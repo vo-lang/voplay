@@ -1,7 +1,9 @@
 //! Vo extern implementations for voplay.
 //! Registers: initSurface, submitFrame, pollInput, runtimeIsWeb,
+//!            nativeInit, nativeFrame, nativeWindowSize,
 //!            loadTexture, loadTextureBytes, freeTexture,
-//!            physicsInit, physicsSpawnBody, physicsDestroyBody, physicsStep,
+//!            float64Bits, float64FromBits,
+//!            physicsInit, physicsSpawnBody, physicsDestroyBody, physicsStep, physicsContacts,
 //!            audioLoad, audioLoadBytes, audioFree,
 //!            audioPlaySound, audioPlayMusic, audioStopMusic,
 //!            audioPauseMusic, audioResumeMusic,

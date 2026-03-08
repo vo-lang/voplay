@@ -192,16 +192,8 @@ func (d *DrawCtx) DrawSprite(spr *Sprite, x, y, w, h float64) {
 	d.w.WriteF64(y)
 	d.w.WriteF64(w)
 	d.w.WriteF64(h)
-	if spr.FlipX {
-		d.w.WriteByte(1)
-	} else {
-		d.w.WriteByte(0)
-	}
-	if spr.FlipY {
-		d.w.WriteByte(1)
-	} else {
-		d.w.WriteByte(0)
-	}
+	d.w.WriteBool(spr.FlipX)
+	d.w.WriteBool(spr.FlipY)
 	d.w.WriteF64(spr.Rotation)
 	d.w.WriteF64(tint.R)
 	d.w.WriteF64(tint.G)

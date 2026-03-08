@@ -239,10 +239,32 @@ func serializeBodyDesc(e *Entity2D) []byte {
 	return w.Bytes()
 }
 
-// Contacts returns collision events from the last physics step.
+// Contacts returns active collision pairs from the physics world.
+// Each Contact2D contains pointers to the two colliding entities.
 func (s *Scene2D) Contacts() []Contact2D {
-	// TODO: physics — unpack from physicsContacts extern
-	return nil
+	if !s.physicsReady {
+		return nil
+	}
+	data := physicsContacts()
+	r := NewByteReader(data)
+	if r.Remaining() < 4 {
+		return nil
+	}
+	count := r.ReadU32()
+	var contacts []Contact2D
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 8 {
+			break
+		}
+		idA := r.ReadU32()
+		idB := r.ReadU32()
+		a, okA := s.bodyMap[idA]
+		b, okB := s.bodyMap[idB]
+		if okA && okB && a.Active && b.Active {
+			contacts = append(contacts, Contact2D{A: a, B: b, Started: true})
+		}
+	}
+	return contacts
 }
 
 // FindByTag returns the first active entity with the given tag, or nil.
@@ -253,6 +275,33 @@ func (s *Scene2D) FindByTag(tag string) *Entity2D {
 		}
 	}
 	return nil
+}
+
+// FindAllByTag returns all active entities with the given tag.
+func (s *Scene2D) FindAllByTag(tag string) []*Entity2D {
+	var result []*Entity2D
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// Clear removes all entities from the scene and destroys their physics bodies.
+func (s *Scene2D) Clear() {
+	for _, e := range s.entities {
+		if e.Physics != nil && e.bodyID != 0 {
+			physicsDestroyBody(e.bodyID)
+		}
+		e.scene = nil
+		e.Active = false
+	}
+	s.entities = s.entities[:0]
+	for k := range s.bodyMap {
+		delete(s.bodyMap, k)
+	}
+	s.physCmds.Reset()
 }
 
 // ForEach calls fn for every active entity.
@@ -284,6 +333,15 @@ func (s *Scene2D) Entities() []*Entity2D {
 		}
 	}
 	return result
+}
+
+// UpdateAnimations advances all entity animations by dt seconds.
+func (s *Scene2D) UpdateAnimations(dt float64) {
+	for _, e := range s.entities {
+		if e.Active && e.Sprite != nil && e.Sprite.Anim != nil {
+			e.Sprite.Anim.Update(dt)
+		}
+	}
 }
 
 // visibleEntities returns a slice of active+visible entities (for rendering).
@@ -341,6 +399,28 @@ func (e *Entity2D) SetVelocity(vx, vy float64) {
 // Velocity returns the current linear velocity (updated after each physics step).
 func (e *Entity2D) Velocity() Vec2 {
 	return e.velocity
+}
+
+// Center returns the entity's center position.
+func (e *Entity2D) Center() Vec2 {
+	return Vec2{e.X, e.Y}
+}
+
+// Bounds returns the entity's axis-aligned bounding rect (centered on X,Y).
+func (e *Entity2D) Bounds() Rect {
+	w := e.W * e.ScaleX
+	h := e.H * e.ScaleY
+	return Rect{e.X - w/2, e.Y - h/2, w, h}
+}
+
+// Overlaps returns true if this entity's bounding rect intersects another's.
+func (e *Entity2D) Overlaps(other *Entity2D) bool {
+	return e.Bounds().Intersects(other.Bounds())
+}
+
+// DistanceTo returns the distance between the centers of two entities.
+func (e *Entity2D) DistanceTo(other *Entity2D) float64 {
+	return e.Center().Distance(other.Center())
 }
 
 // Resource handle types.

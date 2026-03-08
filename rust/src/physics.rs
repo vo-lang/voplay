@@ -262,7 +262,6 @@ impl PhysicsWorld2D {
 
     /// Get contact events from the narrow phase.
     /// Returns pairs of body IDs that are in contact.
-    #[allow(dead_code)]
     pub fn get_contacts(&self) -> Vec<(u32, u32)> {
         let mut contacts = Vec::new();
         // Build reverse map: collider handle -> body_id

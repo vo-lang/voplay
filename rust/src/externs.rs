@@ -121,6 +121,22 @@ pub fn native_frame(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
+#[vo_fn("voplay", "nativeWindowSize")]
+pub fn native_window_size(call: &mut ExternCallContext) -> ExternResult {
+    #[cfg(feature = "native")]
+    {
+        let (w, h) = crate::native::window_size();
+        call.ret_u64(0, w as u64);
+        call.ret_u64(1, h as u64);
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        call.ret_u64(0, 0);
+        call.ret_u64(1, 0);
+    }
+    ExternResult::Ok
+}
+
 // --- loadTexture ---
 
 #[vo_fn("voplay", "loadTexture")]
@@ -341,6 +357,21 @@ pub fn physics_step(call: &mut ExternCallContext) -> ExternResult {
     let state = world.serialize_state();
 
     let slice_ref = call.alloc_bytes(&state);
+    call.ret_ref(0, slice_ref);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "physicsContacts")]
+pub fn physics_contacts(call: &mut ExternCallContext) -> ExternResult {
+    let contacts = get_physics().lock().unwrap().get_contacts();
+    // Serialize: count(u32), then per pair: body_id_a(u32), body_id_b(u32)
+    let mut buf = Vec::with_capacity(4 + contacts.len() * 8);
+    buf.extend_from_slice(&(contacts.len() as u32).to_le_bytes());
+    for (a, b) in &contacts {
+        buf.extend_from_slice(&a.to_le_bytes());
+        buf.extend_from_slice(&b.to_le_bytes());
+    }
+    let slice_ref = call.alloc_bytes(&buf);
     call.ret_ref(0, slice_ref);
     ExternResult::Ok
 }

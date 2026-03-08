@@ -9,7 +9,7 @@ type Game struct {
 	Init     func(g *GameCtx)
 	Update   func(g *GameCtx, dt float64) // dt in seconds
 	Draw     func(g *GameCtx)
-	OnResize func(g *GameCtx, w, h int)   // optional
+	OnResize func(g *GameCtx, w int, h int) // optional
 }
 
 // GameCtx is the game context passed to all callbacks.
@@ -38,6 +38,22 @@ func newGameCtx(game Game) *GameCtx {
 		Width:   game.Width,
 		Height:  game.Height,
 	}
+}
+
+// handleResize checks for size change and updates GameCtx + Scene2D dimensions.
+// Returns true if a resize occurred.
+func (g *GameCtx) handleResize(w, h int, game *Game) bool {
+	if w == g.Width && h == g.Height {
+		return false
+	}
+	g.Width = w
+	g.Height = h
+	g.Scene2D.screenW = float64(w)
+	g.Scene2D.screenH = float64(h)
+	if game.OnResize != nil {
+		game.OnResize(g, w, h)
+	}
+	return true
 }
 
 // Run starts the game. Dispatches to web or native host.
@@ -74,6 +90,7 @@ func float64FromBits(bits uint64) float64
 // Native game loop
 func nativeInit(width, height int, title string) error
 func nativeFrame(cmds []byte) (float64, bool)
+func nativeWindowSize() (int, int)
 
 // Texture loading
 func loadTexture(path string) (int, error)
@@ -102,6 +119,7 @@ func physicsInit(gravityX, gravityY float64)
 func physicsSpawnBody(bodyID int, data []byte)
 func physicsDestroyBody(bodyID int)
 func physicsStep(dt float64, cmds []byte) []byte
+func physicsContacts() []byte
 
 // Audio externs
 func audioLoad(path string) (int, error)

@@ -37,10 +37,13 @@ func startGameLoop(game *Game) {
 		// 2. Physics step + sync
 		gameCtx.Scene2D.StepAndSyncPhysics(dt)
 
-		// 3. Game logic
+		// 3. Update animations
+		gameCtx.Scene2D.UpdateAnimations(dt)
+
+		// 4. Game logic
 		game.Update(gameCtx, dt)
 
-		// 4. Render
+		// 5. Render
 		gameCtx.Draw.reset()
 		game.Draw(gameCtx)
 		submitFrame(gameCtx.Draw.bytes())?
@@ -66,17 +69,24 @@ func runNative(game *Game) {
 			break
 		}
 
-		// 2. Poll input (events collected during nativeFrame's pump)
+		// 2. Handle resize
+		w, h := nativeWindowSize()
+		gameCtx.handleResize(w, h, game)
+
+		// 3. Poll input (events collected during nativeFrame's pump)
 		inputBytes := pollInput()
 		gameCtx.Input.unpackEvents(inputBytes)
 
-		// 3. Physics step + sync
+		// 4. Physics step + sync
 		gameCtx.Scene2D.StepAndSyncPhysics(dt)
 
-		// 4. Game logic
+		// 5. Update animations
+		gameCtx.Scene2D.UpdateAnimations(dt)
+
+		// 6. Game logic
 		game.Update(gameCtx, dt)
 
-		// 5. Encode draw commands (submitted on next nativeFrame call)
+		// 7. Encode draw commands (submitted on next nativeFrame call)
 		gameCtx.Draw.reset()
 		game.Draw(gameCtx)
 

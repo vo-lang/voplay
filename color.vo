@@ -36,6 +36,21 @@ func HexA(v int) Color {
 	}
 }
 
+// WithAlpha returns a copy of this color with a different alpha.
+func (c Color) WithAlpha(a float64) Color {
+	return Color{c.R, c.G, c.B, a}
+}
+
+// Lerp linearly interpolates between two colors.
+func (c Color) Lerp(other Color, t float64) Color {
+	return Color{
+		c.R + (other.R-c.R)*t,
+		c.G + (other.G-c.G)*t,
+		c.B + (other.B-c.B)*t,
+		c.A + (other.A-c.A)*t,
+	}
+}
+
 // Predefined colors.
 var (
 	White       = Color{1, 1, 1, 1}

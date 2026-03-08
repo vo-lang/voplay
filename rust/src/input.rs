@@ -10,6 +10,7 @@ const INPUT_KEY_UP: u8 = 0x02;
 const INPUT_POINTER_DOWN: u8 = 0x03;
 const INPUT_POINTER_UP: u8 = 0x04;
 const INPUT_POINTER_MOVE: u8 = 0x05;
+const INPUT_SCROLL: u8 = 0x06;
 
 /// Global input buffer — events are appended by JS/native listeners,
 /// drained by pollInput each frame.
@@ -37,6 +38,14 @@ pub fn push_pointer_event(kind: u8, x: f64, y: f64, button: u8) {
     buf.push(button);
 }
 
+/// Append a scroll event to the buffer.
+pub fn push_scroll_event(dx: f64, dy: f64) {
+    let mut buf = INPUT_BUFFER.lock().unwrap();
+    buf.push(INPUT_SCROLL);
+    buf.extend_from_slice(&dx.to_le_bytes());
+    buf.extend_from_slice(&dy.to_le_bytes());
+}
+
 /// Drain the input buffer, returning all buffered events.
 pub fn drain_input() -> Vec<u8> {
     let mut buf = INPUT_BUFFER.lock().unwrap();
@@ -47,3 +56,5 @@ pub fn drain_input() -> Vec<u8> {
 pub const POINTER_DOWN: u8 = INPUT_POINTER_DOWN;
 pub const POINTER_UP: u8 = INPUT_POINTER_UP;
 pub const POINTER_MOVE: u8 = INPUT_POINTER_MOVE;
+#[allow(dead_code)]
+pub const SCROLL: u8 = INPUT_SCROLL;

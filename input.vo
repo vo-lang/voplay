@@ -9,6 +9,7 @@ const (
 	inputPointerDown = 0x03
 	inputPointerUp   = 0x04
 	inputPointerMove = 0x05
+	inputScroll      = 0x06
 )
 
 // InputState holds the current state of keyboard and pointer input.
@@ -23,6 +24,9 @@ type InputState struct {
 	pointerButtons     int   // bitmask of held buttons
 	pointerPressed     int   // buttons pressed this frame
 	pointerReleased    int   // buttons released this frame
+
+	// Scroll wheel
+	scrollX, scrollY float64
 }
 
 func newInputState() *InputState {
@@ -65,6 +69,9 @@ func (inp *InputState) unpackEvents(data []byte) {
 			inp.pointerX = r.ReadF64()
 			inp.pointerY = r.ReadF64()
 			inp.pointerButtons = int(r.ReadByte())
+		case inputScroll:
+			inp.scrollX += r.ReadF64()
+			inp.scrollY += r.ReadF64()
 		default:
 			return // unknown event, stop parsing
 		}
@@ -81,6 +88,8 @@ func (inp *InputState) endFrame() {
 	}
 	inp.pointerPressed = 0
 	inp.pointerReleased = 0
+	inp.scrollX = 0
+	inp.scrollY = 0
 }
 
 // --- Keyboard polling ---
@@ -121,6 +130,12 @@ func (inp *InputState) IsPointerPressed(button int) bool {
 // IsPointerReleased returns true if the given button was released this frame.
 func (inp *InputState) IsPointerReleased(button int) bool {
 	return inp.pointerReleased&(1<<button) != 0
+}
+
+// ScrollDelta returns the accumulated scroll wheel delta for this frame.
+// Positive Y = scroll up/forward, negative Y = scroll down/backward.
+func (inp *InputState) ScrollDelta() (float64, float64) {
+	return inp.scrollX, inp.scrollY
 }
 
 // WorldPointerPos converts pointer screen position to world coordinates

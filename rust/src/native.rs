@@ -200,6 +200,13 @@ impl ApplicationHandler for NativeApp {
                 };
                 input::push_pointer_event(kind, self.cursor_x, self.cursor_y, btn);
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
+                };
+                input::push_scroll_event(dx, dy);
+            }
 
             _ => {}
         }

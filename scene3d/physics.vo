@@ -1,0 +1,177 @@
+// Physics types, colliders, and extern declarations for 3D physics.
+package scene3d
+
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+// BodyType determines how the physics engine treats a body.
+type BodyType int
+
+const (
+	Dynamic   BodyType = 0
+	Static    BodyType = 1
+	Kinematic BodyType = 2
+)
+
+// Physics is the physics configuration and runtime state for a 3D entity.
+type Physics struct {
+	Type          BodyType
+	Collider      Collider
+	Density       float64
+	Friction      float64
+	Restitution   float64
+	LinearDamping float64
+	FixedRotation bool
+
+	// Runtime state (managed by Scene, not user-set).
+	bodyID   int
+	velocity voplay.Vec3
+}
+
+// Collider is a tagged value type for 3D physics shapes.
+type Collider struct {
+	kind int
+	args [3]float64
+}
+
+// Collider kind constants (must match Rust ColliderKind3D in physics3d.rs).
+const (
+	colliderCapsule3D = 3
+	colliderBox3D     = 4
+	colliderSphere    = 5
+)
+
+// Collider shape type constants.
+const (
+	ColliderBox     = colliderBox3D
+	ColliderSphere  = colliderSphere
+	ColliderCapsule = colliderCapsule3D
+)
+
+// 3D collider constructors.
+func Box(halfX, halfY, halfZ float64) Collider {
+	return Collider{kind: colliderBox3D, args: [3]float64{halfX, halfY, halfZ}}
+}
+func Sphere(radius float64) Collider {
+	return Collider{kind: colliderSphere, args: [3]float64{radius, 0, 0}}
+}
+func Capsule(halfHeight, radius float64) Collider {
+	return Collider{kind: colliderCapsule3D, args: [3]float64{halfHeight, radius, 0}}
+}
+
+// Kind returns the collider shape type (ColliderBox, ColliderSphere, or ColliderCapsule).
+func (c Collider) Kind() int {
+	return c.kind
+}
+
+// Args returns the raw shape arguments.
+// Box: [halfX, halfY, halfZ], Sphere: [radius, 0, 0], Capsule: [halfHeight, radius, 0].
+func (c Collider) Args() [3]float64 {
+	return c.args
+}
+
+// Contact represents an active collision pair between two entities.
+type Contact struct {
+	A *Entity
+	B *Entity
+}
+
+// RayCastHit describes a ray cast hit in the 3D physics world.
+type RayCastHit struct {
+	Entity   *Entity
+	Point    voplay.Vec3
+	Normal   voplay.Vec3
+	Distance float64
+}
+
+// Physics 3D command opcodes (must match Rust physics3d.rs).
+const (
+	physicsCmdForce   byte = 1
+	physicsCmdImpulse byte = 2
+	physicsCmdSetVel  byte = 3
+	physicsCmdSetPos  byte = 4
+)
+
+// writePhysCmd appends a 3D physics command to this scene's command buffer.
+func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2, v3 float64) {
+	s.physCmds.WriteByte(cmd)
+	s.physCmds.WriteU32(bodyID)
+	s.physCmds.WriteF64(v1)
+	s.physCmds.WriteF64(v2)
+	s.physCmds.WriteF64(v3)
+}
+
+// ApplyForce applies a force to a 3D physics entity (buffered until next step).
+func (e *Entity) ApplyForce(force voplay.Vec3) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, force.X, force.Y, force.Z)
+}
+
+// ApplyImpulse applies an impulse to a 3D physics entity (buffered until next step).
+func (e *Entity) ApplyImpulse(impulse voplay.Vec3) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, impulse.X, impulse.Y, impulse.Z)
+}
+
+// SetVelocity sets the linear velocity of a 3D physics entity (buffered until next step).
+func (e *Entity) SetVelocity(vel voplay.Vec3) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vel.X, vel.Y, vel.Z)
+}
+
+// SetPosition teleports a 3D physics entity to the given position (buffered until next step).
+// For non-physics entities, sets Position directly.
+func (e *Entity) SetPosition(pos voplay.Vec3) {
+	e.Position = pos
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, pos.X, pos.Y, pos.Z)
+	}
+}
+
+// Velocity returns the current linear velocity (updated after each physics step).
+// Panics if the entity has no Physics component.
+func (e *Entity) Velocity() voplay.Vec3 {
+	return e.Physics.velocity
+}
+
+// serializeBodyDesc encodes a 3D body description for the physics extern.
+func serializeBodyDesc(e *Entity) []byte {
+	p := e.Physics
+	w := codec.NewByteWriter(128)
+	w.WriteByte(byte(p.Type))
+	w.WriteByte(byte(p.Collider.kind))
+	w.WriteBool(p.FixedRotation)
+	w.WriteF64(e.Position.X)
+	w.WriteF64(e.Position.Y)
+	w.WriteF64(e.Position.Z)
+	w.WriteF64(e.Rotation.X)
+	w.WriteF64(e.Rotation.Y)
+	w.WriteF64(e.Rotation.Z)
+	w.WriteF64(e.Rotation.W)
+	w.WriteF64(p.Collider.args[0])
+	w.WriteF64(p.Collider.args[1])
+	w.WriteF64(p.Collider.args[2])
+	w.WriteF64(p.Density)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	w.WriteF64(p.LinearDamping)
+	return w.Bytes()
+}
+
+// --- Physics 3D extern declarations (implemented in Rust) ---
+
+func physicsInit(gravityX, gravityY, gravityZ float64) int
+func physicsDestroy(worldID int)
+func physicsSpawnBody(worldID int, bodyID int, data []byte)
+func physicsDestroyBody(worldID int, bodyID int)
+func physicsStep(worldID int, dt float64, cmds []byte) []byte
+func physicsContacts(worldID int) []byte
+func physicsSetGravity(worldID int, gx, gy, gz float64)
+func physicsRayCast(worldID int, ox, oy, oz, dx, dy, dz, maxDist float64) []byte
+func physicsQueryAABB(worldID int, minX, minY, minZ, maxX, maxY, maxZ float64) []byte

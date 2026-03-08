@@ -4,12 +4,10 @@ package voplay
 
 import "github.com/vo-lang/vogui"
 
-var surfaceReady bool
-
-func runWeb(game *Game) {
+func runWeb(ctx *GameCtx, game *Game) {
 	vogui.Run(vogui.App{
 		Init: func() any {
-			startGameLoop(game)
+			startGameLoop(ctx, game)
 			return nil
 		},
 		View: func(state any) vogui.Node {
@@ -20,76 +18,79 @@ func runWeb(game *Game) {
 	})
 }
 
-func startGameLoop(game *Game) {
+func startGameLoop(ctx *GameCtx, game *Game) {
 	vogui.RunGameLoop(func(state any, dtMs float64) {
 		dt := dtMs / 1000.0 // vogui delivers ms, game API uses seconds
 
-		if !surfaceReady {
+		// Phase 1: Kick off async renderer init (once).
+		if !ctx.surfaceInitiated {
 			initSurface("canvas")?
-			game.Init(gameCtx)
-			surfaceReady = true
+			ctx.surfaceInitiated = true
+		}
+
+		// Phase 2: Wait for renderer to be ready before game.Init.
+		// On WASM, renderer init is async — skip frames until ready.
+		if !ctx.gameInitialized {
+			if !isRendererReady() {
+				return
+			}
+			game.Init(ctx)
+			ctx.gameInitialized = true
 		}
 
 		// 1. Poll input (one extern: returns packed key/pointer events)
 		inputBytes := pollInput()
-		gameCtx.Input.unpackEvents(inputBytes)
+		ctx.Input.unpackEvents(inputBytes)
 
-		// 2. Physics step + sync
-		gameCtx.Scene2D.StepAndSyncPhysics(dt)
+		// 2. Game logic (user steps physics/animations as needed)
+		game.Update(ctx, dt)
 
-		// 3. Update animations
-		gameCtx.Scene2D.UpdateAnimations(dt)
+		// 3. Render
+		ctx.Draw.reset()
+		game.Draw(ctx)
+		submitFrame(ctx.Draw.bytes())?
 
-		// 4. Game logic
-		game.Update(gameCtx, dt)
-
-		// 5. Render
-		gameCtx.Draw.reset()
-		game.Draw(gameCtx)
-		submitFrame(gameCtx.Draw.bytes())?
-
-		gameCtx.Input.endFrame()
+		ctx.Input.endFrame()
 	})
 }
 
 // runNative opens a native window (winit) and runs the game loop.
-// Vo drives the loop; nativeFrame pumps winit events and submits draw commands.
-func runNative(game *Game) {
+// Frame order matches web: poll → update → draw → submit.
+func runNative(ctx *GameCtx, game *Game) {
 	err := nativeInit(game.Width, game.Height, game.Title)
 	if err != nil {
 		panic(err)
 	}
 
-	game.Init(gameCtx)
+	game.Init(ctx)
 
 	for {
-		// 1. Submit previous frame's draw commands + pump OS events + get dt
-		dt, closed := nativeFrame(gameCtx.Draw.bytes())
+		// 1. Pump OS events + get dt
+		dt, closed := nativePumpEvents()
 		if closed {
 			break
 		}
 
 		// 2. Handle resize
 		w, h := nativeWindowSize()
-		gameCtx.handleResize(w, h, game)
+		ctx.handleResize(w, h, game)
 
-		// 3. Poll input (events collected during nativeFrame's pump)
+		// 3. Poll input
 		inputBytes := pollInput()
-		gameCtx.Input.unpackEvents(inputBytes)
+		ctx.Input.unpackEvents(inputBytes)
 
-		// 4. Physics step + sync
-		gameCtx.Scene2D.StepAndSyncPhysics(dt)
+		// 4. Game logic (user steps physics/animations as needed)
+		game.Update(ctx, dt)
 
-		// 5. Update animations
-		gameCtx.Scene2D.UpdateAnimations(dt)
+		// 5. Encode + submit draw commands (same frame)
+		ctx.Draw.reset()
+		game.Draw(ctx)
+		nativeSubmitFrame(ctx.Draw.bytes())
 
-		// 6. Game logic
-		game.Update(gameCtx, dt)
+		ctx.Input.endFrame()
+	}
 
-		// 7. Encode draw commands (submitted on next nativeFrame call)
-		gameCtx.Draw.reset()
-		game.Draw(gameCtx)
-
-		gameCtx.Input.endFrame()
+	if game.OnClose != nil {
+		game.OnClose(ctx)
 	}
 }

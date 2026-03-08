@@ -16,11 +16,8 @@ pub enum Opcode {
     DrawCircle = 0x12,
     DrawLine = 0x13,
     DrawText = 0x14,
-    DrawTilemap = 0x15,
-    DrawScene2D = 0x16,
     DrawModel = 0x20,
     DrawBillboard = 0x21,
-    DrawScene3D = 0x22,
     SetLights3D = 0x23,
 }
 
@@ -38,11 +35,8 @@ impl Opcode {
             0x12 => Some(Opcode::DrawCircle),
             0x13 => Some(Opcode::DrawLine),
             0x14 => Some(Opcode::DrawText),
-            0x15 => Some(Opcode::DrawTilemap),
-            0x16 => Some(Opcode::DrawScene2D),
             0x20 => Some(Opcode::DrawModel),
             0x21 => Some(Opcode::DrawBillboard),
-            0x22 => Some(Opcode::DrawScene3D),
             0x23 => Some(Opcode::SetLights3D),
             _ => None,
         }
@@ -96,6 +90,12 @@ pub enum DrawCommand {
         rotation: f32,
         r: f32, g: f32, b: f32, a: f32,
     },
+    DrawBillboard {
+        tex_id: u32,
+        src_x: f32, src_y: f32, src_w: f32, src_h: f32,
+        world_x: f32, world_y: f32, world_z: f32,
+        w: f32, h: f32,
+    },
 }
 
 /// Stream reader for binary draw commands.
@@ -113,19 +113,30 @@ impl<'a> StreamReader<'a> {
         self.data.len() - self.pos
     }
 
+    fn check_remaining(&self, n: usize) {
+        assert!(
+            self.remaining() >= n,
+            "voplay: draw stream truncated at pos {} (need {} bytes, have {})",
+            self.pos, n, self.remaining()
+        );
+    }
+
     fn read_u8(&mut self) -> u8 {
+        self.check_remaining(1);
         let v = self.data[self.pos];
         self.pos += 1;
         v
     }
 
     fn read_u16(&mut self) -> u16 {
+        self.check_remaining(2);
         let v = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
         self.pos += 2;
         v
     }
 
     fn read_u32(&mut self) -> u32 {
+        self.check_remaining(4);
         let v = u32::from_le_bytes([
             self.data[self.pos],
             self.data[self.pos + 1],
@@ -137,19 +148,15 @@ impl<'a> StreamReader<'a> {
     }
 
     fn read_f32(&mut self) -> f32 {
-        // Wire format is f64 (Vo has no Float32bits). Read f64, truncate to f32.
+        self.check_remaining(4);
         let bytes = [
             self.data[self.pos],
             self.data[self.pos + 1],
             self.data[self.pos + 2],
             self.data[self.pos + 3],
-            self.data[self.pos + 4],
-            self.data[self.pos + 5],
-            self.data[self.pos + 6],
-            self.data[self.pos + 7],
         ];
-        self.pos += 8;
-        f64::from_le_bytes(bytes) as f32
+        self.pos += 4;
+        f32::from_le_bytes(bytes)
     }
 
     /// Decode the next command from the stream. Returns None when stream is exhausted.
@@ -227,6 +234,7 @@ impl<'a> StreamReader<'a> {
                 let b = self.read_f32();
                 let a = self.read_f32();
                 let len = self.read_u16() as usize;
+                self.check_remaining(len);
                 let text = String::from_utf8_lossy(&self.data[self.pos..self.pos + len]).to_string();
                 self.pos += len;
                 Some(DrawCommand::DrawText { x, y, size, r, g, b, a, text })
@@ -294,10 +302,21 @@ impl<'a> StreamReader<'a> {
                     model_id, px, py, pz, qx, qy, qz, qw, sx, sy, sz,
                 })
             }
-            // Unimplemented opcodes — skip for now
-            _ => {
-                log::warn!("voplay: unhandled opcode {:?}", op);
-                None
+            Opcode::DrawBillboard => {
+                let tex_id = self.read_u32();
+                let src_x = self.read_f32();
+                let src_y = self.read_f32();
+                let src_w = self.read_f32();
+                let src_h = self.read_f32();
+                let world_x = self.read_f32();
+                let world_y = self.read_f32();
+                let world_z = self.read_f32();
+                let w = self.read_f32();
+                let h = self.read_f32();
+                Some(DrawCommand::DrawBillboard {
+                    tex_id, src_x, src_y, src_w, src_h,
+                    world_x, world_y, world_z, w, h,
+                })
             }
         }
     }

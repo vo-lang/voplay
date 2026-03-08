@@ -12,6 +12,8 @@ mod renderer;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod draw_list;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod font_manager;
@@ -22,7 +24,11 @@ mod model_loader;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod physics_registry;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod physics;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod physics3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod audio;
 #[cfg(any(feature = "native", feature = "wasm"))]

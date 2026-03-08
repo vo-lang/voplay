@@ -1,43 +1,42 @@
 // Audio playback: load clips, play SFX and music, volume control.
 package voplay
 
-// AudioClip is a handle to a loaded audio resource (WAV, OGG, MP3).
-type AudioClip int
+// AudioClipID is a handle to a loaded audio resource (WAV, OGG, MP3).
+type AudioClipID int
 
-// LoadAudio loads an audio file from disk and returns an AudioClip.
-func LoadAudio(path string) (AudioClip, error) {
+// LoadAudio loads an audio file from disk and returns an AudioClipID.
+func LoadAudio(path string) (AudioClipID, error) {
 	id, err := audioLoad(path)
-	return AudioClip(id), err
+	return AudioClipID(id), err
 }
 
 // LoadAudioBytes loads an audio clip from encoded bytes (WAV, OGG, MP3).
-func LoadAudioBytes(data []byte) (AudioClip, error) {
+func LoadAudioBytes(data []byte) (AudioClipID, error) {
 	id, err := audioLoadBytes(data)
-	return AudioClip(id), err
+	return AudioClipID(id), err
 }
 
 // Free releases a loaded audio clip.
-func (c AudioClip) Free() {
+func (c AudioClipID) Free() {
 	audioFree(int(c))
 }
 
 // Play plays this clip as a one-shot sound effect.
 // volume: 0.0–1.0 (scaled by global SFX volume).
-func (c AudioClip) Play() {
-	audioPlaySound(int(c), 1.0, 1.0, 0.0)
+func (c AudioClipID) Play() {
+	audioPlaySound(int(c), 1.0, 1.0)
 }
 
 // PlayEx plays this clip as a sound effect with explicit parameters.
 // volume: amplitude scale (1.0 = normal).
 // pitch: playback speed (1.0 = normal, 2.0 = double speed/octave up).
-// pan: stereo position (-1.0 = left, 0.0 = center, 1.0 = right).
-func (c AudioClip) PlayEx(volume, pitch, pan float64) {
-	audioPlaySound(int(c), volume, pitch, pan)
+func (c AudioClipID) PlayEx(volume, pitch float64) {
+	audioPlaySound(int(c), volume, pitch)
 }
 
 // PlayMusic starts this clip as looping background music.
 // Stops any currently playing music. volume: 0.0–1.0 (scaled by global music volume).
-func (c AudioClip) PlayMusic(volume float64) {
+func (c AudioClipID) PlayMusic(volume float64) {
 	audioPlayMusic(int(c), volume)
 }
 

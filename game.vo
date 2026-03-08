@@ -10,37 +10,31 @@ type Game struct {
 	Update   func(g *GameCtx, dt float64) // dt in seconds
 	Draw     func(g *GameCtx)
 	OnResize func(g *GameCtx, w int, h int) // optional
+	OnClose  func(g *GameCtx)              // optional; called when the game loop exits
 }
 
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
-	Scene2D *Scene2D
-	Scene3D *Scene3D
-	Input   *InputState
-	Draw    *DrawCtx
-	Width   int // current viewport width (updated on resize)
-	Height  int // current viewport height (updated on resize)
-	Data    any // user-attached game data
+	Input  *InputState
+	Draw   *DrawCtx
+	Width  int // current viewport width (updated on resize)
+	Height int // current viewport height (updated on resize)
+
+	// Internal lifecycle state (managed by host, not for game code).
+	surfaceInitiated bool
+	gameInitialized  bool
 }
 
-// Package-level game context, shared across host_vogui / host_native.
-var gameCtx *GameCtx
-
 func newGameCtx(game Game) *GameCtx {
-	s2d := newScene2D()
-	s2d.screenW = float64(game.Width)
-	s2d.screenH = float64(game.Height)
 	return &GameCtx{
-		Scene2D: s2d,
-		Scene3D: newScene3D(),
-		Input:   newInputState(),
-		Draw:    newDrawCtx(),
-		Width:   game.Width,
-		Height:  game.Height,
+		Input:  newInputState(),
+		Draw:   newDrawCtx(),
+		Width:  game.Width,
+		Height: game.Height,
 	}
 }
 
-// handleResize checks for size change and updates GameCtx + Scene2D dimensions.
+// handleResize checks for size change and updates GameCtx dimensions.
 // Returns true if a resize occurred.
 func (g *GameCtx) handleResize(w, h int, game *Game) bool {
 	if w == g.Width && h == g.Height {
@@ -48,8 +42,6 @@ func (g *GameCtx) handleResize(w, h int, game *Game) bool {
 	}
 	g.Width = w
 	g.Height = h
-	g.Scene2D.screenW = float64(w)
-	g.Scene2D.screenH = float64(h)
 	if game.OnResize != nil {
 		game.OnResize(g, w, h)
 	}
@@ -58,11 +50,11 @@ func (g *GameCtx) handleResize(w, h int, game *Game) bool {
 
 // Run starts the game. Dispatches to web or native host.
 func Run(game Game) {
-	gameCtx = newGameCtx(game)
+	ctx := newGameCtx(game)
 	if isWebEnvironment() {
-		runWeb(&game)
+		runWeb(ctx, &game)
 	} else {
-		runNative(&game)
+		runNative(ctx, &game)
 	}
 }
 
@@ -82,14 +74,12 @@ func pollInput() []byte
 
 // Runtime query
 func runtimeIsWeb() bool
-
-// Float64 bit conversion (Vo stdlib lacks math.Float64bits/Float64frombits)
-func float64Bits(f float64) uint64
-func float64FromBits(bits uint64) float64
+func isRendererReady() bool
 
 // Native game loop
 func nativeInit(width, height int, title string) error
-func nativeFrame(cmds []byte) (float64, bool)
+func nativePumpEvents() (float64, bool)
+func nativeSubmitFrame(cmds []byte)
 func nativeWindowSize() (int, int)
 
 // Texture loading
@@ -101,11 +91,16 @@ func freeTexture(id int)
 func loadFont(path string) (int, error)
 func loadFontBytes(data []byte) (int, error)
 func freeFont(id int)
+func measureText(fontID int, text string, size float64) (float64, float64)
 
 // Model loading
 func loadModel(path string) (int, error)
 func loadModelBytes(data []byte) (int, error)
 func freeModel(id int)
+
+// Resource handle types.
+type TextureID int
+type ModelID int
 
 // LoadTexture loads an image file and returns a TextureID.
 func LoadTexture(path string) (TextureID, error) {
@@ -119,8 +114,8 @@ func LoadTextureBytes(data []byte) (TextureID, error) {
 	return TextureID(id), err
 }
 
-// FreeTexture releases a loaded texture.
-func FreeTexture(id TextureID) {
+// Free releases this texture.
+func (id TextureID) Free() {
 	freeTexture(int(id))
 }
 
@@ -139,8 +134,8 @@ func LoadFontBytes(data []byte) (FontID, error) {
 	return FontID(id), err
 }
 
-// FreeFont releases a loaded font.
-func FreeFont(id FontID) {
+// Free releases this font.
+func (id FontID) Free() {
 	freeFont(int(id))
 }
 
@@ -156,24 +151,17 @@ func LoadModelBytes(data []byte) (ModelID, error) {
 	return ModelID(id), err
 }
 
-// FreeModel releases a loaded model.
-func FreeModel(id ModelID) {
+// Free releases this model.
+func (id ModelID) Free() {
 	freeModel(int(id))
 }
 
-// Physics externs
-func physicsInit(gravityX, gravityY float64)
-func physicsSpawnBody(bodyID int, data []byte)
-func physicsDestroyBody(bodyID int)
-func physicsStep(dt float64, cmds []byte) []byte
-func physicsContacts() []byte
-func physicsSetGravity(gx, gy float64)
 
 // Audio externs
 func audioLoad(path string) (int, error)
 func audioLoadBytes(data []byte) (int, error)
 func audioFree(clipID int)
-func audioPlaySound(clipID int, volume, pitch, pan float64)
+func audioPlaySound(clipID int, volume, pitch float64)
 func audioPlayMusic(clipID int, volume float64)
 func audioStopMusic()
 func audioPauseMusic()

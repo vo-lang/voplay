@@ -1,0 +1,412 @@
+// Scene manages 3D entities, camera, lighting, and physics.
+package scene3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+// Camera defines the 3D viewport.
+type Camera struct {
+	Position voplay.Vec3
+	Target   voplay.Vec3    // look-at point
+	Up       voplay.Vec3    // up vector (default: 0, 1, 0)
+	Fov      float64 // field of view in degrees (default: 60)
+	Near     float64 // near clip plane (default: 0.1)
+	Far      float64 // far clip plane (default: 1000)
+}
+
+// LookAt sets the camera position and target.
+func (c *Camera) LookAt(position, target voplay.Vec3) {
+	c.Position = position
+	c.Target = target
+}
+
+// Orbit positions the camera at a given distance from center,
+// looking at center, using spherical coordinates (yaw, pitch in radians).
+func (c *Camera) Orbit(center voplay.Vec3, distance, yaw, pitch float64) {
+	// Clamp pitch to avoid flipping
+	if pitch > 1.5 {
+		pitch = 1.5
+	}
+	if pitch < -1.5 {
+		pitch = -1.5
+	}
+	cp := math.Cos(pitch)
+	c.Position = voplay.Vec3{
+		center.X + distance*math.Cos(yaw)*cp,
+		center.Y + distance*math.Sin(pitch),
+		center.Z + distance*math.Sin(yaw)*cp,
+	}
+	c.Target = center
+}
+
+// ScreenToRay returns a ray origin and direction for a screen-space pixel.
+// screenW, screenH are the window dimensions.
+func (c *Camera) ScreenToRay(screenX, screenY, screenW, screenH float64) (voplay.Vec3, voplay.Vec3) {
+	// Compute normalized device coordinates (-1 to 1)
+	nx := (2.0*screenX/screenW - 1.0)
+	ny := (1.0 - 2.0*screenY/screenH)
+
+	// Build camera basis vectors
+	forward := c.Target.Sub(c.Position).Normalize()
+	right := forward.Cross(c.Up).Normalize()
+	up := right.Cross(forward)
+
+	// Compute half-extents based on FOV and aspect
+	fovRad := c.Fov * math.Pi / 180.0
+	half_h := math.Tan(fovRad / 2.0)
+	aspect := screenW / screenH
+	half_w := half_h * aspect
+
+	// Ray direction in world space
+	dir := forward.Add(right.Scale(nx * half_w)).Add(up.Scale(ny * half_h)).Normalize()
+	return c.Position, dir
+}
+
+// Light is a light source in the 3D scene (alias for voplay.LightDesc).
+type Light = voplay.LightDesc
+
+// Light type constants (re-exported from voplay for convenience).
+const (
+	DirectionalLight = voplay.DirectionalLight
+	PointLight       = voplay.PointLight
+)
+
+// Scene holds the 3D scene state.
+type Scene struct {
+	Camera  Camera
+	Lights  []Light
+	Ambient voplay.Color
+	Gravity voplay.Vec3
+
+	entities    []*Entity
+	visibleBuf []*Entity
+	worldID    int
+	nextBodyID int
+	physCmds   codec.ByteWriter
+	bodyMap    map[int]*Entity
+}
+
+// New creates a new 3D scene with default camera and gravity.
+func New() *Scene {
+	return &Scene{
+		Camera: Camera{
+			Position: voplay.Vec3{0, 5, 10},
+			Target:   voplay.Vec3{0, 0, 0},
+			Up:       voplay.Vec3{0, 1, 0},
+			Fov:      60,
+			Near:     0.1,
+			Far:      1000,
+		},
+		Ambient:    voplay.Color{0.1, 0.1, 0.1, 1},
+		Gravity:    voplay.Vec3{0, -9.8, 0},
+		nextBodyID: 1,
+		physCmds:   codec.NewByteWriter(256),
+		bodyMap:    make(map[int]*Entity),
+	}
+}
+
+// Entity is a 3D game object managed by the scene.
+// Transform fields are always present. Optional components (Model, Physics)
+// are zero/nil when not used. Physics runtime state (bodyID, velocity) lives
+// in the Physics struct, not on Entity.
+type Entity struct {
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Scale    voplay.Vec3
+	Model    voplay.ModelID
+	Tag      string
+	Active   bool
+	Visible  bool
+	Data     any
+	Physics  *Physics
+	scene    *Scene
+}
+
+// Spawn creates an entity in the scene.
+// If Physics is set, a Rapier3D body is created via extern.
+func (s *Scene) Spawn(e Entity) *Entity {
+	if e.Scale == (voplay.Vec3{}) {
+		e.Scale = voplay.Vec3{1, 1, 1}
+	}
+	if e.Rotation == (voplay.Quat{}) {
+		e.Rotation = voplay.QuatIdentity()
+	}
+	e.Active = true
+	e.Visible = true
+	e.scene = s
+	if e.Physics != nil {
+		s.ensurePhysics()
+		e.Physics.bodyID = s.nextBodyID
+		s.nextBodyID++
+	}
+	ent := &e
+	s.entities = append(s.entities, ent)
+	if ent.Physics != nil {
+		s.bodyMap[ent.Physics.bodyID] = ent
+		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
+	}
+	return ent
+}
+
+// Destroy removes an entity from the scene.
+func (s *Scene) Destroy(e *Entity) {
+	e.Active = false
+	if e.Physics != nil {
+		delete(s.bodyMap, e.Physics.bodyID)
+		physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		e.Physics.bodyID = 0
+	}
+	e.scene = nil
+	// Swap-remove: O(1) instead of O(n) shift
+	for i, ent := range s.entities {
+		if ent == e {
+			last := len(s.entities) - 1
+			s.entities[i] = s.entities[last]
+			s.entities[last] = nil
+			s.entities = s.entities[:last]
+			return
+		}
+	}
+}
+
+// Clear removes all entities from the scene.
+func (s *Scene) Clear() {
+	for _, e := range s.entities {
+		if e.Physics != nil {
+			physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		}
+		e.scene = nil
+		e.Active = false
+	}
+	s.entities = nil
+	for k := range s.bodyMap {
+		delete(s.bodyMap, k)
+	}
+	s.physCmds.Reset()
+}
+
+// EntityCount returns the number of active entities in the scene.
+func (s *Scene) EntityCount() int {
+	n := 0
+	for _, e := range s.entities {
+		if e.Active {
+			n++
+		}
+	}
+	return n
+}
+
+// FindByTag returns the first active entity with the given tag, or nil if not found.
+func (s *Scene) FindByTag(tag string) *Entity {
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			return e
+		}
+	}
+	return nil
+}
+
+// FindAllByTag returns all active entities with the given tag.
+func (s *Scene) FindAllByTag(tag string) []*Entity {
+	var result []*Entity
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// Entities returns a copy of the active entity list.
+func (s *Scene) Entities() []*Entity {
+	result := make([]*Entity, 0, len(s.entities))
+	for _, e := range s.entities {
+		if e.Active {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// VisibleEntities returns a slice of active+visible entities (for rendering).
+// The returned slice is reused across calls; callers must not retain it.
+func (s *Scene) VisibleEntities() []*Entity {
+	s.visibleBuf = s.visibleBuf[:0]
+	for _, e := range s.entities {
+		if e.Active && e.Visible {
+			s.visibleBuf = append(s.visibleBuf, e)
+		}
+	}
+	return s.visibleBuf
+}
+
+// ForEach calls fn for every active entity in the scene.
+func (s *Scene) ForEach(fn func(e *Entity)) {
+	for _, e := range s.entities {
+		if e.Active {
+			fn(e)
+		}
+	}
+}
+
+// AddLight adds a light to the scene.
+func (s *Scene) AddLight(l Light) {
+	s.Lights = append(s.Lights, l)
+}
+
+// ClearLights removes all lights from the scene.
+func (s *Scene) ClearLights() {
+	s.Lights = nil
+}
+
+// HasPhysics returns true if a physics world is initialized.
+func (s *Scene) HasPhysics() bool {
+	return s.worldID != 0
+}
+
+// Close destroys the physics world and releases all resources.
+func (s *Scene) Close() {
+	s.Clear()
+	if s.worldID != 0 {
+		physicsDestroy(s.worldID)
+		s.worldID = 0
+	}
+}
+
+// ensurePhysics lazily initializes the Rapier3D physics world for this scene.
+func (s *Scene) ensurePhysics() {
+	if s.worldID != 0 {
+		return
+	}
+	s.worldID = physicsInit(s.Gravity.X, s.Gravity.Y, s.Gravity.Z)
+}
+
+// SetGravity changes the 3D physics gravity at runtime.
+func (s *Scene) SetGravity(g voplay.Vec3) {
+	s.Gravity = g
+	if s.worldID != 0 {
+		physicsSetGravity(s.worldID, g.X, g.Y, g.Z)
+	}
+}
+
+// StepAndSyncPhysics runs one 3D physics step and syncs body state back to entities.
+func (s *Scene) StepAndSyncPhysics(dt float64) {
+	if s.worldID == 0 {
+		return
+	}
+	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
+	s.physCmds.Reset()
+
+	// Decode state: count(u32), then per body:
+	// body_id(u32), x(f64), y(f64), z(f64), qx(f64), qy(f64), qz(f64), qw(f64), vx(f64), vy(f64), vz(f64)
+	r := codec.NewByteReader(state)
+	if r.Remaining() < 4 {
+		return
+	}
+	count := r.ReadU32()
+
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 92 { // 4 + 11*8
+			break
+		}
+		bodyID := r.ReadU32()
+		x := r.ReadF64()
+		y := r.ReadF64()
+		z := r.ReadF64()
+		qx := r.ReadF64()
+		qy := r.ReadF64()
+		qz := r.ReadF64()
+		qw := r.ReadF64()
+		vx := r.ReadF64()
+		vy := r.ReadF64()
+		vz := r.ReadF64()
+
+		if ent, ok := s.bodyMap[bodyID]; ok {
+			ent.Position = voplay.Vec3{x, y, z}
+			ent.Rotation = voplay.Quat{qx, qy, qz, qw}
+			ent.Physics.velocity = voplay.Vec3{vx, vy, vz}
+		}
+	}
+}
+
+// RayCast casts a ray into the 3D physics world and returns the first hit.
+func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsRayCast(s.worldID, origin.X, origin.Y, origin.Z, dir.X, dir.Y, dir.Z, maxDist)
+	if len(data) < 1 || data[0] == 0 {
+		return nil
+	}
+	r := codec.NewByteReader(data[1:])
+	bodyID := r.ReadU32()
+	hx := r.ReadF64()
+	hy := r.ReadF64()
+	hz := r.ReadF64()
+	nx := r.ReadF64()
+	ny := r.ReadF64()
+	nz := r.ReadF64()
+	dist := r.ReadF64()
+	ent, ok := s.bodyMap[bodyID]
+	if !ok {
+		return nil
+	}
+	return &RayCastHit{
+		Entity:   ent,
+		Point:    voplay.Vec3{hx, hy, hz},
+		Normal:   voplay.Vec3{nx, ny, nz},
+		Distance: dist,
+	}
+}
+
+// QueryAABB returns all physics entities whose colliders intersect the given axis-aligned bounding box.
+func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsQueryAABB(s.worldID, min.X, min.Y, min.Z, max.X, max.Y, max.Z)
+	r := codec.NewByteReader(data)
+	if r.Remaining() < 4 {
+		return nil
+	}
+	count := r.ReadU32()
+	var result []*Entity
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 4 {
+			break
+		}
+		bodyID := r.ReadU32()
+		if ent, ok := s.bodyMap[bodyID]; ok && ent.Active {
+			result = append(result, ent)
+		}
+	}
+	return result
+}
+
+// Contacts returns active collision pairs from the 3D physics world.
+func (s *Scene) Contacts() []Contact {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsContacts(s.worldID)
+	r := codec.NewByteReader(data)
+	if r.Remaining() < 4 {
+		return nil
+	}
+	count := r.ReadU32()
+	var contacts []Contact
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 8 {
+			break
+		}
+		idA := r.ReadU32()
+		idB := r.ReadU32()
+		a, okA := s.bodyMap[idA]
+		b, okB := s.bodyMap[idB]
+		if okA && okB && a.Active && b.Active {
+			contacts = append(contacts, Contact{A: a, B: b})
+		}
+	}
+	return contacts
+}

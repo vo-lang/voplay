@@ -5,7 +5,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use crate::pipeline2d::{QuadVertex, QUAD_VERTICES};
-use crate::texture::{TextureId, TextureManager};
+use crate::texture::TextureId;
 
 /// Per-instance data for a sprite.
 #[repr(C)]
@@ -39,40 +39,6 @@ impl SpriteInstance {
 pub struct SpriteDraw {
     pub texture_id: TextureId,
     pub instance: SpriteInstance,
-}
-
-/// Collects sprite draws per frame, then flushes in texture-batched order.
-pub struct SpriteBatch {
-    draws: Vec<SpriteDraw>,
-}
-
-impl SpriteBatch {
-    pub fn new() -> Self {
-        Self {
-            draws: Vec::with_capacity(256),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.draws.clear();
-    }
-
-    pub fn push(&mut self, draw: SpriteDraw) {
-        self.draws.push(draw);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.draws.is_empty()
-    }
-
-    /// Sort by texture ID so we can batch draws per texture.
-    pub fn sort_by_texture(&mut self) {
-        self.draws.sort_by_key(|d| d.texture_id);
-    }
-
-    pub fn draws(&self) -> &[SpriteDraw] {
-        &self.draws
-    }
 }
 
 const INITIAL_SPRITE_CAPACITY: usize = 1024;
@@ -168,27 +134,18 @@ impl PipelineSprite {
         }
     }
 
-    /// Upload a batch of sprite instances and draw them, grouped by texture.
-    /// Must be called within an active render pass.
-    pub fn draw_batch<'a>(
-        &'a mut self,
+    /// Upload pre-sorted sprite instances to the GPU buffer.
+    pub fn upload_instances(
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        pass: &mut wgpu::RenderPass<'a>,
-        camera_bind_group: &'a wgpu::BindGroup,
-        batch: &mut SpriteBatch,
-        textures: &'a TextureManager,
+        instances: &[SpriteInstance],
     ) {
-        if batch.is_empty() {
+        if instances.is_empty() {
             return;
         }
-
-        batch.sort_by_texture();
-        let draws = batch.draws();
-
-        // Ensure instance buffer is large enough for the whole batch
-        if draws.len() > self.instance_capacity {
-            let new_capacity = draws.len().next_power_of_two();
+        if instances.len() > self.instance_capacity {
+            let new_capacity = instances.len().next_power_of_two();
             self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("voplay_sprite_ib"),
                 size: (new_capacity * std::mem::size_of::<SpriteInstance>()) as u64,
@@ -197,40 +154,28 @@ impl PipelineSprite {
             });
             self.instance_capacity = new_capacity;
         }
+        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
+    }
 
-        // Upload all instances at once
-        let all_instances: Vec<SpriteInstance> = draws.iter().map(|d| d.instance).collect();
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&all_instances));
-
+    /// Draw a sub-range of uploaded sprites with a specific texture.
+    pub fn draw_range<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        camera_bind_group: &'a wgpu::BindGroup,
+        camera_offset: &[u32],
+        texture_bind_group: &'a wgpu::BindGroup,
+        start: u32,
+        count: u32,
+    ) {
+        if count == 0 {
+            return;
+        }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, camera_bind_group, &[]);
+        pass.set_bind_group(0, camera_bind_group, camera_offset);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-
-        // Draw in texture-contiguous batches
-        let mut batch_start = 0usize;
-        while batch_start < draws.len() {
-            let tex_id = draws[batch_start].texture_id;
-            let gpu_tex = match textures.get(tex_id) {
-                Some(t) => t,
-                None => {
-                    log::warn!("voplay: sprite references unknown texture {}", tex_id);
-                    batch_start += 1;
-                    continue;
-                }
-            };
-
-            // Find end of this texture run
-            let mut batch_end = batch_start + 1;
-            while batch_end < draws.len() && draws[batch_end].texture_id == tex_id {
-                batch_end += 1;
-            }
-
-            let count = (batch_end - batch_start) as u32;
-            pass.set_bind_group(1, &gpu_tex.bind_group, &[]);
-            pass.draw(0..6, batch_start as u32..batch_start as u32 + count);
-
-            batch_start = batch_end;
-        }
+        pass.set_bind_group(1, texture_bind_group, &[]);
+        pass.draw(0..6, start..start + count);
     }
+
 }

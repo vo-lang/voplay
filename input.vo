@@ -2,6 +2,9 @@
 // Events are unpacked from binary data returned by pollInput extern.
 package voplay
 
+import "math"
+import "github.com/vo-lang/voplay/codec"
+
 // Input event kinds (must match Rust encoder in input.rs).
 const (
 	inputKeyDown     = 0x01
@@ -20,14 +23,18 @@ type InputState struct {
 	keysReleased map[string]bool // released this frame
 
 	// Pointer state
-	pointerX, pointerY float64
-	pointerButtons     int   // bitmask of held buttons
-	pointerPressed     int   // buttons pressed this frame
-	pointerReleased    int   // buttons released this frame
+	pointerX, pointerY     float64
+	prevPointerX, prevPointerY float64
+	pointerButtons         int   // bitmask of held buttons
+	pointerPressed         int   // buttons pressed this frame
+	pointerReleased        int   // buttons released this frame
 
 	// Scroll wheel
 	scrollX, scrollY float64
 }
+
+// NewInputState creates a new InputState with empty state.
+func NewInputState() *InputState { return newInputState() }
 
 func newInputState() *InputState {
 	return &InputState{
@@ -39,7 +46,7 @@ func newInputState() *InputState {
 
 // unpackEvents decodes binary input events from pollInput.
 func (inp *InputState) unpackEvents(data []byte) {
-	r := NewByteReader(data)
+	r := codec.NewByteReader(data)
 	for r.Remaining() > 0 {
 		kind := r.ReadByte()
 		switch kind {
@@ -68,7 +75,7 @@ func (inp *InputState) unpackEvents(data []byte) {
 		case inputPointerMove:
 			inp.pointerX = r.ReadF64()
 			inp.pointerY = r.ReadF64()
-			inp.pointerButtons = int(r.ReadByte())
+			_ = r.ReadByte() // button byte present in wire format but ignored for move events
 		case inputScroll:
 			inp.scrollX += r.ReadF64()
 			inp.scrollY += r.ReadF64()
@@ -78,7 +85,7 @@ func (inp *InputState) unpackEvents(data []byte) {
 	}
 }
 
-// endFrame clears per-frame flags (pressed/released).
+// endFrame clears per-frame flags (pressed/released) and snapshots pointer for delta.
 func (inp *InputState) endFrame() {
 	for k := range inp.keysPressed {
 		delete(inp.keysPressed, k)
@@ -88,6 +95,8 @@ func (inp *InputState) endFrame() {
 	}
 	inp.pointerPressed = 0
 	inp.pointerReleased = 0
+	inp.prevPointerX = inp.pointerX
+	inp.prevPointerY = inp.pointerY
 	inp.scrollX = 0
 	inp.scrollY = 0
 }
@@ -138,16 +147,31 @@ func (inp *InputState) ScrollDelta() (float64, float64) {
 	return inp.scrollX, inp.scrollY
 }
 
+// PointerDelta returns the pointer movement since the last frame.
+func (inp *InputState) PointerDelta() (float64, float64) {
+	return inp.pointerX - inp.prevPointerX, inp.pointerY - inp.prevPointerY
+}
+
 // WorldPointerPos converts pointer screen position to world coordinates
-// using the given 2D camera and screen dimensions.
-func (inp *InputState) WorldPointerPos(cam *Camera2D, screenW, screenH float64) (float64, float64) {
-	return cam.ScreenToWorld(inp.pointerX, inp.pointerY, screenW, screenH)
+// using the given 2D camera parameters (including rotation) and screen dimensions.
+func (inp *InputState) WorldPointerPos(camX, camY, camZoom, camRotation, screenW, screenH float64) (float64, float64) {
+	if camZoom == 0 {
+		panic("WorldPointerPos: camZoom must not be 0")
+	}
+	// Translate to camera-relative screen coords, then undo zoom
+	rx := (inp.pointerX - screenW/2) / camZoom
+	ry := (inp.pointerY - screenH/2) / camZoom
+	// Undo camera rotation (rotate by -camRotation)
+	cos := math.Cos(-camRotation)
+	sin := math.Sin(-camRotation)
+	wx := rx*cos - ry*sin + camX
+	wy := rx*sin + ry*cos + camY
+	return wx, wy
 }
 
 // --- binary decode helpers ---
 
 func decodeKeyEvent(r *ByteReader) string {
-	_ = r.ReadU16() // keyCode (unused for now)
 	nameLen := int(r.ReadByte())
 	return string(r.ReadBytes(nameLen))
 }

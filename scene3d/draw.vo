@@ -1,0 +1,25 @@
+// Scene3D draw convenience functions.
+// These wrap voplay.DrawCtx methods with scene3d types (Scene, Light).
+package scene3d
+
+import "github.com/vo-lang/voplay"
+
+// SetLights encodes the lighting state for subsequent 3D draw commands.
+func SetLights(d *voplay.DrawCtx, ambient voplay.Color, lights []Light) {
+	d.SetLights3D(ambient, lights)
+}
+
+// DrawScene draws the entire 3D scene: camera, lights, then all visible entities.
+// Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
+func DrawScene(d *voplay.DrawCtx, s *Scene) {
+	c := &s.Camera
+	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
+	SetLights(d, s.Ambient, s.Lights)
+	for _, n := range s.VisibleEntities() {
+		if n.Model == 0 {
+			continue
+		}
+		d.DrawModel(n.Model, n.Position, n.Rotation, n.Scale)
+	}
+	d.ResetCamera()
+}

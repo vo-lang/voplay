@@ -1,0 +1,173 @@
+// Physics types, colliders, and extern declarations for 2D physics.
+package scene2d
+
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+// BodyType determines how the physics engine treats a body.
+type BodyType int
+
+const (
+	Dynamic   BodyType = 0
+	Static    BodyType = 1
+	Kinematic BodyType = 2
+)
+
+// Physics is the physics configuration and runtime state for a 2D entity.
+type Physics struct {
+	Type          BodyType
+	Collider      Collider
+	Density       float64
+	Friction      float64
+	Restitution   float64
+	LinearDamping float64
+	FixedRotation bool
+
+	// Runtime state (managed by Scene, not user-set).
+	bodyID   int
+	velocity voplay.Vec2
+}
+
+// Collider is a tagged value type for 2D physics shapes.
+type Collider struct {
+	kind int
+	args [3]float64
+}
+
+// Collider kind constants (must match Rust ColliderKind in physics.rs).
+const (
+	colliderBox2D    = 1
+	colliderCircle2D = 2
+	colliderCapsule  = 3
+)
+
+// Collider shape type constants.
+const (
+	ColliderBox     = colliderBox2D
+	ColliderCircle  = colliderCircle2D
+	ColliderCapsule = colliderCapsule
+)
+
+// 2D collider constructors.
+func Box(halfW, halfH float64) Collider {
+	return Collider{kind: colliderBox2D, args: [3]float64{halfW, halfH, 0}}
+}
+func Circle(radius float64) Collider {
+	return Collider{kind: colliderCircle2D, args: [3]float64{radius, 0, 0}}
+}
+func Capsule(halfHeight, radius float64) Collider {
+	return Collider{kind: colliderCapsule, args: [3]float64{halfHeight, radius, 0}}
+}
+
+// Kind returns the collider shape type (ColliderBox, ColliderCircle, or ColliderCapsule).
+func (c Collider) Kind() int {
+	return c.kind
+}
+
+// Args returns the raw shape arguments.
+// Box: [halfW, halfH, 0], Circle: [radius, 0, 0], Capsule: [halfHeight, radius, 0].
+func (c Collider) Args() [3]float64 {
+	return c.args
+}
+
+// Contact represents an active collision pair between two entities.
+type Contact struct {
+	A *Entity
+	B *Entity
+}
+
+// RayCastHit describes a ray cast hit in the 2D physics world.
+type RayCastHit struct {
+	Entity   *Entity
+	Point    voplay.Vec2
+	Normal   voplay.Vec2
+	Distance float64
+}
+
+// Physics command opcodes (must match Rust physics.rs).
+const (
+	physicsCmdForce   byte = 1
+	physicsCmdImpulse byte = 2
+	physicsCmdSetVel  byte = 3
+	physicsCmdSetPos  byte = 4
+)
+
+// writePhysCmd appends a physics command to this scene's command buffer.
+func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2 float64) {
+	s.physCmds.WriteByte(cmd)
+	s.physCmds.WriteU32(bodyID)
+	s.physCmds.WriteF64(v1)
+	s.physCmds.WriteF64(v2)
+}
+
+// ApplyForce applies a force to a physics entity (buffered until next step).
+func (e *Entity) ApplyForce(fx, fy float64) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, fx, fy)
+}
+
+// ApplyImpulse applies an impulse to a physics entity (buffered until next step).
+func (e *Entity) ApplyImpulse(ix, iy float64) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, ix, iy)
+}
+
+// SetVelocity sets the linear velocity of a physics entity (buffered until next step).
+func (e *Entity) SetVelocity(vx, vy float64) {
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vx, vy)
+}
+
+// SetPosition teleports a physics entity to the given position (buffered until next step).
+// For non-physics entities, sets X/Y directly.
+func (e *Entity) SetPosition(x, y float64) {
+	e.X = x
+	e.Y = y
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, x, y)
+	}
+}
+
+// Velocity returns the current linear velocity (updated after each physics step).
+// Panics if the entity has no Physics component.
+func (e *Entity) Velocity() voplay.Vec2 {
+	return e.Physics.velocity
+}
+
+// serializeBodyDesc encodes a body description for the physics extern.
+func serializeBodyDesc(e *Entity) []byte {
+	p := e.Physics
+	w := codec.NewByteWriter(83)
+	w.WriteByte(byte(p.Type))
+	w.WriteByte(byte(p.Collider.kind))
+	w.WriteBool(p.FixedRotation)
+	w.WriteF64(e.X)
+	w.WriteF64(e.Y)
+	w.WriteF64(e.Rotation)
+	w.WriteF64(p.Collider.args[0])
+	w.WriteF64(p.Collider.args[1])
+	w.WriteF64(p.Collider.args[2])
+	w.WriteF64(p.Density)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	w.WriteF64(p.LinearDamping)
+	return w.Bytes()
+}
+
+// --- Physics extern declarations (implemented in Rust) ---
+
+func physicsInit(gravityX, gravityY float64) int
+func physicsDestroy(worldID int)
+func physicsSpawnBody(worldID int, bodyID int, data []byte)
+func physicsDestroyBody(worldID int, bodyID int)
+func physicsStep(worldID int, dt float64, cmds []byte) []byte
+func physicsContacts(worldID int) []byte
+func physicsSetGravity(worldID int, gx, gy float64)
+func physicsRayCast(worldID int, ox, oy, dx, dy, maxDist float64) []byte
+func physicsQueryRect(worldID int, minX, minY, maxX, maxY float64) []byte

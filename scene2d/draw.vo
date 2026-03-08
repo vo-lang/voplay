@@ -1,0 +1,113 @@
+// Scene2D draw convenience functions.
+// These wrap voplay.DrawCtx methods with scene2d types (Sprite, Tilemap, Scene).
+package scene2d
+
+import "github.com/vo-lang/voplay"
+
+// DrawSprite draws a sprite at the given position and size using its current animation frame.
+func DrawSprite(d *voplay.DrawCtx, spr *Sprite, x, y, w, h float64) {
+	DrawSpriteRotated(d, spr, x, y, w, h, spr.Rotation)
+}
+
+// DrawSpriteRotated draws a sprite with an explicit rotation (radians).
+func DrawSpriteRotated(d *voplay.DrawCtx, spr *Sprite, x, y, w, h, rotation float64) {
+	srcX, srcY, srcW, srcH := spr.SrcX, spr.SrcY, spr.SrcW, spr.SrcH
+	if spr.Anim != nil {
+		srcX, srcY, srcW, srcH = spr.Anim.CurrentFrame()
+	}
+	d.DrawSprite(spr.Texture, srcX, srcY, srcW, srcH, x, y, w, h, spr.FlipX, spr.FlipY, rotation, spr.Tint)
+}
+
+// DrawTilemap draws visible tiles of a tilemap layer within the given viewport.
+// viewX, viewY, viewW, viewH define the visible world-space rect (use Camera.ViewRect).
+func DrawTilemap(d *voplay.DrawCtx, tm *Tilemap, layerIdx int, viewX, viewY, viewW, viewH float64) {
+	if tm == nil || tm.TileSet == nil {
+		return
+	}
+	if layerIdx < 0 || layerIdx >= len(tm.Layers) {
+		return
+	}
+	ts := tm.TileSet
+	tw := float64(ts.TileW)
+	th := float64(ts.TileH)
+	layer := tm.Layers[layerIdx]
+
+	// Compute visible tile range (clamped to tilemap bounds)
+	colStart := int(viewX / tw)
+	rowStart := int(viewY / th)
+	colEnd := int((viewX + viewW) / tw) + 1
+	rowEnd := int((viewY + viewH) / th) + 1
+	if colStart < 0 {
+		colStart = 0
+	}
+	if rowStart < 0 {
+		rowStart = 0
+	}
+	if colEnd > tm.Width {
+		colEnd = tm.Width
+	}
+	if rowEnd > tm.Height {
+		rowEnd = tm.Height
+	}
+
+	for row := rowStart; row < rowEnd; row++ {
+		for col := colStart; col < colEnd; col++ {
+			tileIdx := layer.Tiles[row*tm.Width+col]
+			if tileIdx < 0 {
+				continue // empty tile
+			}
+			// Compute source rect in tileset
+			srcCol := tileIdx % ts.Columns
+			srcRow := tileIdx / ts.Columns
+			srcX := float64(srcCol * ts.TileW)
+			srcY := float64(srcRow * ts.TileH)
+			// Destination position in world space
+			dx := float64(col) * tw
+			dy := float64(row) * th
+			d.DrawSprite(ts.Texture, srcX, srcY, tw, th, dx, dy, tw, th, false, false, 0, voplay.White)
+		}
+	}
+}
+
+// DrawScene draws the entire 2D scene: camera, tilemap (if set), then entities sorted by ZOrder.
+// screenW and screenH are the current viewport dimensions (used for tilemap culling).
+func DrawScene(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
+	d.SetCamera2D(s.Camera.X, s.Camera.Y, s.Camera.Zoom, s.Camera.Rotation)
+
+	// Draw tilemap layers (bottom to top, before entities)
+	if s.Tilemap != nil && screenW > 0 {
+		vr := s.Camera.ViewRect(screenW, screenH)
+		for i := range s.Tilemap.Layers {
+			DrawTilemap(d, s.Tilemap, i, vr.X, vr.Y, vr.W, vr.H)
+		}
+	}
+
+	// Collect visible entities and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
+	sorted := s.VisibleEntities()
+	for i := 1; i < len(sorted); i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j].ZOrder > key.ZOrder {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+
+	for _, e := range sorted {
+		if e.Sprite == nil {
+			continue
+		}
+		w := e.W * e.ScaleX
+		h := e.H * e.ScaleY
+		x := e.X - w/2
+		y := e.Y - h/2
+		if e.Rotation != 0 {
+			DrawSpriteRotated(d, e.Sprite, x, y, w, h, e.Rotation)
+		} else {
+			DrawSprite(d, e.Sprite, x, y, w, h)
+		}
+	}
+
+	d.ResetCamera()
+}

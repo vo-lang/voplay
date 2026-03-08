@@ -6,14 +6,31 @@
 
 use rapier2d::prelude::*;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
-/// Body type matching Vo's BodyType enum.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug)]
-pub enum PhysBodyType {
-    Dynamic = 0,
-    Static = 1,
-    Kinematic = 2,
+use crate::physics_registry::{WorldRegistry, PhysBodyType, with_world_in};
+
+/// Global registry of 2D physics worlds, keyed by world handle.
+static REGISTRY: Mutex<Option<WorldRegistry<PhysicsWorld2D>>> = Mutex::new(None);
+
+/// Create a new 2D physics world and return its handle.
+pub fn create_world(gravity_x: f32, gravity_y: f32) -> u32 {
+    let mut reg = REGISTRY.lock().unwrap();
+    let reg = reg.get_or_insert_with(WorldRegistry::new);
+    reg.insert(PhysicsWorld2D::new(gravity_x, gravity_y))
+}
+
+/// Destroy a 2D physics world by handle.
+pub fn destroy_world(world_id: u32) {
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(reg) = reg.as_mut() {
+        reg.remove(world_id);
+    }
+}
+
+/// Access a physics world by handle. Panics if not found.
+pub fn with_world<R>(world_id: u32, f: impl FnOnce(&mut PhysicsWorld2D) -> R) -> R {
+    with_world_in(&REGISTRY, world_id, f)
 }
 
 /// Collider kind matching Vo's Collider.kind field.
@@ -64,6 +81,9 @@ pub struct PhysicsWorld2D {
 
     // Handle registry: Vo body_id -> Rapier handle
     handle_map: HashMap<u32, RigidBodyHandle>,
+    /// Reverse map from Rapier RigidBodyHandle → Vo body ID (for contact/query).
+    reverse_map: HashMap<RigidBodyHandle, u32>,
+    query_pipeline: QueryPipeline,
 }
 
 impl PhysicsWorld2D {
@@ -82,6 +102,8 @@ impl PhysicsWorld2D {
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             handle_map: HashMap::new(),
+            reverse_map: HashMap::new(),
+            query_pipeline: QueryPipeline::new(),
         }
     }
 
@@ -147,11 +169,13 @@ impl PhysicsWorld2D {
 
         self.collider_set.insert_with_parent(collider, rb_handle, &mut self.rigid_body_set);
         self.handle_map.insert(desc.body_id, rb_handle);
+        self.reverse_map.insert(rb_handle, desc.body_id);
     }
 
     /// Destroy a body by Vo body_id.
     pub fn destroy_body(&mut self, body_id: u32) {
         if let Some(handle) = self.handle_map.remove(&body_id) {
+            self.reverse_map.remove(&handle);
             self.rigid_body_set.remove(
                 handle,
                 &mut self.island_manager,
@@ -233,62 +257,128 @@ impl PhysicsWorld2D {
             &mut self.impulse_joint_set,
             &mut self.multibody_joint_set,
             &mut self.ccd_solver,
-            None,
+            Some(&mut self.query_pipeline),
             &(),
             &(),
         );
     }
 
-    /// Serialize all body positions into a byte buffer.
+    /// Serialize non-fixed body positions into a byte buffer.
     /// Format: [count: u32, then for each body: body_id: u32, x: f64, y: f64, rotation: f64, vx: f64, vy: f64]
     pub fn serialize_state(&self) -> Vec<u8> {
-        let count = self.handle_map.len() as u32;
+        // Count non-fixed bodies (static bodies never move, skip them)
+        let count = self
+            .handle_map
+            .iter()
+            .filter(|(_, h)| {
+                self.rigid_body_set
+                    .get(**h)
+                    .map(|rb| !rb.is_fixed())
+                    .unwrap_or(false)
+            })
+            .count();
+
         // 4 bytes count + 44 bytes per body (4 + 5*8)
-        let mut buf = Vec::with_capacity(4 + self.handle_map.len() * 44);
-        buf.extend_from_slice(&count.to_le_bytes());
+        let mut buf = Vec::with_capacity(4 + count * 44);
+        buf.extend_from_slice(&(count as u32).to_le_bytes());
 
         for (&body_id, &handle) in &self.handle_map {
-            if let Some(rb) = self.rigid_body_set.get(handle) {
-                let pos = rb.translation();
-                let rot = rb.rotation().angle();
-                let vel = rb.linvel();
-                buf.extend_from_slice(&body_id.to_le_bytes());
-                buf.extend_from_slice(&(pos.x as f64).to_le_bytes());
-                buf.extend_from_slice(&(pos.y as f64).to_le_bytes());
-                buf.extend_from_slice(&(rot as f64).to_le_bytes());
-                buf.extend_from_slice(&(vel.x as f64).to_le_bytes());
-                buf.extend_from_slice(&(vel.y as f64).to_le_bytes());
+            let rb = match self.rigid_body_set.get(handle) {
+                Some(rb) => rb,
+                None => continue,
+            };
+            if rb.is_fixed() {
+                continue;
             }
+
+            let pos = rb.translation();
+            let rot = rb.rotation().angle();
+            let vel = rb.linvel();
+            buf.extend_from_slice(&body_id.to_le_bytes());
+            buf.extend_from_slice(&(pos.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(pos.y as f64).to_le_bytes());
+            buf.extend_from_slice(&(rot as f64).to_le_bytes());
+            buf.extend_from_slice(&(vel.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(vel.y as f64).to_le_bytes());
         }
 
         buf
+    }
+
+    /// Ray cast into the 2D physics world.
+    /// Returns the first hit: (body_id, hit_x, hit_y, normal_x, normal_y, toi).
+    pub fn ray_cast(&self, ox: f32, oy: f32, dx: f32, dy: f32, max_dist: f32) -> Option<(u32, f32, f32, f32, f32, f32)> {
+        let ray = Ray::new(point![ox, oy], vector![dx, dy]);
+        let filter = QueryFilter::default();
+
+        if let Some((col_handle, intersection)) = self.query_pipeline.cast_ray_and_get_normal(
+            &self.rigid_body_set,
+            &self.collider_set,
+            &ray,
+            max_dist,
+            true,
+            filter,
+        ) {
+            let rb_handle = self.collider_set.get(col_handle).and_then(|c| c.parent());
+            if let Some(h) = rb_handle {
+                if let Some(&body_id) = self.reverse_map.get(&h) {
+                    let hit_point = ray.point_at(intersection.time_of_impact);
+                    return Some((
+                        body_id,
+                        hit_point.x,
+                        hit_point.y,
+                        intersection.normal.x,
+                        intersection.normal.y,
+                        intersection.time_of_impact,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// Query all bodies whose colliders intersect an AABB rectangle.
+    /// Returns a list of body_ids.
+    pub fn query_rect(&self, min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Vec<u32> {
+        let aabb = Aabb {
+            mins: point![min_x, min_y],
+            maxs: point![max_x, max_y],
+        };
+
+        let mut result = Vec::new();
+        self.query_pipeline.colliders_with_aabb_intersecting_aabb(&aabb, |col_handle| {
+            let rb_handle = self.collider_set.get(*col_handle).and_then(|c| c.parent());
+            if let Some(h) = rb_handle {
+                if let Some(&body_id) = self.reverse_map.get(&h) {
+                    if !result.contains(&body_id) {
+                        result.push(body_id);
+                    }
+                }
+            }
+            true // continue iterating
+        });
+        result
     }
 
     /// Get contact events from the narrow phase.
     /// Returns pairs of body IDs that are in contact.
     pub fn get_contacts(&self) -> Vec<(u32, u32)> {
         let mut contacts = Vec::new();
-        // Build reverse map: collider handle -> body_id
-        let mut collider_to_body: HashMap<ColliderHandle, u32> = HashMap::new();
-        for (&body_id, &rb_handle) in &self.handle_map {
-            if let Some(rb) = self.rigid_body_set.get(rb_handle) {
-                for &col_handle in rb.colliders() {
-                    collider_to_body.insert(col_handle, body_id);
+        for pair in self.narrow_phase.contact_pairs() {
+            if !pair.has_any_active_contact {
+                continue;
+            }
+            let rb1 = self.collider_set.get(pair.collider1).and_then(|c| c.parent());
+            let rb2 = self.collider_set.get(pair.collider2).and_then(|c| c.parent());
+            if let (Some(h1), Some(h2)) = (rb1, rb2) {
+                if let (Some(&id1), Some(&id2)) = (
+                    self.reverse_map.get(&h1),
+                    self.reverse_map.get(&h2),
+                ) {
+                    contacts.push((id1, id2));
                 }
             }
         }
-
-        self.narrow_phase.contact_pairs().for_each(|pair| {
-            if pair.has_any_active_contact {
-                if let (Some(&id_a), Some(&id_b)) = (
-                    collider_to_body.get(&pair.collider1),
-                    collider_to_body.get(&pair.collider2),
-                ) {
-                    contacts.push((id_a, id_b));
-                }
-            }
-        });
-
         contacts
     }
 }

@@ -1,6 +1,11 @@
 // ByteWriter and ByteReader for binary encoding/decoding.
 // Used by DrawCtx, physics command buffers, and state deserialization.
-package voplay
+//
+// This package exists to keep serialization primitives out of the public
+// voplay API surface. Game code should not import this package directly.
+package codec
+
+import "math"
 
 // ByteWriter appends binary data to a byte slice.
 type ByteWriter struct {
@@ -28,11 +33,16 @@ func (w *ByteWriter) WriteU32(v int) {
 }
 
 func (w *ByteWriter) WriteF64(v float64) {
-	b := float64Bits(v)
+	b := math.Float64bits(v)
 	w.buf = append(w.buf,
 		byte(b), byte(b>>8), byte(b>>16), byte(b>>24),
 		byte(b>>32), byte(b>>40), byte(b>>48), byte(b>>56),
 	)
+}
+
+func (w *ByteWriter) WriteF32(v float64) {
+	b := math.Float32bits(float32(v))
+	w.buf = append(w.buf, byte(b), byte(b>>8), byte(b>>16), byte(b>>24))
 }
 
 func (w *ByteWriter) WriteBool(v bool) {
@@ -92,5 +102,12 @@ func (r *ByteReader) ReadF64() float64 {
 	bits := uint64(d[0]) | uint64(d[1])<<8 | uint64(d[2])<<16 | uint64(d[3])<<24 |
 		uint64(d[4])<<32 | uint64(d[5])<<40 | uint64(d[6])<<48 | uint64(d[7])<<56
 	r.pos += 8
-	return float64FromBits(bits)
+	return math.Float64frombits(int(bits))
+}
+
+func (r *ByteReader) ReadF32() float64 {
+	d := r.data[r.pos:]
+	bits := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
+	r.pos += 4
+	return float64(math.Float32frombits(bits))
 }

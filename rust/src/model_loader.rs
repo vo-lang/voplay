@@ -70,6 +70,8 @@ impl ModelManager {
     }
 
     /// Load a model from a file path (glTF or GLB).
+    /// Uses gltf::import so external .bin buffers and texture files are resolved
+    /// relative to the file's directory, supporting both GLB and split .gltf+.bin layouts.
     pub fn load_file(
         &mut self,
         device: &wgpu::Device,
@@ -77,12 +79,14 @@ impl ModelManager {
         texture_manager: &mut TextureManager,
         path: &str,
     ) -> Result<ModelId, String> {
-        let data = std::fs::read(path)
-            .map_err(|e| format!("read model '{}': {}", path, e))?;
-        self.load_bytes(device, queue, texture_manager, &data, Some(path))
+        let (document, buffers, images) = gltf::import(path)
+            .map_err(|e| format!("gltf import '{}': {}", path, e))?;
+        self.upload_gltf(device, queue, texture_manager, document, buffers, images, path)
     }
 
     /// Load a model from raw glTF/GLB bytes.
+    /// Only supports self-contained formats (GLB or glTF with all buffers/textures embedded).
+    /// For .gltf files with external .bin or texture files, use load_file instead.
     pub fn load_bytes(
         &mut self,
         device: &wgpu::Device,
@@ -93,8 +97,22 @@ impl ModelManager {
     ) -> Result<ModelId, String> {
         let (document, buffers, images) = gltf::import_slice(data)
             .map_err(|e| format!("gltf import: {}", e))?;
+        let label = source_path.unwrap_or("<bytes>");
+        self.upload_gltf(device, queue, texture_manager, document, buffers, images, label)
+    }
 
-        // Upload embedded textures
+    /// Upload a parsed glTF document to GPU. Shared by load_file and load_bytes.
+    fn upload_gltf(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_manager: &mut TextureManager,
+        document: gltf::Document,
+        buffers: Vec<gltf::buffer::Data>,
+        images: Vec<gltf::image::Data>,
+        label: &str,
+    ) -> Result<ModelId, String> {
+        // Upload embedded/resolved textures
         let mut tex_map: HashMap<usize, TextureId> = HashMap::new();
         for (idx, image) in images.iter().enumerate() {
             let rgba = match image.format {
@@ -192,10 +210,7 @@ impl ModelManager {
         }
 
         if gpu_meshes.is_empty() {
-            return Err(format!(
-                "model '{}' contains no renderable meshes",
-                source_path.unwrap_or("<bytes>")
-            ));
+            return Err(format!("model '{}' contains no renderable meshes", label));
         }
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);

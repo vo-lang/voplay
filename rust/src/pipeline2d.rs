@@ -4,9 +4,9 @@
 use bytemuck::{Pod, Zeroable};
 
 // Shape type constants (matched in WGSL shader).
-const SHAPE_RECT: f32 = 0.0;
-const SHAPE_CIRCLE: f32 = 1.0;
-const SHAPE_LINE: f32 = 2.0;
+#[allow(dead_code)] const SHAPE_RECT: f32 = 0.0;
+#[allow(dead_code)] const SHAPE_CIRCLE: f32 = 1.0;
+#[allow(dead_code)] const SHAPE_LINE: f32 = 2.0;
 
 /// Vertex for the unit quad.
 #[repr(C)]
@@ -143,91 +143,6 @@ pub struct Pipeline2D {
     instance_capacity: usize,
 }
 
-/// Batch of shape instances collected per frame.
-pub struct ShapeBatch {
-    instances: Vec<ShapeInstance>,
-    camera: CameraUniform,
-    camera_dirty: bool,
-}
-
-impl ShapeBatch {
-    pub fn new(width: f32, height: f32) -> Self {
-        Self {
-            instances: Vec::with_capacity(256),
-            camera: CameraUniform::screen_space(width, height),
-            camera_dirty: true,
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.instances.clear();
-        self.camera_dirty = false;
-    }
-
-    pub fn set_screen_space(&mut self, width: f32, height: f32) {
-        self.camera = CameraUniform::screen_space(width, height);
-        self.camera_dirty = true;
-    }
-
-    pub fn set_camera_2d(&mut self, width: f32, height: f32, x: f32, y: f32, zoom: f32, rotation: f32) {
-        self.camera = CameraUniform::with_camera(width, height, x, y, zoom, rotation);
-        self.camera_dirty = true;
-    }
-
-    pub fn push_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
-        self.instances.push(ShapeInstance {
-            rect: [x, y, w, h],
-            color,
-            params: [SHAPE_RECT, 0.0, 0.0, 0.0],
-        });
-    }
-
-    pub fn push_circle(&mut self, cx: f32, cy: f32, radius: f32, color: [f32; 4]) {
-        // Circle is rendered as a quad enclosing the circle; SDF in fragment shader.
-        let d = radius * 2.0;
-        self.instances.push(ShapeInstance {
-            rect: [cx - radius, cy - radius, d, d],
-            color,
-            params: [SHAPE_CIRCLE, 0.0, 0.0, 0.0],
-        });
-    }
-
-    pub fn push_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: [f32; 4]) {
-        // Line → oriented rectangle. Center at midpoint, size = (length, thickness), rotated.
-        let dx = x2 - x1;
-        let dy = y2 - y1;
-        let length = (dx * dx + dy * dy).sqrt();
-        let angle = dy.atan2(dx);
-        let cx = (x1 + x2) * 0.5;
-        let cy = (y1 + y2) * 0.5;
-        // Rect position is top-left, so offset from center.
-        let half_l = length * 0.5;
-        let half_t = thickness * 0.5;
-        self.instances.push(ShapeInstance {
-            rect: [cx - half_l, cy - half_t, length, thickness],
-            color,
-            params: [SHAPE_LINE, angle, 0.0, 0.0],
-        });
-    }
-
-    pub fn instance_count(&self) -> usize {
-        self.instances.len()
-    }
-
-    pub fn instance_data(&self) -> &[ShapeInstance] {
-        &self.instances
-    }
-
-    pub fn camera_uniform(&self) -> &CameraUniform {
-        &self.camera
-    }
-
-    #[allow(dead_code)]
-    pub fn is_camera_dirty(&self) -> bool {
-        self.camera_dirty
-    }
-}
-
 const INITIAL_INSTANCE_CAPACITY: usize = 1024;
 
 impl Pipeline2D {
@@ -316,23 +231,18 @@ impl Pipeline2D {
         }
     }
 
-    /// Upload batch data to GPU buffers. Must be called before `draw`.
-    /// Separated from draw to avoid borrow conflicts (mutable self for buffer growth
-    /// vs immutable self borrows inside the render pass).
-    pub fn prepare(
+    /// Upload pre-sorted shape instances to the GPU buffer.
+    pub fn upload_instances(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        batch: &ShapeBatch,
+        instances: &[ShapeInstance],
     ) {
-        let count = batch.instance_count();
-        if count == 0 {
+        if instances.is_empty() {
             return;
         }
-
-        // Grow instance buffer if needed
-        if count > self.instance_capacity {
-            let new_capacity = count.next_power_of_two();
+        if instances.len() > self.instance_capacity {
+            let new_capacity = instances.len().next_power_of_two();
             self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("voplay_shape_ib"),
                 size: (new_capacity * std::mem::size_of::<ShapeInstance>()) as u64,
@@ -341,26 +251,25 @@ impl Pipeline2D {
             });
             self.instance_capacity = new_capacity;
         }
-
-        // Upload instance data
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(batch.instance_data()));
+        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
     }
 
-    /// Record draw commands into an active render pass.
-    /// Call `prepare` first.
-    pub fn draw<'a>(
+    /// Draw a sub-range of the uploaded instance buffer.
+    pub fn draw_range<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         camera_bind_group: &'a wgpu::BindGroup,
-        instance_count: u32,
+        camera_offset: &[u32],
+        start: u32,
+        count: u32,
     ) {
-        if instance_count == 0 {
+        if count == 0 {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, camera_bind_group, &[]);
+        pass.set_bind_group(0, camera_bind_group, camera_offset);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        pass.draw(0..6, 0..instance_count);
+        pass.draw(0..6, start..start + count);
     }
 }

@@ -1,12 +1,10 @@
 //! Native window + game loop support for voplay.
 //!
 //! Architecture: Vo drives the game loop via a tight `for {}`.
-//! Each frame, Vo calls `nativeFrame(cmds)` which:
-//!   1. Pumps winit events non-blocking (input, resize, close)
-//!   2. Applies pending resize to renderer
-//!   3. Submits draw commands directly to GPU (NOT via RedrawRequested —
-//!      that event has platform-inconsistent timing on Windows)
-//!   4. Returns (dt, closed) to Vo
+//! Each frame, Vo calls:
+//!   1. `nativePumpEvents()` — pumps winit events, applies resize, returns (dt, closed)
+//!   2. (game logic, physics, draw encoding)
+//!   3. `nativeSubmitFrame(cmds)` — submits draw commands to GPU
 //!
 //! Uses winit's `pump_app_events` API (macOS, Windows, Linux, Android).
 
@@ -194,8 +192,8 @@ impl ApplicationHandler for NativeApp {
                 };
                 let btn = match button {
                     winit::event::MouseButton::Left => 0,
-                    winit::event::MouseButton::Right => 1,
-                    winit::event::MouseButton::Middle => 2,
+                    winit::event::MouseButton::Middle => 1,
+                    winit::event::MouseButton::Right => 2,
                     _ => 0,
                 };
                 input::push_pointer_event(kind, self.cursor_x, self.cursor_y, btn);
@@ -259,21 +257,9 @@ pub fn init(width: u32, height: u32, title: &str) -> Result<(), String> {
     })
 }
 
-/// Pump OS events + submit draw commands + return dt.
+/// Pump OS events, apply resize, compute dt. Does NOT submit draw commands.
 /// Returns (dt_seconds, should_close).
-///
-/// Frame model:
-///   1. pump_app_events(ZERO) — processes input, resize, close (non-blocking)
-///   2. Apply pending resize to renderer
-///   3. Submit draw commands directly (NOT via RedrawRequested — that
-///      event has platform-inconsistent timing on Windows)
-///   4. Compute dt from wall clock
-///   5. Return (dt, closed) to Vo
-pub fn frame(cmds: Vec<u8>) -> (f64, bool) {
-    // 1. Pump OS events (input, resize, close).
-    //    We do NOT rely on RedrawRequested for game rendering — that event
-    //    is platform-inconsistent (Windows doesn't guarantee it fires on
-    //    request_redraw inside the handler). Instead we render directly below.
+pub fn pump_events() -> (f64, bool) {
     let mut exited = false;
     EVENT_LOOP.with(|el| {
         let mut el_opt = el.borrow_mut();
@@ -288,10 +274,6 @@ pub fn frame(cmds: Vec<u8>) -> (f64, bool) {
         }
     });
 
-    // 2. Handle pending resize + submit draw commands directly.
-    //    This runs outside pump_app_events, which is fine on Windows/Linux.
-    //    On macOS this may cause minor resize artifacts (acceptable trade-off
-    //    vs not rendering at all on Windows).
     APP.with(|app| {
         let mut app = app.borrow_mut();
 
@@ -299,15 +281,6 @@ pub fn frame(cmds: Vec<u8>) -> (f64, bool) {
         if let Some((w, h)) = app.new_size.take() {
             if let Some(renderer) = app.renderer.as_mut() {
                 renderer.resize(w, h);
-            }
-        }
-
-        // Submit draw commands
-        if !cmds.is_empty() {
-            if let Some(renderer) = app.renderer.as_mut() {
-                if let Err(e) = renderer.submit_frame(&cmds) {
-                    log::error!("voplay: submit_frame error: {}", e);
-                }
             }
         }
 
@@ -322,6 +295,21 @@ pub fn frame(cmds: Vec<u8>) -> (f64, bool) {
         let closed = app.should_close || exited;
         (dt, closed)
     })
+}
+
+/// Submit draw commands to the native renderer.
+pub fn submit_frame(cmds: Vec<u8>) {
+    if cmds.is_empty() {
+        return;
+    }
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        if let Some(renderer) = app.renderer.as_mut() {
+            if let Err(e) = renderer.submit_frame(&cmds) {
+                log::error!("voplay: submit_frame error: {}", e);
+            }
+        }
+    });
 }
 
 /// Get current window size.
@@ -339,109 +327,16 @@ pub fn window_size() -> (u32, u32) {
 }
 
 // ---------------------------------------------------------------------------
-// Texture management (delegated to renderer)
+// Renderer access (used by externs for resource management)
 // ---------------------------------------------------------------------------
 
-/// Load a texture from a file path via the native renderer.
-pub fn load_texture(path: &str) -> Result<u32, String> {
+/// Access the native renderer. Returns Err if not initialized.
+pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String> {
     APP.with(|app| {
         let mut app = app.borrow_mut();
         match app.renderer.as_mut() {
-            Some(r) => r.load_texture(path),
+            Some(r) => Ok(f(r)),
             None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Load a texture from encoded image bytes via the native renderer.
-pub fn load_texture_bytes(data: &[u8]) -> Result<u32, String> {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        match app.renderer.as_mut() {
-            Some(r) => r.load_texture_bytes(data),
-            None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Free a texture by ID via the native renderer.
-pub fn free_texture(id: u32) {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        if let Some(r) = app.renderer.as_mut() {
-            r.free_texture(id);
-        }
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Model management (delegated to renderer)
-// ---------------------------------------------------------------------------
-
-/// Load a model from a file path via the native renderer.
-pub fn load_model(path: &str) -> Result<u32, String> {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        match app.renderer.as_mut() {
-            Some(r) => r.load_model(path),
-            None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Load a model from raw glTF/GLB bytes via the native renderer.
-pub fn load_model_bytes(data: &[u8]) -> Result<u32, String> {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        match app.renderer.as_mut() {
-            Some(r) => r.load_model_bytes(data),
-            None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Free a model by ID via the native renderer.
-pub fn free_model(id: u32) {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        if let Some(r) = app.renderer.as_mut() {
-            r.free_model(id);
-        }
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Font management (delegated to renderer)
-// ---------------------------------------------------------------------------
-
-/// Load a font from a file path via the native renderer.
-pub fn load_font(path: &str) -> Result<u32, String> {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        match app.renderer.as_mut() {
-            Some(r) => r.load_font(path),
-            None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Load a font from raw TTF/OTF bytes via the native renderer.
-pub fn load_font_bytes(data: Vec<u8>) -> Result<u32, String> {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        match app.renderer.as_mut() {
-            Some(r) => r.load_font_bytes(data),
-            None => Err("voplay: renderer not initialized".to_string()),
-        }
-    })
-}
-
-/// Free a font by ID via the native renderer.
-pub fn free_font(id: u32) {
-    APP.with(|app| {
-        let mut app = app.borrow_mut();
-        if let Some(r) = app.renderer.as_mut() {
-            r.free_font(id);
         }
     })
 }

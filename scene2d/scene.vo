@@ -1,0 +1,441 @@
+// Scene manages 2D entities, camera, and physics.
+package scene2d
+
+import "math"
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+// Camera defines the 2D viewport.
+type Camera struct {
+	X, Y     float64 // center position
+	Zoom     float64 // 1.0 = no zoom
+	Rotation float64 // radians
+}
+
+// Follow moves the camera center to the given position.
+func (c *Camera) Follow(x, y float64) {
+	c.X = x
+	c.Y = y
+}
+
+// LerpFollow smoothly moves the camera toward a target position.
+func (c *Camera) LerpFollow(x, y, t float64) {
+	c.X += (x - c.X) * t
+	c.Y += (y - c.Y) * t
+}
+
+// ScreenToWorld converts screen pixel coordinates to world coordinates,
+// accounting for camera position, zoom, and rotation.
+func (c *Camera) ScreenToWorld(screenX, screenY, screenW, screenH float64) (float64, float64) {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	// Translate to camera-relative screen coords, then undo zoom
+	rx := (screenX - screenW/2) / c.Zoom
+	ry := (screenY - screenH/2) / c.Zoom
+	// Undo camera rotation (rotate by -Rotation)
+	cos := math.Cos(-c.Rotation)
+	sin := math.Sin(-c.Rotation)
+	wx := rx*cos - ry*sin + c.X
+	wy := rx*sin + ry*cos + c.Y
+	return wx, wy
+}
+
+// WorldToScreen converts world coordinates to screen pixel coordinates,
+// accounting for camera position, zoom, and rotation.
+func (c *Camera) WorldToScreen(worldX, worldY, screenW, screenH float64) (float64, float64) {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	// Translate relative to camera center
+	dx := worldX - c.X
+	dy := worldY - c.Y
+	// Apply camera rotation
+	cos := math.Cos(c.Rotation)
+	sin := math.Sin(c.Rotation)
+	rx := dx*cos - dy*sin
+	ry := dx*sin + dy*cos
+	// Apply zoom and translate to screen center
+	sx := rx*c.Zoom + screenW/2
+	sy := ry*c.Zoom + screenH/2
+	return sx, sy
+}
+
+// ViewRect returns the visible world-space rectangle (x, y, w, h).
+func (c *Camera) ViewRect(screenW, screenH float64) voplay.Rect {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	w := screenW / c.Zoom
+	h := screenH / c.Zoom
+	return voplay.Rect{
+		X: c.X - w/2,
+		Y: c.Y - h/2,
+		W: w,
+		H: h,
+	}
+}
+
+// Scene holds the 2D scene state.
+type Scene struct {
+	Camera  Camera
+	Tilemap *Tilemap // tilemap for this scene (nil = none)
+	Gravity voplay.Vec2
+
+	entities   []*Entity
+	visibleBuf []*Entity
+	worldID    int
+	nextBodyID int
+	physCmds   codec.ByteWriter
+	bodyMap    map[int]*Entity
+}
+
+// New creates a new Scene with default settings.
+func New() *Scene {
+	return &Scene{
+		Camera:     Camera{Zoom: 1.0},
+		Gravity:    voplay.Vec2{0, 9.8},
+		nextBodyID: 1,
+		physCmds:   codec.NewByteWriter(256),
+		bodyMap:    make(map[int]*Entity),
+	}
+}
+
+// Entity is a 2D game object managed by the scene.
+// Transform fields are always present. Optional components (Sprite, Physics)
+// are nil when not used. Physics runtime state (bodyID, velocity) lives in
+// the Physics struct, not on Entity.
+type Entity struct {
+	X, Y     float64
+	W, H     float64
+	Rotation float64
+	ScaleX   float64
+	ScaleY   float64
+	Sprite   *Sprite
+	Tag      string
+	Active   bool
+	Visible  bool
+	ZOrder   int
+	Data     any
+	Physics  *Physics
+	scene    *Scene
+}
+
+// Spawn creates an entity in the scene.
+// If Physics is set, a Rapier body is created via extern.
+func (s *Scene) Spawn(e Entity) *Entity {
+	if e.ScaleX == 0 {
+		e.ScaleX = 1
+	}
+	if e.ScaleY == 0 {
+		e.ScaleY = 1
+	}
+	e.Active = true
+	e.Visible = true
+	e.scene = s
+	if e.Physics != nil {
+		s.ensurePhysics()
+		e.Physics.bodyID = s.nextBodyID
+		s.nextBodyID++
+	}
+	ent := &e
+	s.entities = append(s.entities, ent)
+	if ent.Physics != nil {
+		s.bodyMap[ent.Physics.bodyID] = ent
+		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
+	}
+	return ent
+}
+
+// Destroy removes an entity from the scene.
+func (s *Scene) Destroy(e *Entity) {
+	e.Active = false
+	if e.Physics != nil {
+		delete(s.bodyMap, e.Physics.bodyID)
+		physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		e.Physics.bodyID = 0
+	}
+	e.scene = nil
+	// Swap-remove: O(1) instead of O(n) shift
+	for i, ent := range s.entities {
+		if ent == e {
+			last := len(s.entities) - 1
+			s.entities[i] = s.entities[last]
+			s.entities[last] = nil
+			s.entities = s.entities[:last]
+			return
+		}
+	}
+}
+
+// SetGravity changes the physics gravity at runtime.
+func (s *Scene) SetGravity(g voplay.Vec2) {
+	s.Gravity = g
+	if s.worldID != 0 {
+		physicsSetGravity(s.worldID, g.X, g.Y)
+	}
+}
+
+// ensurePhysics lazily initializes the Rapier physics world for this scene.
+func (s *Scene) ensurePhysics() {
+	if s.worldID != 0 {
+		return
+	}
+	s.worldID = physicsInit(s.Gravity.X, s.Gravity.Y)
+}
+
+// Contacts returns active collision pairs from the physics world.
+func (s *Scene) Contacts() []Contact {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsContacts(s.worldID)
+	r := codec.NewByteReader(data)
+	if r.Remaining() < 4 {
+		return nil
+	}
+	count := r.ReadU32()
+	var contacts []Contact
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 8 {
+			break
+		}
+		idA := r.ReadU32()
+		idB := r.ReadU32()
+		a, okA := s.bodyMap[idA]
+		b, okB := s.bodyMap[idB]
+		if okA && okB && a.Active && b.Active {
+			contacts = append(contacts, Contact{A: a, B: b})
+		}
+	}
+	return contacts
+}
+
+// RayCast casts a ray into the 2D physics world and returns the first hit.
+func (s *Scene) RayCast(origin, dir voplay.Vec2, maxDist float64) *RayCastHit {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsRayCast(s.worldID, origin.X, origin.Y, dir.X, dir.Y, maxDist)
+	if len(data) < 1 || data[0] == 0 {
+		return nil
+	}
+	r := codec.NewByteReader(data[1:])
+	bodyID := r.ReadU32()
+	hx := r.ReadF64()
+	hy := r.ReadF64()
+	nx := r.ReadF64()
+	ny := r.ReadF64()
+	dist := r.ReadF64()
+	ent, ok := s.bodyMap[bodyID]
+	if !ok {
+		return nil
+	}
+	return &RayCastHit{
+		Entity:   ent,
+		Point:    voplay.Vec2{hx, hy},
+		Normal:   voplay.Vec2{nx, ny},
+		Distance: dist,
+	}
+}
+
+// QueryRect returns all physics entities whose colliders intersect the given AABB rectangle.
+func (s *Scene) QueryRect(rect voplay.Rect) []*Entity {
+	if s.worldID == 0 {
+		return nil
+	}
+	data := physicsQueryRect(s.worldID, rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
+	r := codec.NewByteReader(data)
+	if r.Remaining() < 4 {
+		return nil
+	}
+	count := r.ReadU32()
+	var result []*Entity
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 4 {
+			break
+		}
+		bodyID := r.ReadU32()
+		if ent, ok := s.bodyMap[bodyID]; ok && ent.Active {
+			result = append(result, ent)
+		}
+	}
+	return result
+}
+
+// FindByTag returns the first active entity with the given tag, or nil.
+func (s *Scene) FindByTag(tag string) *Entity {
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			return e
+		}
+	}
+	return nil
+}
+
+// FindAllByTag returns all active entities with the given tag.
+func (s *Scene) FindAllByTag(tag string) []*Entity {
+	var result []*Entity
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// FindInRadius returns all active entities whose center is within radius of (x, y).
+func (s *Scene) FindInRadius(x, y, radius float64) []*Entity {
+	rSq := radius * radius
+	var result []*Entity
+	for _, e := range s.entities {
+		if !e.Active {
+			continue
+		}
+		dx := e.X - x
+		dy := e.Y - y
+		if dx*dx+dy*dy <= rSq {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// Clear removes all entities from the scene and destroys their physics bodies.
+func (s *Scene) Clear() {
+	for _, e := range s.entities {
+		if e.Physics != nil {
+			physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		}
+		e.scene = nil
+		e.Active = false
+	}
+	s.entities = s.entities[:0]
+	for k := range s.bodyMap {
+		delete(s.bodyMap, k)
+	}
+	s.physCmds.Reset()
+}
+
+// ForEach calls fn for every active entity.
+func (s *Scene) ForEach(fn func(e *Entity)) {
+	for _, e := range s.entities {
+		if e.Active {
+			fn(e)
+		}
+	}
+}
+
+// EntityCount returns the number of active entities.
+func (s *Scene) EntityCount() int {
+	n := 0
+	for _, e := range s.entities {
+		if e.Active {
+			n++
+		}
+	}
+	return n
+}
+
+// Entities returns a copy of the active entity list.
+func (s *Scene) Entities() []*Entity {
+	result := make([]*Entity, 0, len(s.entities))
+	for _, e := range s.entities {
+		if e.Active {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// UpdateAnimations advances all entity animations by dt seconds.
+func (s *Scene) UpdateAnimations(dt float64) {
+	for _, e := range s.entities {
+		if e.Active && e.Sprite != nil && e.Sprite.Anim != nil {
+			e.Sprite.Anim.Update(dt)
+		}
+	}
+}
+
+// VisibleEntities returns a slice of active+visible entities (for rendering).
+// The returned slice is reused across calls; callers must not retain it.
+func (s *Scene) VisibleEntities() []*Entity {
+	s.visibleBuf = s.visibleBuf[:0]
+	for _, e := range s.entities {
+		if e.Active && e.Visible {
+			s.visibleBuf = append(s.visibleBuf, e)
+		}
+	}
+	return s.visibleBuf
+}
+
+// HasPhysics returns true if a physics world is initialized.
+func (s *Scene) HasPhysics() bool {
+	return s.worldID != 0
+}
+
+// Close destroys the physics world and releases all resources.
+func (s *Scene) Close() {
+	s.Clear()
+	if s.worldID != 0 {
+		physicsDestroy(s.worldID)
+		s.worldID = 0
+	}
+}
+
+// StepAndSyncPhysics runs one physics step and syncs body state back to entities.
+func (s *Scene) StepAndSyncPhysics(dt float64) {
+	if s.worldID == 0 {
+		return
+	}
+	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
+	s.physCmds.Reset()
+
+	// Decode state: count(u32), then per body: body_id(u32), x(f64), y(f64), rotation(f64), vx(f64), vy(f64)
+	r := codec.NewByteReader(state)
+	if r.Remaining() < 4 {
+		return
+	}
+	count := r.ReadU32()
+
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 44 { // 4 + 5*8
+			break
+		}
+		bodyID := r.ReadU32()
+		x := r.ReadF64()
+		y := r.ReadF64()
+		rotation := r.ReadF64()
+		vx := r.ReadF64()
+		vy := r.ReadF64()
+
+		if e, ok := s.bodyMap[bodyID]; ok && e.Active {
+			e.X = x
+			e.Y = y
+			e.Rotation = rotation
+			e.Physics.velocity = voplay.Vec2{vx, vy}
+		}
+	}
+}
+
+// Center returns the entity's center position.
+func (e *Entity) Center() voplay.Vec2 {
+	return voplay.Vec2{e.X, e.Y}
+}
+
+// Bounds returns the entity's axis-aligned bounding rect (centered on X,Y).
+func (e *Entity) Bounds() voplay.Rect {
+	w := e.W * e.ScaleX
+	h := e.H * e.ScaleY
+	return voplay.Rect{e.X - w/2, e.Y - h/2, w, h}
+}
+
+// Overlaps returns true if this entity's bounding rect intersects another's.
+func (e *Entity) Overlaps(other *Entity) bool {
+	return e.Bounds().Intersects(other.Bounds())
+}
+
+// DistanceTo returns the distance between the centers of two entities.
+func (e *Entity) DistanceTo(other *Entity) float64 {
+	return e.Center().Distance(other.Center())
+}

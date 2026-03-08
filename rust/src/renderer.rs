@@ -1,14 +1,18 @@
 //! wgpu-based renderer for voplay.
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
+use crate::draw_list::{DrawList2D, DrawCallKind};
 use crate::font_manager::FontManager;
 use crate::math3d;
 use crate::model_loader::{ModelId, ModelManager};
-use crate::pipeline2d::{Pipeline2D, ShapeBatch, CameraUniform};
+use crate::pipeline2d::{Pipeline2D, CameraUniform};
 use crate::pipeline3d::{Pipeline3D, Camera3DUniform, ModelUniform, LightUniform, LightData, ModelDraw};
-use crate::pipeline_sprite::{PipelineSprite, SpriteBatch, SpriteDraw, SpriteInstance};
+use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
 use crate::stream::{DrawCommand, StreamReader};
+
+/// Maximum number of camera states per frame before buffer regrow.
+const INITIAL_CAMERA_SLOTS: usize = 16;
 
 /// Renderer holds all wgpu state and rendering pipelines.
 pub struct Renderer {
@@ -17,15 +21,17 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     depth_view: Option<wgpu::TextureView>,
-    // Camera (shared by all 2D pipelines)
+    // Camera (shared by all 2D pipelines, dynamic offset)
+    camera_bgl: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    camera_slot_capacity: usize,
+    camera_alignment: u32,
     // Pipelines
     pipeline2d: Pipeline2D,
     pipeline_sprite: PipelineSprite,
-    // Per-frame batches
-    shape_batch: ShapeBatch,
-    sprite_batch: SpriteBatch,
+    // Unified 2D draw list (replaces ShapeBatch + SpriteBatch)
+    draw_list: DrawList2D,
     // 3D pipeline
     pipeline3d: Pipeline3D,
     model_manager: ModelManager,
@@ -36,39 +42,52 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create shared camera bind group layout, buffer, and bind group.
-    fn create_camera_resources(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Buffer, wgpu::BindGroup) {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    /// Create shared camera bind group layout (dynamic offset).
+    fn create_camera_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("voplay_camera_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<CameraUniform>() as u64,
+                    ),
                 },
                 count: None,
             }],
-        });
+        })
+    }
 
+    /// Create (or recreate) the camera buffer and bind group for `slot_count` slots.
+    fn create_camera_buffer_and_bg(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        slot_count: usize,
+        alignment: u32,
+    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+        let total_size = slot_count as u64 * alignment as u64;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_camera"),
-            size: std::mem::size_of::<CameraUniform>() as u64,
+            size: total_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voplay_camera_bg"),
-            layout: &layout,
+            layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: buffer.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<CameraUniform>() as u64),
+                }),
             }],
         });
-
-        (layout, buffer, bind_group)
+        (buffer, bind_group)
     }
 
     /// Create a new renderer from an existing wgpu instance + surface.
@@ -122,7 +141,11 @@ impl Renderer {
         let w = width as f32;
         let h = height as f32;
 
-        let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
+        let camera_bgl = Self::create_camera_bgl(&device);
+        let camera_alignment = device.limits().min_uniform_buffer_offset_alignment;
+        let (camera_buffer, camera_bind_group) = Self::create_camera_buffer_and_bg(
+            &device, &camera_bgl, INITIAL_CAMERA_SLOTS, camera_alignment,
+        );
         let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, format, &camera_bgl);
         let tex_bgl = texture_manager.bind_group_layout();
@@ -133,8 +156,7 @@ impl Renderer {
         let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new();
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
-        let shape_batch = ShapeBatch::new(w, h);
-        let sprite_batch = SpriteBatch::new();
+        let draw_list = DrawList2D::new(w, h);
 
         Ok(Self {
             device,
@@ -142,14 +164,16 @@ impl Renderer {
             surface,
             surface_config,
             depth_view: Some(depth_view),
+            camera_bgl,
             camera_buffer,
             camera_bind_group,
+            camera_slot_capacity: INITIAL_CAMERA_SLOTS,
+            camera_alignment,
             pipeline2d,
             pipeline_sprite,
+            draw_list,
             pipeline3d,
             model_manager,
-            shape_batch,
-            sprite_batch,
             texture_manager,
             font_manager,
         })
@@ -166,7 +190,11 @@ impl Renderer {
         let w = surface_config.width as f32;
         let h = surface_config.height as f32;
 
-        let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
+        let camera_bgl = Self::create_camera_bgl(&device);
+        let camera_alignment = device.limits().min_uniform_buffer_offset_alignment;
+        let (camera_buffer, camera_bind_group) = Self::create_camera_buffer_and_bg(
+            &device, &camera_bgl, INITIAL_CAMERA_SLOTS, camera_alignment,
+        );
         let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, surface_config.format, &camera_bgl);
         let tex_bgl = texture_manager.bind_group_layout();
@@ -177,8 +205,7 @@ impl Renderer {
         let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new();
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
-        let shape_batch = ShapeBatch::new(w, h);
-        let sprite_batch = SpriteBatch::new();
+        let draw_list = DrawList2D::new(w, h);
 
         Self {
             device,
@@ -186,14 +213,16 @@ impl Renderer {
             surface,
             surface_config,
             depth_view: Some(depth_view),
+            camera_bgl,
             camera_buffer,
             camera_bind_group,
+            camera_slot_capacity: INITIAL_CAMERA_SLOTS,
+            camera_alignment,
             pipeline2d,
             pipeline_sprite,
+            draw_list,
             pipeline3d,
             model_manager,
-            shape_batch,
-            sprite_batch,
             texture_manager,
             font_manager,
         }
@@ -226,7 +255,6 @@ impl Renderer {
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_view = Some(Self::create_depth_view(&self.device, width, height));
-        self.shape_batch.set_screen_space(width as f32, height as f32);
     }
 
     // --- Model management ---
@@ -261,6 +289,11 @@ impl Renderer {
     /// Free a loaded font by ID.
     pub fn free_font(&mut self, id: crate::font_manager::FontId) {
         self.font_manager.free(id);
+    }
+
+    /// Measure text dimensions (width, height) using the specified font.
+    pub fn measure_text(&self, font_id: crate::font_manager::FontId, text: &str, size: f32) -> (f32, f32) {
+        self.font_manager.measure_text(font_id, text, size)
     }
 
     // --- Texture management ---
@@ -299,11 +332,10 @@ impl Renderer {
         let w = self.surface_config.width as f32;
         let h = self.surface_config.height as f32;
 
-        // Decode command stream into batches
+        // Reset draw list for this frame
         let mut clear_color = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-        self.shape_batch.clear();
-        self.sprite_batch.clear();
-        self.shape_batch.set_screen_space(w, h);
+        self.draw_list.clear();
+        self.draw_list.set_screen_space(w, h);
 
         // 3D state for this frame
         let mut camera3d_uniform: Option<Camera3DUniform> = None;
@@ -315,6 +347,7 @@ impl Renderer {
         let mut model_draws: Vec<ModelDraw> = Vec::new();
         let aspect = w / h;
 
+        // Decode command stream into the unified draw list
         let mut reader = StreamReader::new(data);
         while let Some(cmd) = reader.next_command() {
             match cmd {
@@ -324,22 +357,22 @@ impl Renderer {
                     };
                 }
                 DrawCommand::SetCamera2D { x, y, zoom, rotation } => {
-                    self.shape_batch.set_camera_2d(w, h, x, y, zoom, rotation);
+                    self.draw_list.set_camera_2d(w, h, x, y, zoom, rotation);
                 }
                 DrawCommand::ResetCamera => {
-                    self.shape_batch.set_screen_space(w, h);
+                    self.draw_list.reset_camera();
                 }
-                DrawCommand::SetLayer { .. } => {
-                    // TODO: z-ordering via depth or sort
+                DrawCommand::SetLayer { z } => {
+                    self.draw_list.set_layer(z);
                 }
                 DrawCommand::DrawRect { x, y, w, h, r, g, b, a } => {
-                    self.shape_batch.push_rect(x, y, w, h, [r, g, b, a]);
+                    self.draw_list.push_rect(x, y, w, h, [r, g, b, a]);
                 }
                 DrawCommand::DrawCircle { cx, cy, radius, r, g, b, a } => {
-                    self.shape_batch.push_circle(cx, cy, radius, [r, g, b, a]);
+                    self.draw_list.push_circle(cx, cy, radius, [r, g, b, a]);
                 }
                 DrawCommand::DrawLine { x1, y1, x2, y2, thickness, r, g, b, a } => {
-                    self.shape_batch.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
+                    self.draw_list.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
                 DrawCommand::SetFont { font_id } => {
                     self.font_manager.set_current(font_id);
@@ -347,7 +380,7 @@ impl Renderer {
                 DrawCommand::DrawText { x, y, size, r, g, b, a, text } => {
                     let draws = self.font_manager.layout_text(&text, x, y, size, r, g, b, a);
                     for draw in draws {
-                        self.sprite_batch.push(draw);
+                        self.draw_list.push_sprite(draw.texture_id, draw.instance);
                     }
                 }
                 DrawCommand::DrawSprite {
@@ -356,28 +389,28 @@ impl Renderer {
                     flip_x, flip_y, rotation,
                     r, g, b, a,
                 } => {
-                    // Convert source pixel rect to normalized UV using texture dimensions
                     let (u0, v0, u1, v1) = if let Some(tex) = self.texture_manager.get(tex_id) {
-                        let tw = tex.width as f32;
-                        let th = tex.height as f32;
-                        (src_x / tw, src_y / th, (src_x + src_w) / tw, (src_y + src_h) / th)
+                        if src_w == 0.0 && src_h == 0.0 {
+                            // src_w/src_h == 0 means "use full texture"
+                            (0.0, 0.0, 1.0, 1.0)
+                        } else {
+                            let tw = tex.width as f32;
+                            let th = tex.height as f32;
+                            (src_x / tw, src_y / th, (src_x + src_w) / tw, (src_y + src_h) / th)
+                        }
                     } else {
-                        (0.0, 0.0, 1.0, 1.0) // fallback: full texture
+                        (0.0, 0.0, 1.0, 1.0)
                     };
-
-                    self.sprite_batch.push(SpriteDraw {
-                        texture_id: tex_id,
-                        instance: SpriteInstance {
-                            dst_rect: [dst_x, dst_y, dst_w, dst_h],
-                            src_rect: [u0, v0, u1, v1],
-                            color: [r, g, b, a],
-                            params: [
-                                rotation,
-                                if flip_x { 1.0 } else { 0.0 },
-                                if flip_y { 1.0 } else { 0.0 },
-                                0.0,
-                            ],
-                        },
+                    self.draw_list.push_sprite(tex_id, SpriteInstance {
+                        dst_rect: [dst_x, dst_y, dst_w, dst_h],
+                        src_rect: [u0, v0, u1, v1],
+                        color: [r, g, b, a],
+                        params: [
+                            rotation,
+                            if flip_x { 1.0 } else { 0.0 },
+                            if flip_y { 1.0 } else { 0.0 },
+                            0.0,
+                        ],
                     });
                 }
                 // --- 3D commands ---
@@ -387,13 +420,13 @@ impl Renderer {
                     up_x, up_y, up_z,
                     fov, near, far,
                 } => {
-                    let view = math3d::look_at_rh(
+                    let v = math3d::look_at_rh(
                         [eye_x, eye_y, eye_z],
                         [target_x, target_y, target_z],
                         [up_x, up_y, up_z],
                     );
                     let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
-                    let view_proj = math3d::mat4_mul(&proj, &view);
+                    let view_proj = math3d::mat4_mul(&proj, &v);
                     camera3d_uniform = Some(Camera3DUniform {
                         view_proj,
                         camera_pos: [eye_x, eye_y, eye_z],
@@ -406,10 +439,8 @@ impl Renderer {
                     light_uniform.count = [count as u32, 0, 0, 0];
                     for (i, l) in lights.iter().take(8).enumerate() {
                         let (pos_or_dir, w_type) = if l.light_type == 0 {
-                            // Directional: encode direction
                             ([l.dx, l.dy, l.dz], 0.0f32)
                         } else {
-                            // Point: encode position
                             ([l.px, l.py, l.pz], 1.0f32)
                         };
                         light_uniform.lights[i] = LightData {
@@ -423,7 +454,6 @@ impl Renderer {
                 } => {
                     let model_mat = math3d::model_matrix(px, py, pz, qx, qy, qz, qw, sx, sy, sz);
                     let normal_mat = math3d::transpose_upper3x3(&model_mat);
-                    // Get base color from model's first mesh material (or white)
                     let base_color = self.model_manager.get(model_id)
                         .and_then(|m| m.meshes.first())
                         .map(|mesh| mesh.material.base_color)
@@ -437,23 +467,71 @@ impl Renderer {
                         },
                     });
                 }
+                DrawCommand::DrawBillboard {
+                    tex_id, src_x, src_y, src_w, src_h,
+                    world_x, world_y, world_z, w: bw, h: bh,
+                } => {
+                    // Project 3D world position to screen coordinates using the current 3D camera
+                    if let Some(ref cam) = camera3d_uniform {
+                        let clip = math3d::mat4_mul_vec4(&cam.view_proj, [world_x, world_y, world_z, 1.0]);
+                        if clip[3] > 0.0 {
+                            let ndc_x = clip[0] / clip[3];
+                            let ndc_y = clip[1] / clip[3];
+                            // NDC → screen: x = (ndc+1)/2 * w, y = (1-ndc)/2 * h
+                            let screen_x = (ndc_x + 1.0) * 0.5 * w - bw * 0.5;
+                            let screen_y = (1.0 - ndc_y) * 0.5 * h - bh * 0.5;
+
+                            let (u0, v0, u1, v1) = if let Some(tex) = self.texture_manager.get(tex_id) {
+                                if src_w == 0.0 && src_h == 0.0 {
+                                    (0.0, 0.0, 1.0, 1.0)
+                                } else {
+                                    let tw = tex.width as f32;
+                                    let th = tex.height as f32;
+                                    (src_x / tw, src_y / th, (src_x + src_w) / tw, (src_y + src_h) / th)
+                                }
+                            } else {
+                                (0.0, 0.0, 1.0, 1.0)
+                            };
+
+                            self.draw_list.push_sprite(tex_id, SpriteInstance {
+                                dst_rect: [screen_x, screen_y, bw, bh],
+                                src_rect: [u0, v0, u1, v1],
+                                color: [1.0, 1.0, 1.0, 1.0],
+                                params: [0.0, 0.0, 0.0, 0.0],
+                            });
+                        }
+                    }
+                }
             }
         }
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
         self.font_manager.ensure_atlas(&mut self.texture_manager, &self.device, &self.queue);
-        // Reset font to default for next frame
         self.font_manager.reset_current();
 
-        // Upload camera uniform
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::bytes_of(self.shape_batch.camera_uniform()),
-        );
+        // Resolve draw list: sort by (layer, order), produce draw calls
+        let frame = self.draw_list.resolve();
 
-        // Upload shape batch to GPU
-        self.pipeline2d.prepare(&self.device, &self.queue, &self.shape_batch);
+        // Upload all camera uniforms into the dynamic offset buffer
+        let align = self.camera_alignment;
+        let cam_count = frame.cameras.len();
+        if cam_count > self.camera_slot_capacity {
+            let new_cap = cam_count.next_power_of_two();
+            let (buf, bg) = Self::create_camera_buffer_and_bg(
+                &self.device, &self.camera_bgl, new_cap, align,
+            );
+            self.camera_buffer = buf;
+            self.camera_bind_group = bg;
+            self.camera_slot_capacity = new_cap;
+        }
+        for (i, cam) in frame.cameras.iter().enumerate() {
+            let offset = i as u64 * align as u64;
+            self.queue.write_buffer(&self.camera_buffer, offset, bytemuck::bytes_of(cam));
+        }
+
+        // Upload sorted 2D instance data
+        self.pipeline2d.upload_instances(&self.device, &self.queue, &frame.shapes);
+        self.pipeline_sprite.upload_instances(&self.device, &self.queue, &frame.sprites);
 
         // Render pass
         {
@@ -495,19 +573,33 @@ impl Renderer {
                 }
             }
 
-            // Draw sprites (textured quads, depth ignored)
-            self.pipeline_sprite.draw_batch(
-                &self.device,
-                &self.queue,
-                &mut render_pass,
-                &self.camera_bind_group,
-                &mut self.sprite_batch,
-                &self.texture_manager,
-            );
-
-            // Draw 2D shapes (on top of sprites, depth ignored)
-            let shape_count = self.shape_batch.instance_count() as u32;
-            self.pipeline2d.draw(&mut render_pass, &self.camera_bind_group, shape_count);
+            // Draw 2D content in layer-sorted order
+            for dc in &frame.draw_calls {
+                let cam_offset = dc.camera_idx as u32 * align;
+                match &dc.kind {
+                    DrawCallKind::Shapes { start, count } => {
+                        self.pipeline2d.draw_range(
+                            &mut render_pass,
+                            &self.camera_bind_group,
+                            &[cam_offset],
+                            *start,
+                            *count,
+                        );
+                    }
+                    DrawCallKind::Sprites { texture_id, start, count } => {
+                        if let Some(tex) = self.texture_manager.get(*texture_id) {
+                            self.pipeline_sprite.draw_range(
+                                &mut render_pass,
+                                &self.camera_bind_group,
+                                &[cam_offset],
+                                &tex.bind_group,
+                                *start,
+                                *count,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

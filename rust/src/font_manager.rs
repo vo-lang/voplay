@@ -280,6 +280,37 @@ impl FontManager {
         });
     }
 
+    /// Measure text dimensions (width, height) using fontdue metrics.
+    /// Uses the specified font_id (0 = default).
+    pub fn measure_text(&self, font_id: FontId, text: &str, size: f32) -> (f32, f32) {
+        let font = match self.fonts.get(&font_id) {
+            Some(f) => f,
+            None => match self.fonts.get(&0) {
+                Some(f) => f,
+                None => return (0.0, 0.0),
+            },
+        };
+
+        let mut width: f32 = 0.0;
+        let mut max_height: f32 = 0.0;
+        for ch in text.chars() {
+            let metrics = font.metrics(ch, size);
+            width += metrics.advance_width;
+            let h = metrics.height as f32;
+            if h > max_height {
+                max_height = h;
+            }
+        }
+
+        // Use line metrics if available for more accurate height
+        let line_height = font
+            .horizontal_line_metrics(size)
+            .map(|lm| lm.ascent - lm.descent)
+            .unwrap_or(max_height);
+
+        (width, line_height)
+    }
+
     /// Shelf-based rectangle packing. Returns top-left (x, y) or None if full.
     fn pack_rect(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
         // Try to fit in an existing shelf

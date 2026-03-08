@@ -10,14 +10,15 @@
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Unique clip ID counter.
 static NEXT_CLIP_ID: AtomicU32 = AtomicU32::new(1);
 
-/// Raw audio data stored for replay.
+/// Raw audio data stored for replay. Arc-shared to avoid cloning on each play.
 struct AudioClipData {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 /// The audio engine manages output streams, loaded clips, and playback.
@@ -58,12 +59,13 @@ impl AudioEngine {
     /// Load audio from raw file bytes (WAV, OGG, MP3).
     /// Returns a clip ID on success.
     pub fn load_bytes(&mut self, data: Vec<u8>) -> Result<u32, String> {
-        // Validate by trying to decode a clone (Decoder requires 'static)
-        let test_cursor = Cursor::new(data.clone());
+        // Validate by trying to decode
+        let shared: Arc<[u8]> = Arc::from(data);
+        let test_cursor = Cursor::new(Arc::clone(&shared));
         Decoder::new(test_cursor).map_err(|e| format!("audio decode error: {e}"))?;
 
         let id = NEXT_CLIP_ID.fetch_add(1, Ordering::Relaxed);
-        self.clips.insert(id, AudioClipData { bytes: data });
+        self.clips.insert(id, AudioClipData { bytes: shared });
         Ok(id)
     }
 
@@ -79,8 +81,8 @@ impl AudioEngine {
     }
 
     /// Play a sound effect (fire-and-forget). Volume is scaled by sfx_volume.
-    /// Optional pitch and pan parameters (1.0 = normal pitch, 0.0 = center pan).
-    pub fn play_sound(&self, clip_id: u32, volume: f32, pitch: f32, pan: f32) {
+    /// pitch: playback speed multiplier (1.0 = normal).
+    pub fn play_sound(&self, clip_id: u32, volume: f32, pitch: f32) {
         let clip = match self.clips.get(&clip_id) {
             Some(c) => c,
             None => {
@@ -89,7 +91,7 @@ impl AudioEngine {
             }
         };
 
-        let cursor = Cursor::new(clip.bytes.clone());
+        let cursor = Cursor::new(Arc::clone(&clip.bytes));
         let source = match Decoder::new(cursor) {
             Ok(s) => s,
             Err(e) => {
@@ -100,26 +102,11 @@ impl AudioEngine {
 
         let final_volume = volume * self.sfx_volume;
 
-        // Apply pitch (speed), pan, then amplify
         let processed = source
             .speed(pitch)
             .amplify(final_volume);
 
-        // Pan: -1.0 = full left, 0.0 = center, 1.0 = full right
-        // rodio doesn't have built-in pan, so we approximate with channel volumes
-        // For simplicity, just play without pan if near center
-        if pan.abs() < 0.01 {
-            let _ = self.stream_handle.play_raw(processed.convert_samples());
-        } else {
-            // Use a Sink for pan control (left/right volume)
-            if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-                sink.append(processed);
-                // Pan approximation: attenuate one channel
-                // rodio Sink doesn't support per-channel volume natively,
-                // so we just use the overall volume for now
-                sink.detach();
-            }
-        }
+        let _ = self.stream_handle.play_raw(processed.convert_samples());
     }
 
     /// Play music (looping). Stops any currently playing music first.
@@ -135,7 +122,7 @@ impl AudioEngine {
             }
         };
 
-        let cursor = Cursor::new(clip.bytes.clone());
+        let cursor = Cursor::new(Arc::clone(&clip.bytes));
         let source = match Decoder::new(cursor) {
             Ok(s) => s,
             Err(e) => {

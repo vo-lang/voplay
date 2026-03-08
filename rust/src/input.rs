@@ -20,8 +20,6 @@ static INPUT_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 pub fn push_key_event(down: bool, key_name: &str) {
     let mut buf = INPUT_BUFFER.lock().unwrap();
     buf.push(if down { INPUT_KEY_DOWN } else { INPUT_KEY_UP });
-    // keyCode: u16 (0 for now — name-based lookup)
-    buf.extend_from_slice(&0u16.to_le_bytes());
     // name: u8 len + utf8
     let name_bytes = key_name.as_bytes();
     let len = name_bytes.len().min(255) as u8;

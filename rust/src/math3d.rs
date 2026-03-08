@@ -71,6 +71,16 @@ pub fn mat4_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
+/// Multiply a 4×4 matrix (column-major) by a vec4.
+pub fn mat4_mul_vec4(m: &[[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
+    [
+        m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + m[3][0] * v[3],
+        m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2] + m[3][1] * v[3],
+        m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2] + m[3][2] * v[3],
+        m[0][3] * v[0] + m[1][3] * v[1] + m[2][3] * v[2] + m[3][3] * v[3],
+    ]
+}
+
 /// Transpose of the upper-left 3×3, stored in a 4×4 (for normal matrix).
 pub fn transpose_upper3x3(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     [

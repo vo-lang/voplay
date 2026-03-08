@@ -1,10 +1,15 @@
 // DrawCtx encodes draw commands into a binary []byte buffer.
 // No extern calls — pure Vo. Submitted once per frame via submitFrame.
+//
+// All methods use root-package types only (no sub-package references).
+// Scene-aware convenience methods live in scene2d/draw.vo and scene3d/draw.vo.
 package voplay
 
 import "math"
+import "github.com/vo-lang/voplay/codec"
 
 // Draw command opcodes (must match Rust decoder in stream.rs).
+// Unexported: sub-packages use DrawCtx methods, not raw opcodes.
 const (
 	opClear         = 0x01
 	opSetCamera2D   = 0x02
@@ -17,17 +22,14 @@ const (
 	opDrawCircle    = 0x12
 	opDrawLine      = 0x13
 	opDrawText      = 0x14
-	opDrawTilemap   = 0x15
-	opDrawScene2D   = 0x16
 	opDrawModel     = 0x20
 	opDrawBillboard = 0x21
-	opDrawScene3D   = 0x22
 	opSetLights3D   = 0x23
 )
 
 // DrawCtx buffers binary draw commands for the current frame.
 type DrawCtx struct {
-	w ByteWriter
+	w codec.ByteWriter
 }
 
 // NewDrawCtx creates a new draw command context.
@@ -35,7 +37,7 @@ func NewDrawCtx() *DrawCtx { return newDrawCtx() }
 
 func newDrawCtx() *DrawCtx {
 	return &DrawCtx{
-		w: NewByteWriter(4096),
+		w: codec.NewByteWriter(4096),
 	}
 }
 
@@ -57,10 +59,10 @@ func (d *DrawCtx) Bytes() []byte {
 // Clear sets the background color for this frame.
 func (d *DrawCtx) Clear(r, g, b, a float64) {
 	d.w.WriteByte(opClear)
-	d.w.WriteF64(r)
-	d.w.WriteF64(g)
-	d.w.WriteF64(b)
-	d.w.WriteF64(a)
+	d.w.WriteF32(r)
+	d.w.WriteF32(g)
+	d.w.WriteF32(b)
+	d.w.WriteF32(a)
 }
 
 // ClearColor sets the background color using a Color value.
@@ -74,16 +76,19 @@ func (d *DrawCtx) ResetCamera() {
 }
 
 // SetCamera2D sets the 2D camera for world-space drawing.
-func (d *DrawCtx) SetCamera2D(cam *Camera2D) {
+func (d *DrawCtx) SetCamera2D(x, y, zoom, rotation float64) {
 	d.w.WriteByte(opSetCamera2D)
-	d.w.WriteF64(cam.X)
-	d.w.WriteF64(cam.Y)
-	d.w.WriteF64(cam.Zoom)
-	d.w.WriteF64(cam.Rotation)
+	d.w.WriteF32(x)
+	d.w.WriteF32(y)
+	d.w.WriteF32(zoom)
+	d.w.WriteF32(rotation)
 }
 
-// SetLayer sets the z-order layer for subsequent 2D draws.
+// SetLayer sets the z-order layer (0–65535) for subsequent 2D draws.
 func (d *DrawCtx) SetLayer(z int) {
+	if z < 0 || z > 65535 {
+		panic("SetLayer: z must be in range 0–65535")
+	}
 	d.w.WriteByte(opSetLayer)
 	d.w.WriteU16(z)
 }
@@ -98,58 +103,60 @@ func (d *DrawCtx) SetFont(id FontID) {
 // DrawRect draws a filled rectangle.
 func (d *DrawCtx) DrawRect(x, y, w, h float64, c Color) {
 	d.w.WriteByte(opDrawRect)
-	d.w.WriteF64(x)
-	d.w.WriteF64(y)
-	d.w.WriteF64(w)
-	d.w.WriteF64(h)
-	d.w.WriteF64(c.R)
-	d.w.WriteF64(c.G)
-	d.w.WriteF64(c.B)
-	d.w.WriteF64(c.A)
+	d.w.WriteF32(x)
+	d.w.WriteF32(y)
+	d.w.WriteF32(w)
+	d.w.WriteF32(h)
+	d.w.WriteF32(c.R)
+	d.w.WriteF32(c.G)
+	d.w.WriteF32(c.B)
+	d.w.WriteF32(c.A)
 }
 
 // DrawCircle draws a filled circle.
 func (d *DrawCtx) DrawCircle(cx, cy, radius float64, c Color) {
 	d.w.WriteByte(opDrawCircle)
-	d.w.WriteF64(cx)
-	d.w.WriteF64(cy)
-	d.w.WriteF64(radius)
-	d.w.WriteF64(c.R)
-	d.w.WriteF64(c.G)
-	d.w.WriteF64(c.B)
-	d.w.WriteF64(c.A)
+	d.w.WriteF32(cx)
+	d.w.WriteF32(cy)
+	d.w.WriteF32(radius)
+	d.w.WriteF32(c.R)
+	d.w.WriteF32(c.G)
+	d.w.WriteF32(c.B)
+	d.w.WriteF32(c.A)
 }
 
 // DrawLine draws a line segment.
 func (d *DrawCtx) DrawLine(x1, y1, x2, y2, thickness float64, c Color) {
 	d.w.WriteByte(opDrawLine)
-	d.w.WriteF64(x1)
-	d.w.WriteF64(y1)
-	d.w.WriteF64(x2)
-	d.w.WriteF64(y2)
-	d.w.WriteF64(thickness)
-	d.w.WriteF64(c.R)
-	d.w.WriteF64(c.G)
-	d.w.WriteF64(c.B)
-	d.w.WriteF64(c.A)
+	d.w.WriteF32(x1)
+	d.w.WriteF32(y1)
+	d.w.WriteF32(x2)
+	d.w.WriteF32(y2)
+	d.w.WriteF32(thickness)
+	d.w.WriteF32(c.R)
+	d.w.WriteF32(c.G)
+	d.w.WriteF32(c.B)
+	d.w.WriteF32(c.A)
 }
 
 // DrawRectOutline draws a rectangle outline using 4 lines.
+// Horizontal lines are extended by half the thickness to cover corner gaps.
 func (d *DrawCtx) DrawRectOutline(x, y, w, h, thickness float64, c Color) {
+	ht := thickness / 2
 	x2 := x + w
 	y2 := y + h
-	d.DrawLine(x, y, x2, y, thickness, c)     // top
-	d.DrawLine(x2, y, x2, y2, thickness, c)   // right
-	d.DrawLine(x2, y2, x, y2, thickness, c)   // bottom
-	d.DrawLine(x, y2, x, y, thickness, c)     // left
+	d.DrawLine(x-ht, y, x2+ht, y, thickness, c)     // top
+	d.DrawLine(x2, y, x2, y2, thickness, c)          // right
+	d.DrawLine(x-ht, y2, x2+ht, y2, thickness, c)   // bottom
+	d.DrawLine(x, y2, x, y, thickness, c)            // left
 }
 
 // DrawCircleOutline draws a circle outline using line segments.
 func (d *DrawCtx) DrawCircleOutline(cx, cy, radius, thickness float64, segments int, c Color) {
 	if segments < 3 {
-		segments = 32
+		panic("DrawCircleOutline: segments must be >= 3")
 	}
-	step := 6.283185307179586 / float64(segments) // 2*PI / segments
+	step := (math.Pi * 2) / float64(segments)
 	px := cx + radius
 	py := cy
 	for i := 1; i <= segments; i++ {
@@ -162,189 +169,117 @@ func (d *DrawCtx) DrawCircleOutline(cx, cy, radius, thickness float64, segments 
 	}
 }
 
-// MeasureText returns the pixel width and height of text at the given size.
-// Based on the built-in 8x8 monospace font.
+// MeasureText returns the pixel width and height of text at the given size,
+// using the default built-in font (font ID 0).
 func MeasureText(text string, size float64) (float64, float64) {
-	scale := size / 8.0
-	w := float64(len(text)) * 8.0 * scale
-	return w, size
+	return measureText(0, text, size)
+}
+
+// MeasureTextFont returns the pixel width and height of text at the given size,
+// using the specified font.
+func MeasureTextFont(font FontID, text string, size float64) (float64, float64) {
+	return measureText(int(font), text, size)
 }
 
 // DrawText draws text at the given position.
 func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
 	d.w.WriteByte(opDrawText)
-	d.w.WriteF64(x)
-	d.w.WriteF64(y)
-	d.w.WriteF64(size)
-	d.w.WriteF64(c.R)
-	d.w.WriteF64(c.G)
-	d.w.WriteF64(c.B)
-	d.w.WriteF64(c.A)
+	d.w.WriteF32(x)
+	d.w.WriteF32(y)
+	d.w.WriteF32(size)
+	d.w.WriteF32(c.R)
+	d.w.WriteF32(c.G)
+	d.w.WriteF32(c.B)
+	d.w.WriteF32(c.A)
 	d.w.WriteString(text)
 }
 
-// DrawSprite draws a sprite at the given position and size.
-func (d *DrawCtx) DrawSprite(spr *Sprite, x, y, w, h float64) {
-	srcX, srcY, srcW, srcH := spr.SrcX, spr.SrcY, spr.SrcW, spr.SrcH
-	if spr.Anim != nil {
-		srcX, srcY, srcW, srcH = spr.Anim.CurrentFrame()
-	}
-	tint := spr.Tint
-	if tint.A == 0 && tint.R == 0 && tint.G == 0 && tint.B == 0 {
-		tint = White // default to no tint
-	}
+// SpriteParams holds parameters for drawing a textured sprite.
+type SpriteParams struct {
+	Tex      TextureID
+	Src      Rect     // source rectangle in texture pixels (zero = full texture)
+	Dst      Rect     // destination rectangle in world/screen space
+	FlipX    bool
+	FlipY    bool
+	Rotation float64
+	Tint     Color    // color tint (use White for no tint)
+}
+
+// DrawSpriteParams draws a textured quad using a SpriteParams struct.
+func (d *DrawCtx) DrawSpriteParams(p SpriteParams) {
+	d.DrawSprite(p.Tex, p.Src.X, p.Src.Y, p.Src.W, p.Src.H, p.Dst.X, p.Dst.Y, p.Dst.W, p.Dst.H, p.FlipX, p.FlipY, p.Rotation, p.Tint)
+}
+
+// DrawSprite draws a textured quad with full control over source/dest rects, flipping, rotation, and tint.
+func (d *DrawCtx) DrawSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH float64, flipX, flipY bool, rotation float64, tint Color) {
 	d.w.WriteByte(opDrawSprite)
-	d.w.WriteU32(int(spr.Texture))
-	d.w.WriteF64(srcX)
-	d.w.WriteF64(srcY)
-	d.w.WriteF64(srcW)
-	d.w.WriteF64(srcH)
-	d.w.WriteF64(x)
-	d.w.WriteF64(y)
-	d.w.WriteF64(w)
-	d.w.WriteF64(h)
-	d.w.WriteBool(spr.FlipX)
-	d.w.WriteBool(spr.FlipY)
-	d.w.WriteF64(spr.Rotation)
-	d.w.WriteF64(tint.R)
-	d.w.WriteF64(tint.G)
-	d.w.WriteF64(tint.B)
-	d.w.WriteF64(tint.A)
+	d.w.WriteU32(int(tex))
+	d.w.WriteF32(srcX)
+	d.w.WriteF32(srcY)
+	d.w.WriteF32(srcW)
+	d.w.WriteF32(srcH)
+	d.w.WriteF32(dstX)
+	d.w.WriteF32(dstY)
+	d.w.WriteF32(dstW)
+	d.w.WriteF32(dstH)
+	d.w.WriteBool(flipX)
+	d.w.WriteBool(flipY)
+	d.w.WriteF32(rotation)
+	d.w.WriteF32(tint.R)
+	d.w.WriteF32(tint.G)
+	d.w.WriteF32(tint.B)
+	d.w.WriteF32(tint.A)
 }
 
-// DrawSpriteRotated draws a sprite with an additional rotation (radians).
-func (d *DrawCtx) DrawSpriteRotated(spr *Sprite, x, y, w, h, rotation float64) {
-	saved := spr.Rotation
-	spr.Rotation = rotation
-	d.DrawSprite(spr, x, y, w, h)
-	spr.Rotation = saved
+// DrawTexture draws a full texture at the given position and size with no rotation or flipping.
+func (d *DrawCtx) DrawTexture(tex TextureID, x, y, w, h float64) {
+	d.DrawSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, White)
 }
 
-// DrawTilemap draws visible tiles of a tilemap layer within the given viewport.
-// viewX, viewY, viewW, viewH define the visible world-space rect (use Camera2D.ViewRect).
-func (d *DrawCtx) DrawTilemap(tm *Tilemap, layerIdx int, viewX, viewY, viewW, viewH float64) {
-	if tm == nil || tm.TileSet == nil {
-		return
-	}
-	if layerIdx < 0 || layerIdx >= len(tm.Layers) {
-		return
-	}
-	ts := tm.TileSet
-	tw := float64(ts.TileW)
-	th := float64(ts.TileH)
-	layer := tm.Layers[layerIdx]
-
-	// Compute visible tile range (clamped to tilemap bounds)
-	colStart := int(viewX / tw)
-	rowStart := int(viewY / th)
-	colEnd := int((viewX + viewW) / tw) + 1
-	rowEnd := int((viewY + viewH) / th) + 1
-	if colStart < 0 {
-		colStart = 0
-	}
-	if rowStart < 0 {
-		rowStart = 0
-	}
-	if colEnd > tm.Width {
-		colEnd = tm.Width
-	}
-	if rowEnd > tm.Height {
-		rowEnd = tm.Height
-	}
-
-	// Temporary sprite for encoding tiles
-	spr := &Sprite{
-		Texture: ts.Texture,
-		Tint:    White,
-	}
-
-	for row := rowStart; row < rowEnd; row++ {
-		for col := colStart; col < colEnd; col++ {
-			tileIdx := layer.Tiles[row*tm.Width+col]
-			if tileIdx < 0 {
-				continue // empty tile
-			}
-			// Compute source rect in tileset
-			srcCol := tileIdx % ts.Columns
-			srcRow := tileIdx / ts.Columns
-			spr.SrcX = float64(srcCol * ts.TileW)
-			spr.SrcY = float64(srcRow * ts.TileH)
-			spr.SrcW = tw
-			spr.SrcH = th
-			// Destination position in world space
-			dx := float64(col) * tw
-			dy := float64(row) * th
-			d.DrawSprite(spr, dx, dy, tw, th)
-		}
-	}
-}
-
-// DrawScene2D draws the entire 2D scene: camera, tilemap (if set), then entities sorted by ZOrder.
-// screenW, screenH are the window dimensions (needed for viewport culling).
-func (d *DrawCtx) DrawScene2D(s *Scene2D) {
-	d.SetCamera2D(&s.Camera)
-
-	// Draw tilemap layers (bottom to top, before entities)
-	if s.Tilemap != nil && s.screenW > 0 {
-		vr := s.Camera.ViewRect(s.screenW, s.screenH)
-		for i := range s.Tilemap.Layers {
-			d.DrawTilemap(s.Tilemap, i, vr.X, vr.Y, vr.W, vr.H)
-		}
-	}
-
-	// Collect visible entities and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
-	sorted := s.visibleEntities()
-	for i := 1; i < len(sorted); i++ {
-		key := sorted[i]
-		j := i - 1
-		for j >= 0 && sorted[j].ZOrder > key.ZOrder {
-			sorted[j+1] = sorted[j]
-			j--
-		}
-		sorted[j+1] = key
-	}
-
-	for _, e := range sorted {
-		if e.Sprite == nil {
-			continue
-		}
-		w := e.W * e.ScaleX
-		h := e.H * e.ScaleY
-		x := e.X - w/2
-		y := e.Y - h/2
-		if e.Rotation != 0 {
-			d.DrawSpriteRotated(e.Sprite, x, y, w, h, e.Rotation)
-		} else {
-			d.DrawSprite(e.Sprite, x, y, w, h)
-		}
-	}
-
-	d.ResetCamera()
+// DrawTextureColor draws a full texture at the given position and size, tinted with the given color.
+func (d *DrawCtx) DrawTextureColor(tex TextureID, x, y, w, h float64, tint Color) {
+	d.DrawSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, tint)
 }
 
 // SetCamera3D sets the 3D camera for subsequent 3D draw commands.
-func (d *DrawCtx) SetCamera3D(cam *Camera3D) {
+func (d *DrawCtx) SetCamera3D(pos, target, up Vec3, fov, near, far float64) {
 	d.w.WriteByte(opSetCamera3D)
-	d.w.WriteF64(cam.Position.X)
-	d.w.WriteF64(cam.Position.Y)
-	d.w.WriteF64(cam.Position.Z)
-	d.w.WriteF64(cam.Target.X)
-	d.w.WriteF64(cam.Target.Y)
-	d.w.WriteF64(cam.Target.Z)
-	d.w.WriteF64(cam.Up.X)
-	d.w.WriteF64(cam.Up.Y)
-	d.w.WriteF64(cam.Up.Z)
-	d.w.WriteF64(cam.Fov)
-	d.w.WriteF64(cam.Near)
-	d.w.WriteF64(cam.Far)
+	d.w.WriteF32(pos.X)
+	d.w.WriteF32(pos.Y)
+	d.w.WriteF32(pos.Z)
+	d.w.WriteF32(target.X)
+	d.w.WriteF32(target.Y)
+	d.w.WriteF32(target.Z)
+	d.w.WriteF32(up.X)
+	d.w.WriteF32(up.Y)
+	d.w.WriteF32(up.Z)
+	d.w.WriteF32(fov)
+	d.w.WriteF32(near)
+	d.w.WriteF32(far)
 }
 
-// SetLights3D sets the lights for subsequent 3D draw commands.
-func (d *DrawCtx) SetLights3D(ambient Color, lights []Light) {
+// Light type constants for LightDesc.
+const (
+	DirectionalLight = 0
+	PointLight       = 1
+)
+
+// LightDesc describes a light for the SetLights3D draw command.
+type LightDesc struct {
+	Type      int // DirectionalLight or PointLight
+	Position  Vec3
+	Direction Vec3
+	Color     Color
+	Intensity float64
+}
+
+// SetLights3D encodes the lighting state for subsequent 3D draw commands.
+// ambient is the ambient light color, lights is a list of up to 8 lights.
+func (d *DrawCtx) SetLights3D(ambient Color, lights []LightDesc) {
 	d.w.WriteByte(opSetLights3D)
-	d.w.WriteF64(ambient.R)
-	d.w.WriteF64(ambient.G)
-	d.w.WriteF64(ambient.B)
+	d.w.WriteF32(ambient.R)
+	d.w.WriteF32(ambient.G)
+	d.w.WriteF32(ambient.B)
 	count := len(lights)
 	if count > 8 {
 		count = 8
@@ -353,16 +288,16 @@ func (d *DrawCtx) SetLights3D(ambient Color, lights []Light) {
 	for i := 0; i < count; i++ {
 		l := lights[i]
 		d.w.WriteByte(byte(l.Type))
-		d.w.WriteF64(l.Position.X)
-		d.w.WriteF64(l.Position.Y)
-		d.w.WriteF64(l.Position.Z)
-		d.w.WriteF64(l.Direction.X)
-		d.w.WriteF64(l.Direction.Y)
-		d.w.WriteF64(l.Direction.Z)
-		d.w.WriteF64(l.Color.R)
-		d.w.WriteF64(l.Color.G)
-		d.w.WriteF64(l.Color.B)
-		d.w.WriteF64(l.Intensity)
+		d.w.WriteF32(l.Position.X)
+		d.w.WriteF32(l.Position.Y)
+		d.w.WriteF32(l.Position.Z)
+		d.w.WriteF32(l.Direction.X)
+		d.w.WriteF32(l.Direction.Y)
+		d.w.WriteF32(l.Direction.Z)
+		d.w.WriteF32(l.Color.R)
+		d.w.WriteF32(l.Color.G)
+		d.w.WriteF32(l.Color.B)
+		d.w.WriteF32(l.Intensity)
 	}
 }
 
@@ -370,26 +305,31 @@ func (d *DrawCtx) SetLights3D(ambient Color, lights []Light) {
 func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3) {
 	d.w.WriteByte(opDrawModel)
 	d.w.WriteU32(int(model))
-	d.w.WriteF64(pos.X)
-	d.w.WriteF64(pos.Y)
-	d.w.WriteF64(pos.Z)
-	d.w.WriteF64(rot.X)
-	d.w.WriteF64(rot.Y)
-	d.w.WriteF64(rot.Z)
-	d.w.WriteF64(rot.W)
-	d.w.WriteF64(scale.X)
-	d.w.WriteF64(scale.Y)
-	d.w.WriteF64(scale.Z)
+	d.w.WriteF32(pos.X)
+	d.w.WriteF32(pos.Y)
+	d.w.WriteF32(pos.Z)
+	d.w.WriteF32(rot.X)
+	d.w.WriteF32(rot.Y)
+	d.w.WriteF32(rot.Z)
+	d.w.WriteF32(rot.W)
+	d.w.WriteF32(scale.X)
+	d.w.WriteF32(scale.Y)
+	d.w.WriteF32(scale.Z)
 }
 
-// DrawScene3D draws the entire 3D scene: camera, lights, then all visible nodes.
-func (d *DrawCtx) DrawScene3D(s *Scene3D) {
-	d.SetCamera3D(&s.Camera)
-	d.SetLights3D(Color{R: 0.1, G: 0.1, B: 0.1, A: 1}, s.Lights)
-	for _, n := range s.nodes {
-		if !n.Visible || n.Model == 0 {
-			continue
-		}
-		d.DrawModel(n.Model, n.Position, n.Rotation, n.Scale)
-	}
+// DrawBillboard draws a camera-facing sprite at a 3D world position.
+// The quad always faces the camera. Useful for health bars, name tags, damage numbers.
+// Requires a 3D camera to be active (SetCamera3D).
+func (d *DrawCtx) DrawBillboard(tex TextureID, srcX, srcY, srcW, srcH float64, worldPos Vec3, w, h float64) {
+	d.w.WriteByte(opDrawBillboard)
+	d.w.WriteU32(int(tex))
+	d.w.WriteF32(srcX)
+	d.w.WriteF32(srcY)
+	d.w.WriteF32(srcW)
+	d.w.WriteF32(srcH)
+	d.w.WriteF32(worldPos.X)
+	d.w.WriteF32(worldPos.Y)
+	d.w.WriteF32(worldPos.Z)
+	d.w.WriteF32(w)
+	d.w.WriteF32(h)
 }

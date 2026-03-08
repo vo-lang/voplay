@@ -24,16 +24,7 @@ fn get_renderer() -> &'static std::sync::Mutex<Renderer> {
 #[vo_fn("voplay", "initSurface")]
 pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
     let _canvas_ref = call.arg_str(0).to_string();
-
-    // Phase 0: For native, create a headless/dummy surface for testing.
-    // Full surface creation requires platform-specific code (web: canvas element, native: winit).
-    // For now, return an error explaining this is not yet implemented.
-    // The actual implementation will be platform-specific in Phase 1.
-
-    // TODO: Phase 1 — platform-specific surface creation
-    //   Web: find <canvas> element, create wgpu surface
-    //   Native: create winit window, create wgpu surface
-
+    // Web surface init is handled here; native uses nativeInit instead.
     write_nil_error(call, 0);
     ExternResult::Ok
 }

@@ -321,5 +321,5 @@ func (d *DrawCtx) DrawScene2D(s *Scene2D) {
 
 // DrawScene3D draws the entire 3D scene.
 func (d *DrawCtx) DrawScene3D(s *Scene3D) {
-	// TODO: Phase 5+
+	// TODO: Phase 8
 }

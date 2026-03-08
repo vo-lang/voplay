@@ -73,7 +73,7 @@ impl CameraUniform {
     /// Screen-space orthographic projection: (0,0) top-left, (w,h) bottom-right.
     pub fn screen_space(width: f32, height: f32) -> Self {
         Self {
-            projection: orthographic(0.0, width, height, 0.0, -1.0, 1.0),
+            projection: crate::math3d::orthographic(0.0, width, height, 0.0, -1.0, 1.0),
         }
     }
 
@@ -134,18 +134,6 @@ impl CameraUniform {
     }
 }
 
-/// Column-major orthographic projection matrix.
-fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
-    let w = right - left;
-    let h = top - bottom;
-    let d = far - near;
-    [
-        [2.0 / w,           0.0,              0.0,          0.0],
-        [0.0,               2.0 / h,          0.0,          0.0],
-        [0.0,               0.0,              -2.0 / d,     0.0],
-        [-(right + left) / w, -(top + bottom) / h, -(far + near) / d, 1.0],
-    ]
-}
 
 /// The full 2D pipeline state.
 pub struct Pipeline2D {

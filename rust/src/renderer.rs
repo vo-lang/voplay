@@ -2,10 +2,10 @@
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
 use crate::font_manager::FontManager;
+use crate::math3d;
 use crate::model_loader::{ModelId, ModelManager};
 use crate::pipeline2d::{Pipeline2D, ShapeBatch, CameraUniform};
-use crate::pipeline3d::{Pipeline3D, Camera3DUniform, ModelUniform, LightUniform, LightData, ModelDraw,
-                        build_model_matrix, transpose_upper3x3, look_at_rh, perspective_rh_zo, mat4_mul};
+use crate::pipeline3d::{Pipeline3D, Camera3DUniform, ModelUniform, LightUniform, LightData, ModelDraw};
 use crate::pipeline_sprite::{PipelineSprite, SpriteBatch, SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
 use crate::stream::{DrawCommand, StreamReader};
@@ -387,13 +387,13 @@ impl Renderer {
                     up_x, up_y, up_z,
                     fov, near, far,
                 } => {
-                    let view = look_at_rh(
+                    let view = math3d::look_at_rh(
                         [eye_x, eye_y, eye_z],
                         [target_x, target_y, target_z],
                         [up_x, up_y, up_z],
                     );
-                    let proj = perspective_rh_zo(fov.to_radians(), aspect, near, far);
-                    let view_proj = mat4_mul(&proj, &view);
+                    let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
+                    let view_proj = math3d::mat4_mul(&proj, &view);
                     camera3d_uniform = Some(Camera3DUniform {
                         view_proj,
                         camera_pos: [eye_x, eye_y, eye_z],
@@ -421,8 +421,8 @@ impl Renderer {
                 DrawCommand::DrawModel {
                     model_id, px, py, pz, qx, qy, qz, qw, sx, sy, sz,
                 } => {
-                    let model_mat = build_model_matrix(px, py, pz, qx, qy, qz, qw, sx, sy, sz);
-                    let normal_mat = transpose_upper3x3(&model_mat);
+                    let model_mat = math3d::model_matrix(px, py, pz, qx, qy, qz, qw, sx, sy, sz);
+                    let normal_mat = math3d::transpose_upper3x3(&model_mat);
                     // Get base color from model's first mesh material (or white)
                     let base_color = self.model_manager.get(model_id)
                         .and_then(|m| m.meshes.first())

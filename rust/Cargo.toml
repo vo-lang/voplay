@@ -1,0 +1,59 @@
+[package]
+name = "vo-voplay"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VoPlay game engine — Rust renderer + physics + input"
+
+[package.metadata.vo]
+vomod = "../vo.mod"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native"]
+native = ["dep:linkme", "dep:vo-ext", "dep:vo-ffi-macro", "dep:vo-runtime", "dep:vogui", "dep:winit", "dep:pollster", "vo-ext/native", "vo-runtime/std"]
+wasm = ["dep:vo-ext", "dep:vo-ffi-macro", "dep:vo-runtime", "vo-ext/wasm", "dep:wasm-bindgen", "dep:web-sys", "dep:js-sys"]
+wasm-standalone = []
+
+[dependencies]
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+
+vo-ext       = { git = "https://github.com/vo-lang/volang", default-features = false, optional = true }
+vo-ffi-macro = { git = "https://github.com/vo-lang/volang", optional = true }
+vo-runtime   = { git = "https://github.com/vo-lang/volang", default-features = false, optional = true }
+linkme       = { version = "0.3", optional = true }
+vogui        = { git = "https://github.com/vo-lang/vogui", default-features = false, optional = true }
+winit        = { version = "0.30", optional = true }
+pollster     = { version = "0.4", optional = true }
+
+wasm-bindgen = { version = "0.2", optional = true }
+web-sys      = { version = "0.3", optional = true, features = [
+    "Document", "Window", "HtmlCanvasElement", "Element",
+    "KeyboardEvent", "PointerEvent", "EventTarget",
+] }
+js-sys       = { version = "0.3", optional = true }
+
+[[example]]
+name = "test_shapes"
+required-features = ["native"]
+
+[workspace]
+
+# Redirect git deps to local sibling repos for development
+[patch."https://github.com/vo-lang/vogui"]
+vogui = { path = "../../vogui/rust" }
+
+[patch."https://github.com/vo-lang/volang"]
+vo-common    = { path = "../../volang/lang/crates/vo-common" }
+vo-engine    = { path = "../../volang/lang/crates/vo-engine" }
+vo-ext       = { path = "../../volang/lang/crates/vo-ext" }
+vo-ffi-macro = { path = "../../volang/lang/crates/vo-ffi-macro" }
+vo-module    = { path = "../../volang/lang/crates/vo-module" }
+vo-runtime   = { path = "../../volang/lang/crates/vo-runtime" }
+vo-stdlib    = { path = "../../volang/lang/crates/vo-stdlib" }
+vo-syntax    = { path = "../../volang/lang/crates/vo-syntax" }
+vo-vm        = { path = "../../volang/lang/crates/vo-vm" }

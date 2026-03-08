@@ -1,0 +1,113 @@
+// Scene3D manages 3D nodes, camera, lighting, and physics.
+// Phase 0: stub — camera only.
+package voplay
+
+// Camera3D defines the 3D viewport.
+type Camera3D struct {
+	Position Vec3
+	Target   Vec3    // look-at point
+	Up       Vec3    // up vector (default: 0, 1, 0)
+	Fov      float64 // field of view in degrees (default: 60)
+	Near     float64 // near clip plane (default: 0.1)
+	Far      float64 // far clip plane (default: 1000)
+}
+
+// Light represents a light source in the 3D scene.
+type Light struct {
+	Type      LightType
+	Position  Vec3    // for Point and Spot
+	Direction Vec3    // for Directional and Spot
+	Color     Color
+	Intensity float64
+}
+
+type LightType int
+
+const (
+	DirectionalLight LightType = 0
+	PointLight       LightType = 1
+)
+
+// Scene3D holds the 3D scene state.
+type Scene3D struct {
+	Camera  Camera3D
+	Lights  []Light
+	Gravity Vec3 // physics gravity (default: 0, -9.8, 0)
+
+	nodes []*Node3D
+}
+
+func newScene3D() *Scene3D {
+	return &Scene3D{
+		Camera: Camera3D{
+			Position: Vec3{0, 5, 10},
+			Target:   Vec3{0, 0, 0},
+			Up:       Vec3{0, 1, 0},
+			Fov:      60,
+			Near:     0.1,
+			Far:      1000,
+		},
+		Gravity: Vec3{0, -9.8, 0},
+	}
+}
+
+// Node3D is a 3D game object managed by the scene.
+type Node3D struct {
+	Position Vec3
+	Rotation Quat
+	Scale    Vec3
+	Model    ModelID
+	Children []*Node3D
+	Tag      string
+	Visible  bool
+	Data     any
+	Physics  *Physics3D
+	bodyID   int // internal: Rapier body handle, set by Spawn
+}
+
+// Physics3D is the physics configuration for a 3D node.
+type Physics3D struct {
+	Type          BodyType
+	Collider      Collider
+	Density       float64
+	Friction      float64
+	Restitution   float64
+	LinearDamping float64
+	FixedRotation bool
+}
+
+// Spawn creates a node in the scene.
+func (s *Scene3D) Spawn(n Node3D) *Node3D {
+	if n.Scale == (Vec3{}) {
+		n.Scale = Vec3{1, 1, 1}
+	}
+	if n.Rotation == (Quat{}) {
+		n.Rotation = QuatIdentity()
+	}
+	n.Visible = true
+	node := &n
+	s.nodes = append(s.nodes, node)
+	// TODO: Phase 5 — create Rapier body if Physics != nil
+	return node
+}
+
+// Destroy removes a node from the scene.
+func (s *Scene3D) Destroy(n *Node3D) {
+	// TODO: Phase 5 — destroy Rapier body
+	for i, node := range s.nodes {
+		if node == n {
+			s.nodes = append(s.nodes[:i], s.nodes[i+1:]...)
+			return
+		}
+	}
+}
+
+// Physics force methods on Node3D.
+func (n *Node3D) ApplyForce(force Vec3)      {} // TODO: Phase 5
+func (n *Node3D) ApplyImpulse(impulse Vec3)  {} // TODO: Phase 5
+func (n *Node3D) Velocity() Vec3             { return Vec3{} } // TODO: Phase 5
+func (n *Node3D) SetVelocity(vel Vec3)       {} // TODO: Phase 5
+
+func (s *Scene3D) hasPhysics() bool {
+	return false // TODO: Phase 5
+}

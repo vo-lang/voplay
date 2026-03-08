@@ -1,0 +1,152 @@
+// Basic math types for voplay: Vec2, Vec3, Quat, Rect.
+// Pure Vo, no externs. ~200 lines.
+package voplay
+
+import "math"
+
+// Vec2 is a 2D vector.
+type Vec2 struct {
+	X, Y float64
+}
+
+func (a Vec2) Add(b Vec2) Vec2        { return Vec2{a.X + b.X, a.Y + b.Y} }
+func (a Vec2) Sub(b Vec2) Vec2        { return Vec2{a.X - b.X, a.Y - b.Y} }
+func (a Vec2) Scale(s float64) Vec2   { return Vec2{a.X * s, a.Y * s} }
+func (a Vec2) Dot(b Vec2) float64     { return a.X*b.X + a.Y*b.Y }
+func (a Vec2) Length() float64        { return math.Sqrt(a.X*a.X + a.Y*a.Y) }
+func (a Vec2) LengthSq() float64     { return a.X*a.X + a.Y*a.Y }
+func (a Vec2) Distance(b Vec2) float64 { return a.Sub(b).Length() }
+
+func (a Vec2) Normalize() Vec2 {
+	l := a.Length()
+	if l == 0 {
+		return Vec2{}
+	}
+	return Vec2{a.X / l, a.Y / l}
+}
+
+func (a Vec2) Lerp(b Vec2, t float64) Vec2 {
+	return Vec2{a.X + (b.X-a.X)*t, a.Y + (b.Y-a.Y)*t}
+}
+
+// Vec3 is a 3D vector.
+type Vec3 struct {
+	X, Y, Z float64
+}
+
+func (a Vec3) Add(b Vec3) Vec3        { return Vec3{a.X + b.X, a.Y + b.Y, a.Z + b.Z} }
+func (a Vec3) Sub(b Vec3) Vec3        { return Vec3{a.X - b.X, a.Y - b.Y, a.Z - b.Z} }
+func (a Vec3) Scale(s float64) Vec3   { return Vec3{a.X * s, a.Y * s, a.Z * s} }
+func (a Vec3) Dot(b Vec3) float64     { return a.X*b.X + a.Y*b.Y + a.Z*b.Z }
+func (a Vec3) Length() float64        { return math.Sqrt(a.X*a.X + a.Y*a.Y + a.Z*a.Z) }
+func (a Vec3) LengthSq() float64     { return a.X*a.X + a.Y*a.Y + a.Z*a.Z }
+func (a Vec3) Distance(b Vec3) float64 { return a.Sub(b).Length() }
+
+func (a Vec3) Cross(b Vec3) Vec3 {
+	return Vec3{
+		a.Y*b.Z - a.Z*b.Y,
+		a.Z*b.X - a.X*b.Z,
+		a.X*b.Y - a.Y*b.X,
+	}
+}
+
+func (a Vec3) Normalize() Vec3 {
+	l := a.Length()
+	if l == 0 {
+		return Vec3{}
+	}
+	return Vec3{a.X / l, a.Y / l, a.Z / l}
+}
+
+func (a Vec3) Lerp(b Vec3, t float64) Vec3 {
+	return Vec3{
+		a.X + (b.X-a.X)*t,
+		a.Y + (b.Y-a.Y)*t,
+		a.Z + (b.Z-a.Z)*t,
+	}
+}
+
+// Quat is a quaternion for 3D rotations.
+type Quat struct {
+	X, Y, Z, W float64
+}
+
+// QuatIdentity returns the identity quaternion (no rotation).
+func QuatIdentity() Quat { return Quat{0, 0, 0, 1} }
+
+func (q Quat) Length() float64 {
+	return math.Sqrt(q.X*q.X + q.Y*q.Y + q.Z*q.Z + q.W*q.W)
+}
+
+func (q Quat) Normalize() Quat {
+	l := q.Length()
+	if l == 0 {
+		return QuatIdentity()
+	}
+	return Quat{q.X / l, q.Y / l, q.Z / l, q.W / l}
+}
+
+func (a Quat) Mul(b Quat) Quat {
+	return Quat{
+		a.W*b.X + a.X*b.W + a.Y*b.Z - a.Z*b.Y,
+		a.W*b.Y - a.X*b.Z + a.Y*b.W + a.Z*b.X,
+		a.W*b.Z + a.X*b.Y - a.Y*b.X + a.Z*b.W,
+		a.W*b.W - a.X*b.X - a.Y*b.Y - a.Z*b.Z,
+	}
+}
+
+// Slerp performs spherical linear interpolation between two quaternions.
+func (a Quat) Slerp(b Quat, t float64) Quat {
+	dot := a.X*b.X + a.Y*b.Y + a.Z*b.Z + a.W*b.W
+	// Ensure shortest path
+	bq := b
+	if dot < 0 {
+		bq = Quat{-b.X, -b.Y, -b.Z, -b.W}
+		dot = -dot
+	}
+	// If very close, use linear interpolation
+	if dot > 0.9995 {
+		return Quat{
+			a.X + (bq.X-a.X)*t,
+			a.Y + (bq.Y-a.Y)*t,
+			a.Z + (bq.Z-a.Z)*t,
+			a.W + (bq.W-a.W)*t,
+		}.Normalize()
+	}
+	theta := math.Acos(dot)
+	sinTheta := math.Sin(theta)
+	wa := math.Sin((1-t)*theta) / sinTheta
+	wb := math.Sin(t*theta) / sinTheta
+	return Quat{
+		wa*a.X + wb*bq.X,
+		wa*a.Y + wb*bq.Y,
+		wa*a.Z + wb*bq.Z,
+		wa*a.W + wb*bq.W,
+	}
+}
+
+// QuatFromAxisAngle creates a quaternion from an axis and angle (radians).
+func QuatFromAxisAngle(axis Vec3, angle float64) Quat {
+	axis = axis.Normalize()
+	half := angle / 2
+	s := math.Sin(half)
+	return Quat{axis.X * s, axis.Y * s, axis.Z * s, math.Cos(half)}
+}
+
+// Rect is an axis-aligned rectangle.
+type Rect struct {
+	X, Y, W, H float64
+}
+
+func (r Rect) Contains(px, py float64) bool {
+	return px >= r.X && px < r.X+r.W && py >= r.Y && py < r.Y+r.H
+}
+
+func (r Rect) Intersects(other Rect) bool {
+	return r.X < other.X+other.W && r.X+r.W > other.X &&
+		r.Y < other.Y+other.H && r.Y+r.H > other.Y
+}
+
+func (r Rect) Center() (float64, float64) {
+	return r.X + r.W/2, r.Y + r.H/2
+}

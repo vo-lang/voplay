@@ -1,0 +1,188 @@
+// Scene2D manages 2D entities, camera, and physics.
+// Phase 0: stub — camera + empty entity list.
+package voplay
+
+// Camera2D defines the 2D viewport.
+type Camera2D struct {
+	X, Y     float64 // center position
+	Zoom     float64 // 1.0 = no zoom
+	Rotation float64 // radians
+}
+
+// Scene2D holds the 2D scene state.
+type Scene2D struct {
+	Camera    Camera2D
+	Tilemap   *Tilemap  // tilemap for this scene (nil = none); drawn first by DrawScene2D
+	Gravity   Vec2      // physics gravity (default: 0, 9.8)
+	ViewAngle float64   // 3D viewing angle for 2.5D entities (degrees from vertical)
+
+	entities []*Entity2D
+}
+
+func newScene2D() *Scene2D {
+	return &Scene2D{
+		Camera: Camera2D{Zoom: 1.0},
+		Gravity: Vec2{0, 9.8},
+	}
+}
+
+// Entity2D is a 2D game object managed by the scene.
+type Entity2D struct {
+	X, Y     float64
+	W, H     float64
+	Rotation float64
+	ScaleX   float64
+	ScaleY   float64
+	Sprite   *Sprite
+	Model    ModelID
+	ModelYaw float64
+	Tag      string
+	Active   bool
+	Visible  bool
+	ZOrder   int
+	Data     any
+	Physics  *Physics2D
+	bodyID   int // internal: Rapier body handle, set by Spawn
+}
+
+// Physics2D is the physics configuration for a 2D entity.
+type Physics2D struct {
+	Type          BodyType
+	Collider      Collider
+	Density       float64
+	Friction      float64
+	Restitution   float64
+	LinearDamping float64
+	FixedRotation bool
+}
+
+// BodyType determines how the physics engine treats a body.
+type BodyType int
+
+const (
+	Dynamic   BodyType = 0
+	Static    BodyType = 1
+	Kinematic BodyType = 2
+)
+
+// Collider is a tagged value type — kind determines shape, args hold dimensions.
+type Collider struct {
+	kind  int
+	args  [3]float64
+	model ModelID
+}
+
+// 2D collider constructors.
+func Box(halfW, halfH float64) Collider {
+	return Collider{kind: 1, args: [3]float64{halfW, halfH, 0}}
+}
+func Circle(radius float64) Collider {
+	return Collider{kind: 2, args: [3]float64{radius, 0, 0}}
+}
+func Capsule(halfHeight, radius float64) Collider {
+	return Collider{kind: 3, args: [3]float64{halfHeight, radius, 0}}
+}
+
+// 3D collider constructors (used with Scene3D / Physics3D).
+func Box3D(halfX, halfY, halfZ float64) Collider {
+	return Collider{kind: 4, args: [3]float64{halfX, halfY, halfZ}}
+}
+func Sphere(radius float64) Collider {
+	return Collider{kind: 5, args: [3]float64{radius, 0, 0}}
+}
+func MeshCollider(model ModelID) Collider {
+	return Collider{kind: 6, model: model}
+}
+
+// Contact2D represents a collision event between two entities.
+type Contact2D struct {
+	A       *Entity2D
+	B       *Entity2D
+	Started bool // true = contact began, false = contact ended
+}
+
+// Spawn creates an entity in the scene.
+// If Physics is set, a Rapier body is created.
+func (s *Scene2D) Spawn(e Entity2D) *Entity2D {
+	if e.ScaleX == 0 {
+		e.ScaleX = 1
+	}
+	if e.ScaleY == 0 {
+		e.ScaleY = 1
+	}
+	e.Active = true
+	e.Visible = true
+	ent := &e
+	s.entities = append(s.entities, ent)
+	// TODO: Phase 3 — create Rapier body if Physics != nil
+	return ent
+}
+
+// Destroy removes an entity from the scene.
+func (s *Scene2D) Destroy(e *Entity2D) {
+	e.Active = false
+	// TODO: Phase 3 — destroy Rapier body
+	for i, ent := range s.entities {
+		if ent == e {
+			s.entities = append(s.entities[:i], s.entities[i+1:]...)
+			return
+		}
+	}
+}
+
+// Contacts returns collision events from the last physics step.
+func (s *Scene2D) Contacts() []Contact2D {
+	// TODO: Phase 3 — unpack from physicsContacts extern
+	return nil
+}
+
+// Physics force methods on Entity2D (buffered, sent next frame).
+func (e *Entity2D) ApplyForce(fx, fy float64)      {} // TODO: Phase 3
+func (e *Entity2D) ApplyImpulse(ix, iy float64)    {} // TODO: Phase 3
+func (e *Entity2D) Velocity() Vec2                  { return Vec2{} } // TODO: Phase 3
+func (e *Entity2D) SetVelocity(vx, vy float64)     {} // TODO: Phase 3
+
+// Resource handle types.
+type TextureID int
+type ModelID int
+
+// Sprite represents a 2D image or animation frame.
+type Sprite struct {
+	Texture TextureID
+	SrcX    int
+	SrcY    int
+	SrcW    int
+	SrcH    int
+}
+
+// Tilemap stub — full implementation in Phase 2.
+type Tilemap struct {
+	TileSet *TileSet
+	id      int // Rust-side tilemap handle
+}
+
+type TileSet struct {
+	Texture TextureID
+	TileW   int
+	TileH   int
+	Columns int
+}
+
+// Upload sends tilemap data to Rust.
+func (t *Tilemap) Upload() {
+	// TODO: Phase 2 — call uploadTilemap extern
+}
+
+// WorldToTile converts world coordinates to tile coordinates.
+func (t *Tilemap) WorldToTile(wx, wy float64) (int, int) {
+	if t.TileSet == nil {
+		return 0, 0
+	}
+	col := int(wx) / t.TileSet.TileW
+	row := int(wy) / t.TileSet.TileH
+	return col, row
+}
+
+func (s *Scene2D) hasPhysics() bool {
+	return false // TODO: Phase 3 — return true if any entity has Physics
+}

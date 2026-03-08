@@ -1,0 +1,85 @@
+// Web/Studio host: uses vogui for canvas surface + game loop tick.
+// All input is handled by voplay's own listeners (pollInput extern).
+package voplay
+
+import "github.com/vo-lang/vogui"
+
+var surfaceReady bool
+
+func runWeb(game *Game) {
+	vogui.Run(vogui.App{
+		Init: func() any {
+			startGameLoop(game)
+			return nil
+		},
+		View: func(state any) vogui.Node {
+			return vogui.Canvas(vogui.CanvasProps{
+				Fullscreen: true,
+			})
+		},
+	})
+}
+
+func startGameLoop(game *Game) {
+	vogui.RunGameLoop(func(state any, dtMs float64) {
+		dt := dtMs / 1000.0 // vogui delivers ms, game API uses seconds
+
+		if !surfaceReady {
+			initSurface("canvas")?
+			game.Init(gameCtx)
+			surfaceReady = true
+		}
+
+		// 1. Poll input (one extern: returns packed key/pointer events)
+		inputBytes := pollInput()
+		gameCtx.Input.unpackEvents(inputBytes)
+
+		// 2. Physics step + sync
+		stepAndSyncPhysics(dt)
+
+		// 3. Game logic
+		game.Update(gameCtx, dt)
+
+		// 4. Render
+		gameCtx.Draw.reset()
+		game.Draw(gameCtx)
+		submitFrame(gameCtx.Draw.bytes())?
+
+		gameCtx.Input.endFrame()
+	})
+}
+
+// runNative opens a native window (winit) and runs the game loop.
+// Vo drives the loop; nativeFrame pumps winit events and submits draw commands.
+func runNative(game *Game) {
+	err := nativeInit(game.Width, game.Height, game.Title)
+	if err != nil {
+		panic(err)
+	}
+
+	game.Init(gameCtx)
+
+	for {
+		// 1. Submit previous frame's draw commands + pump OS events + get dt
+		dt, closed := nativeFrame(gameCtx.Draw.bytes())
+		if closed {
+			break
+		}
+
+		// 2. Poll input (events collected during nativeFrame's pump)
+		inputBytes := pollInput()
+		gameCtx.Input.unpackEvents(inputBytes)
+
+		// 3. Physics step + sync
+		stepAndSyncPhysics(dt)
+
+		// 4. Game logic
+		game.Update(gameCtx, dt)
+
+		// 5. Encode draw commands (submitted on next nativeFrame call)
+		gameCtx.Draw.reset()
+		game.Draw(gameCtx)
+
+		gameCtx.Input.endFrame()
+	}
+}

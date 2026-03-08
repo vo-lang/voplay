@@ -1,0 +1,155 @@
+// InputState provides polling-based input for keyboard and pointer.
+// Events are unpacked from binary data returned by pollInput extern.
+package voplay
+
+// Input event kinds (must match Rust encoder in input.rs).
+const (
+	inputKeyDown     = 0x01
+	inputKeyUp       = 0x02
+	inputPointerDown = 0x03
+	inputPointerUp   = 0x04
+	inputPointerMove = 0x05
+)
+
+// InputState holds the current state of keyboard and pointer input.
+type InputState struct {
+	// Keyboard state: key string → state
+	keysDown     map[string]bool // currently held
+	keysPressed  map[string]bool // pressed this frame
+	keysReleased map[string]bool // released this frame
+
+	// Pointer state
+	pointerX, pointerY float64
+	pointerButtons     int   // bitmask of held buttons
+	pointerPressed     int   // buttons pressed this frame
+	pointerReleased    int   // buttons released this frame
+}
+
+func newInputState() *InputState {
+	return &InputState{
+		keysDown:     map[string]bool{},
+		keysPressed:  map[string]bool{},
+		keysReleased: map[string]bool{},
+	}
+}
+
+// unpackEvents decodes binary input events from pollInput.
+func (inp *InputState) unpackEvents(data []byte) {
+	i := 0
+	for i < len(data) {
+		kind := data[i]
+		i++
+		switch kind {
+		case inputKeyDown:
+			key, n := decodeKeyEvent(data[i:])
+			i += n
+			if !inp.keysDown[key] {
+				inp.keysPressed[key] = true
+			}
+			inp.keysDown[key] = true
+		case inputKeyUp:
+			key, n := decodeKeyEvent(data[i:])
+			i += n
+			inp.keysDown[key] = false
+			inp.keysReleased[key] = true
+		case inputPointerDown:
+			inp.pointerX = readF64(data[i:])
+			inp.pointerY = readF64(data[i+8:])
+			btn := int(data[i+16])
+			i += 17
+			inp.pointerButtons |= 1 << btn
+			inp.pointerPressed |= 1 << btn
+		case inputPointerUp:
+			inp.pointerX = readF64(data[i:])
+			inp.pointerY = readF64(data[i+8:])
+			btn := int(data[i+16])
+			i += 17
+			inp.pointerButtons &^= 1 << btn
+			inp.pointerReleased |= 1 << btn
+		case inputPointerMove:
+			inp.pointerX = readF64(data[i:])
+			inp.pointerY = readF64(data[i+8:])
+			inp.pointerButtons = int(data[i+16])
+			i += 17
+		default:
+			return // unknown event, stop parsing
+		}
+	}
+}
+
+// endFrame clears per-frame flags (pressed/released).
+func (inp *InputState) endFrame() {
+	for k := range inp.keysPressed {
+		delete(inp.keysPressed, k)
+	}
+	for k := range inp.keysReleased {
+		delete(inp.keysReleased, k)
+	}
+	inp.pointerPressed = 0
+	inp.pointerReleased = 0
+}
+
+// --- Keyboard polling ---
+
+// IsKeyDown returns true if the key is currently held.
+func (inp *InputState) IsKeyDown(key string) bool {
+	return inp.keysDown[key]
+}
+
+// IsKeyPressed returns true if the key was pressed this frame.
+func (inp *InputState) IsKeyPressed(key string) bool {
+	return inp.keysPressed[key]
+}
+
+// IsKeyReleased returns true if the key was released this frame.
+func (inp *InputState) IsKeyReleased(key string) bool {
+	return inp.keysReleased[key]
+}
+
+// --- Pointer polling ---
+
+// PointerPos returns the current pointer position in screen coordinates.
+func (inp *InputState) PointerPos() (float64, float64) {
+	return inp.pointerX, inp.pointerY
+}
+
+// IsPointerDown returns true if the given button is currently held.
+// Button 0 = left, 1 = middle, 2 = right.
+func (inp *InputState) IsPointerDown(button int) bool {
+	return inp.pointerButtons&(1<<button) != 0
+}
+
+// IsPointerPressed returns true if the given button was pressed this frame.
+func (inp *InputState) IsPointerPressed(button int) bool {
+	return inp.pointerPressed&(1<<button) != 0
+}
+
+// IsPointerReleased returns true if the given button was released this frame.
+func (inp *InputState) IsPointerReleased(button int) bool {
+	return inp.pointerReleased&(1<<button) != 0
+}
+
+// WorldPointerPos converts pointer screen position to world coordinates
+// using the given 2D camera.
+func (inp *InputState) WorldPointerPos(cam *Camera2D) (float64, float64) {
+	// TODO: proper camera transform (inverse of zoom + pan + rotation)
+	wx := inp.pointerX/cam.Zoom + cam.X
+	wy := inp.pointerY/cam.Zoom + cam.Y
+	return wx, wy
+}
+
+// --- binary decode helpers ---
+
+func decodeKeyEvent(data []byte) (string, int) {
+	// keyCode:u16 (unused for now), len:u8, utf8:bytes
+	// skip keyCode
+	nameLen := int(data[2])
+	name := string(data[3 : 3+nameLen])
+	return name, 3 + nameLen
+}
+
+func readF64(data []byte) float64 {
+	bits := uint64(data[0]) | uint64(data[1])<<8 | uint64(data[2])<<16 | uint64(data[3])<<24 |
+		uint64(data[4])<<32 | uint64(data[5])<<40 | uint64(data[6])<<48 | uint64(data[7])<<56
+	return float64FromBits(bits)
+}

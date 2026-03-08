@@ -1,0 +1,3 @@
+[extension]
+name = "voplay"
+path = "rust/target/{profile}/libvo_voplay"

@@ -1,0 +1,167 @@
+// DrawCtx encodes draw commands into a binary []byte buffer.
+// No extern calls — pure Vo. Submitted once per frame via submitFrame.
+package voplay
+
+// Draw command opcodes (must match Rust decoder in stream.rs).
+const (
+	opClear         = 0x01
+	opSetCamera2D   = 0x02
+	opSetCamera3D   = 0x03
+	opResetCamera   = 0x04
+	opSetLayer      = 0x05
+	opDrawSprite    = 0x10
+	opDrawRect      = 0x11
+	opDrawCircle    = 0x12
+	opDrawLine      = 0x13
+	opDrawText      = 0x14
+	opDrawTilemap   = 0x15
+	opDrawScene2D   = 0x16
+	opDrawModel     = 0x20
+	opDrawBillboard = 0x21
+	opDrawScene3D   = 0x22
+	opSetLights3D   = 0x23
+)
+
+// DrawCtx buffers binary draw commands for the current frame.
+type DrawCtx struct {
+	buf []byte
+}
+
+func newDrawCtx() *DrawCtx {
+	return &DrawCtx{
+		buf: make([]byte, 0, 4096),
+	}
+}
+
+func (d *DrawCtx) reset() {
+	d.buf = d.buf[:0]
+}
+
+func (d *DrawCtx) bytes() []byte {
+	return d.buf
+}
+
+// --- binary encoding helpers ---
+
+func (d *DrawCtx) writeByte(v byte) {
+	d.buf = append(d.buf, v)
+}
+
+func (d *DrawCtx) writeU16(v int) {
+	d.buf = append(d.buf, byte(v), byte(v>>8))
+}
+
+func (d *DrawCtx) writeU32(v int) {
+	d.buf = append(d.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+}
+
+func (d *DrawCtx) writeF64(v float64) {
+	bits := float64Bits(v)
+	d.buf = append(d.buf,
+		byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24),
+		byte(bits>>32), byte(bits>>40), byte(bits>>48), byte(bits>>56),
+	)
+}
+
+// --- Public draw commands ---
+
+// Clear sets the background color for this frame.
+func (d *DrawCtx) Clear(r, g, b, a float64) {
+	d.writeByte(opClear)
+	d.writeF64(r)
+	d.writeF64(g)
+	d.writeF64(b)
+	d.writeF64(a)
+}
+
+// ClearColor sets the background color using a Color value.
+func (d *DrawCtx) ClearColor(c Color) {
+	d.Clear(c.R, c.G, c.B, c.A)
+}
+
+// ResetCamera switches to screen-space coordinates (for HUD).
+func (d *DrawCtx) ResetCamera() {
+	d.writeByte(opResetCamera)
+}
+
+// SetCamera2D sets the 2D camera for world-space drawing.
+func (d *DrawCtx) SetCamera2D(cam *Camera2D) {
+	d.writeByte(opSetCamera2D)
+	d.writeF64(cam.X)
+	d.writeF64(cam.Y)
+	d.writeF64(cam.Zoom)
+	d.writeF64(cam.Rotation)
+}
+
+// SetLayer sets the z-order layer for subsequent 2D draws.
+func (d *DrawCtx) SetLayer(z int) {
+	d.writeByte(opSetLayer)
+	d.writeU16(z)
+}
+
+// DrawRect draws a filled rectangle.
+func (d *DrawCtx) DrawRect(x, y, w, h float64, c Color) {
+	d.writeByte(opDrawRect)
+	d.writeF64(x)
+	d.writeF64(y)
+	d.writeF64(w)
+	d.writeF64(h)
+	d.writeF64(c.R)
+	d.writeF64(c.G)
+	d.writeF64(c.B)
+	d.writeF64(c.A)
+}
+
+// DrawCircle draws a filled circle.
+func (d *DrawCtx) DrawCircle(cx, cy, radius float64, c Color) {
+	d.writeByte(opDrawCircle)
+	d.writeF64(cx)
+	d.writeF64(cy)
+	d.writeF64(radius)
+	d.writeF64(c.R)
+	d.writeF64(c.G)
+	d.writeF64(c.B)
+	d.writeF64(c.A)
+}
+
+// DrawLine draws a line segment.
+func (d *DrawCtx) DrawLine(x1, y1, x2, y2, thickness float64, c Color) {
+	d.writeByte(opDrawLine)
+	d.writeF64(x1)
+	d.writeF64(y1)
+	d.writeF64(x2)
+	d.writeF64(y2)
+	d.writeF64(thickness)
+	d.writeF64(c.R)
+	d.writeF64(c.G)
+	d.writeF64(c.B)
+	d.writeF64(c.A)
+}
+
+// DrawText draws text at the given position.
+func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
+	d.writeByte(opDrawText)
+	d.writeF64(x)
+	d.writeF64(y)
+	d.writeF64(size)
+	d.writeF64(c.R)
+	d.writeF64(c.G)
+	d.writeF64(c.B)
+	d.writeF64(c.A)
+	// String: u16 len + utf8 bytes
+	b := []byte(text)
+	d.writeU16(len(b))
+	d.buf = append(d.buf, b...)
+}
+
+// DrawScene2D draws the entire 2D scene: tilemap (if set), then entities.
+func (d *DrawCtx) DrawScene2D(s *Scene2D) {
+	// Phase 0: stub — just emit SetCamera2D
+	d.SetCamera2D(&s.Camera)
+	// TODO: Phase 2+ — emit tilemap + entity draw commands
+}
+
+// DrawScene3D draws the entire 3D scene.
+func (d *DrawCtx) DrawScene3D(s *Scene3D) {
+	// TODO: Phase 5+
+}

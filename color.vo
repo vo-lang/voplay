@@ -1,0 +1,51 @@
+// Color type and predefined constants for voplay.
+package voplay
+
+// Color represents an RGBA color with float64 components in [0, 1].
+type Color struct {
+	R, G, B, A float64
+}
+
+// RGBA creates a Color from 0-1 float components.
+func RGBA(r, g, b, a float64) Color {
+	return Color{r, g, b, a}
+}
+
+// RGB creates an opaque Color from 0-1 float components.
+func RGB(r, g, b float64) Color {
+	return Color{r, g, b, 1.0}
+}
+
+// Hex creates a Color from a 24-bit hex value (0xRRGGBB).
+func Hex(v int) Color {
+	return Color{
+		float64((v>>16)&0xFF) / 255.0,
+		float64((v>>8)&0xFF) / 255.0,
+		float64(v&0xFF) / 255.0,
+		1.0,
+	}
+}
+
+// HexA creates a Color from a 32-bit hex value (0xRRGGBBAA).
+func HexA(v int) Color {
+	return Color{
+		float64((v>>24)&0xFF) / 255.0,
+		float64((v>>16)&0xFF) / 255.0,
+		float64((v>>8)&0xFF) / 255.0,
+		float64(v&0xFF) / 255.0,
+	}
+}
+
+// Predefined colors.
+var (
+	White       = Color{1, 1, 1, 1}
+	Black       = Color{0, 0, 0, 1}
+	Red         = Color{1, 0, 0, 1}
+	Green       = Color{0, 1, 0, 1}
+	Blue        = Color{0, 0, 1, 1}
+	Yellow      = Color{1, 1, 0, 1}
+	Cyan        = Color{0, 1, 1, 1}
+	Magenta     = Color{1, 0, 1, 1}
+	Transparent = Color{0, 0, 0, 0}
+	CornflowerBlue = Color{0.392, 0.584, 0.929, 1}
+)

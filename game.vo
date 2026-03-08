@@ -1,0 +1,78 @@
+// Game lifecycle: Game struct, GameCtx, Run, and extern declarations.
+package voplay
+
+// Game defines a voplay game application.
+type Game struct {
+	Width    int
+	Height   int
+	Title    string
+	Init     func(g *GameCtx)
+	Update   func(g *GameCtx, dt float64) // dt in seconds
+	Draw     func(g *GameCtx)
+	OnResize func(g *GameCtx, w, h int)   // optional
+}
+
+// GameCtx is the game context passed to all callbacks.
+type GameCtx struct {
+	Scene2D *Scene2D
+	Scene3D *Scene3D
+	Input   *InputState
+	Draw    *DrawCtx
+	Width   int // current viewport width (updated on resize)
+	Height  int // current viewport height (updated on resize)
+	Data    any // user-attached game data
+}
+
+// Package-level game context, shared across host_vogui / host_native.
+var gameCtx *GameCtx
+
+func newGameCtx(game Game) *GameCtx {
+	return &GameCtx{
+		Scene2D: newScene2D(),
+		Scene3D: newScene3D(),
+		Input:   newInputState(),
+		Draw:    newDrawCtx(),
+		Width:   game.Width,
+		Height:  game.Height,
+	}
+}
+
+// Run starts the game. Dispatches to web or native host.
+func Run(game Game) {
+	gameCtx = newGameCtx(game)
+	if isWebEnvironment() {
+		runWeb(&game)
+	} else {
+		runNative(&game)
+	}
+}
+
+// isWebEnvironment returns true when running in a WASM/browser context.
+func isWebEnvironment() bool {
+	return runtimeIsWeb()
+}
+
+// --- Extern declarations (implemented in Rust: vo-voplay crate) ---
+
+// Surface
+func initSurface(canvasRef string) error
+func submitFrame(cmds []byte) error
+
+// Input
+func pollInput() []byte
+
+// Runtime query
+func runtimeIsWeb() bool
+
+// Float64 bit conversion (Vo stdlib lacks math.Float64bits/Float64frombits)
+func float64Bits(f float64) uint64
+func float64FromBits(bits uint64) float64
+
+// Native game loop
+func nativeInit(width, height int, title string) error
+func nativeFrame(cmds []byte) (float64, bool)
+
+// Physics step (Phase 3+)
+func stepAndSyncPhysics(dt float64) {
+	// TODO: Phase 3 — call physicsStep externs, unpack state
+}

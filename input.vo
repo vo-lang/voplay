@@ -35,42 +35,36 @@ func newInputState() *InputState {
 
 // unpackEvents decodes binary input events from pollInput.
 func (inp *InputState) unpackEvents(data []byte) {
-	i := 0
-	for i < len(data) {
-		kind := data[i]
-		i++
+	r := NewByteReader(data)
+	for r.Remaining() > 0 {
+		kind := r.ReadByte()
 		switch kind {
 		case inputKeyDown:
-			key, n := decodeKeyEvent(data[i:])
-			i += n
+			key := decodeKeyEvent(&r)
 			if !inp.keysDown[key] {
 				inp.keysPressed[key] = true
 			}
 			inp.keysDown[key] = true
 		case inputKeyUp:
-			key, n := decodeKeyEvent(data[i:])
-			i += n
+			key := decodeKeyEvent(&r)
 			inp.keysDown[key] = false
 			inp.keysReleased[key] = true
 		case inputPointerDown:
-			inp.pointerX = readF64(data[i:])
-			inp.pointerY = readF64(data[i+8:])
-			btn := int(data[i+16])
-			i += 17
+			inp.pointerX = r.ReadF64()
+			inp.pointerY = r.ReadF64()
+			btn := int(r.ReadByte())
 			inp.pointerButtons |= 1 << btn
 			inp.pointerPressed |= 1 << btn
 		case inputPointerUp:
-			inp.pointerX = readF64(data[i:])
-			inp.pointerY = readF64(data[i+8:])
-			btn := int(data[i+16])
-			i += 17
+			inp.pointerX = r.ReadF64()
+			inp.pointerY = r.ReadF64()
+			btn := int(r.ReadByte())
 			inp.pointerButtons &^= 1 << btn
 			inp.pointerReleased |= 1 << btn
 		case inputPointerMove:
-			inp.pointerX = readF64(data[i:])
-			inp.pointerY = readF64(data[i+8:])
-			inp.pointerButtons = int(data[i+16])
-			i += 17
+			inp.pointerX = r.ReadF64()
+			inp.pointerY = r.ReadF64()
+			inp.pointerButtons = int(r.ReadByte())
 		default:
 			return // unknown event, stop parsing
 		}
@@ -130,26 +124,15 @@ func (inp *InputState) IsPointerReleased(button int) bool {
 }
 
 // WorldPointerPos converts pointer screen position to world coordinates
-// using the given 2D camera.
-func (inp *InputState) WorldPointerPos(cam *Camera2D) (float64, float64) {
-	// TODO: proper camera transform (inverse of zoom + pan + rotation)
-	wx := inp.pointerX/cam.Zoom + cam.X
-	wy := inp.pointerY/cam.Zoom + cam.Y
-	return wx, wy
+// using the given 2D camera and screen dimensions.
+func (inp *InputState) WorldPointerPos(cam *Camera2D, screenW, screenH float64) (float64, float64) {
+	return cam.ScreenToWorld(inp.pointerX, inp.pointerY, screenW, screenH)
 }
 
 // --- binary decode helpers ---
 
-func decodeKeyEvent(data []byte) (string, int) {
-	// keyCode:u16 (unused for now), len:u8, utf8:bytes
-	// skip keyCode
-	nameLen := int(data[2])
-	name := string(data[3 : 3+nameLen])
-	return name, 3 + nameLen
-}
-
-func readF64(data []byte) float64 {
-	bits := uint64(data[0]) | uint64(data[1])<<8 | uint64(data[2])<<16 | uint64(data[3])<<24 |
-		uint64(data[4])<<32 | uint64(data[5])<<40 | uint64(data[6])<<48 | uint64(data[7])<<56
-	return float64FromBits(bits)
+func decodeKeyEvent(r *ByteReader) string {
+	_ = r.ReadU16() // keyCode (unused for now)
+	nameLen := int(r.ReadByte())
+	return string(r.ReadBytes(nameLen))
 }

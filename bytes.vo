@@ -66,11 +66,25 @@ func (r *ByteReader) ReadByte() byte {
 	return v
 }
 
+func (r *ByteReader) ReadU16() int {
+	d := r.data[r.pos:]
+	v := int(d[0]) | int(d[1])<<8
+	r.pos += 2
+	return v
+}
+
 func (r *ByteReader) ReadU32() int {
 	d := r.data[r.pos:]
 	v := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
 	r.pos += 4
 	return v
+}
+
+func (r *ByteReader) ReadBytes(n int) []byte {
+	b := make([]byte, n)
+	copy(b, r.data[r.pos:r.pos+n])
+	r.pos += n
+	return b
 }
 
 func (r *ByteReader) ReadF64() float64 {

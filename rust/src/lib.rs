@@ -14,6 +14,10 @@ mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline_sprite;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod texture;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod input;
 #[cfg(feature = "native")]
 pub mod native;

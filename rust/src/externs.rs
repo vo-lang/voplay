@@ -1,5 +1,6 @@
 //! Vo extern implementations for voplay.
-//! Registers: initSurface, submitFrame, pollInput, runtimeIsWeb.
+//! Registers: initSurface, submitFrame, pollInput, runtimeIsWeb,
+//!            loadTexture, loadTextureBytes, freeTexture.
 
 use vo_ext::prelude::*;
 use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
@@ -119,6 +120,117 @@ pub fn native_frame(call: &mut ExternCallContext) -> ExternResult {
         call.ret_f64(0, 0.0);
         call.ret_bool(1, true);
     }
+    ExternResult::Ok
+}
+
+// --- loadTexture ---
+
+#[vo_fn("voplay", "loadTexture")]
+pub fn load_texture(call: &mut ExternCallContext) -> ExternResult {
+    let path = call.arg_str(0).to_string();
+
+    #[cfg(feature = "native")]
+    {
+        match crate::native::load_texture(&path) {
+            Ok(id) => {
+                call.ret_u64(0, id as u64);
+                write_nil_error(call, 1);
+            }
+            Err(msg) => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, &msg);
+            }
+        }
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        match RENDERER.get() {
+            Some(renderer_mutex) => {
+                let mut renderer = renderer_mutex.lock().unwrap();
+                match renderer.load_texture(&path) {
+                    Ok(id) => {
+                        call.ret_u64(0, id as u64);
+                        write_nil_error(call, 1);
+                    }
+                    Err(msg) => {
+                        call.ret_u64(0, 0);
+                        write_error_to(call, 1, &msg);
+                    }
+                }
+            }
+            None => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, "voplay: renderer not initialized");
+            }
+        }
+    }
+
+    ExternResult::Ok
+}
+
+// --- loadTextureBytes ---
+
+#[vo_fn("voplay", "loadTextureBytes")]
+pub fn load_texture_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let data = call.arg_bytes(0).to_vec();
+
+    #[cfg(feature = "native")]
+    {
+        match crate::native::load_texture_bytes(&data) {
+            Ok(id) => {
+                call.ret_u64(0, id as u64);
+                write_nil_error(call, 1);
+            }
+            Err(msg) => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, &msg);
+            }
+        }
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        match RENDERER.get() {
+            Some(renderer_mutex) => {
+                let mut renderer = renderer_mutex.lock().unwrap();
+                match renderer.load_texture_bytes(&data) {
+                    Ok(id) => {
+                        call.ret_u64(0, id as u64);
+                        write_nil_error(call, 1);
+                    }
+                    Err(msg) => {
+                        call.ret_u64(0, 0);
+                        write_error_to(call, 1, &msg);
+                    }
+                }
+            }
+            None => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, "voplay: renderer not initialized");
+            }
+        }
+    }
+
+    ExternResult::Ok
+}
+
+// --- freeTexture ---
+
+#[vo_fn("voplay", "freeTexture")]
+pub fn free_texture(call: &mut ExternCallContext) -> ExternResult {
+    let id = call.arg_u64(0) as u32;
+
+    #[cfg(feature = "native")]
+    {
+        crate::native::free_texture(id);
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        if let Some(renderer_mutex) = RENDERER.get() {
+            let mut renderer = renderer_mutex.lock().unwrap();
+            renderer.free_texture(id);
+        }
+    }
+
     ExternResult::Ok
 }
 

@@ -72,6 +72,28 @@ func float64FromBits(bits uint64) float64
 func nativeInit(width, height int, title string) error
 func nativeFrame(cmds []byte) (float64, bool)
 
+// Texture loading
+func loadTexture(path string) (int, error)
+func loadTextureBytes(data []byte) (int, error)
+func freeTexture(id int)
+
+// LoadTexture loads an image file and returns a TextureID.
+func LoadTexture(path string) (TextureID, error) {
+	id, err := loadTexture(path)
+	return TextureID(id), err
+}
+
+// LoadTextureBytes loads a texture from encoded image bytes (PNG, JPEG, etc.).
+func LoadTextureBytes(data []byte) (TextureID, error) {
+	id, err := loadTextureBytes(data)
+	return TextureID(id), err
+}
+
+// FreeTexture releases a loaded texture.
+func FreeTexture(id TextureID) {
+	freeTexture(int(id))
+}
+
 // Physics step (Phase 3+)
 func stepAndSyncPhysics(dt float64) {
 	// TODO: Phase 3 — call physicsStep externs, unpack state

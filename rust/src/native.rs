@@ -332,6 +332,42 @@ pub fn window_size() -> (u32, u32) {
 }
 
 // ---------------------------------------------------------------------------
+// Texture management (delegated to renderer)
+// ---------------------------------------------------------------------------
+
+/// Load a texture from a file path via the native renderer.
+pub fn load_texture(path: &str) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_texture(path),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Load a texture from encoded image bytes via the native renderer.
+pub fn load_texture_bytes(data: &[u8]) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_texture_bytes(data),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Free a texture by ID via the native renderer.
+pub fn free_texture(id: u32) {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        if let Some(r) = app.renderer.as_mut() {
+            r.free_texture(id);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

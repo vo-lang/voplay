@@ -154,6 +154,51 @@ func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
 	d.buf = append(d.buf, b...)
 }
 
+// DrawSprite draws a sprite at the given position and size.
+func (d *DrawCtx) DrawSprite(spr *Sprite, x, y, w, h float64) {
+	srcX, srcY, srcW, srcH := spr.SrcX, spr.SrcY, spr.SrcW, spr.SrcH
+	if spr.Anim != nil {
+		srcX, srcY, srcW, srcH = spr.Anim.CurrentFrame()
+	}
+	tint := spr.Tint
+	if tint.A == 0 && tint.R == 0 && tint.G == 0 && tint.B == 0 {
+		tint = White // default to no tint
+	}
+	d.writeByte(opDrawSprite)
+	d.writeU32(int(spr.Texture))
+	d.writeF64(srcX)
+	d.writeF64(srcY)
+	d.writeF64(srcW)
+	d.writeF64(srcH)
+	d.writeF64(x)
+	d.writeF64(y)
+	d.writeF64(w)
+	d.writeF64(h)
+	if spr.FlipX {
+		d.writeByte(1)
+	} else {
+		d.writeByte(0)
+	}
+	if spr.FlipY {
+		d.writeByte(1)
+	} else {
+		d.writeByte(0)
+	}
+	d.writeF64(spr.Rotation)
+	d.writeF64(tint.R)
+	d.writeF64(tint.G)
+	d.writeF64(tint.B)
+	d.writeF64(tint.A)
+}
+
+// DrawSpriteRotated draws a sprite with an additional rotation (radians).
+func (d *DrawCtx) DrawSpriteRotated(spr *Sprite, x, y, w, h, rotation float64) {
+	saved := spr.Rotation
+	spr.Rotation = rotation
+	d.DrawSprite(spr, x, y, w, h)
+	spr.Rotation = saved
+}
+
 // DrawScene2D draws the entire 2D scene: tilemap (if set), then entities.
 func (d *DrawCtx) DrawScene2D(s *Scene2D) {
 	// Phase 0: stub — just emit SetCamera2D

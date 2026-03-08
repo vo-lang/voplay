@@ -59,7 +59,14 @@ pub enum DrawCommand {
     DrawCircle { cx: f32, cy: f32, radius: f32, r: f32, g: f32, b: f32, a: f32 },
     DrawLine { x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, r: f32, g: f32, b: f32, a: f32 },
     DrawText { x: f32, y: f32, size: f32, r: f32, g: f32, b: f32, a: f32, text: String },
-    // TODO: Phase 2+ — DrawSprite, DrawTilemap, DrawModel, etc.
+    DrawSprite {
+        tex_id: u32,
+        src_x: f32, src_y: f32, src_w: f32, src_h: f32,
+        dst_x: f32, dst_y: f32, dst_w: f32, dst_h: f32,
+        flip_x: bool, flip_y: bool,
+        rotation: f32,
+        r: f32, g: f32, b: f32, a: f32,
+    },
 }
 
 /// Stream reader for binary draw commands.
@@ -86,6 +93,17 @@ impl<'a> StreamReader<'a> {
     fn read_u16(&mut self) -> u16 {
         let v = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
         self.pos += 2;
+        v
+    }
+
+    fn read_u32(&mut self) -> u32 {
+        let v = u32::from_le_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]);
+        self.pos += 4;
         v
     }
 
@@ -179,6 +197,30 @@ impl<'a> StreamReader<'a> {
                 let text = String::from_utf8_lossy(&self.data[self.pos..self.pos + len]).to_string();
                 self.pos += len;
                 Some(DrawCommand::DrawText { x, y, size, r, g, b, a, text })
+            }
+            Opcode::DrawSprite => {
+                let tex_id = self.read_u32();
+                let src_x = self.read_f32();
+                let src_y = self.read_f32();
+                let src_w = self.read_f32();
+                let src_h = self.read_f32();
+                let dst_x = self.read_f32();
+                let dst_y = self.read_f32();
+                let dst_w = self.read_f32();
+                let dst_h = self.read_f32();
+                let flip_x = self.read_u8() != 0;
+                let flip_y = self.read_u8() != 0;
+                let rotation = self.read_f32();
+                let r = self.read_f32();
+                let g = self.read_f32();
+                let b = self.read_f32();
+                let a = self.read_f32();
+                Some(DrawCommand::DrawSprite {
+                    tex_id, src_x, src_y, src_w, src_h,
+                    dst_x, dst_y, dst_w, dst_h,
+                    flip_x, flip_y, rotation,
+                    r, g, b, a,
+                })
             }
             // Unimplemented opcodes — skip for now
             _ => {

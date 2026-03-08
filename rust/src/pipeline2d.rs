@@ -153,8 +153,6 @@ pub struct Pipeline2D {
     vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
 }
 
 /// Batch of shape instances collected per frame.
@@ -245,48 +243,22 @@ impl ShapeBatch {
 const INITIAL_INSTANCE_CAPACITY: usize = 1024;
 
 impl Pipeline2D {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        camera_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         // Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_shape2d"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shape2d.wgsl").into()),
         });
 
-        // Camera uniform buffer + bind group
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_camera"),
-            size: std::mem::size_of::<CameraUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("voplay_camera_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_camera_bg"),
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-
         // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("voplay_shape2d_layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
+            bind_group_layouts: &[camera_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -353,8 +325,6 @@ impl Pipeline2D {
             vertex_buffer,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
-            camera_buffer,
-            camera_bind_group,
         }
     }
 
@@ -371,9 +341,6 @@ impl Pipeline2D {
         if count == 0 {
             return;
         }
-
-        // Upload camera uniform
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(batch.camera_uniform()));
 
         // Grow instance buffer if needed
         if count > self.instance_capacity {
@@ -396,13 +363,14 @@ impl Pipeline2D {
     pub fn draw<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
+        camera_bind_group: &'a wgpu::BindGroup,
         instance_count: u32,
     ) {
         if instance_count == 0 {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.draw(0..6, 0..instance_count);

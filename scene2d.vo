@@ -148,11 +148,107 @@ type ModelID int
 
 // Sprite represents a 2D image or animation frame.
 type Sprite struct {
+	Texture  TextureID
+	SrcX     float64 // source rect within texture (pixels)
+	SrcY     float64
+	SrcW     float64
+	SrcH     float64
+	FlipX    bool
+	FlipY    bool
+	Rotation float64 // radians
+	Tint     Color   // multiply tint (default: White = no tint)
+	Anim     *Animation
+}
+
+// NewSprite creates a sprite using the full texture with no tint.
+func NewSprite(tex TextureID, w, h float64) *Sprite {
+	return &Sprite{
+		Texture: tex,
+		SrcW:    w,
+		SrcH:    h,
+		Tint:    White,
+	}
+}
+
+// SpriteSheet describes a grid-based atlas for animation frames.
+type SpriteSheet struct {
 	Texture TextureID
-	SrcX    int
-	SrcY    int
-	SrcW    int
-	SrcH    int
+	FrameW  int
+	FrameH  int
+	Columns int
+}
+
+// NewSpriteSheet creates a sprite sheet descriptor.
+func NewSpriteSheet(tex TextureID, frameW, frameH, columns int) *SpriteSheet {
+	return &SpriteSheet{
+		Texture: tex,
+		FrameW:  frameW,
+		FrameH:  frameH,
+		Columns: columns,
+	}
+}
+
+// Frame returns the source rect for frame index i.
+func (ss *SpriteSheet) Frame(i int) (float64, float64, float64, float64) {
+	col := i % ss.Columns
+	row := i / ss.Columns
+	x := float64(col * ss.FrameW)
+	y := float64(row * ss.FrameH)
+	return x, y, float64(ss.FrameW), float64(ss.FrameH)
+}
+
+// Animation plays through a sequence of sprite sheet frames.
+type Animation struct {
+	Sheet  *SpriteSheet
+	Frames []int   // frame indices within the sheet
+	FPS    float64
+	Loop   bool
+
+	time    float64
+	current int
+	done    bool
+}
+
+// Update advances the animation by dt seconds.
+func (a *Animation) Update(dt float64) {
+	if a.done || len(a.Frames) == 0 {
+		return
+	}
+	a.time += dt
+	frameDur := 1.0 / a.FPS
+	for a.time >= frameDur {
+		a.time -= frameDur
+		a.current++
+		if a.current >= len(a.Frames) {
+			if a.Loop {
+				a.current = 0
+			} else {
+				a.current = len(a.Frames) - 1
+				a.done = true
+				return
+			}
+		}
+	}
+}
+
+// CurrentFrame returns the source rect of the current animation frame.
+func (a *Animation) CurrentFrame() (float64, float64, float64, float64) {
+	if len(a.Frames) == 0 {
+		return 0, 0, 0, 0
+	}
+	return a.Sheet.Frame(a.Frames[a.current])
+}
+
+// Done returns true if a non-looping animation has finished.
+func (a *Animation) Done() bool {
+	return a.done
+}
+
+// Reset restarts the animation from the beginning.
+func (a *Animation) Reset() {
+	a.time = 0
+	a.current = 0
+	a.done = false
 }
 
 // Tilemap stub — full implementation in Phase 2.

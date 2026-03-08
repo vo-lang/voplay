@@ -20,6 +20,7 @@ wasm-standalone = []
 [dependencies]
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 log = "0.4"
 
 vo-ext       = { git = "https://github.com/vo-lang/volang", default-features = false, optional = true }

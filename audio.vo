@@ -1,0 +1,67 @@
+// Audio playback: load clips, play SFX and music, volume control.
+package voplay
+
+// AudioClip is a handle to a loaded audio resource (WAV, OGG, MP3).
+type AudioClip int
+
+// LoadAudio loads an audio file from disk and returns an AudioClip.
+func LoadAudio(path string) (AudioClip, error) {
+	id, err := audioLoad(path)
+	return AudioClip(id), err
+}
+
+// LoadAudioBytes loads an audio clip from encoded bytes (WAV, OGG, MP3).
+func LoadAudioBytes(data []byte) (AudioClip, error) {
+	id, err := audioLoadBytes(data)
+	return AudioClip(id), err
+}
+
+// Free releases a loaded audio clip.
+func (c AudioClip) Free() {
+	audioFree(int(c))
+}
+
+// Play plays this clip as a one-shot sound effect.
+// volume: 0.0–1.0 (scaled by global SFX volume).
+func (c AudioClip) Play() {
+	audioPlaySound(int(c), 1.0, 1.0, 0.0)
+}
+
+// PlayEx plays this clip as a sound effect with explicit parameters.
+// volume: amplitude scale (1.0 = normal).
+// pitch: playback speed (1.0 = normal, 2.0 = double speed/octave up).
+// pan: stereo position (-1.0 = left, 0.0 = center, 1.0 = right).
+func (c AudioClip) PlayEx(volume, pitch, pan float64) {
+	audioPlaySound(int(c), volume, pitch, pan)
+}
+
+// PlayMusic starts this clip as looping background music.
+// Stops any currently playing music. volume: 0.0–1.0 (scaled by global music volume).
+func (c AudioClip) PlayMusic(volume float64) {
+	audioPlayMusic(int(c), volume)
+}
+
+// StopMusic stops the currently playing background music.
+func StopMusic() {
+	audioStopMusic()
+}
+
+// PauseMusic pauses the currently playing background music.
+func PauseMusic() {
+	audioPauseMusic()
+}
+
+// ResumeMusic resumes paused background music.
+func ResumeMusic() {
+	audioResumeMusic()
+}
+
+// SetSFXVolume sets the global volume multiplier for sound effects (0.0–1.0).
+func SetSFXVolume(vol float64) {
+	audioSetSFXVolume(vol)
+}
+
+// SetMusicVolume sets the global volume multiplier for music (0.0–1.0).
+func SetMusicVolume(vol float64) {
+	audioSetMusicVolume(vol)
+}

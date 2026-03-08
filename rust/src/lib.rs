@@ -18,6 +18,8 @@ mod font;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod audio;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_sprite;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod texture;

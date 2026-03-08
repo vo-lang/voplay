@@ -102,3 +102,15 @@ func physicsInit(gravityX, gravityY float64)
 func physicsSpawnBody(bodyID int, data []byte)
 func physicsDestroyBody(bodyID int)
 func physicsStep(dt float64, cmds []byte) []byte
+
+// Audio externs
+func audioLoad(path string) (int, error)
+func audioLoadBytes(data []byte) (int, error)
+func audioFree(clipID int)
+func audioPlaySound(clipID int, volume, pitch, pan float64)
+func audioPlayMusic(clipID int, volume float64)
+func audioStopMusic()
+func audioPauseMusic()
+func audioResumeMusic()
+func audioSetSFXVolume(vol float64)
+func audioSetMusicVolume(vol float64)

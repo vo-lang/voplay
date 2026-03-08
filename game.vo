@@ -120,6 +120,7 @@ func physicsSpawnBody(bodyID int, data []byte)
 func physicsDestroyBody(bodyID int)
 func physicsStep(dt float64, cmds []byte) []byte
 func physicsContacts() []byte
+func physicsSetGravity(gx, gy float64)
 
 // Audio externs
 func audioLoad(path string) (int, error)

@@ -210,6 +210,14 @@ func (s *Scene2D) Destroy(e *Entity2D) {
 	}
 }
 
+// SetGravity changes the physics gravity at runtime.
+func (s *Scene2D) SetGravity(g Vec2) {
+	s.Gravity = g
+	if s.physicsReady {
+		physicsSetGravity(g.X, g.Y)
+	}
+}
+
 // ensurePhysics lazily initializes the Rapier physics world.
 func (s *Scene2D) ensurePhysics() {
 	if s.physicsReady {
@@ -282,6 +290,23 @@ func (s *Scene2D) FindAllByTag(tag string) []*Entity2D {
 	var result []*Entity2D
 	for _, e := range s.entities {
 		if e.Active && e.Tag == tag {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// FindInRadius returns all active entities whose center is within radius of (x, y).
+func (s *Scene2D) FindInRadius(x, y, radius float64) []*Entity2D {
+	rSq := radius * radius
+	var result []*Entity2D
+	for _, e := range s.entities {
+		if !e.Active {
+			continue
+		}
+		dx := e.X - x
+		dy := e.Y - y
+		if dx*dx+dy*dy <= rSq {
 			result = append(result, e)
 		}
 	}
@@ -362,6 +387,7 @@ const (
 	physicsCmdForce   byte = 1
 	physicsCmdImpulse byte = 2
 	physicsCmdSetVel  byte = 3
+	physicsCmdSetPos  byte = 4
 )
 
 // writePhysCmd appends a physics command to this scene's command buffer.
@@ -394,6 +420,16 @@ func (e *Entity2D) SetVelocity(vx, vy float64) {
 		return
 	}
 	e.scene.writePhysCmd(physicsCmdSetVel, e.bodyID, vx, vy)
+}
+
+// SetPosition teleports a physics entity to the given position (buffered until next step).
+// For non-physics entities, sets X/Y directly.
+func (e *Entity2D) SetPosition(x, y float64) {
+	e.X = x
+	e.Y = y
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetPos, e.bodyID, x, y)
+	}
 }
 
 // Velocity returns the current linear velocity (updated after each physics step).

@@ -45,6 +45,7 @@ pub struct BodyDesc {
 const CMD_APPLY_FORCE: u8 = 1;
 const CMD_APPLY_IMPULSE: u8 = 2;
 const CMD_SET_VELOCITY: u8 = 3;
+const CMD_SET_POSITION: u8 = 4;
 
 /// Manages the Rapier2D physics world.
 pub struct PhysicsWorld2D {
@@ -85,7 +86,6 @@ impl PhysicsWorld2D {
     }
 
     /// Set gravity.
-    #[allow(dead_code)]
     pub fn set_gravity(&mut self, x: f32, y: f32) {
         self.gravity = vector![x, y];
     }
@@ -168,6 +168,7 @@ impl PhysicsWorld2D {
     ///   CMD_APPLY_FORCE:   body_id, fx, fy (2x f64)
     ///   CMD_APPLY_IMPULSE: body_id, ix, iy (2x f64)
     ///   CMD_SET_VELOCITY:  body_id, vx, vy (2x f64)
+    ///   CMD_SET_POSITION:  body_id, x, y (2x f64)
     pub fn apply_commands(&mut self, data: &[u8]) {
         let mut pos = 0;
         while pos < data.len() {
@@ -208,6 +209,9 @@ impl PhysicsWorld2D {
                     }
                     CMD_SET_VELOCITY => {
                         rb.set_linvel(vector![v1, v2], true);
+                    }
+                    CMD_SET_POSITION => {
+                        rb.set_translation(vector![v1, v2], true);
                     }
                     _ => {}
                 }

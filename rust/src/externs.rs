@@ -363,6 +363,16 @@ pub fn physics_step(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
+#[vo_fn("voplay", "physicsSetGravity")]
+pub fn physics_set_gravity(call: &mut ExternCallContext) -> ExternResult {
+    let gx = call.arg_f64(0) as f32;
+    let gy = call.arg_f64(1) as f32;
+    if let Some(physics_mutex) = PHYSICS.get() {
+        physics_mutex.lock().unwrap().set_gravity(gx, gy);
+    }
+    ExternResult::Ok
+}
+
 #[vo_fn("voplay", "physicsContacts")]
 pub fn physics_contacts(call: &mut ExternCallContext) -> ExternResult {
     let contacts = get_physics().lock().unwrap().get_contacts();

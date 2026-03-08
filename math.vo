@@ -58,6 +58,8 @@ func (a Vec3) Normalize() Vec3 {
 	return Vec3{a.X / l, a.Y / l, a.Z / l}
 }
 
+func (a Vec3) Negate() Vec3 { return Vec3{-a.X, -a.Y, -a.Z} }
+
 func (a Vec3) Lerp(b Vec3, t float64) Vec3 {
 	return Vec3{
 		a.X + (b.X-a.X)*t,
@@ -123,6 +125,47 @@ func (a Quat) Slerp(b Quat, t float64) Quat {
 		wa*a.Z + wb*bq.Z,
 		wa*a.W + wb*bq.W,
 	}
+}
+
+// QuatRotateVec3 rotates a vector by the quaternion.
+func (q Quat) RotateVec3(v Vec3) Vec3 {
+	u := Vec3{q.X, q.Y, q.Z}
+	s := q.W
+	return u.Scale(2 * u.Dot(v)).
+		Add(v.Scale(s*s - u.Dot(u))).
+		Add(u.Cross(v).Scale(2 * s))
+}
+
+// QuatFromEuler creates a quaternion from Euler angles (radians, YXZ order).
+func QuatFromEuler(pitch, yaw, roll float64) Quat {
+	cp := math.Cos(pitch * 0.5)
+	sp := math.Sin(pitch * 0.5)
+	cy := math.Cos(yaw * 0.5)
+	sy := math.Sin(yaw * 0.5)
+	cr := math.Cos(roll * 0.5)
+	sr := math.Sin(roll * 0.5)
+	return Quat{
+		X: cy*sp*cr + sy*cp*sr,
+		Y: sy*cp*cr - cy*sp*sr,
+		Z: cy*cp*sr - sy*sp*cr,
+		W: cy*cp*cr + sy*sp*sr,
+	}
+}
+
+// QuatToAxisAngle extracts the axis and angle (radians) from a quaternion.
+func (q Quat) ToAxisAngle() (Vec3, float64) {
+	q = q.Normalize()
+	angle := 2 * math.Acos(q.W)
+	s := math.Sqrt(1 - q.W*q.W)
+	if s < 0.0001 {
+		return Vec3{1, 0, 0}, angle
+	}
+	return Vec3{q.X / s, q.Y / s, q.Z / s}, angle
+}
+
+// Inverse returns the inverse (conjugate for unit quaternions).
+func (q Quat) Inverse() Quat {
+	return Quat{-q.X, -q.Y, -q.Z, q.W}
 }
 
 // QuatFromAxisAngle creates a quaternion from an axis and angle (radians).

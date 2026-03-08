@@ -375,6 +375,42 @@ pub fn free_texture(id: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// Model management (delegated to renderer)
+// ---------------------------------------------------------------------------
+
+/// Load a model from a file path via the native renderer.
+pub fn load_model(path: &str) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_model(path),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Load a model from raw glTF/GLB bytes via the native renderer.
+pub fn load_model_bytes(data: &[u8]) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_model_bytes(data),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Free a model by ID via the native renderer.
+pub fn free_model(id: u32) {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        if let Some(r) = app.renderer.as_mut() {
+            r.free_model(id);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Font management (delegated to renderer)
 // ---------------------------------------------------------------------------
 

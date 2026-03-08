@@ -16,6 +16,10 @@ mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod font_manager;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod model_loader;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline3d;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod physics;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod audio;

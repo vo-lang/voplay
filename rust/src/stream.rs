@@ -49,6 +49,16 @@ impl Opcode {
     }
 }
 
+/// Decoded light from SetLights3D command.
+#[derive(Debug, Clone)]
+pub struct DecodedLight {
+    pub light_type: u8, // 0 = directional, 1 = point
+    pub px: f32, pub py: f32, pub pz: f32, // position (point) or unused (dir)
+    pub dx: f32, pub dy: f32, pub dz: f32, // direction (dir) or unused (point)
+    pub cr: f32, pub cg: f32, pub cb: f32, // color
+    pub intensity: f32,
+}
+
 /// Decoded draw command.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -62,6 +72,22 @@ pub enum DrawCommand {
     DrawLine { x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, r: f32, g: f32, b: f32, a: f32 },
     DrawText { x: f32, y: f32, size: f32, r: f32, g: f32, b: f32, a: f32, text: String },
     SetFont { font_id: u32 },
+    SetCamera3D {
+        eye_x: f32, eye_y: f32, eye_z: f32,
+        target_x: f32, target_y: f32, target_z: f32,
+        up_x: f32, up_y: f32, up_z: f32,
+        fov: f32, near: f32, far: f32,
+    },
+    SetLights3D {
+        ambient_r: f32, ambient_g: f32, ambient_b: f32,
+        lights: Vec<DecodedLight>,
+    },
+    DrawModel {
+        model_id: u32,
+        px: f32, py: f32, pz: f32,
+        qx: f32, qy: f32, qz: f32, qw: f32,
+        sx: f32, sy: f32, sz: f32,
+    },
     DrawSprite {
         tex_id: u32,
         src_x: f32, src_y: f32, src_w: f32, src_h: f32,
@@ -227,6 +253,45 @@ impl<'a> StreamReader<'a> {
                     dst_x, dst_y, dst_w, dst_h,
                     flip_x, flip_y, rotation,
                     r, g, b, a,
+                })
+            }
+            Opcode::SetCamera3D => {
+                let eye_x = self.read_f32(); let eye_y = self.read_f32(); let eye_z = self.read_f32();
+                let target_x = self.read_f32(); let target_y = self.read_f32(); let target_z = self.read_f32();
+                let up_x = self.read_f32(); let up_y = self.read_f32(); let up_z = self.read_f32();
+                let fov = self.read_f32(); let near = self.read_f32(); let far = self.read_f32();
+                Some(DrawCommand::SetCamera3D {
+                    eye_x, eye_y, eye_z,
+                    target_x, target_y, target_z,
+                    up_x, up_y, up_z,
+                    fov, near, far,
+                })
+            }
+            Opcode::SetLights3D => {
+                let ambient_r = self.read_f32();
+                let ambient_g = self.read_f32();
+                let ambient_b = self.read_f32();
+                let count = self.read_u8() as usize;
+                let mut lights = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let light_type = self.read_u8();
+                    let px = self.read_f32(); let py = self.read_f32(); let pz = self.read_f32();
+                    let dx = self.read_f32(); let dy = self.read_f32(); let dz = self.read_f32();
+                    let cr = self.read_f32(); let cg = self.read_f32(); let cb = self.read_f32();
+                    let intensity = self.read_f32();
+                    lights.push(DecodedLight {
+                        light_type, px, py, pz, dx, dy, dz, cr, cg, cb, intensity,
+                    });
+                }
+                Some(DrawCommand::SetLights3D { ambient_r, ambient_g, ambient_b, lights })
+            }
+            Opcode::DrawModel => {
+                let model_id = self.read_u32();
+                let px = self.read_f32(); let py = self.read_f32(); let pz = self.read_f32();
+                let qx = self.read_f32(); let qy = self.read_f32(); let qz = self.read_f32(); let qw = self.read_f32();
+                let sx = self.read_f32(); let sy = self.read_f32(); let sz = self.read_f32();
+                Some(DrawCommand::DrawModel {
+                    model_id, px, py, pz, qx, qy, qz, qw, sx, sy, sz,
                 })
             }
             // Unimplemented opcodes — skip for now

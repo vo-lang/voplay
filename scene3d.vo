@@ -37,6 +37,9 @@ type Scene3D struct {
 	nodes []*Node3D
 }
 
+// NewScene3D creates a new 3D scene with default camera and gravity.
+func NewScene3D() *Scene3D { return newScene3D() }
+
 func newScene3D() *Scene3D {
 	return &Scene3D{
 		Camera: Camera3D{
@@ -100,6 +103,44 @@ func (s *Scene3D) Destroy(n *Node3D) {
 			return
 		}
 	}
+}
+
+// Clear removes all nodes from the scene.
+func (s *Scene3D) Clear() {
+	s.nodes = nil
+}
+
+// NodeCount returns the number of nodes in the scene.
+func (s *Scene3D) NodeCount() int {
+	return len(s.nodes)
+}
+
+// FindByTag returns all nodes with the given tag.
+func (s *Scene3D) FindByTag(tag string) []*Node3D {
+	var result []*Node3D
+	for _, n := range s.nodes {
+		if n.Tag == tag {
+			result = append(result, n)
+		}
+	}
+	return result
+}
+
+// ForEach calls fn for every node in the scene.
+func (s *Scene3D) ForEach(fn func(n *Node3D)) {
+	for _, n := range s.nodes {
+		fn(n)
+	}
+}
+
+// AddLight adds a light to the scene.
+func (s *Scene3D) AddLight(l Light) {
+	s.Lights = append(s.Lights, l)
+}
+
+// ClearLights removes all lights from the scene.
+func (s *Scene3D) ClearLights() {
+	s.Lights = nil
 }
 
 // Physics force methods on Node3D.

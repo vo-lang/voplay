@@ -30,6 +30,9 @@ type DrawCtx struct {
 	w ByteWriter
 }
 
+// NewDrawCtx creates a new draw command context.
+func NewDrawCtx() *DrawCtx { return newDrawCtx() }
+
 func newDrawCtx() *DrawCtx {
 	return &DrawCtx{
 		w: NewByteWriter(4096),
@@ -319,7 +322,74 @@ func (d *DrawCtx) DrawScene2D(s *Scene2D) {
 	d.ResetCamera()
 }
 
-// DrawScene3D draws the entire 3D scene.
+// SetCamera3D sets the 3D camera for subsequent 3D draw commands.
+func (d *DrawCtx) SetCamera3D(cam *Camera3D) {
+	d.w.WriteByte(opSetCamera3D)
+	d.w.WriteF64(cam.Position.X)
+	d.w.WriteF64(cam.Position.Y)
+	d.w.WriteF64(cam.Position.Z)
+	d.w.WriteF64(cam.Target.X)
+	d.w.WriteF64(cam.Target.Y)
+	d.w.WriteF64(cam.Target.Z)
+	d.w.WriteF64(cam.Up.X)
+	d.w.WriteF64(cam.Up.Y)
+	d.w.WriteF64(cam.Up.Z)
+	d.w.WriteF64(cam.Fov)
+	d.w.WriteF64(cam.Near)
+	d.w.WriteF64(cam.Far)
+}
+
+// SetLights3D sets the lights for subsequent 3D draw commands.
+func (d *DrawCtx) SetLights3D(ambient Color, lights []Light) {
+	d.w.WriteByte(opSetLights3D)
+	d.w.WriteF64(ambient.R)
+	d.w.WriteF64(ambient.G)
+	d.w.WriteF64(ambient.B)
+	count := len(lights)
+	if count > 8 {
+		count = 8
+	}
+	d.w.WriteByte(byte(count))
+	for i := 0; i < count; i++ {
+		l := lights[i]
+		d.w.WriteByte(byte(l.Type))
+		d.w.WriteF64(l.Position.X)
+		d.w.WriteF64(l.Position.Y)
+		d.w.WriteF64(l.Position.Z)
+		d.w.WriteF64(l.Direction.X)
+		d.w.WriteF64(l.Direction.Y)
+		d.w.WriteF64(l.Direction.Z)
+		d.w.WriteF64(l.Color.R)
+		d.w.WriteF64(l.Color.G)
+		d.w.WriteF64(l.Color.B)
+		d.w.WriteF64(l.Intensity)
+	}
+}
+
+// DrawModel draws a 3D model at the given transform.
+func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3) {
+	d.w.WriteByte(opDrawModel)
+	d.w.WriteU32(int(model))
+	d.w.WriteF64(pos.X)
+	d.w.WriteF64(pos.Y)
+	d.w.WriteF64(pos.Z)
+	d.w.WriteF64(rot.X)
+	d.w.WriteF64(rot.Y)
+	d.w.WriteF64(rot.Z)
+	d.w.WriteF64(rot.W)
+	d.w.WriteF64(scale.X)
+	d.w.WriteF64(scale.Y)
+	d.w.WriteF64(scale.Z)
+}
+
+// DrawScene3D draws the entire 3D scene: camera, lights, then all visible nodes.
 func (d *DrawCtx) DrawScene3D(s *Scene3D) {
-	// TODO: Phase 8
+	d.SetCamera3D(&s.Camera)
+	d.SetLights3D(Color{R: 0.1, G: 0.1, B: 0.1, A: 1}, s.Lights)
+	for _, n := range s.nodes {
+		if !n.Visible || n.Model == 0 {
+			continue
+		}
+		d.DrawModel(n.Model, n.Position, n.Rotation, n.Scale)
+	}
 }

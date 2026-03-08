@@ -102,6 +102,11 @@ func loadFont(path string) (int, error)
 func loadFontBytes(data []byte) (int, error)
 func freeFont(id int)
 
+// Model loading
+func loadModel(path string) (int, error)
+func loadModelBytes(data []byte) (int, error)
+func freeModel(id int)
+
 // LoadTexture loads an image file and returns a TextureID.
 func LoadTexture(path string) (TextureID, error) {
 	id, err := loadTexture(path)
@@ -137,6 +142,23 @@ func LoadFontBytes(data []byte) (FontID, error) {
 // FreeFont releases a loaded font.
 func FreeFont(id FontID) {
 	freeFont(int(id))
+}
+
+// LoadModel loads a glTF/GLB model file and returns a ModelID.
+func LoadModel(path string) (ModelID, error) {
+	id, err := loadModel(path)
+	return ModelID(id), err
+}
+
+// LoadModelBytes loads a glTF/GLB model from raw bytes.
+func LoadModelBytes(data []byte) (ModelID, error) {
+	id, err := loadModelBytes(data)
+	return ModelID(id), err
+}
+
+// FreeModel releases a loaded model.
+func FreeModel(id ModelID) {
+	freeModel(int(id))
 }
 
 // Physics externs

@@ -2,7 +2,10 @@
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
 use crate::font_manager::FontManager;
+use crate::model_loader::{ModelId, ModelManager};
 use crate::pipeline2d::{Pipeline2D, ShapeBatch, CameraUniform};
+use crate::pipeline3d::{Pipeline3D, Camera3DUniform, ModelUniform, LightUniform, LightData, ModelDraw,
+                        build_model_matrix, transpose_upper3x3, look_at_rh, perspective_rh_zo, mat4_mul};
 use crate::pipeline_sprite::{PipelineSprite, SpriteBatch, SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
 use crate::stream::{DrawCommand, StreamReader};
@@ -23,6 +26,9 @@ pub struct Renderer {
     // Per-frame batches
     shape_batch: ShapeBatch,
     sprite_batch: SpriteBatch,
+    // 3D pipeline
+    pipeline3d: Pipeline3D,
+    model_manager: ModelManager,
     // Texture manager
     texture_manager: TextureManager,
     // Font manager for text rendering (TTF/OTF, dynamic glyph atlas)
@@ -119,9 +125,12 @@ impl Renderer {
         let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
         let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, format, &camera_bgl);
+        let tex_bgl = texture_manager.bind_group_layout();
         let pipeline_sprite = PipelineSprite::new(
-            &device, &queue, format, &camera_bgl, texture_manager.bind_group_layout(),
+            &device, &queue, format, &camera_bgl, tex_bgl,
         );
+        let pipeline3d = Pipeline3D::new(&device, &queue, format, tex_bgl);
+        let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new();
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
@@ -137,6 +146,8 @@ impl Renderer {
             camera_bind_group,
             pipeline2d,
             pipeline_sprite,
+            pipeline3d,
+            model_manager,
             shape_batch,
             sprite_batch,
             texture_manager,
@@ -158,9 +169,12 @@ impl Renderer {
         let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
         let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, surface_config.format, &camera_bgl);
+        let tex_bgl = texture_manager.bind_group_layout();
         let pipeline_sprite = PipelineSprite::new(
-            &device, &queue, surface_config.format, &camera_bgl, texture_manager.bind_group_layout(),
+            &device, &queue, surface_config.format, &camera_bgl, tex_bgl,
         );
+        let pipeline3d = Pipeline3D::new(&device, &queue, surface_config.format, tex_bgl);
+        let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new();
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
@@ -176,6 +190,8 @@ impl Renderer {
             camera_bind_group,
             pipeline2d,
             pipeline_sprite,
+            pipeline3d,
+            model_manager,
             shape_batch,
             sprite_batch,
             texture_manager,
@@ -211,6 +227,23 @@ impl Renderer {
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_view = Some(Self::create_depth_view(&self.device, width, height));
         self.shape_batch.set_screen_space(width as f32, height as f32);
+    }
+
+    // --- Model management ---
+
+    /// Load a model from a file path. Returns ModelId.
+    pub fn load_model(&mut self, path: &str) -> Result<ModelId, String> {
+        self.model_manager.load_file(&self.device, &self.queue, &mut self.texture_manager, path)
+    }
+
+    /// Load a model from raw glTF/GLB bytes. Returns ModelId.
+    pub fn load_model_bytes(&mut self, data: &[u8]) -> Result<ModelId, String> {
+        self.model_manager.load_bytes(&self.device, &self.queue, &mut self.texture_manager, data, None)
+    }
+
+    /// Free a loaded model by ID.
+    pub fn free_model(&mut self, id: ModelId) {
+        self.model_manager.free(id);
     }
 
     // --- Font management ---
@@ -271,6 +304,16 @@ impl Renderer {
         self.shape_batch.clear();
         self.sprite_batch.clear();
         self.shape_batch.set_screen_space(w, h);
+
+        // 3D state for this frame
+        let mut camera3d_uniform: Option<Camera3DUniform> = None;
+        let mut light_uniform = LightUniform {
+            ambient: [0.1, 0.1, 0.1, 1.0],
+            count: [0, 0, 0, 0],
+            lights: [LightData { position_or_dir: [0.0; 4], color_intensity: [0.0; 4] }; 8],
+        };
+        let mut model_draws: Vec<ModelDraw> = Vec::new();
+        let aspect = w / h;
 
         let mut reader = StreamReader::new(data);
         while let Some(cmd) = reader.next_command() {
@@ -337,6 +380,63 @@ impl Renderer {
                         },
                     });
                 }
+                // --- 3D commands ---
+                DrawCommand::SetCamera3D {
+                    eye_x, eye_y, eye_z,
+                    target_x, target_y, target_z,
+                    up_x, up_y, up_z,
+                    fov, near, far,
+                } => {
+                    let view = look_at_rh(
+                        [eye_x, eye_y, eye_z],
+                        [target_x, target_y, target_z],
+                        [up_x, up_y, up_z],
+                    );
+                    let proj = perspective_rh_zo(fov.to_radians(), aspect, near, far);
+                    let view_proj = mat4_mul(&proj, &view);
+                    camera3d_uniform = Some(Camera3DUniform {
+                        view_proj,
+                        camera_pos: [eye_x, eye_y, eye_z],
+                        _pad: 0.0,
+                    });
+                }
+                DrawCommand::SetLights3D { ambient_r, ambient_g, ambient_b, lights } => {
+                    light_uniform.ambient = [ambient_r, ambient_g, ambient_b, 1.0];
+                    let count = lights.len().min(8);
+                    light_uniform.count = [count as u32, 0, 0, 0];
+                    for (i, l) in lights.iter().take(8).enumerate() {
+                        let (pos_or_dir, w_type) = if l.light_type == 0 {
+                            // Directional: encode direction
+                            ([l.dx, l.dy, l.dz], 0.0f32)
+                        } else {
+                            // Point: encode position
+                            ([l.px, l.py, l.pz], 1.0f32)
+                        };
+                        light_uniform.lights[i] = LightData {
+                            position_or_dir: [pos_or_dir[0], pos_or_dir[1], pos_or_dir[2], w_type],
+                            color_intensity: [l.cr, l.cg, l.cb, l.intensity],
+                        };
+                    }
+                }
+                DrawCommand::DrawModel {
+                    model_id, px, py, pz, qx, qy, qz, qw, sx, sy, sz,
+                } => {
+                    let model_mat = build_model_matrix(px, py, pz, qx, qy, qz, qw, sx, sy, sz);
+                    let normal_mat = transpose_upper3x3(&model_mat);
+                    // Get base color from model's first mesh material (or white)
+                    let base_color = self.model_manager.get(model_id)
+                        .and_then(|m| m.meshes.first())
+                        .map(|mesh| mesh.material.base_color)
+                        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    model_draws.push(ModelDraw {
+                        model_id,
+                        model_uniform: ModelUniform {
+                            model: model_mat,
+                            normal_matrix: normal_mat,
+                            base_color,
+                        },
+                    });
+                }
             }
         }
 
@@ -381,7 +481,21 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Draw sprites (textured quads)
+            // Draw 3D models first (depth tested)
+            if !model_draws.is_empty() {
+                if let Some(ref cam3d) = camera3d_uniform {
+                    self.pipeline3d.set_camera_and_lights(&self.queue, cam3d, &light_uniform);
+                    self.pipeline3d.draw_models(
+                        &self.queue,
+                        &mut render_pass,
+                        &model_draws,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                }
+            }
+
+            // Draw sprites (textured quads, depth ignored)
             self.pipeline_sprite.draw_batch(
                 &self.device,
                 &self.queue,
@@ -391,7 +505,7 @@ impl Renderer {
                 &self.texture_manager,
             );
 
-            // Draw 2D shapes (on top of sprites)
+            // Draw 2D shapes (on top of sprites, depth ignored)
             let shape_count = self.shape_batch.instance_count() as u32;
             self.pipeline2d.draw(&mut render_pass, &self.camera_bind_group, shape_count);
         }

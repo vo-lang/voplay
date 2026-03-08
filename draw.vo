@@ -11,6 +11,7 @@ const (
 	opSetCamera3D   = 0x03
 	opResetCamera   = 0x04
 	opSetLayer      = 0x05
+	opSetFont       = 0x06
 	opDrawSprite    = 0x10
 	opDrawRect      = 0x11
 	opDrawCircle    = 0x12
@@ -82,6 +83,13 @@ func (d *DrawCtx) SetCamera2D(cam *Camera2D) {
 func (d *DrawCtx) SetLayer(z int) {
 	d.w.WriteByte(opSetLayer)
 	d.w.WriteU16(z)
+}
+
+// SetFont sets the active font for subsequent DrawText calls.
+// Use FontID 0 for the default built-in font.
+func (d *DrawCtx) SetFont(id FontID) {
+	d.w.WriteByte(opSetFont)
+	d.w.WriteU32(int(id))
 }
 
 // DrawRect draws a filled rectangle.

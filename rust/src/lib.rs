@@ -14,7 +14,7 @@ mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod font;
+mod font_manager;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics;
 #[cfg(any(feature = "native", feature = "wasm"))]

@@ -1,7 +1,7 @@
 //! wgpu-based renderer for voplay.
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
-use crate::font::BuiltinFont;
+use crate::font_manager::FontManager;
 use crate::pipeline2d::{Pipeline2D, ShapeBatch, CameraUniform};
 use crate::pipeline_sprite::{PipelineSprite, SpriteBatch, SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
@@ -25,8 +25,8 @@ pub struct Renderer {
     sprite_batch: SpriteBatch,
     // Texture manager
     texture_manager: TextureManager,
-    // Built-in font for text rendering
-    font: BuiltinFont,
+    // Font manager for text rendering (TTF/OTF, dynamic glyph atlas)
+    font_manager: FontManager,
 }
 
 impl Renderer {
@@ -122,7 +122,8 @@ impl Renderer {
         let pipeline_sprite = PipelineSprite::new(
             &device, &queue, format, &camera_bgl, texture_manager.bind_group_layout(),
         );
-        let font = BuiltinFont::create(&mut texture_manager, &device, &queue);
+        let mut font_manager = FontManager::new();
+        font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
         let sprite_batch = SpriteBatch::new();
 
@@ -139,7 +140,7 @@ impl Renderer {
             shape_batch,
             sprite_batch,
             texture_manager,
-            font,
+            font_manager,
         })
     }
 
@@ -160,7 +161,8 @@ impl Renderer {
         let pipeline_sprite = PipelineSprite::new(
             &device, &queue, surface_config.format, &camera_bgl, texture_manager.bind_group_layout(),
         );
-        let font = BuiltinFont::create(&mut texture_manager, &device, &queue);
+        let mut font_manager = FontManager::new();
+        font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
         let sprite_batch = SpriteBatch::new();
 
@@ -177,7 +179,7 @@ impl Renderer {
             shape_batch,
             sprite_batch,
             texture_manager,
-            font,
+            font_manager,
         }
     }
 
@@ -209,6 +211,23 @@ impl Renderer {
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_view = Some(Self::create_depth_view(&self.device, width, height));
         self.shape_batch.set_screen_space(width as f32, height as f32);
+    }
+
+    // --- Font management ---
+
+    /// Load a font from a file path. Returns FontId.
+    pub fn load_font(&mut self, path: &str) -> Result<crate::font_manager::FontId, String> {
+        self.font_manager.load_file(path)
+    }
+
+    /// Load a font from raw TTF/OTF bytes. Returns FontId.
+    pub fn load_font_bytes(&mut self, data: Vec<u8>) -> Result<crate::font_manager::FontId, String> {
+        self.font_manager.load_bytes(data)
+    }
+
+    /// Free a loaded font by ID.
+    pub fn free_font(&mut self, id: crate::font_manager::FontId) {
+        self.font_manager.free(id);
     }
 
     // --- Texture management ---
@@ -279,8 +298,11 @@ impl Renderer {
                 DrawCommand::DrawLine { x1, y1, x2, y2, thickness, r, g, b, a } => {
                     self.shape_batch.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
+                DrawCommand::SetFont { font_id } => {
+                    self.font_manager.set_current(font_id);
+                }
                 DrawCommand::DrawText { x, y, size, r, g, b, a, text } => {
-                    let draws = self.font.layout_text(&text, x, y, size, r, g, b, a);
+                    let draws = self.font_manager.layout_text(&text, x, y, size, r, g, b, a);
                     for draw in draws {
                         self.sprite_batch.push(draw);
                     }
@@ -317,6 +339,11 @@ impl Renderer {
                 }
             }
         }
+
+        // Flush font atlas (re-upload if new glyphs were rasterized)
+        self.font_manager.ensure_atlas(&mut self.texture_manager, &self.device, &self.queue);
+        // Reset font to default for next frame
+        self.font_manager.reset_current();
 
         // Upload camera uniform
         self.queue.write_buffer(

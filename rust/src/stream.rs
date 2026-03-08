@@ -10,6 +10,7 @@ pub enum Opcode {
     SetCamera3D = 0x03,
     ResetCamera = 0x04,
     SetLayer = 0x05,
+    SetFont = 0x06,
     DrawSprite = 0x10,
     DrawRect = 0x11,
     DrawCircle = 0x12,
@@ -31,6 +32,7 @@ impl Opcode {
             0x03 => Some(Opcode::SetCamera3D),
             0x04 => Some(Opcode::ResetCamera),
             0x05 => Some(Opcode::SetLayer),
+            0x06 => Some(Opcode::SetFont),
             0x10 => Some(Opcode::DrawSprite),
             0x11 => Some(Opcode::DrawRect),
             0x12 => Some(Opcode::DrawCircle),
@@ -59,6 +61,7 @@ pub enum DrawCommand {
     DrawCircle { cx: f32, cy: f32, radius: f32, r: f32, g: f32, b: f32, a: f32 },
     DrawLine { x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, r: f32, g: f32, b: f32, a: f32 },
     DrawText { x: f32, y: f32, size: f32, r: f32, g: f32, b: f32, a: f32, text: String },
+    SetFont { font_id: u32 },
     DrawSprite {
         tex_id: u32,
         src_x: f32, src_y: f32, src_w: f32, src_h: f32,
@@ -151,6 +154,10 @@ impl<'a> StreamReader<'a> {
             Opcode::SetLayer => {
                 let z = self.read_u16();
                 Some(DrawCommand::SetLayer { z })
+            }
+            Opcode::SetFont => {
+                let font_id = self.read_u32();
+                Some(DrawCommand::SetFont { font_id })
             }
             Opcode::DrawRect => {
                 let x = self.read_f32();

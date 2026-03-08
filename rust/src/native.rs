@@ -375,6 +375,42 @@ pub fn free_texture(id: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// Font management (delegated to renderer)
+// ---------------------------------------------------------------------------
+
+/// Load a font from a file path via the native renderer.
+pub fn load_font(path: &str) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_font(path),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Load a font from raw TTF/OTF bytes via the native renderer.
+pub fn load_font_bytes(data: Vec<u8>) -> Result<u32, String> {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        match app.renderer.as_mut() {
+            Some(r) => r.load_font_bytes(data),
+            None => Err("voplay: renderer not initialized".to_string()),
+        }
+    })
+}
+
+/// Free a font by ID via the native renderer.
+pub fn free_font(id: u32) {
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        if let Some(r) = app.renderer.as_mut() {
+            r.free_font(id);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

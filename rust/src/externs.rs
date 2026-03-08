@@ -7,7 +7,8 @@
 //!            audioLoad, audioLoadBytes, audioFree,
 //!            audioPlaySound, audioPlayMusic, audioStopMusic,
 //!            audioPauseMusic, audioResumeMusic,
-//!            audioSetSFXVolume, audioSetMusicVolume.
+//!            audioSetSFXVolume, audioSetMusicVolume,
+//!            loadFont, loadFontBytes, freeFont.
 
 use vo_ext::prelude::*;
 use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
@@ -524,5 +525,112 @@ pub fn audio_set_music_volume(call: &mut ExternCallContext) -> ExternResult {
     if let Some(audio_mutex) = get_audio() {
         audio_mutex.lock().unwrap().set_music_volume(vol);
     }
+    ExternResult::Ok
+}
+
+// --- Font externs ---
+
+#[vo_fn("voplay", "loadFont")]
+pub fn load_font(call: &mut ExternCallContext) -> ExternResult {
+    let path = call.arg_str(0).to_string();
+
+    #[cfg(feature = "native")]
+    {
+        match crate::native::load_font(&path) {
+            Ok(id) => {
+                call.ret_u64(0, id as u64);
+                write_nil_error(call, 1);
+            }
+            Err(msg) => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, &msg);
+            }
+        }
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        match RENDERER.get() {
+            Some(renderer_mutex) => {
+                let mut renderer = renderer_mutex.lock().unwrap();
+                match renderer.load_font(&path) {
+                    Ok(id) => {
+                        call.ret_u64(0, id as u64);
+                        write_nil_error(call, 1);
+                    }
+                    Err(msg) => {
+                        call.ret_u64(0, 0);
+                        write_error_to(call, 1, &msg);
+                    }
+                }
+            }
+            None => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, "voplay: renderer not initialized");
+            }
+        }
+    }
+
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadFontBytes")]
+pub fn load_font_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let data = call.arg_bytes(0).to_vec();
+
+    #[cfg(feature = "native")]
+    {
+        match crate::native::load_font_bytes(data) {
+            Ok(id) => {
+                call.ret_u64(0, id as u64);
+                write_nil_error(call, 1);
+            }
+            Err(msg) => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, &msg);
+            }
+        }
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        match RENDERER.get() {
+            Some(renderer_mutex) => {
+                let mut renderer = renderer_mutex.lock().unwrap();
+                match renderer.load_font_bytes(data) {
+                    Ok(id) => {
+                        call.ret_u64(0, id as u64);
+                        write_nil_error(call, 1);
+                    }
+                    Err(msg) => {
+                        call.ret_u64(0, 0);
+                        write_error_to(call, 1, &msg);
+                    }
+                }
+            }
+            None => {
+                call.ret_u64(0, 0);
+                write_error_to(call, 1, "voplay: renderer not initialized");
+            }
+        }
+    }
+
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "freeFont")]
+pub fn free_font(call: &mut ExternCallContext) -> ExternResult {
+    let id = call.arg_u64(0) as u32;
+
+    #[cfg(feature = "native")]
+    {
+        crate::native::free_font(id);
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        if let Some(renderer_mutex) = RENDERER.get() {
+            let mut renderer = renderer_mutex.lock().unwrap();
+            renderer.free_font(id);
+        }
+    }
+
     ExternResult::Ok
 }

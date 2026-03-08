@@ -97,6 +97,11 @@ func loadTexture(path string) (int, error)
 func loadTextureBytes(data []byte) (int, error)
 func freeTexture(id int)
 
+// Font loading
+func loadFont(path string) (int, error)
+func loadFontBytes(data []byte) (int, error)
+func freeFont(id int)
+
 // LoadTexture loads an image file and returns a TextureID.
 func LoadTexture(path string) (TextureID, error) {
 	id, err := loadTexture(path)
@@ -112,6 +117,26 @@ func LoadTextureBytes(data []byte) (TextureID, error) {
 // FreeTexture releases a loaded texture.
 func FreeTexture(id TextureID) {
 	freeTexture(int(id))
+}
+
+// FontID is an opaque handle to a loaded font.
+type FontID int
+
+// LoadFont loads a TTF/OTF font file and returns a FontID.
+func LoadFont(path string) (FontID, error) {
+	id, err := loadFont(path)
+	return FontID(id), err
+}
+
+// LoadFontBytes loads a TTF/OTF font from raw bytes.
+func LoadFontBytes(data []byte) (FontID, error) {
+	id, err := loadFontBytes(data)
+	return FontID(id), err
+}
+
+// FreeFont releases a loaded font.
+func FreeFont(id FontID) {
+	freeFont(int(id))
 }
 
 // Physics externs

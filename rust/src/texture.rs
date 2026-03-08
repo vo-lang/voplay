@@ -171,6 +171,31 @@ impl TextureManager {
         self.load_image_bytes(device, queue, &data)
     }
 
+    /// Re-upload RGBA pixel data to an existing texture. Size must match.
+    pub fn update_rgba(&self, queue: &wgpu::Queue, id: TextureId, rgba_data: &[u8]) {
+        if let Some(tex) = self.textures.get(&id) {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * tex.width),
+                    rows_per_image: Some(tex.height),
+                },
+                wgpu::Extent3d {
+                    width: tex.width,
+                    height: tex.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
     /// Free a texture by ID, releasing GPU resources.
     pub fn free(&mut self, id: TextureId) {
         self.textures.remove(&id);

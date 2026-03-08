@@ -1,6 +1,7 @@
 //! wgpu-based renderer for voplay.
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
+use crate::font::BuiltinFont;
 use crate::pipeline2d::{Pipeline2D, ShapeBatch, CameraUniform};
 use crate::pipeline_sprite::{PipelineSprite, SpriteBatch, SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
@@ -24,6 +25,8 @@ pub struct Renderer {
     sprite_batch: SpriteBatch,
     // Texture manager
     texture_manager: TextureManager,
+    // Built-in font for text rendering
+    font: BuiltinFont,
 }
 
 impl Renderer {
@@ -114,11 +117,12 @@ impl Renderer {
         let h = height as f32;
 
         let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
-        let texture_manager = TextureManager::new(&device);
+        let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, format, &camera_bgl);
         let pipeline_sprite = PipelineSprite::new(
             &device, &queue, format, &camera_bgl, texture_manager.bind_group_layout(),
         );
+        let font = BuiltinFont::create(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
         let sprite_batch = SpriteBatch::new();
 
@@ -135,6 +139,7 @@ impl Renderer {
             shape_batch,
             sprite_batch,
             texture_manager,
+            font,
         })
     }
 
@@ -150,11 +155,12 @@ impl Renderer {
         let h = surface_config.height as f32;
 
         let (camera_bgl, camera_buffer, camera_bind_group) = Self::create_camera_resources(&device);
-        let texture_manager = TextureManager::new(&device);
+        let mut texture_manager = TextureManager::new(&device);
         let pipeline2d = Pipeline2D::new(&device, &queue, surface_config.format, &camera_bgl);
         let pipeline_sprite = PipelineSprite::new(
             &device, &queue, surface_config.format, &camera_bgl, texture_manager.bind_group_layout(),
         );
+        let font = BuiltinFont::create(&mut texture_manager, &device, &queue);
         let shape_batch = ShapeBatch::new(w, h);
         let sprite_batch = SpriteBatch::new();
 
@@ -171,6 +177,7 @@ impl Renderer {
             shape_batch,
             sprite_batch,
             texture_manager,
+            font,
         }
     }
 
@@ -272,8 +279,11 @@ impl Renderer {
                 DrawCommand::DrawLine { x1, y1, x2, y2, thickness, r, g, b, a } => {
                     self.shape_batch.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
-                DrawCommand::DrawText { .. } => {
-                    // TODO: text rendering
+                DrawCommand::DrawText { x, y, size, r, g, b, a, text } => {
+                    let draws = self.font.layout_text(&text, x, y, size, r, g, b, a);
+                    for draw in draws {
+                        self.sprite_batch.push(draw);
+                    }
                 }
                 DrawCommand::DrawSprite {
                     tex_id, src_x, src_y, src_w, src_h,

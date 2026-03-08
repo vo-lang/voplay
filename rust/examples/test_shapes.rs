@@ -151,6 +151,32 @@ fn build_test_commands(frame: u64) -> Vec<u8> {
     write_f64(&mut buf, 1.0);
     write_f64(&mut buf, 1.0);
 
+    // DrawText: opcode 0x14 + x,y,size,r,g,b,a (7x f64) + u16 len + utf8 bytes
+    let text = b"Hello VoPlay!";
+    buf.push(0x14);
+    write_f64(&mut buf, 50.0);    // x
+    write_f64(&mut buf, 550.0);   // y
+    write_f64(&mut buf, 24.0);    // size
+    write_f64(&mut buf, 1.0);     // r (white)
+    write_f64(&mut buf, 1.0);     // g
+    write_f64(&mut buf, 1.0);     // b
+    write_f64(&mut buf, 1.0);     // a
+    buf.extend_from_slice(&(text.len() as u16).to_le_bytes());
+    buf.extend_from_slice(text);
+
+    // Larger yellow text
+    let text2 = b"Frame count shown below";
+    buf.push(0x14);
+    write_f64(&mut buf, 50.0);
+    write_f64(&mut buf, 30.0);
+    write_f64(&mut buf, 16.0);
+    write_f64(&mut buf, 1.0);
+    write_f64(&mut buf, 1.0);
+    write_f64(&mut buf, 0.0);
+    write_f64(&mut buf, 1.0);
+    buf.extend_from_slice(&(text2.len() as u16).to_le_bytes());
+    buf.extend_from_slice(text2);
+
     buf
 }
 

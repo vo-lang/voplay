@@ -35,7 +35,7 @@ func startGameLoop(game *Game) {
 		gameCtx.Input.unpackEvents(inputBytes)
 
 		// 2. Physics step + sync
-		stepAndSyncPhysics(dt)
+		gameCtx.Scene2D.StepAndSyncPhysics(dt)
 
 		// 3. Game logic
 		game.Update(gameCtx, dt)
@@ -71,7 +71,7 @@ func runNative(game *Game) {
 		gameCtx.Input.unpackEvents(inputBytes)
 
 		// 3. Physics step + sync
-		stepAndSyncPhysics(dt)
+		gameCtx.Scene2D.StepAndSyncPhysics(dt)
 
 		// 4. Game logic
 		game.Update(gameCtx, dt)

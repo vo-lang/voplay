@@ -66,9 +66,10 @@ type Scene2D struct {
 	Gravity   Vec2      // physics gravity (default: 0, 9.8)
 	ViewAngle float64   // 3D viewing angle for 2.5D entities (degrees from vertical)
 
-	entities []*Entity2D
-	screenW  float64 // set by GameCtx on init/resize
-	screenH  float64
+	entities     []*Entity2D
+	screenW      float64 // set by GameCtx on init/resize
+	screenH      float64
+	physicsReady bool // true after physicsInit called
 }
 
 func newScene2D() *Scene2D {
@@ -77,6 +78,9 @@ func newScene2D() *Scene2D {
 		Gravity: Vec2{0, 9.8},
 	}
 }
+
+// nextBodyID is the auto-incrementing body ID for physics bodies.
+var nextBodyID int = 1
 
 // Entity2D is a 2D game object managed by the scene.
 type Entity2D struct {
@@ -94,7 +98,8 @@ type Entity2D struct {
 	ZOrder   int
 	Data     any
 	Physics  *Physics2D
-	bodyID   int // internal: Rapier body handle, set by Spawn
+	bodyID   int  // internal: Rapier body handle, set by Spawn
+	velocity Vec2 // cached from last physics sync
 }
 
 // Physics2D is the physics configuration for a 2D entity.
@@ -154,7 +159,7 @@ type Contact2D struct {
 }
 
 // Spawn creates an entity in the scene.
-// If Physics is set, a Rapier body is created.
+// If Physics is set, a Rapier body is created via extern.
 func (s *Scene2D) Spawn(e Entity2D) *Entity2D {
 	if e.ScaleX == 0 {
 		e.ScaleX = 1
@@ -164,22 +169,66 @@ func (s *Scene2D) Spawn(e Entity2D) *Entity2D {
 	}
 	e.Active = true
 	e.Visible = true
+	if e.Physics != nil {
+		if !s.physicsReady {
+			physicsInit(s.Gravity.X, s.Gravity.Y)
+			s.physicsReady = true
+		}
+		e.bodyID = nextBodyID
+		nextBodyID++
+		physicsSpawnBody(e.bodyID, serializeBodyDesc(&e))
+	}
 	ent := &e
 	s.entities = append(s.entities, ent)
-	// TODO: Phase 3 — create Rapier body if Physics != nil
 	return ent
 }
 
 // Destroy removes an entity from the scene.
 func (s *Scene2D) Destroy(e *Entity2D) {
 	e.Active = false
-	// TODO: Phase 3 — destroy Rapier body
+	if e.Physics != nil && e.bodyID != 0 {
+		physicsDestroyBody(e.bodyID)
+		e.bodyID = 0
+	}
 	for i, ent := range s.entities {
 		if ent == e {
 			s.entities = append(s.entities[:i], s.entities[i+1:]...)
 			return
 		}
 	}
+}
+
+// serializeBodyDesc encodes a body description for the physics extern.
+// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8),
+//         x,y,rotation, collider_args(3), density, friction, restitution, linear_damping (10x f64)
+func serializeBodyDesc(e *Entity2D) []byte {
+	p := e.Physics
+	buf := make([]byte, 0, 83) // 3 + 10*8
+	buf = append(buf, byte(p.Type))
+	buf = append(buf, byte(p.Collider.kind))
+	if p.FixedRotation {
+		buf = append(buf, 1)
+	} else {
+		buf = append(buf, 0)
+	}
+	appendF64 := func(v float64) {
+		b := float64Bits(v)
+		buf = append(buf,
+			byte(b), byte(b>>8), byte(b>>16), byte(b>>24),
+			byte(b>>32), byte(b>>40), byte(b>>48), byte(b>>56),
+		)
+	}
+	appendF64(e.X)
+	appendF64(e.Y)
+	appendF64(e.Rotation)
+	appendF64(p.Collider.args[0])
+	appendF64(p.Collider.args[1])
+	appendF64(p.Collider.args[2])
+	appendF64(p.Density)
+	appendF64(p.Friction)
+	appendF64(p.Restitution)
+	appendF64(p.LinearDamping)
+	return buf
 }
 
 // Contacts returns collision events from the last physics step.
@@ -240,11 +289,46 @@ func (s *Scene2D) visibleEntities() []*Entity2D {
 	return result
 }
 
-// Physics force methods on Entity2D (buffered, sent next frame).
-func (e *Entity2D) ApplyForce(fx, fy float64)      {} // TODO: Phase 3
-func (e *Entity2D) ApplyImpulse(ix, iy float64)    {} // TODO: Phase 3
-func (e *Entity2D) Velocity() Vec2                  { return Vec2{} } // TODO: Phase 3
-func (e *Entity2D) SetVelocity(vx, vy float64)     {} // TODO: Phase 3
+// --- Physics command buffer ---
+
+// Physics command opcodes (must match Rust physics.rs).
+const (
+	physicsCmdForce   = 1
+	physicsCmdImpulse = 2
+	physicsCmdSetVel  = 3
+)
+
+// physicsCmdBuf accumulates physics commands for the current frame.
+var physicsCmdBuf []byte
+
+func physCmdWrite(cmd byte, bodyID int, v1, v2 float64) {
+	physicsCmdBuf = append(physicsCmdBuf, cmd)
+	physicsCmdBuf = append(physicsCmdBuf, byte(bodyID), byte(bodyID>>8), byte(bodyID>>16), byte(bodyID>>24))
+	b1 := float64Bits(v1)
+	physicsCmdBuf = append(physicsCmdBuf,
+		byte(b1), byte(b1>>8), byte(b1>>16), byte(b1>>24),
+		byte(b1>>32), byte(b1>>40), byte(b1>>48), byte(b1>>56),
+	)
+	b2 := float64Bits(v2)
+	physicsCmdBuf = append(physicsCmdBuf,
+		byte(b2), byte(b2>>8), byte(b2>>16), byte(b2>>24),
+		byte(b2>>32), byte(b2>>40), byte(b2>>48), byte(b2>>56),
+	)
+}
+
+// Physics force methods on Entity2D (buffered, sent next physics step).
+func (e *Entity2D) ApplyForce(fx, fy float64) {
+	physCmdWrite(physicsCmdForce, e.bodyID, fx, fy)
+}
+func (e *Entity2D) ApplyImpulse(ix, iy float64) {
+	physCmdWrite(physicsCmdImpulse, e.bodyID, ix, iy)
+}
+func (e *Entity2D) SetVelocity(vx, vy float64) {
+	physCmdWrite(physicsCmdSetVel, e.bodyID, vx, vy)
+}
+func (e *Entity2D) Velocity() Vec2 {
+	return e.velocity
+}
 
 // Resource handle types.
 type TextureID int
@@ -497,5 +581,60 @@ func (t *Tilemap) markClean() {
 }
 
 func (s *Scene2D) hasPhysics() bool {
-	return false // TODO: Phase 3 — return true if any entity has Physics
+	return s.physicsReady
+}
+
+// StepAndSyncPhysics runs one physics step and syncs body state back to entities.
+func (s *Scene2D) StepAndSyncPhysics(dt float64) {
+	if !s.physicsReady {
+		return
+	}
+	state := physicsStep(dt, physicsCmdBuf)
+	physicsCmdBuf = physicsCmdBuf[:0] // reset command buffer
+
+	// Decode state: count(u32), then per body: body_id(u32), x(f64), y(f64), rotation(f64), vx(f64), vy(f64)
+	if len(state) < 4 {
+		return
+	}
+	count := int(state[0]) | int(state[1])<<8 | int(state[2])<<16 | int(state[3])<<24
+	pos := 4
+
+	for i := 0; i < count; i++ {
+		if pos+44 > len(state) {
+			break
+		}
+		bodyID := int(state[pos]) | int(state[pos+1])<<8 | int(state[pos+2])<<16 | int(state[pos+3])<<24
+		pos += 4
+		x := float64FromBits(
+			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
+				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
+		pos += 8
+		y := float64FromBits(
+			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
+				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
+		pos += 8
+		rotation := float64FromBits(
+			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
+				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
+		pos += 8
+		vx := float64FromBits(
+			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
+				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
+		pos += 8
+		vy := float64FromBits(
+			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
+				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
+		pos += 8
+
+		// Find entity by bodyID and sync state
+		for _, e := range s.entities {
+			if e.bodyID == bodyID && e.Active {
+				e.X = x
+				e.Y = y
+				e.Rotation = rotation
+				e.velocity = Vec2{vx, vy}
+				break
+			}
+		}
+	}
 }

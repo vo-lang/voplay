@@ -1,11 +1,13 @@
 //! Vo extern implementations for voplay.
 //! Registers: initSurface, submitFrame, pollInput, runtimeIsWeb,
-//!            loadTexture, loadTextureBytes, freeTexture.
+//!            loadTexture, loadTextureBytes, freeTexture,
+//!            physicsInit, physicsSpawnBody, physicsDestroyBody, physicsStep.
 
 use vo_ext::prelude::*;
 use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use crate::physics::{PhysicsWorld2D, BodyDesc, PhysBodyType, ColliderKind};
 use crate::renderer::Renderer;
 use crate::input;
 
@@ -240,5 +242,109 @@ pub fn free_texture(call: &mut ExternCallContext) -> ExternResult {
 pub fn runtime_is_web(call: &mut ExternCallContext) -> ExternResult {
     let is_web = cfg!(target_arch = "wasm32");
     call.ret_bool(0, is_web);
+    ExternResult::Ok
+}
+
+// --- Physics externs ---
+
+static PHYSICS: OnceLock<Mutex<PhysicsWorld2D>> = OnceLock::new();
+
+fn get_physics() -> &'static Mutex<PhysicsWorld2D> {
+    PHYSICS.get().expect("voplay: physics not initialized (call physicsInit first)")
+}
+
+#[vo_fn("voplay", "physicsInit")]
+pub fn physics_init(call: &mut ExternCallContext) -> ExternResult {
+    let gx = call.arg_f64(0) as f32;
+    let gy = call.arg_f64(1) as f32;
+    let _ = PHYSICS.set(Mutex::new(PhysicsWorld2D::new(gx, gy)));
+    ExternResult::Ok
+}
+
+/// Decode a BodyDesc from bytes.
+/// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8),
+///         x(f64), y(f64), rotation(f64),
+///         collider_args(3x f64), density(f64), friction(f64), restitution(f64),
+///         linear_damping(f64)
+fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
+    let mut pos = 0;
+    let body_type = match data[pos] {
+        1 => PhysBodyType::Static,
+        2 => PhysBodyType::Kinematic,
+        _ => PhysBodyType::Dynamic,
+    };
+    pos += 1;
+    let collider_kind = match data[pos] {
+        2 => ColliderKind::Circle,
+        3 => ColliderKind::Capsule,
+        _ => ColliderKind::Box,
+    };
+    pos += 1;
+    let fixed_rotation = data[pos] != 0;
+    pos += 1;
+
+    let read_f64 = |p: &mut usize| -> f64 {
+        let v = f64::from_le_bytes([
+            data[*p], data[*p+1], data[*p+2], data[*p+3],
+            data[*p+4], data[*p+5], data[*p+6], data[*p+7],
+        ]);
+        *p += 8;
+        v
+    };
+
+    let x = read_f64(&mut pos) as f32;
+    let y = read_f64(&mut pos) as f32;
+    let rotation = read_f64(&mut pos) as f32;
+    let ca0 = read_f64(&mut pos) as f32;
+    let ca1 = read_f64(&mut pos) as f32;
+    let ca2 = read_f64(&mut pos) as f32;
+    let density = read_f64(&mut pos) as f32;
+    let friction = read_f64(&mut pos) as f32;
+    let restitution = read_f64(&mut pos) as f32;
+    let linear_damping = read_f64(&mut pos) as f32;
+
+    BodyDesc {
+        body_id,
+        body_type,
+        x, y, rotation,
+        collider_kind,
+        collider_args: [ca0, ca1, ca2],
+        density,
+        friction,
+        restitution,
+        linear_damping,
+        fixed_rotation,
+    }
+}
+
+#[vo_fn("voplay", "physicsSpawnBody")]
+pub fn physics_spawn_body(call: &mut ExternCallContext) -> ExternResult {
+    let body_id = call.arg_u64(0) as u32;
+    let data = call.arg_bytes(1);
+    let desc = decode_body_desc(body_id, data);
+    get_physics().lock().unwrap().spawn_body(&desc);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "physicsDestroyBody")]
+pub fn physics_destroy_body(call: &mut ExternCallContext) -> ExternResult {
+    let body_id = call.arg_u64(0) as u32;
+    get_physics().lock().unwrap().destroy_body(body_id);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "physicsStep")]
+pub fn physics_step(call: &mut ExternCallContext) -> ExternResult {
+    let dt = call.arg_f64(0) as f32;
+    let cmds = call.arg_bytes(1);
+    let cmds_owned = cmds.to_vec();
+
+    let mut world = get_physics().lock().unwrap();
+    world.apply_commands(&cmds_owned);
+    world.step(dt);
+    let state = world.serialize_state();
+
+    let slice_ref = call.alloc_bytes(&state);
+    call.ret_ref(0, slice_ref);
     ExternResult::Ok
 }

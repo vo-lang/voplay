@@ -97,7 +97,8 @@ func FreeTexture(id TextureID) {
 	freeTexture(int(id))
 }
 
-// Physics step (Phase 3+)
-func stepAndSyncPhysics(dt float64) {
-	// TODO: Phase 3 — call physicsStep externs, unpack state
-}
+// Physics externs
+func physicsInit(gravityX, gravityY float64)
+func physicsSpawnBody(bodyID int, data []byte)
+func physicsDestroyBody(bodyID int)
+func physicsStep(dt float64, cmds []byte) []byte

@@ -67,6 +67,8 @@ type Scene2D struct {
 	ViewAngle float64   // 3D viewing angle for 2.5D entities (degrees from vertical)
 
 	entities []*Entity2D
+	screenW  float64 // set by GameCtx on init/resize
+	screenH  float64
 }
 
 func newScene2D() *Scene2D {
@@ -353,12 +355,9 @@ func (a *Animation) Reset() {
 	a.done = false
 }
 
-// Tilemap stub — full implementation in Phase 2.
-type Tilemap struct {
-	TileSet *TileSet
-	id      int // Rust-side tilemap handle
-}
-
+// TileSet describes the texture atlas used by a tilemap.
+// Tiles are arranged in a grid: tile index 0 = first tile, wrapping by Columns.
+// Tile index -1 means empty (transparent).
 type TileSet struct {
 	Texture TextureID
 	TileW   int
@@ -366,9 +365,110 @@ type TileSet struct {
 	Columns int
 }
 
-// Upload sends tilemap data to Rust.
-func (t *Tilemap) Upload() {
-	// TODO: Phase 2 — call uploadTilemap extern
+// TileLayer holds a single layer of tile indices.
+type TileLayer struct {
+	Tiles []int // row-major: index = row * width + col; -1 = empty
+}
+
+// Tilemap is a multi-layer grid of tiles.
+type Tilemap struct {
+	TileSet *TileSet
+	Width   int // in tiles
+	Height  int // in tiles
+	Layers  []*TileLayer
+
+	id    int  // Rust-side handle (assigned on first upload)
+	dirty bool // true if tile data changed since last upload
+}
+
+// NewTilemap creates a tilemap with the given dimensions and one default layer.
+func NewTilemap(ts *TileSet, width, height int) *Tilemap {
+	layer := &TileLayer{
+		Tiles: make([]int, width*height),
+	}
+	// Initialize all tiles to -1 (empty)
+	for i := range layer.Tiles {
+		layer.Tiles[i] = -1
+	}
+	return &Tilemap{
+		TileSet: ts,
+		Width:   width,
+		Height:  height,
+		Layers:  []*TileLayer{layer},
+		dirty:   true,
+	}
+}
+
+// AddLayer adds a new empty layer and returns its index.
+func (t *Tilemap) AddLayer() int {
+	layer := &TileLayer{
+		Tiles: make([]int, t.Width*t.Height),
+	}
+	for i := range layer.Tiles {
+		layer.Tiles[i] = -1
+	}
+	t.Layers = append(t.Layers, layer)
+	t.dirty = true
+	return len(t.Layers) - 1
+}
+
+// SetTile sets the tile index at (col, row) in the given layer.
+func (t *Tilemap) SetTile(layer, col, row, tileIdx int) {
+	if layer < 0 || layer >= len(t.Layers) {
+		return
+	}
+	if col < 0 || col >= t.Width || row < 0 || row >= t.Height {
+		return
+	}
+	t.Layers[layer].Tiles[row*t.Width+col] = tileIdx
+	t.dirty = true
+}
+
+// GetTile returns the tile index at (col, row) in the given layer.
+func (t *Tilemap) GetTile(layer, col, row int) int {
+	if layer < 0 || layer >= len(t.Layers) {
+		return -1
+	}
+	if col < 0 || col >= t.Width || row < 0 || row >= t.Height {
+		return -1
+	}
+	return t.Layers[layer].Tiles[row*t.Width+col]
+}
+
+// Fill sets all tiles in a layer to the given index.
+func (t *Tilemap) Fill(layer, tileIdx int) {
+	if layer < 0 || layer >= len(t.Layers) {
+		return
+	}
+	for i := range t.Layers[layer].Tiles {
+		t.Layers[layer].Tiles[i] = tileIdx
+	}
+	t.dirty = true
+}
+
+// FillRect fills a rectangular region in a layer with a tile index.
+func (t *Tilemap) FillRect(layer, col, row, w, h, tileIdx int) {
+	if layer < 0 || layer >= len(t.Layers) {
+		return
+	}
+	for r := row; r < row+h && r < t.Height; r++ {
+		for c := col; c < col+w && c < t.Width; c++ {
+			if r >= 0 && c >= 0 {
+				t.Layers[layer].Tiles[r*t.Width+c] = tileIdx
+			}
+		}
+	}
+	t.dirty = true
+}
+
+// PixelWidth returns the tilemap width in pixels.
+func (t *Tilemap) PixelWidth() int {
+	return t.Width * t.TileSet.TileW
+}
+
+// PixelHeight returns the tilemap height in pixels.
+func (t *Tilemap) PixelHeight() int {
+	return t.Height * t.TileSet.TileH
 }
 
 // WorldToTile converts world coordinates to tile coordinates.
@@ -379,6 +479,21 @@ func (t *Tilemap) WorldToTile(wx, wy float64) (int, int) {
 	col := int(wx) / t.TileSet.TileW
 	row := int(wy) / t.TileSet.TileH
 	return col, row
+}
+
+// TileToWorld converts tile coordinates to world coordinates (top-left of tile).
+func (t *Tilemap) TileToWorld(col, row int) (float64, float64) {
+	return float64(col * t.TileSet.TileW), float64(row * t.TileSet.TileH)
+}
+
+// isDirty returns true if tile data needs re-upload.
+func (t *Tilemap) isDirty() bool {
+	return t.dirty
+}
+
+// markClean clears the dirty flag after upload.
+func (t *Tilemap) markClean() {
+	t.dirty = false
 }
 
 func (s *Scene2D) hasPhysics() bool {

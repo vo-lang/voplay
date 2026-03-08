@@ -27,8 +27,11 @@ type GameCtx struct {
 var gameCtx *GameCtx
 
 func newGameCtx(game Game) *GameCtx {
+	s2d := newScene2D()
+	s2d.screenW = float64(game.Width)
+	s2d.screenH = float64(game.Height)
 	return &GameCtx{
-		Scene2D: newScene2D(),
+		Scene2D: s2d,
 		Scene3D: newScene3D(),
 		Input:   newInputState(),
 		Draw:    newDrawCtx(),

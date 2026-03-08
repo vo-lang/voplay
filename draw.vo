@@ -204,11 +204,77 @@ func (d *DrawCtx) DrawSpriteRotated(spr *Sprite, x, y, w, h, rotation float64) {
 	spr.Rotation = saved
 }
 
+// DrawTilemap draws visible tiles of a tilemap layer within the given viewport.
+// viewX, viewY, viewW, viewH define the visible world-space rect (use Camera2D.ViewRect).
+func (d *DrawCtx) DrawTilemap(tm *Tilemap, layerIdx int, viewX, viewY, viewW, viewH float64) {
+	if tm == nil || tm.TileSet == nil {
+		return
+	}
+	if layerIdx < 0 || layerIdx >= len(tm.Layers) {
+		return
+	}
+	ts := tm.TileSet
+	tw := float64(ts.TileW)
+	th := float64(ts.TileH)
+	layer := tm.Layers[layerIdx]
+
+	// Compute visible tile range (clamped to tilemap bounds)
+	colStart := int(viewX / tw)
+	rowStart := int(viewY / th)
+	colEnd := int((viewX + viewW) / tw) + 1
+	rowEnd := int((viewY + viewH) / th) + 1
+	if colStart < 0 {
+		colStart = 0
+	}
+	if rowStart < 0 {
+		rowStart = 0
+	}
+	if colEnd > tm.Width {
+		colEnd = tm.Width
+	}
+	if rowEnd > tm.Height {
+		rowEnd = tm.Height
+	}
+
+	// Temporary sprite for encoding tiles
+	spr := &Sprite{
+		Texture: ts.Texture,
+		Tint:    White,
+	}
+
+	for row := rowStart; row < rowEnd; row++ {
+		for col := colStart; col < colEnd; col++ {
+			tileIdx := layer.Tiles[row*tm.Width+col]
+			if tileIdx < 0 {
+				continue // empty tile
+			}
+			// Compute source rect in tileset
+			srcCol := tileIdx % ts.Columns
+			srcRow := tileIdx / ts.Columns
+			spr.SrcX = float64(srcCol * ts.TileW)
+			spr.SrcY = float64(srcRow * ts.TileH)
+			spr.SrcW = tw
+			spr.SrcH = th
+			// Destination position in world space
+			dx := float64(col) * tw
+			dy := float64(row) * th
+			d.DrawSprite(spr, dx, dy, tw, th)
+		}
+	}
+}
+
 // DrawScene2D draws the entire 2D scene: camera, tilemap (if set), then entities sorted by ZOrder.
+// screenW, screenH are the window dimensions (needed for viewport culling).
 func (d *DrawCtx) DrawScene2D(s *Scene2D) {
 	d.SetCamera2D(&s.Camera)
 
-	// TODO: tilemap rendering when tilemap pipeline is ready
+	// Draw tilemap layers (bottom to top, before entities)
+	if s.Tilemap != nil && s.screenW > 0 {
+		vr := s.Camera.ViewRect(s.screenW, s.screenH)
+		for i := range s.Tilemap.Layers {
+			d.DrawTilemap(s.Tilemap, i, vr.X, vr.Y, vr.W, vr.H)
+		}
+	}
 
 	// Collect visible entities and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
 	sorted := s.visibleEntities()

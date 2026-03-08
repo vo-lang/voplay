@@ -69,18 +69,26 @@ type Scene2D struct {
 	entities     []*Entity2D
 	screenW      float64 // set by GameCtx on init/resize
 	screenH      float64
-	physicsReady bool // true after physicsInit called
+	physicsReady bool    // true after physicsInit called
+	nextBodyID   int     // auto-increment body ID counter
+	physCmds     ByteWriter // buffered physics commands for current frame
+	bodyMap      map[int]*Entity2D // bodyID → entity for O(1) sync
 }
 
 func newScene2D() *Scene2D {
-	return &Scene2D{
-		Camera: Camera2D{Zoom: 1.0},
-		Gravity: Vec2{0, 9.8},
-	}
+	return NewScene2D()
 }
 
-// nextBodyID is the auto-incrementing body ID for physics bodies.
-var nextBodyID int = 1
+// NewScene2D creates a new Scene2D with default settings.
+func NewScene2D() *Scene2D {
+	return &Scene2D{
+		Camera:     Camera2D{Zoom: 1.0},
+		Gravity:    Vec2{0, 9.8},
+		nextBodyID: 1,
+		physCmds:   NewByteWriter(256),
+		bodyMap:    make(map[int]*Entity2D),
+	}
+}
 
 // Entity2D is a 2D game object managed by the scene.
 type Entity2D struct {
@@ -98,8 +106,9 @@ type Entity2D struct {
 	ZOrder   int
 	Data     any
 	Physics  *Physics2D
-	bodyID   int  // internal: Rapier body handle, set by Spawn
-	velocity Vec2 // cached from last physics sync
+	bodyID   int      // internal: Rapier body handle, set by Spawn
+	velocity Vec2     // cached from last physics sync
+	scene    *Scene2D // back-pointer for physics command routing
 }
 
 // Physics2D is the physics configuration for a 2D entity.
@@ -169,17 +178,18 @@ func (s *Scene2D) Spawn(e Entity2D) *Entity2D {
 	}
 	e.Active = true
 	e.Visible = true
+	e.scene = s
 	if e.Physics != nil {
-		if !s.physicsReady {
-			physicsInit(s.Gravity.X, s.Gravity.Y)
-			s.physicsReady = true
-		}
-		e.bodyID = nextBodyID
-		nextBodyID++
-		physicsSpawnBody(e.bodyID, serializeBodyDesc(&e))
+		s.ensurePhysics()
+		e.bodyID = s.nextBodyID
+		s.nextBodyID++
 	}
 	ent := &e
 	s.entities = append(s.entities, ent)
+	if ent.Physics != nil {
+		s.bodyMap[ent.bodyID] = ent
+		physicsSpawnBody(ent.bodyID, serializeBodyDesc(ent))
+	}
 	return ent
 }
 
@@ -187,9 +197,11 @@ func (s *Scene2D) Spawn(e Entity2D) *Entity2D {
 func (s *Scene2D) Destroy(e *Entity2D) {
 	e.Active = false
 	if e.Physics != nil && e.bodyID != 0 {
+		delete(s.bodyMap, e.bodyID)
 		physicsDestroyBody(e.bodyID)
 		e.bodyID = 0
 	}
+	e.scene = nil
 	for i, ent := range s.entities {
 		if ent == e {
 			s.entities = append(s.entities[:i], s.entities[i+1:]...)
@@ -198,37 +210,33 @@ func (s *Scene2D) Destroy(e *Entity2D) {
 	}
 }
 
+// ensurePhysics lazily initializes the Rapier physics world.
+func (s *Scene2D) ensurePhysics() {
+	if s.physicsReady {
+		return
+	}
+	physicsInit(s.Gravity.X, s.Gravity.Y)
+	s.physicsReady = true
+}
+
 // serializeBodyDesc encodes a body description for the physics extern.
-// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8),
-//         x,y,rotation, collider_args(3), density, friction, restitution, linear_damping (10x f64)
 func serializeBodyDesc(e *Entity2D) []byte {
 	p := e.Physics
-	buf := make([]byte, 0, 83) // 3 + 10*8
-	buf = append(buf, byte(p.Type))
-	buf = append(buf, byte(p.Collider.kind))
-	if p.FixedRotation {
-		buf = append(buf, 1)
-	} else {
-		buf = append(buf, 0)
-	}
-	appendF64 := func(v float64) {
-		b := float64Bits(v)
-		buf = append(buf,
-			byte(b), byte(b>>8), byte(b>>16), byte(b>>24),
-			byte(b>>32), byte(b>>40), byte(b>>48), byte(b>>56),
-		)
-	}
-	appendF64(e.X)
-	appendF64(e.Y)
-	appendF64(e.Rotation)
-	appendF64(p.Collider.args[0])
-	appendF64(p.Collider.args[1])
-	appendF64(p.Collider.args[2])
-	appendF64(p.Density)
-	appendF64(p.Friction)
-	appendF64(p.Restitution)
-	appendF64(p.LinearDamping)
-	return buf
+	w := NewByteWriter(83)
+	w.WriteByte(byte(p.Type))
+	w.WriteByte(byte(p.Collider.kind))
+	w.WriteBool(p.FixedRotation)
+	w.WriteF64(e.X)
+	w.WriteF64(e.Y)
+	w.WriteF64(e.Rotation)
+	w.WriteF64(p.Collider.args[0])
+	w.WriteF64(p.Collider.args[1])
+	w.WriteF64(p.Collider.args[2])
+	w.WriteF64(p.Density)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	w.WriteF64(p.LinearDamping)
+	return w.Bytes()
 }
 
 // Contacts returns collision events from the last physics step.
@@ -293,39 +301,44 @@ func (s *Scene2D) visibleEntities() []*Entity2D {
 
 // Physics command opcodes (must match Rust physics.rs).
 const (
-	physicsCmdForce   = 1
-	physicsCmdImpulse = 2
-	physicsCmdSetVel  = 3
+	physicsCmdForce   byte = 1
+	physicsCmdImpulse byte = 2
+	physicsCmdSetVel  byte = 3
 )
 
-// physicsCmdBuf accumulates physics commands for the current frame.
-var physicsCmdBuf []byte
-
-func physCmdWrite(cmd byte, bodyID int, v1, v2 float64) {
-	physicsCmdBuf = append(physicsCmdBuf, cmd)
-	physicsCmdBuf = append(physicsCmdBuf, byte(bodyID), byte(bodyID>>8), byte(bodyID>>16), byte(bodyID>>24))
-	b1 := float64Bits(v1)
-	physicsCmdBuf = append(physicsCmdBuf,
-		byte(b1), byte(b1>>8), byte(b1>>16), byte(b1>>24),
-		byte(b1>>32), byte(b1>>40), byte(b1>>48), byte(b1>>56),
-	)
-	b2 := float64Bits(v2)
-	physicsCmdBuf = append(physicsCmdBuf,
-		byte(b2), byte(b2>>8), byte(b2>>16), byte(b2>>24),
-		byte(b2>>32), byte(b2>>40), byte(b2>>48), byte(b2>>56),
-	)
+// writePhysCmd appends a physics command to this scene's command buffer.
+func (s *Scene2D) writePhysCmd(cmd byte, bodyID int, v1, v2 float64) {
+	s.physCmds.WriteByte(cmd)
+	s.physCmds.WriteU32(bodyID)
+	s.physCmds.WriteF64(v1)
+	s.physCmds.WriteF64(v2)
 }
 
-// Physics force methods on Entity2D (buffered, sent next physics step).
+// ApplyForce applies a force to a physics entity (buffered until next step).
 func (e *Entity2D) ApplyForce(fx, fy float64) {
-	physCmdWrite(physicsCmdForce, e.bodyID, fx, fy)
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdForce, e.bodyID, fx, fy)
 }
+
+// ApplyImpulse applies an impulse to a physics entity (buffered until next step).
 func (e *Entity2D) ApplyImpulse(ix, iy float64) {
-	physCmdWrite(physicsCmdImpulse, e.bodyID, ix, iy)
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdImpulse, e.bodyID, ix, iy)
 }
+
+// SetVelocity sets the linear velocity of a physics entity (buffered until next step).
 func (e *Entity2D) SetVelocity(vx, vy float64) {
-	physCmdWrite(physicsCmdSetVel, e.bodyID, vx, vy)
+	if e.scene == nil || e.Physics == nil {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdSetVel, e.bodyID, vx, vy)
 }
+
+// Velocity returns the current linear velocity (updated after each physics step).
 func (e *Entity2D) Velocity() Vec2 {
 	return e.velocity
 }
@@ -589,52 +602,32 @@ func (s *Scene2D) StepAndSyncPhysics(dt float64) {
 	if !s.physicsReady {
 		return
 	}
-	state := physicsStep(dt, physicsCmdBuf)
-	physicsCmdBuf = physicsCmdBuf[:0] // reset command buffer
+	state := physicsStep(dt, s.physCmds.Bytes())
+	s.physCmds.Reset()
 
 	// Decode state: count(u32), then per body: body_id(u32), x(f64), y(f64), rotation(f64), vx(f64), vy(f64)
-	if len(state) < 4 {
+	r := NewByteReader(state)
+	if r.Remaining() < 4 {
 		return
 	}
-	count := int(state[0]) | int(state[1])<<8 | int(state[2])<<16 | int(state[3])<<24
-	pos := 4
+	count := r.ReadU32()
 
 	for i := 0; i < count; i++ {
-		if pos+44 > len(state) {
+		if r.Remaining() < 44 { // 4 + 5*8
 			break
 		}
-		bodyID := int(state[pos]) | int(state[pos+1])<<8 | int(state[pos+2])<<16 | int(state[pos+3])<<24
-		pos += 4
-		x := float64FromBits(
-			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
-				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
-		pos += 8
-		y := float64FromBits(
-			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
-				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
-		pos += 8
-		rotation := float64FromBits(
-			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
-				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
-		pos += 8
-		vx := float64FromBits(
-			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
-				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
-		pos += 8
-		vy := float64FromBits(
-			uint64(state[pos]) | uint64(state[pos+1])<<8 | uint64(state[pos+2])<<16 | uint64(state[pos+3])<<24 |
-				uint64(state[pos+4])<<32 | uint64(state[pos+5])<<40 | uint64(state[pos+6])<<48 | uint64(state[pos+7])<<56)
-		pos += 8
+		bodyID := r.ReadU32()
+		x := r.ReadF64()
+		y := r.ReadF64()
+		rotation := r.ReadF64()
+		vx := r.ReadF64()
+		vy := r.ReadF64()
 
-		// Find entity by bodyID and sync state
-		for _, e := range s.entities {
-			if e.bodyID == bodyID && e.Active {
-				e.X = x
-				e.Y = y
-				e.Rotation = rotation
-				e.velocity = Vec2{vx, vy}
-				break
-			}
+		if e, ok := s.bodyMap[bodyID]; ok && e.Active {
+			e.X = x
+			e.Y = y
+			e.Rotation = rotation
+			e.velocity = Vec2{vx, vy}
 		}
 	}
 }

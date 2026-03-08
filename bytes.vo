@@ -1,0 +1,82 @@
+// ByteWriter and ByteReader for binary encoding/decoding.
+// Used by DrawCtx, physics command buffers, and state deserialization.
+package voplay
+
+// ByteWriter appends binary data to a byte slice.
+type ByteWriter struct {
+	buf []byte
+}
+
+func NewByteWriter(cap int) ByteWriter {
+	return ByteWriter{buf: make([]byte, 0, cap)}
+}
+
+func (w *ByteWriter) Bytes() []byte { return w.buf }
+func (w *ByteWriter) Len() int      { return len(w.buf) }
+func (w *ByteWriter) Reset()        { w.buf = w.buf[:0] }
+
+func (w *ByteWriter) WriteByte(v byte) {
+	w.buf = append(w.buf, v)
+}
+
+func (w *ByteWriter) WriteU16(v int) {
+	w.buf = append(w.buf, byte(v), byte(v>>8))
+}
+
+func (w *ByteWriter) WriteU32(v int) {
+	w.buf = append(w.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+}
+
+func (w *ByteWriter) WriteF64(v float64) {
+	b := float64Bits(v)
+	w.buf = append(w.buf,
+		byte(b), byte(b>>8), byte(b>>16), byte(b>>24),
+		byte(b>>32), byte(b>>40), byte(b>>48), byte(b>>56),
+	)
+}
+
+func (w *ByteWriter) WriteBool(v bool) {
+	if v {
+		w.buf = append(w.buf, 1)
+	} else {
+		w.buf = append(w.buf, 0)
+	}
+}
+
+func (w *ByteWriter) WriteString(s string) {
+	w.WriteU16(len(s))
+	w.buf = append(w.buf, s...)
+}
+
+// ByteReader reads binary data from a byte slice.
+type ByteReader struct {
+	data []byte
+	pos  int
+}
+
+func NewByteReader(data []byte) ByteReader {
+	return ByteReader{data: data}
+}
+
+func (r *ByteReader) Remaining() int { return len(r.data) - r.pos }
+
+func (r *ByteReader) ReadByte() byte {
+	v := r.data[r.pos]
+	r.pos++
+	return v
+}
+
+func (r *ByteReader) ReadU32() int {
+	d := r.data[r.pos:]
+	v := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
+	r.pos += 4
+	return v
+}
+
+func (r *ByteReader) ReadF64() float64 {
+	d := r.data[r.pos:]
+	bits := uint64(d[0]) | uint64(d[1])<<8 | uint64(d[2])<<16 | uint64(d[3])<<24 |
+		uint64(d[4])<<32 | uint64(d[5])<<40 | uint64(d[6])<<48 | uint64(d[7])<<56
+	r.pos += 8
+	return float64FromBits(bits)
+}

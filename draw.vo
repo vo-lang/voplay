@@ -26,59 +26,37 @@ const (
 
 // DrawCtx buffers binary draw commands for the current frame.
 type DrawCtx struct {
-	buf []byte
+	w ByteWriter
 }
 
 func newDrawCtx() *DrawCtx {
 	return &DrawCtx{
-		buf: make([]byte, 0, 4096),
+		w: NewByteWriter(4096),
 	}
 }
 
 func (d *DrawCtx) reset() {
-	d.buf = d.buf[:0]
+	d.w.Reset()
 }
 
 func (d *DrawCtx) bytes() []byte {
-	return d.buf
+	return d.w.Bytes()
 }
 
 // Bytes returns the encoded command buffer.
 func (d *DrawCtx) Bytes() []byte {
-	return d.buf
-}
-
-// --- binary encoding helpers ---
-
-func (d *DrawCtx) writeByte(v byte) {
-	d.buf = append(d.buf, v)
-}
-
-func (d *DrawCtx) writeU16(v int) {
-	d.buf = append(d.buf, byte(v), byte(v>>8))
-}
-
-func (d *DrawCtx) writeU32(v int) {
-	d.buf = append(d.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
-}
-
-func (d *DrawCtx) writeF64(v float64) {
-	bits := float64Bits(v)
-	d.buf = append(d.buf,
-		byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24),
-		byte(bits>>32), byte(bits>>40), byte(bits>>48), byte(bits>>56),
-	)
+	return d.w.Bytes()
 }
 
 // --- Public draw commands ---
 
 // Clear sets the background color for this frame.
 func (d *DrawCtx) Clear(r, g, b, a float64) {
-	d.writeByte(opClear)
-	d.writeF64(r)
-	d.writeF64(g)
-	d.writeF64(b)
-	d.writeF64(a)
+	d.w.WriteByte(opClear)
+	d.w.WriteF64(r)
+	d.w.WriteF64(g)
+	d.w.WriteF64(b)
+	d.w.WriteF64(a)
 }
 
 // ClearColor sets the background color using a Color value.
@@ -88,61 +66,61 @@ func (d *DrawCtx) ClearColor(c Color) {
 
 // ResetCamera switches to screen-space coordinates (for HUD).
 func (d *DrawCtx) ResetCamera() {
-	d.writeByte(opResetCamera)
+	d.w.WriteByte(opResetCamera)
 }
 
 // SetCamera2D sets the 2D camera for world-space drawing.
 func (d *DrawCtx) SetCamera2D(cam *Camera2D) {
-	d.writeByte(opSetCamera2D)
-	d.writeF64(cam.X)
-	d.writeF64(cam.Y)
-	d.writeF64(cam.Zoom)
-	d.writeF64(cam.Rotation)
+	d.w.WriteByte(opSetCamera2D)
+	d.w.WriteF64(cam.X)
+	d.w.WriteF64(cam.Y)
+	d.w.WriteF64(cam.Zoom)
+	d.w.WriteF64(cam.Rotation)
 }
 
 // SetLayer sets the z-order layer for subsequent 2D draws.
 func (d *DrawCtx) SetLayer(z int) {
-	d.writeByte(opSetLayer)
-	d.writeU16(z)
+	d.w.WriteByte(opSetLayer)
+	d.w.WriteU16(z)
 }
 
 // DrawRect draws a filled rectangle.
 func (d *DrawCtx) DrawRect(x, y, w, h float64, c Color) {
-	d.writeByte(opDrawRect)
-	d.writeF64(x)
-	d.writeF64(y)
-	d.writeF64(w)
-	d.writeF64(h)
-	d.writeF64(c.R)
-	d.writeF64(c.G)
-	d.writeF64(c.B)
-	d.writeF64(c.A)
+	d.w.WriteByte(opDrawRect)
+	d.w.WriteF64(x)
+	d.w.WriteF64(y)
+	d.w.WriteF64(w)
+	d.w.WriteF64(h)
+	d.w.WriteF64(c.R)
+	d.w.WriteF64(c.G)
+	d.w.WriteF64(c.B)
+	d.w.WriteF64(c.A)
 }
 
 // DrawCircle draws a filled circle.
 func (d *DrawCtx) DrawCircle(cx, cy, radius float64, c Color) {
-	d.writeByte(opDrawCircle)
-	d.writeF64(cx)
-	d.writeF64(cy)
-	d.writeF64(radius)
-	d.writeF64(c.R)
-	d.writeF64(c.G)
-	d.writeF64(c.B)
-	d.writeF64(c.A)
+	d.w.WriteByte(opDrawCircle)
+	d.w.WriteF64(cx)
+	d.w.WriteF64(cy)
+	d.w.WriteF64(radius)
+	d.w.WriteF64(c.R)
+	d.w.WriteF64(c.G)
+	d.w.WriteF64(c.B)
+	d.w.WriteF64(c.A)
 }
 
 // DrawLine draws a line segment.
 func (d *DrawCtx) DrawLine(x1, y1, x2, y2, thickness float64, c Color) {
-	d.writeByte(opDrawLine)
-	d.writeF64(x1)
-	d.writeF64(y1)
-	d.writeF64(x2)
-	d.writeF64(y2)
-	d.writeF64(thickness)
-	d.writeF64(c.R)
-	d.writeF64(c.G)
-	d.writeF64(c.B)
-	d.writeF64(c.A)
+	d.w.WriteByte(opDrawLine)
+	d.w.WriteF64(x1)
+	d.w.WriteF64(y1)
+	d.w.WriteF64(x2)
+	d.w.WriteF64(y2)
+	d.w.WriteF64(thickness)
+	d.w.WriteF64(c.R)
+	d.w.WriteF64(c.G)
+	d.w.WriteF64(c.B)
+	d.w.WriteF64(c.A)
 }
 
 // DrawRectOutline draws a rectangle outline using 4 lines.
@@ -183,18 +161,15 @@ func MeasureText(text string, size float64) (float64, float64) {
 
 // DrawText draws text at the given position.
 func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
-	d.writeByte(opDrawText)
-	d.writeF64(x)
-	d.writeF64(y)
-	d.writeF64(size)
-	d.writeF64(c.R)
-	d.writeF64(c.G)
-	d.writeF64(c.B)
-	d.writeF64(c.A)
-	// String: u16 len + utf8 bytes
-	b := []byte(text)
-	d.writeU16(len(b))
-	d.buf = append(d.buf, b...)
+	d.w.WriteByte(opDrawText)
+	d.w.WriteF64(x)
+	d.w.WriteF64(y)
+	d.w.WriteF64(size)
+	d.w.WriteF64(c.R)
+	d.w.WriteF64(c.G)
+	d.w.WriteF64(c.B)
+	d.w.WriteF64(c.A)
+	d.w.WriteString(text)
 }
 
 // DrawSprite draws a sprite at the given position and size.
@@ -207,31 +182,31 @@ func (d *DrawCtx) DrawSprite(spr *Sprite, x, y, w, h float64) {
 	if tint.A == 0 && tint.R == 0 && tint.G == 0 && tint.B == 0 {
 		tint = White // default to no tint
 	}
-	d.writeByte(opDrawSprite)
-	d.writeU32(int(spr.Texture))
-	d.writeF64(srcX)
-	d.writeF64(srcY)
-	d.writeF64(srcW)
-	d.writeF64(srcH)
-	d.writeF64(x)
-	d.writeF64(y)
-	d.writeF64(w)
-	d.writeF64(h)
+	d.w.WriteByte(opDrawSprite)
+	d.w.WriteU32(int(spr.Texture))
+	d.w.WriteF64(srcX)
+	d.w.WriteF64(srcY)
+	d.w.WriteF64(srcW)
+	d.w.WriteF64(srcH)
+	d.w.WriteF64(x)
+	d.w.WriteF64(y)
+	d.w.WriteF64(w)
+	d.w.WriteF64(h)
 	if spr.FlipX {
-		d.writeByte(1)
+		d.w.WriteByte(1)
 	} else {
-		d.writeByte(0)
+		d.w.WriteByte(0)
 	}
 	if spr.FlipY {
-		d.writeByte(1)
+		d.w.WriteByte(1)
 	} else {
-		d.writeByte(0)
+		d.w.WriteByte(0)
 	}
-	d.writeF64(spr.Rotation)
-	d.writeF64(tint.R)
-	d.writeF64(tint.G)
-	d.writeF64(tint.B)
-	d.writeF64(tint.A)
+	d.w.WriteF64(spr.Rotation)
+	d.w.WriteF64(tint.R)
+	d.w.WriteF64(tint.G)
+	d.w.WriteF64(tint.B)
+	d.w.WriteF64(tint.A)
 }
 
 // DrawSpriteRotated draws a sprite with an additional rotation (radians).

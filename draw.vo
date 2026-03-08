@@ -41,6 +41,11 @@ func (d *DrawCtx) bytes() []byte {
 	return d.buf
 }
 
+// Bytes returns the encoded command buffer.
+func (d *DrawCtx) Bytes() []byte {
+	return d.buf
+}
+
 // --- binary encoding helpers ---
 
 func (d *DrawCtx) writeByte(v byte) {
@@ -199,11 +204,40 @@ func (d *DrawCtx) DrawSpriteRotated(spr *Sprite, x, y, w, h, rotation float64) {
 	spr.Rotation = saved
 }
 
-// DrawScene2D draws the entire 2D scene: tilemap (if set), then entities.
+// DrawScene2D draws the entire 2D scene: camera, tilemap (if set), then entities sorted by ZOrder.
 func (d *DrawCtx) DrawScene2D(s *Scene2D) {
-	// Phase 0: stub — just emit SetCamera2D
 	d.SetCamera2D(&s.Camera)
-	// TODO: Phase 2+ — emit tilemap + entity draw commands
+
+	// TODO: tilemap rendering when tilemap pipeline is ready
+
+	// Collect visible entities and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
+	sorted := s.visibleEntities()
+	for i := 1; i < len(sorted); i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j].ZOrder > key.ZOrder {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+
+	for _, e := range sorted {
+		if e.Sprite == nil {
+			continue
+		}
+		w := e.W * e.ScaleX
+		h := e.H * e.ScaleY
+		x := e.X - w/2
+		y := e.Y - h/2
+		if e.Rotation != 0 {
+			d.DrawSpriteRotated(e.Sprite, x, y, w, h, e.Rotation)
+		} else {
+			d.DrawSprite(e.Sprite, x, y, w, h)
+		}
+	}
+
+	d.ResetCamera()
 }
 
 // DrawScene3D draws the entire 3D scene.

@@ -1,5 +1,4 @@
 // Scene2D manages 2D entities, camera, and physics.
-// Phase 0: stub — camera + empty entity list.
 package voplay
 
 // Camera2D defines the 2D viewport.
@@ -7,6 +6,57 @@ type Camera2D struct {
 	X, Y     float64 // center position
 	Zoom     float64 // 1.0 = no zoom
 	Rotation float64 // radians
+}
+
+// Follow moves the camera center to the given position.
+func (c *Camera2D) Follow(x, y float64) {
+	c.X = x
+	c.Y = y
+}
+
+// LerpFollow smoothly moves the camera toward a target position.
+func (c *Camera2D) LerpFollow(x, y, t float64) {
+	c.X += (x - c.X) * t
+	c.Y += (y - c.Y) * t
+}
+
+// ScreenToWorld converts screen pixel coordinates to world coordinates.
+func (c *Camera2D) ScreenToWorld(screenX, screenY, screenW, screenH float64) (float64, float64) {
+	zoom := c.Zoom
+	if zoom == 0 {
+		zoom = 1
+	}
+	// Screen center offset
+	wx := (screenX - screenW/2) / zoom + c.X
+	wy := (screenY - screenH/2) / zoom + c.Y
+	return wx, wy
+}
+
+// WorldToScreen converts world coordinates to screen pixel coordinates.
+func (c *Camera2D) WorldToScreen(worldX, worldY, screenW, screenH float64) (float64, float64) {
+	zoom := c.Zoom
+	if zoom == 0 {
+		zoom = 1
+	}
+	sx := (worldX - c.X) * zoom + screenW/2
+	sy := (worldY - c.Y) * zoom + screenH/2
+	return sx, sy
+}
+
+// ViewRect returns the visible world-space rectangle (x, y, w, h).
+func (c *Camera2D) ViewRect(screenW, screenH float64) Rect {
+	zoom := c.Zoom
+	if zoom == 0 {
+		zoom = 1
+	}
+	w := screenW / zoom
+	h := screenH / zoom
+	return Rect{
+		X: c.X - w/2,
+		Y: c.Y - h/2,
+		W: w,
+		H: h,
+	}
 }
 
 // Scene2D holds the 2D scene state.
@@ -132,8 +182,60 @@ func (s *Scene2D) Destroy(e *Entity2D) {
 
 // Contacts returns collision events from the last physics step.
 func (s *Scene2D) Contacts() []Contact2D {
-	// TODO: Phase 3 — unpack from physicsContacts extern
+	// TODO: physics — unpack from physicsContacts extern
 	return nil
+}
+
+// FindByTag returns the first active entity with the given tag, or nil.
+func (s *Scene2D) FindByTag(tag string) *Entity2D {
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			return e
+		}
+	}
+	return nil
+}
+
+// ForEach calls fn for every active entity.
+func (s *Scene2D) ForEach(fn func(e *Entity2D)) {
+	for _, e := range s.entities {
+		if e.Active {
+			fn(e)
+		}
+	}
+}
+
+// EntityCount returns the number of active entities.
+func (s *Scene2D) EntityCount() int {
+	n := 0
+	for _, e := range s.entities {
+		if e.Active {
+			n++
+		}
+	}
+	return n
+}
+
+// Entities returns a copy of the active entity list.
+func (s *Scene2D) Entities() []*Entity2D {
+	result := make([]*Entity2D, 0, len(s.entities))
+	for _, e := range s.entities {
+		if e.Active {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// visibleEntities returns a slice of active+visible entities (for rendering).
+func (s *Scene2D) visibleEntities() []*Entity2D {
+	result := make([]*Entity2D, 0, len(s.entities))
+	for _, e := range s.entities {
+		if e.Active && e.Visible {
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 // Physics force methods on Entity2D (buffered, sent next frame).

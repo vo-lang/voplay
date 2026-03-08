@@ -2,6 +2,8 @@
 // No extern calls — pure Vo. Submitted once per frame via submitFrame.
 package voplay
 
+import "math"
+
 // Draw command opcodes (must match Rust decoder in stream.rs).
 const (
 	opClear         = 0x01
@@ -141,6 +143,42 @@ func (d *DrawCtx) DrawLine(x1, y1, x2, y2, thickness float64, c Color) {
 	d.writeF64(c.G)
 	d.writeF64(c.B)
 	d.writeF64(c.A)
+}
+
+// DrawRectOutline draws a rectangle outline using 4 lines.
+func (d *DrawCtx) DrawRectOutline(x, y, w, h, thickness float64, c Color) {
+	x2 := x + w
+	y2 := y + h
+	d.DrawLine(x, y, x2, y, thickness, c)     // top
+	d.DrawLine(x2, y, x2, y2, thickness, c)   // right
+	d.DrawLine(x2, y2, x, y2, thickness, c)   // bottom
+	d.DrawLine(x, y2, x, y, thickness, c)     // left
+}
+
+// DrawCircleOutline draws a circle outline using line segments.
+func (d *DrawCtx) DrawCircleOutline(cx, cy, radius, thickness float64, segments int, c Color) {
+	if segments < 3 {
+		segments = 32
+	}
+	step := 6.283185307179586 / float64(segments) // 2*PI / segments
+	px := cx + radius
+	py := cy
+	for i := 1; i <= segments; i++ {
+		angle := float64(i) * step
+		nx := cx + radius*math.Cos(angle)
+		ny := cy + radius*math.Sin(angle)
+		d.DrawLine(px, py, nx, ny, thickness, c)
+		px = nx
+		py = ny
+	}
+}
+
+// MeasureText returns the pixel width and height of text at the given size.
+// Based on the built-in 8x8 monospace font.
+func MeasureText(text string, size float64) (float64, float64) {
+	scale := size / 8.0
+	w := float64(len(text)) * 8.0 * scale
+	return w, size
 }
 
 // DrawText draws text at the given position.

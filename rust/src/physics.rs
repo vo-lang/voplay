@@ -51,6 +51,8 @@ pub struct BodyDesc {
     pub rotation: f32,
     pub collider_kind: ColliderKind,
     pub collider_args: [f32; 3],
+    pub layer: u16,
+    pub mask: u16,
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
@@ -63,6 +65,7 @@ const CMD_APPLY_FORCE: u8 = 1;
 const CMD_APPLY_IMPULSE: u8 = 2;
 const CMD_SET_VELOCITY: u8 = 3;
 const CMD_SET_POSITION: u8 = 4;
+const CMD_SET_ROTATION: u8 = 5;
 
 /// Manages the Rapier2D physics world.
 pub struct PhysicsWorld2D {
@@ -142,10 +145,16 @@ impl PhysicsWorld2D {
 
         let rb_handle = self.rigid_body_set.insert(rb);
 
+        let groups = InteractionGroups::new(
+            Group::from_bits_truncate(desc.layer.into()),
+            Group::from_bits_truncate(desc.mask.into()),
+        );
+
         // Create collider
         let collider = match desc.collider_kind {
             ColliderKind::Box => {
                 ColliderBuilder::cuboid(desc.collider_args[0], desc.collider_args[1])
+                    .collision_groups(groups)
                     .density(desc.density)
                     .friction(desc.friction)
                     .restitution(desc.restitution)
@@ -153,6 +162,7 @@ impl PhysicsWorld2D {
             }
             ColliderKind::Circle => {
                 ColliderBuilder::ball(desc.collider_args[0])
+                    .collision_groups(groups)
                     .density(desc.density)
                     .friction(desc.friction)
                     .restitution(desc.restitution)
@@ -160,6 +170,7 @@ impl PhysicsWorld2D {
             }
             ColliderKind::Capsule => {
                 ColliderBuilder::capsule_y(desc.collider_args[0], desc.collider_args[1])
+                    .collision_groups(groups)
                     .density(desc.density)
                     .friction(desc.friction)
                     .restitution(desc.restitution)
@@ -236,6 +247,9 @@ impl PhysicsWorld2D {
                     }
                     CMD_SET_POSITION => {
                         rb.set_translation(vector![v1, v2], true);
+                    }
+                    CMD_SET_ROTATION => {
+                        rb.set_rotation(Rotation::new(v1), true);
                     }
                     _ => {}
                 }

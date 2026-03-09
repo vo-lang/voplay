@@ -1,0 +1,470 @@
+package main
+
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/scene2d"
+
+func assert(cond bool, msg string) {
+	if !cond {
+		panic("FAIL: " + msg)
+	}
+}
+
+type eventLog struct {
+	items []string
+}
+
+type assetRuntimeStats struct {
+	nextTextureID int
+	nextFontID    int
+	nextModelID   int
+	nextAudioID   int
+	textureLoads  int
+	textureFrees  int
+	fontLoads     int
+	fontFrees     int
+	modelLoads    int
+	modelFrees    int
+	audioLoads    int
+	audioFrees    int
+}
+
+type testState struct {
+	name             string
+	events           *eventLog
+	fixedUpdateCount int
+	updateCount      int
+	drawCount        int
+	resizeCount      int
+	blockUpdateBelow bool
+	blockDrawBelow   bool
+}
+
+func (s *testState) Enter(g *voplay.GameCtx) {
+	s.events.items = append(s.events.items, s.name+":enter")
+}
+
+func (s *testState) Exit(g *voplay.GameCtx) {
+	s.events.items = append(s.events.items, s.name+":exit")
+}
+
+func (s *testState) Pause(g *voplay.GameCtx) {
+	s.events.items = append(s.events.items, s.name+":pause")
+}
+
+func (s *testState) Resume(g *voplay.GameCtx) {
+	s.events.items = append(s.events.items, s.name+":resume")
+}
+
+func (s *testState) FixedUpdate(g *voplay.GameCtx, dt float64) {
+	s.fixedUpdateCount++
+	s.events.items = append(s.events.items, s.name+":fixed")
+}
+
+func (s *testState) Update(g *voplay.GameCtx, dt float64) {
+	s.updateCount++
+	s.events.items = append(s.events.items, s.name+":update")
+}
+
+func (s *testState) Draw(g *voplay.GameCtx) {
+	s.drawCount++
+	s.events.items = append(s.events.items, s.name+":draw")
+}
+
+func (s *testState) OnResize(g *voplay.GameCtx, w int, h int) {
+	s.resizeCount++
+	s.events.items = append(s.events.items, s.name+":resize")
+}
+
+func (s *testState) BlocksUpdateBelow() bool {
+	return s.blockUpdateBelow
+}
+
+func (s *testState) BlocksDrawBelow() bool {
+	return s.blockDrawBelow
+}
+
+func newTestCtx() *voplay.GameCtx {
+	ctx := &voplay.GameCtx{
+		Input:  voplay.NewInputState(),
+		Draw:   voplay.NewDrawCtx(),
+		Width:  640,
+		Height: 480,
+		FixedStep: 1.0 / 60.0,
+	}
+	ctx.Actions = voplay.NewActionMap(ctx.Input)
+	ctx.Assets = voplay.NewAssets()
+	ctx.States = voplay.NewStateStack(ctx)
+	return ctx
+}
+
+func newMockAssetRuntime(stats *assetRuntimeStats) voplay.AssetRuntime {
+	return voplay.AssetRuntime{
+		LoadTexture: func(path string) (voplay.TextureID, error) {
+			stats.textureLoads++
+			stats.nextTextureID++
+			return voplay.TextureID(stats.nextTextureID), nil
+		},
+		LoadTextureBytes: func(data []byte) (voplay.TextureID, error) {
+			stats.textureLoads++
+			stats.nextTextureID++
+			return voplay.TextureID(stats.nextTextureID), nil
+		},
+		FreeTexture: func(id voplay.TextureID) {
+			stats.textureFrees++
+		},
+		LoadFont: func(path string) (voplay.FontID, error) {
+			stats.fontLoads++
+			stats.nextFontID++
+			return voplay.FontID(stats.nextFontID), nil
+		},
+		LoadFontBytes: func(data []byte) (voplay.FontID, error) {
+			stats.fontLoads++
+			stats.nextFontID++
+			return voplay.FontID(stats.nextFontID), nil
+		},
+		FreeFont: func(id voplay.FontID) {
+			stats.fontFrees++
+		},
+		LoadModel: func(path string) (voplay.ModelID, error) {
+			stats.modelLoads++
+			stats.nextModelID++
+			return voplay.ModelID(stats.nextModelID), nil
+		},
+		LoadModelBytes: func(data []byte) (voplay.ModelID, error) {
+			stats.modelLoads++
+			stats.nextModelID++
+			return voplay.ModelID(stats.nextModelID), nil
+		},
+		FreeModel: func(id voplay.ModelID) {
+			stats.modelFrees++
+		},
+		LoadAudio: func(path string) (voplay.AudioClipID, error) {
+			stats.audioLoads++
+			stats.nextAudioID++
+			return voplay.AudioClipID(stats.nextAudioID), nil
+		},
+		LoadAudioBytes: func(data []byte) (voplay.AudioClipID, error) {
+			stats.audioLoads++
+			stats.nextAudioID++
+			return voplay.AudioClipID(stats.nextAudioID), nil
+		},
+		FreeAudio: func(id voplay.AudioClipID) {
+			stats.audioFrees++
+		},
+	}
+}
+
+func assertEvents(events []string, want []string, label string) {
+	assert(len(events) == len(want), label+": len")
+	for i := range want {
+		assert(events[i] == want[i], label+": event")
+	}
+}
+
+func assertFloatNear(got, want, tol float64, label string) {
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	assert(diff <= tol, label)
+}
+
+func assertFloatFar(got, want, tol float64, label string) {
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	assert(diff > tol, label)
+}
+
+func capturePanic(fn func()) (any, bool) {
+	var recovered any
+	var didPanic bool
+	func() {
+		defer func() {
+			recovered = recover()
+			didPanic = recovered != nil
+		}()
+		fn()
+	}()
+	return recovered, didPanic
+}
+
+func testLifecycle() {
+	ctx := newTestCtx()
+	log := &eventLog{}
+	a := &testState{name: "a", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+	b := &testState{name: "b", events: log, blockUpdateBelow: true, blockDrawBelow: false}
+	c := &testState{name: "c", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+
+	ctx.States.Push(a)
+	assert(ctx.States.Len() == 1, "push a len")
+	assert(ctx.States.Top() == a, "push a top")
+	assertEvents(log.items, []string{"a:enter"}, "push a events")
+
+	ctx.States.Push(b)
+	assert(ctx.States.Len() == 2, "push b len")
+	assert(ctx.States.Top() == b, "push b top")
+	assertEvents(log.items, []string{"a:enter", "a:pause", "b:enter"}, "push b events")
+
+	popped := ctx.States.Pop()
+	assert(popped == b, "pop returns b")
+	assert(ctx.States.Len() == 1, "pop len")
+	assert(ctx.States.Top() == a, "pop top")
+	assertEvents(log.items, []string{"a:enter", "a:pause", "b:enter", "b:exit", "a:resume"}, "pop events")
+
+	ctx.States.Replace(c)
+	assert(ctx.States.Len() == 1, "replace len")
+	assert(ctx.States.Top() == c, "replace top")
+	assertEvents(log.items, []string{"a:enter", "a:pause", "b:enter", "b:exit", "a:resume", "a:exit", "c:enter"}, "replace events")
+}
+
+func testUpdateAndDrawBarriers() {
+	ctx := newTestCtx()
+	log := &eventLog{}
+	base := &testState{name: "base", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+	overlay := &testState{name: "overlay", events: log, blockUpdateBelow: false, blockDrawBelow: false}
+	pause := &testState{name: "pause", events: log, blockUpdateBelow: true, blockDrawBelow: false}
+
+	ctx.States.Push(base)
+	ctx.States.Push(overlay)
+	assert(len(log.items) == 3, "overlay setup events")
+	log.items = log.items[:0]
+
+	ctx.States.Update(0.016)
+	assertEvents(log.items, []string{"base:update", "overlay:update"}, "overlay update propagation")
+	assert(base.updateCount == 1, "base updated once")
+	assert(overlay.updateCount == 1, "overlay updated once")
+	assert(pause.updateCount == 0, "pause update untouched")
+	assert(base.fixedUpdateCount == 0, "base fixed update untouched")
+
+	log.items = log.items[:0]
+	ctx.States.FixedUpdate(0.016)
+	assertEvents(log.items, []string{"base:fixed", "overlay:fixed"}, "overlay fixed update propagation")
+	assert(base.fixedUpdateCount == 1, "base fixed updated once")
+	assert(overlay.fixedUpdateCount == 1, "overlay fixed updated once")
+	assert(pause.fixedUpdateCount == 0, "pause fixed update untouched")
+
+	log.items = log.items[:0]
+	ctx.States.Draw()
+	assertEvents(log.items, []string{"base:draw", "overlay:draw"}, "overlay draw propagation")
+	assert(base.drawCount == 1, "base drawn once")
+	assert(overlay.drawCount == 1, "overlay drawn once")
+
+	log.items = log.items[:0]
+	ctx.States.Replace(pause)
+	assertEvents(log.items, []string{"overlay:exit", "pause:enter"}, "replace overlay with pause")
+
+	log.items = log.items[:0]
+	ctx.States.Update(0.016)
+	assertEvents(log.items, []string{"pause:update"}, "pause blocks update below")
+	assert(base.updateCount == 1, "base not updated behind pause")
+	assert(pause.updateCount == 1, "pause updated once")
+	assert(base.fixedUpdateCount == 1, "base fixed update count preserved")
+
+	log.items = log.items[:0]
+	ctx.States.FixedUpdate(0.016)
+	assertEvents(log.items, []string{"pause:fixed"}, "pause blocks fixed update below")
+	assert(base.fixedUpdateCount == 1, "base fixed update blocked behind pause")
+	assert(pause.fixedUpdateCount == 1, "pause fixed updated once")
+
+	log.items = log.items[:0]
+	ctx.States.Draw()
+	assertEvents(log.items, []string{"base:draw", "pause:draw"}, "pause allows draw below")
+	assert(base.drawCount == 2, "base drawn behind pause")
+	assert(pause.drawCount == 1, "pause drawn once")
+}
+
+func testAdvanceFixedTimestep() {
+	ctx := newTestCtx()
+	ctx.FixedStep = 0.02
+	log := &eventLog{}
+	base := &testState{name: "base", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+	overlay := &testState{name: "overlay", events: log, blockUpdateBelow: false, blockDrawBelow: false}
+
+	ctx.States.Push(base)
+	ctx.States.Push(overlay)
+	log.items = log.items[:0]
+
+	ctx.Advance(0.05)
+	assertEvents(log.items, []string{
+		"base:fixed",
+		"overlay:fixed",
+		"base:fixed",
+		"overlay:fixed",
+		"base:update",
+		"overlay:update",
+	}, "advance fixed timestep order")
+	assert(base.fixedUpdateCount == 2, "base fixed updated twice")
+	assert(overlay.fixedUpdateCount == 2, "overlay fixed updated twice")
+	assert(base.updateCount == 1, "base updated once after fixed steps")
+	assert(overlay.updateCount == 1, "overlay updated once after fixed steps")
+	assertFloatNear(ctx.Alpha, 0.5, 0.000001, "advance alpha")
+}
+
+func testActionMap() {
+	ctx := newTestCtx()
+	actions := ctx.Actions
+	actions.Bind("left", voplay.KeyBinding("ArrowLeft"), voplay.KeyBinding("a"))
+	actions.Bind("fire", voplay.PointerBinding(0))
+	actions.Bind("right", voplay.KeyBinding("ArrowRight"), voplay.KeyBinding("d"))
+
+	ctx.Input.KeyDown("a")
+	assert(actions.IsDown("left"), "left action down from alternate key")
+	assert(actions.IsPressed("left"), "left action pressed on first frame")
+	assert(actions.Axis("left", "right") == -1, "axis negative")
+
+	ctx.Input.EndFrame()
+	assert(actions.IsDown("left"), "left action remains down after frame end")
+	assert(!actions.IsPressed("left"), "left pressed clears after frame end")
+
+	ctx.Input.KeyDown("ArrowRight")
+	assert(actions.Axis("left", "right") == 0, "axis cancels when both sides held")
+	ctx.Input.KeyUp("a")
+	ctx.Input.KeyUp("ArrowRight")
+	assert(actions.IsReleased("left"), "left action released")
+	assert(actions.IsReleased("right"), "right action released")
+	assert(actions.Axis("left", "right") == 0, "axis neutral after release")
+
+	ctx.Input.EndFrame()
+	ctx.Input.PointerDown(20, 30, 0)
+	assert(actions.IsDown("fire"), "pointer binding down")
+	assert(actions.IsPressed("fire"), "pointer binding pressed")
+	ctx.Input.PointerUp(20, 30, 0)
+	assert(actions.IsReleased("fire"), "pointer binding released")
+
+	actions.Rebind("left", voplay.KeyBinding("j"))
+	ctx.Input.EndFrame()
+	ctx.Input.KeyDown("j")
+	assert(actions.IsDown("left"), "rebind replaces action binding")
+	ctx.Input.KeyUp("j")
+	actions.Unbind("right")
+	assert(actions.IsReleased("left"), "rebound key released")
+}
+
+func testCollisionFilterValidation() {
+	assert(voplay.CollisionLayerDefault == 1, "collision default layer")
+	assert(voplay.CollisionMaskAll == 0xFFFF, "collision all mask")
+	voplay.ValidateCollisionFilter(0, 0)
+	voplay.ValidateCollisionFilter(voplay.CollisionMaskAll, voplay.CollisionMaskAll)
+	_, didPanic := capturePanic(func() {
+		voplay.ValidateCollisionFilter(-1, 1)
+	})
+	assert(didPanic, "negative collision layer panics")
+	_, didPanic = capturePanic(func() {
+		voplay.ValidateCollisionFilter(1, 0x10000)
+	})
+	assert(didPanic, "overflow collision mask panics")
+}
+
+func testAssets() {
+	stats := &assetRuntimeStats{}
+	assets := voplay.NewAssetsWithRuntime(newMockAssetRuntime(stats))
+	assets.BeginGroup("global")
+	tex1, err := assets.Texture("ui.atlas", "ui.png")
+	assert(err == nil, "assets texture load")
+	tex2, err := assets.Texture("ui.atlas", "ui.png")
+	assert(err == nil, "assets texture dedupe load")
+	assert(tex1 == tex2, "assets texture dedupe id")
+	assert(stats.textureLoads == 1, "assets texture loaded once in same group")
+	assets.EndGroup()
+
+	assets.BeginGroup("level")
+	tex3, err := assets.Texture("ui.atlas", "ui.png")
+	assert(err == nil, "assets texture cross-group load")
+	assert(tex3 == tex1, "assets texture shared across groups")
+	font1, err := assets.FontBytes("hud.font", []byte{1, 2, 3})
+	assert(err == nil, "assets font bytes load")
+	audio1, err := assets.AudioBytes("click", []byte{4, 5, 6})
+	assert(err == nil, "assets audio bytes load")
+	assert(font1 != 0, "assets font id")
+	assert(audio1 != 0, "assets audio id")
+	assets.EndGroup()
+
+	assets.ReleaseGroup("level")
+	assert(stats.textureFrees == 0, "shared texture not freed with remaining owner")
+	assert(stats.fontFrees == 1, "font freed with owning group")
+	assert(stats.audioFrees == 1, "audio freed with owning group")
+
+	_, didPanic := capturePanic(func() {
+		assets.BeginGroup("mismatch")
+		_, _ = assets.Texture("ui.atlas", "other.png")
+	})
+	assert(didPanic, "assets key mismatch panics")
+	assets.EndGroup()
+
+	assets.ReleaseGroup("global")
+	assert(stats.textureFrees == 1, "shared texture freed after last owner releases")
+
+	assets.BeginGroup("transient")
+	_, err = assets.ModelBytes("ship", []byte{7, 8})
+	assert(err == nil, "assets model bytes load")
+	assets.EndGroup()
+	assets.ReleaseAll()
+	assert(stats.modelFrees == 1, "release all frees remaining model")
+}
+
+func testScene2DCamera() {
+	cam := scene2d.Camera{Zoom: 1.0}
+	cam.FollowWithDeadzone(20, 3, 10, 10, 1.0)
+	assertFloatNear(cam.X, 15, 0.000001, "camera deadzone follow x")
+	assertFloatNear(cam.Y, 0, 0.000001, "camera deadzone follow y")
+
+	cam.Bounds = voplay.Rect{X: 0, Y: 0, W: 100, H: 80}
+	cam.X = 95
+	cam.Y = 70
+	vr := cam.ViewRect(40, 20)
+	centerX, centerY := vr.Center()
+	assertFloatNear(centerX, 80, 0.000001, "camera bounds clamp x")
+	assertFloatNear(centerY, 70, 0.000001, "camera bounds clamp y")
+
+	cam.Bounds = voplay.Rect{}
+	cam.X = 10
+	cam.Y = 20
+	cam.Shake(8, 1.0)
+	cam.Update(0.25)
+	vr = cam.ViewRect(40, 20)
+	centerX, centerY = vr.Center()
+	assertFloatFar(centerX, 10, 0.000001, "camera shake offsets x")
+	assertFloatFar(centerY, 20, 0.000001, "camera shake offsets y")
+	cam.Update(1.0)
+	vr = cam.ViewRect(40, 20)
+	centerX, centerY = vr.Center()
+	assertFloatNear(centerX, 10, 0.000001, "camera shake settles x")
+	assertFloatNear(centerY, 20, 0.000001, "camera shake settles y")
+}
+
+func testResizeAndReset() {
+	ctx := newTestCtx()
+	log := &eventLog{}
+	a := &testState{name: "a", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+	b := &testState{name: "b", events: log, blockUpdateBelow: false, blockDrawBelow: false}
+	c := &testState{name: "c", events: log, blockUpdateBelow: true, blockDrawBelow: true}
+
+	ctx.States.Push(a)
+	ctx.States.Push(b)
+	log.items = log.items[:0]
+
+	ctx.States.Resize(800, 600)
+	assertEvents(log.items, []string{"a:resize", "b:resize"}, "resize dispatch")
+	assert(a.resizeCount == 1, "a resize count")
+	assert(b.resizeCount == 1, "b resize count")
+
+	log.items = log.items[:0]
+	ctx.States.Reset(c)
+	assert(ctx.States.Len() == 1, "reset len")
+	assert(ctx.States.Top() == c, "reset top")
+	assertEvents(log.items, []string{"b:exit", "a:exit", "c:enter"}, "reset events")
+}
+
+func main() {
+	testLifecycle()
+	testUpdateAndDrawBarriers()
+	testAdvanceFixedTimestep()
+	testActionMap()
+	testCollisionFilterValidation()
+	testAssets()
+	testScene2DCamera()
+	testResizeAndReset()
+	println("ALL TESTS PASSED")
+}

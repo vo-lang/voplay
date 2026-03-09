@@ -72,7 +72,8 @@ func DrawTilemap(d *voplay.DrawCtx, tm *Tilemap, layerIdx int, viewX, viewY, vie
 // DrawScene draws the entire 2D scene: camera, tilemap (if set), then entities sorted by ZOrder.
 // screenW and screenH are the current viewport dimensions (used for tilemap culling).
 func DrawScene(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
-	d.SetCamera2D(s.Camera.X, s.Camera.Y, s.Camera.Zoom, s.Camera.Rotation)
+	camX, camY := s.Camera.renderCenter(screenW, screenH)
+	d.SetCamera2D(camX, camY, s.Camera.Zoom, s.Camera.Rotation)
 
 	// Draw tilemap layers (bottom to top, before entities)
 	if s.Tilemap != nil && screenW > 0 {
@@ -82,8 +83,8 @@ func DrawScene(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
 		}
 	}
 
-	// Collect visible entities and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
-	sorted := s.VisibleEntities()
+	// Collect visible entities in view and sort by ZOrder (insertion sort — stable, cache-friendly for small N)
+	sorted := s.visibleInView(screenW, screenH)
 	for i := 1; i < len(sorted); i++ {
 		key := sorted[i]
 		j := i - 1
@@ -98,12 +99,12 @@ func DrawScene(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
 		if e.Sprite == nil {
 			continue
 		}
-		w := e.W * e.ScaleX
-		h := e.H * e.ScaleY
-		x := e.X - w/2
-		y := e.Y - h/2
-		if e.Rotation != 0 {
-			DrawSpriteRotated(d, e.Sprite, x, y, w, h, e.Rotation)
+		w := e.size.X * e.scale.X
+		h := e.size.Y * e.scale.Y
+		x := e.position.X - w/2
+		y := e.position.Y - h/2
+		if e.rotation != 0 {
+			DrawSpriteRotated(d, e.Sprite, x, y, w, h, e.rotation)
 		} else {
 			DrawSprite(d, e.Sprite, x, y, w, h)
 		}

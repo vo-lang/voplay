@@ -6,50 +6,148 @@ type Game struct {
 	Width    int
 	Height   int
 	Title    string
-	Init     func(g *GameCtx)
-	Update   func(g *GameCtx, dt float64) // dt in seconds
-	Draw     func(g *GameCtx)
-	OnResize func(g *GameCtx, w int, h int) // optional
+	FixedStep       float64
+	MaxCatchUpSteps int
+	InitialState State
 	OnClose  func(g *GameCtx)              // optional; called when the game loop exits
 }
 
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
 	Input  *InputState
+	Actions *ActionMap
+	Assets *Assets
 	Draw   *DrawCtx
+	States *StateStack
 	Width  int // current viewport width (updated on resize)
 	Height int // current viewport height (updated on resize)
+	FixedStep float64
+	Alpha     float64
 
 	// Internal lifecycle state (managed by host, not for game code).
 	surfaceInitiated bool
 	gameInitialized  bool
+	closed           bool
+	accumulator      float64
+	maxCatchUpSteps  int
 }
 
 func newGameCtx(game Game) *GameCtx {
-	return &GameCtx{
+	fixedStep := resolveFixedStep(game.FixedStep)
+	ctx := &GameCtx{
 		Input:  newInputState(),
 		Draw:   newDrawCtx(),
 		Width:  game.Width,
 		Height: game.Height,
+		FixedStep:       fixedStep,
+		maxCatchUpSteps: resolveMaxCatchUpSteps(game.MaxCatchUpSteps),
 	}
+	ctx.Actions = NewActionMap(ctx.Input)
+	ctx.Assets = NewAssets()
+	ctx.States = newStateStack(ctx)
+	return ctx
+}
+
+func resolveFixedStep(step float64) float64 {
+	if step == 0 {
+		return 1.0 / 60.0
+	}
+	if step < 0 {
+		panic("Run: FixedStep must be > 0")
+	}
+	return float64(step)
+}
+
+func resolveMaxCatchUpSteps(steps int) int {
+	if steps == 0 {
+		return 8
+	}
+	if steps < 0 {
+		panic("Run: MaxCatchUpSteps must be > 0")
+	}
+	return steps
 }
 
 // handleResize checks for size change and updates GameCtx dimensions.
 // Returns true if a resize occurred.
-func (g *GameCtx) handleResize(w, h int, game *Game) bool {
+func (g *GameCtx) handleResize(w, h int) bool {
 	if w == g.Width && h == g.Height {
 		return false
 	}
 	g.Width = w
 	g.Height = h
-	if game.OnResize != nil {
-		game.OnResize(g, w, h)
-	}
+	g.States.Resize(w, h)
 	return true
+}
+
+func (g *GameCtx) start(initial State) {
+	if initial == nil {
+		panic("Run: InitialState must not be nil")
+	}
+	g.closed = false
+	g.accumulator = 0
+	g.Alpha = 0
+	g.States.Reset(initial)
+	g.gameInitialized = true
+}
+
+func (g *GameCtx) Quit() {
+	g.closed = true
+}
+
+func (g *GameCtx) Advance(dt float64) {
+	if dt < 0 {
+		panic("Advance: dt must not be negative")
+	}
+	if g.closed {
+		return
+	}
+	fixedStep := g.FixedStep
+	if fixedStep == 0 {
+		fixedStep = resolveFixedStep(0)
+		g.FixedStep = fixedStep
+	}
+	if fixedStep < 0 {
+		panic("Advance: FixedStep must be > 0")
+	}
+	maxCatchUpSteps := g.maxCatchUpSteps
+	if maxCatchUpSteps == 0 {
+		maxCatchUpSteps = resolveMaxCatchUpSteps(0)
+	}
+	maxAccumulated := fixedStep * float64(maxCatchUpSteps)
+	frameDt := dt
+	if frameDt > maxAccumulated {
+		frameDt = maxAccumulated
+	}
+	g.accumulator += frameDt
+	if g.accumulator > maxAccumulated {
+		g.accumulator = maxAccumulated
+	}
+	steps := 0
+	for g.accumulator >= fixedStep && steps < maxCatchUpSteps {
+		g.States.FixedUpdate(fixedStep)
+		if g.closed {
+			g.Alpha = 0
+			return
+		}
+		g.accumulator -= fixedStep
+		steps++
+	}
+	if g.accumulator < 0 {
+		g.accumulator = 0
+	}
+	g.Alpha = g.accumulator / fixedStep
+	if g.Alpha > 1 {
+		g.Alpha = 1
+	}
+	g.States.Update(frameDt)
 }
 
 // Run starts the game. Dispatches to web or native host.
 func Run(game Game) {
+	if game.InitialState == nil {
+		panic("Run: InitialState must not be nil")
+	}
 	ctx := newGameCtx(game)
 	if isWebEnvironment() {
 		runWeb(ctx, &game)

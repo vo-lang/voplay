@@ -14,6 +14,35 @@ const ATLAS_SIZE: u32 = 2048;
 /// Default embedded font (Liberation Mono — compact, readable, open-source).
 /// Included at compile time so text rendering works without loading any file.
 const DEFAULT_FONT_DATA: &[u8] = include_bytes!("fonts/default.ttf");
+const DEFAULT_FONT_PATHS: [&str; 6] = [
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+];
+
+fn load_default_font() -> fontdue::Font {
+    if let Ok(font) = fontdue::Font::from_bytes(
+        DEFAULT_FONT_DATA,
+        fontdue::FontSettings::default(),
+    ) {
+        return font;
+    }
+
+    for path in DEFAULT_FONT_PATHS {
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(_) => continue,
+        };
+        if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+            return font;
+        }
+    }
+
+    panic!("voplay: failed to load default font from embedded asset or system font paths")
+}
 
 pub type FontId = u32;
 
@@ -67,11 +96,7 @@ pub struct FontManager {
 impl FontManager {
     /// Create a new font manager and register the default embedded font.
     pub fn new() -> Self {
-        let default_font = fontdue::Font::from_bytes(
-            DEFAULT_FONT_DATA,
-            fontdue::FontSettings::default(),
-        )
-        .expect("voplay: failed to parse embedded default font");
+        let default_font = load_default_font();
 
         let mut fonts = HashMap::new();
         fonts.insert(0, default_font);

@@ -24,13 +24,13 @@ pub fn physics3d_destroy(call: &mut ExternCallContext) -> ExternResult {
 }
 
 /// Decode a 3D BodyDesc from bytes.
-/// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8),
+/// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8), layer(u16), mask(u16),
 ///         x(f64), y(f64), z(f64), qx(f64), qy(f64), qz(f64), qw(f64),
 ///         collider_args(3x f64), density(f64), friction(f64), restitution(f64),
 ///         linear_damping(f64)
 fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
-    // 3 flag bytes + 14 f64 fields = 115 bytes minimum
-    assert!(data.len() >= 115, "voplay: physics3d body desc too short: {} bytes (expected 115)", data.len());
+    // 3 flag bytes + 2 u16 fields + 14 f64 fields = 119 bytes minimum
+    assert!(data.len() >= 119, "voplay: physics3d body desc too short: {} bytes (expected 119)", data.len());
     let mut pos = 0;
     let body_type = PhysBodyType::from_u8(data[pos]);
     pos += 1;
@@ -42,6 +42,10 @@ fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     pos += 1;
     let fixed_rotation = data[pos] != 0;
     pos += 1;
+    let layer = u16::from_le_bytes([data[pos], data[pos + 1]]);
+    pos += 2;
+    let mask = u16::from_le_bytes([data[pos], data[pos + 1]]);
+    pos += 2;
 
     let read_f64 = |p: &mut usize| -> f64 {
         let v = f64::from_le_bytes([
@@ -74,6 +78,8 @@ fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
         qx, qy, qz, qw,
         collider_kind,
         collider_args: [ca0, ca1, ca2],
+        layer,
+        mask,
         density,
         friction,
         restitution,

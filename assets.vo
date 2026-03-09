@@ -1,0 +1,476 @@
+package voplay
+
+const (
+	assetSourcePath  = 1
+	assetSourceBytes = 2
+)
+
+type AssetRuntime struct {
+	LoadTexture      func(path string) (TextureID, error)
+	LoadTextureBytes func(data []byte) (TextureID, error)
+	FreeTexture      func(id TextureID)
+	LoadFont         func(path string) (FontID, error)
+	LoadFontBytes    func(data []byte) (FontID, error)
+	FreeFont         func(id FontID)
+	LoadModel        func(path string) (ModelID, error)
+	LoadModelBytes   func(data []byte) (ModelID, error)
+	FreeModel        func(id ModelID)
+	LoadAudio        func(path string) (AudioClipID, error)
+	LoadAudioBytes   func(data []byte) (AudioClipID, error)
+	FreeAudio        func(id AudioClipID)
+}
+
+type Assets struct {
+	runtime    AssetRuntime
+	groupStack []string
+	groups     map[string]*assetGroup
+	textures   map[string]*managedTexture
+	fonts      map[string]*managedFont
+	models     map[string]*managedModel
+	audio      map[string]*managedAudio
+}
+
+type assetGroup struct {
+	textures map[string]bool
+	fonts    map[string]bool
+	models   map[string]bool
+	audio    map[string]bool
+}
+
+type managedTexture struct {
+	id         TextureID
+	sourceKind int
+	source     string
+	owners     map[string]bool
+}
+
+type managedFont struct {
+	id         FontID
+	sourceKind int
+	source     string
+	owners     map[string]bool
+}
+
+type managedModel struct {
+	id         ModelID
+	sourceKind int
+	source     string
+	owners     map[string]bool
+}
+
+type managedAudio struct {
+	id         AudioClipID
+	sourceKind int
+	source     string
+	owners     map[string]bool
+}
+
+func NewAssets() *Assets {
+	return NewAssetsWithRuntime(defaultAssetRuntime())
+}
+
+func NewAssetsWithRuntime(runtime AssetRuntime) *Assets {
+	validateAssetRuntime(runtime)
+	return &Assets{
+		runtime:  runtime,
+		groups:   map[string]*assetGroup{},
+		textures: map[string]*managedTexture{},
+		fonts:    map[string]*managedFont{},
+		models:   map[string]*managedModel{},
+		audio:    map[string]*managedAudio{},
+	}
+}
+
+func defaultAssetRuntime() AssetRuntime {
+	return AssetRuntime{
+		LoadTexture: func(path string) (TextureID, error) {
+			return LoadTexture(path)
+		},
+		LoadTextureBytes: func(data []byte) (TextureID, error) {
+			return LoadTextureBytes(data)
+		},
+		FreeTexture: func(id TextureID) {
+			id.Free()
+		},
+		LoadFont: func(path string) (FontID, error) {
+			return LoadFont(path)
+		},
+		LoadFontBytes: func(data []byte) (FontID, error) {
+			return LoadFontBytes(data)
+		},
+		FreeFont: func(id FontID) {
+			id.Free()
+		},
+		LoadModel: func(path string) (ModelID, error) {
+			return LoadModel(path)
+		},
+		LoadModelBytes: func(data []byte) (ModelID, error) {
+			return LoadModelBytes(data)
+		},
+		FreeModel: func(id ModelID) {
+			id.Free()
+		},
+		LoadAudio: func(path string) (AudioClipID, error) {
+			return LoadAudio(path)
+		},
+		LoadAudioBytes: func(data []byte) (AudioClipID, error) {
+			return LoadAudioBytes(data)
+		},
+		FreeAudio: func(id AudioClipID) {
+			id.Free()
+		},
+	}
+}
+
+func validateAssetRuntime(runtime AssetRuntime) {
+	if runtime.LoadTexture == nil || runtime.LoadTextureBytes == nil || runtime.FreeTexture == nil {
+		panic("NewAssetsWithRuntime: texture runtime must be complete")
+	}
+	if runtime.LoadFont == nil || runtime.LoadFontBytes == nil || runtime.FreeFont == nil {
+		panic("NewAssetsWithRuntime: font runtime must be complete")
+	}
+	if runtime.LoadModel == nil || runtime.LoadModelBytes == nil || runtime.FreeModel == nil {
+		panic("NewAssetsWithRuntime: model runtime must be complete")
+	}
+	if runtime.LoadAudio == nil || runtime.LoadAudioBytes == nil || runtime.FreeAudio == nil {
+		panic("NewAssetsWithRuntime: audio runtime must be complete")
+	}
+}
+
+func (a *Assets) BeginGroup(name string) {
+	if name == "" {
+		panic("Assets.BeginGroup: name must not be empty")
+	}
+	if a.groups[name] == nil {
+		a.groups[name] = &assetGroup{
+			textures: map[string]bool{},
+			fonts:    map[string]bool{},
+			models:   map[string]bool{},
+			audio:    map[string]bool{},
+		}
+	}
+	a.groupStack = append(a.groupStack, name)
+}
+
+func (a *Assets) EndGroup() {
+	if len(a.groupStack) == 0 {
+		panic("Assets.EndGroup: no active group")
+	}
+	a.groupStack = a.groupStack[:len(a.groupStack)-1]
+}
+
+func (a *Assets) CurrentGroup() string {
+	if len(a.groupStack) == 0 {
+		return ""
+	}
+	return a.groupStack[len(a.groupStack)-1]
+}
+
+func (a *Assets) ReleaseGroup(name string) {
+	if name == "" {
+		panic("Assets.ReleaseGroup: name must not be empty")
+	}
+	for _, active := range a.groupStack {
+		if active == name {
+			panic("Assets.ReleaseGroup: group is currently active: " + name)
+		}
+	}
+	group := a.groups[name]
+	if group == nil {
+		panic("Assets.ReleaseGroup: unknown group: " + name)
+	}
+	for key := range group.textures {
+		entry := a.textures[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			a.runtime.FreeTexture(entry.id)
+			delete(a.textures, key)
+		}
+	}
+	for key := range group.fonts {
+		entry := a.fonts[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			a.runtime.FreeFont(entry.id)
+			delete(a.fonts, key)
+		}
+	}
+	for key := range group.models {
+		entry := a.models[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			a.runtime.FreeModel(entry.id)
+			delete(a.models, key)
+		}
+	}
+	for key := range group.audio {
+		entry := a.audio[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			a.runtime.FreeAudio(entry.id)
+			delete(a.audio, key)
+		}
+	}
+	delete(a.groups, name)
+}
+
+func (a *Assets) ReleaseAll() {
+	names := make([]string, 0, len(a.groups))
+	for name := range a.groups {
+		names = append(names, name)
+	}
+	a.groupStack = a.groupStack[:0]
+	for _, name := range names {
+		a.ReleaseGroup(name)
+	}
+}
+
+func (a *Assets) Texture(key, path string) (TextureID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if path == "" {
+		panic("Assets.Texture: path must not be empty")
+	}
+	if entry := a.textures[key]; entry != nil {
+		entry.requireSource(assetSourcePath, path)
+		a.attachTextureOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadTexture(path)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedTexture{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
+	a.textures[key] = entry
+	a.attachTextureOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if len(data) == 0 {
+		panic("Assets.TextureBytes: data must not be empty")
+	}
+	if entry := a.textures[key]; entry != nil {
+		entry.requireSource(assetSourceBytes, key)
+		a.attachTextureOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadTextureBytes(data)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedTexture{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
+	a.textures[key] = entry
+	a.attachTextureOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) Font(key, path string) (FontID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if path == "" {
+		panic("Assets.Font: path must not be empty")
+	}
+	if entry := a.fonts[key]; entry != nil {
+		entry.requireSource(assetSourcePath, path)
+		a.attachFontOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadFont(path)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedFont{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
+	a.fonts[key] = entry
+	a.attachFontOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) FontBytes(key string, data []byte) (FontID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if len(data) == 0 {
+		panic("Assets.FontBytes: data must not be empty")
+	}
+	if entry := a.fonts[key]; entry != nil {
+		entry.requireSource(assetSourceBytes, key)
+		a.attachFontOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadFontBytes(data)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedFont{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
+	a.fonts[key] = entry
+	a.attachFontOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) Model(key, path string) (ModelID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if path == "" {
+		panic("Assets.Model: path must not be empty")
+	}
+	if entry := a.models[key]; entry != nil {
+		entry.requireSource(assetSourcePath, path)
+		a.attachModelOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadModel(path)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedModel{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
+	a.models[key] = entry
+	a.attachModelOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if len(data) == 0 {
+		panic("Assets.ModelBytes: data must not be empty")
+	}
+	if entry := a.models[key]; entry != nil {
+		entry.requireSource(assetSourceBytes, key)
+		a.attachModelOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadModelBytes(data)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedModel{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
+	a.models[key] = entry
+	a.attachModelOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) Audio(key, path string) (AudioClipID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if path == "" {
+		panic("Assets.Audio: path must not be empty")
+	}
+	if entry := a.audio[key]; entry != nil {
+		entry.requireSource(assetSourcePath, path)
+		a.attachAudioOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadAudio(path)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedAudio{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
+	a.audio[key] = entry
+	a.attachAudioOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) AudioBytes(key string, data []byte) (AudioClipID, error) {
+	requireAssetKey(key)
+	group := a.requireCurrentGroup()
+	if len(data) == 0 {
+		panic("Assets.AudioBytes: data must not be empty")
+	}
+	if entry := a.audio[key]; entry != nil {
+		entry.requireSource(assetSourceBytes, key)
+		a.attachAudioOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id, err := a.runtime.LoadAudioBytes(data)
+	if err != nil {
+		return 0, err
+	}
+	entry := &managedAudio{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
+		a.audio[key] = entry
+		a.attachAudioOwner(group, key, entry)
+	return id, nil
+}
+
+func (a *Assets) requireCurrentGroup() string {
+	group := a.CurrentGroup()
+	if group == "" {
+		panic("Assets: no active group")
+	}
+	return group
+}
+
+func (a *Assets) group(name string) *assetGroup {
+	group := a.groups[name]
+	if group == nil {
+		panic("Assets: unknown group: " + name)
+	}
+	return group
+}
+
+func (a *Assets) attachTextureOwner(groupName, key string, entry *managedTexture) {
+	if entry.owners[groupName] {
+		return
+	}
+	entry.owners[groupName] = true
+	group := a.group(groupName)
+	group.textures[key] = true
+}
+
+func (a *Assets) attachFontOwner(groupName, key string, entry *managedFont) {
+	if entry.owners[groupName] {
+		return
+	}
+	entry.owners[groupName] = true
+	group := a.group(groupName)
+	group.fonts[key] = true
+}
+
+func (a *Assets) attachModelOwner(groupName, key string, entry *managedModel) {
+	if entry.owners[groupName] {
+		return
+	}
+	entry.owners[groupName] = true
+	group := a.group(groupName)
+	group.models[key] = true
+}
+
+func (a *Assets) attachAudioOwner(groupName, key string, entry *managedAudio) {
+	if entry.owners[groupName] {
+		return
+	}
+	entry.owners[groupName] = true
+	group := a.group(groupName)
+	group.audio[key] = true
+}
+
+func requireAssetKey(key string) {
+	if key == "" {
+		panic("Assets: key must not be empty")
+	}
+}
+
+func (m *managedTexture) requireSource(kind int, source string) {
+	if m.sourceKind != kind || m.source != source {
+		panic("Assets.Texture: key reused with different source")
+	}
+}
+
+func (m *managedFont) requireSource(kind int, source string) {
+	if m.sourceKind != kind || m.source != source {
+		panic("Assets.Font: key reused with different source")
+	}
+}
+
+func (m *managedModel) requireSource(kind int, source string) {
+	if m.sourceKind != kind || m.source != source {
+		panic("Assets.Model: key reused with different source")
+	}
+}
+
+func (m *managedAudio) requireSource(kind int, source string) {
+	if m.sourceKind != kind || m.source != source {
+		panic("Assets.Audio: key reused with different source")
+	}
+}

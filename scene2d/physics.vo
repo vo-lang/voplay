@@ -17,6 +17,8 @@ const (
 type Physics struct {
 	Type          BodyType
 	Collider      Collider
+	Layer         int
+	Mask          int
 	Density       float64
 	Friction      float64
 	Restitution   float64
@@ -90,6 +92,7 @@ const (
 	physicsCmdImpulse byte = 2
 	physicsCmdSetVel  byte = 3
 	physicsCmdSetPos  byte = 4
+	physicsCmdSetRot  byte = 5
 )
 
 // writePhysCmd appends a physics command to this scene's command buffer.
@@ -127,10 +130,19 @@ func (e *Entity) SetVelocity(vx, vy float64) {
 // SetPosition teleports a physics entity to the given position (buffered until next step).
 // For non-physics entities, sets X/Y directly.
 func (e *Entity) SetPosition(x, y float64) {
-	e.X = x
-	e.Y = y
+	e.localPosition = e.localPositionFromWorld(voplay.Vec2{x, y})
+	e.syncHierarchyWorldTransform(true)
 	if e.scene != nil && e.Physics != nil {
 		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, x, y)
+	}
+}
+
+// SetRotation sets the rotation of a physics entity (buffered until next step).
+func (e *Entity) SetRotation(rotation float64) {
+	e.localRotation = e.localRotationFromWorld(rotation)
+	e.syncHierarchyWorldTransform(true)
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetRot, e.Physics.bodyID, rotation, 0)
 	}
 }
 
@@ -143,13 +155,16 @@ func (e *Entity) Velocity() voplay.Vec2 {
 // serializeBodyDesc encodes a body description for the physics extern.
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
-	w := codec.NewByteWriter(83)
+	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
+	w := codec.NewByteWriter(87)
 	w.WriteByte(byte(p.Type))
 	w.WriteByte(byte(p.Collider.kind))
 	w.WriteBool(p.FixedRotation)
-	w.WriteF64(e.X)
-	w.WriteF64(e.Y)
-	w.WriteF64(e.Rotation)
+	w.WriteU16(p.Layer)
+	w.WriteU16(p.Mask)
+	w.WriteF64(e.position.X)
+	w.WriteF64(e.position.Y)
+	w.WriteF64(e.rotation)
 	w.WriteF64(p.Collider.args[0])
 	w.WriteF64(p.Collider.args[1])
 	w.WriteF64(p.Collider.args[2])

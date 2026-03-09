@@ -1,0 +1,224 @@
+package voplay
+
+type State interface {
+	FixedUpdate(g *GameCtx, dt float64)
+	Update(g *GameCtx, dt float64)
+	Draw(g *GameCtx)
+}
+
+type stateEnter interface {
+	Enter(g *GameCtx)
+}
+
+type stateExit interface {
+	Exit(g *GameCtx)
+}
+
+type statePause interface {
+	Pause(g *GameCtx)
+}
+
+type stateResume interface {
+	Resume(g *GameCtx)
+}
+
+type stateResize interface {
+	OnResize(g *GameCtx, w int, h int)
+}
+
+type stateUpdateBarrier interface {
+	BlocksUpdateBelow() bool
+}
+
+type stateDrawBarrier interface {
+	BlocksDrawBelow() bool
+}
+
+type StateStack struct {
+	ctx    *GameCtx
+	states []State
+}
+
+func NewStateStack(g *GameCtx) *StateStack { return newStateStack(g) }
+
+func newStateStack(g *GameCtx) *StateStack {
+	return &StateStack{ctx: g}
+}
+
+func (s *StateStack) Len() int {
+	return len(s.states)
+}
+
+func (s *StateStack) IsEmpty() bool {
+	return len(s.states) == 0
+}
+
+func (s *StateStack) Top() State {
+	if len(s.states) == 0 {
+		return nil
+	}
+	return s.states[len(s.states)-1]
+}
+
+func (s *StateStack) Push(state State) {
+	if state == nil {
+		panic("Push: state must not be nil")
+	}
+	current := s.Top()
+	if current != nil {
+		if hook, ok := current.(statePause); ok {
+			hook.Pause(s.ctx)
+		}
+	}
+	s.states = append(s.states, state)
+	if hook, ok := state.(stateEnter); ok {
+		hook.Enter(s.ctx)
+	}
+}
+
+func (s *StateStack) Pop() State {
+	if len(s.states) == 0 {
+		panic("Pop: state stack is empty")
+	}
+	last := len(s.states) - 1
+	state := s.states[last]
+	if hook, ok := state.(stateExit); ok {
+		hook.Exit(s.ctx)
+	}
+	s.states[last] = nil
+	s.states = s.states[:last]
+	if len(s.states) == 0 {
+		s.ctx.Quit()
+		return state
+	}
+	if hook, ok := s.states[len(s.states)-1].(stateResume); ok {
+		hook.Resume(s.ctx)
+	}
+	return state
+}
+
+func (s *StateStack) Replace(state State) {
+	if state == nil {
+		panic("Replace: state must not be nil")
+	}
+	if len(s.states) == 0 {
+		s.states = append(s.states, state)
+		if hook, ok := state.(stateEnter); ok {
+			hook.Enter(s.ctx)
+		}
+		return
+	}
+	last := len(s.states) - 1
+	current := s.states[last]
+	if hook, ok := current.(stateExit); ok {
+		hook.Exit(s.ctx)
+	}
+	s.states[last] = state
+	if hook, ok := state.(stateEnter); ok {
+		hook.Enter(s.ctx)
+	}
+}
+
+func (s *StateStack) Reset(state State) {
+	for i := len(s.states) - 1; i >= 0; i-- {
+		current := s.states[i]
+		if hook, ok := current.(stateExit); ok {
+			hook.Exit(s.ctx)
+		}
+		s.states[i] = nil
+	}
+	s.states = s.states[:0]
+	if state == nil {
+		s.ctx.Quit()
+		return
+	}
+	s.states = append(s.states, state)
+	if hook, ok := state.(stateEnter); ok {
+		hook.Enter(s.ctx)
+	}
+}
+
+func (s *StateStack) Clear() {
+	s.Reset(nil)
+}
+
+func (s *StateStack) Update(dt float64) {
+	active := s.updateSlice()
+	for _, state := range active {
+		state.Update(s.ctx, dt)
+		if s.ctx.closed {
+			return
+		}
+	}
+}
+
+func (s *StateStack) FixedUpdate(dt float64) {
+	active := s.updateSlice()
+	for _, state := range active {
+		state.FixedUpdate(s.ctx, dt)
+		if s.ctx.closed {
+			return
+		}
+	}
+}
+
+func (s *StateStack) Draw() {
+	active := s.drawSlice()
+	for _, state := range active {
+		state.Draw(s.ctx)
+		if s.ctx.closed {
+			return
+		}
+	}
+}
+
+func (s *StateStack) Resize(w int, h int) {
+	active := cloneStateSlice(s.states)
+	for _, state := range active {
+		if hook, ok := state.(stateResize); ok {
+			hook.OnResize(s.ctx, w, h)
+			if s.ctx.closed {
+				return
+			}
+		}
+	}
+}
+
+func (s *StateStack) updateSlice() []State {
+	if len(s.states) == 0 {
+		return nil
+	}
+	start := len(s.states) - 1
+	for start > 0 {
+		blocker, ok := s.states[start].(stateUpdateBarrier)
+		if !ok || blocker.BlocksUpdateBelow() {
+			break
+		}
+		start--
+	}
+	return cloneStateSlice(s.states[start:])
+}
+
+func (s *StateStack) drawSlice() []State {
+	if len(s.states) == 0 {
+		return nil
+	}
+	start := len(s.states) - 1
+	for start > 0 {
+		blocker, ok := s.states[start].(stateDrawBarrier)
+		if !ok || blocker.BlocksDrawBelow() {
+			break
+		}
+		start--
+	}
+	return cloneStateSlice(s.states[start:])
+}
+
+func cloneStateSlice(src []State) []State {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]State, len(src))
+	copy(dst, src)
+	return dst
+}

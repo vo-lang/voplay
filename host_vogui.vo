@@ -19,8 +19,16 @@ func runWeb(ctx *GameCtx, game *Game) {
 }
 
 func startGameLoop(ctx *GameCtx, game *Game) {
-	vogui.RunGameLoop(func(state any, dtMs float64) {
+	loopID := 0
+	loopID = vogui.RunGameLoop(func(state any, dtMs float64) {
 		dt := dtMs / 1000.0 // vogui delivers ms, game API uses seconds
+		if ctx.closed {
+			vogui.StopGameLoop(loopID)
+			if game.OnClose != nil {
+				game.OnClose(ctx)
+			}
+			return
+		}
 
 		// Phase 1: Kick off async renderer init (once).
 		if !ctx.surfaceInitiated {
@@ -34,8 +42,7 @@ func startGameLoop(ctx *GameCtx, game *Game) {
 			if !isRendererReady() {
 				return
 			}
-			game.Init(ctx)
-			ctx.gameInitialized = true
+			ctx.start(game.InitialState)
 		}
 
 		// 1. Poll input (one extern: returns packed key/pointer events)
@@ -43,11 +50,19 @@ func startGameLoop(ctx *GameCtx, game *Game) {
 		ctx.Input.unpackEvents(inputBytes)
 
 		// 2. Game logic (user steps physics/animations as needed)
-		game.Update(ctx, dt)
+		ctx.Advance(dt)
+		if ctx.closed {
+			ctx.Input.endFrame()
+			vogui.StopGameLoop(loopID)
+			if game.OnClose != nil {
+				game.OnClose(ctx)
+			}
+			return
+		}
 
 		// 3. Render
 		ctx.Draw.reset()
-		game.Draw(ctx)
+		ctx.States.Draw()
 		submitFrame(ctx.Draw.bytes())?
 
 		ctx.Input.endFrame()
@@ -62,29 +77,33 @@ func runNative(ctx *GameCtx, game *Game) {
 		panic(err)
 	}
 
-	game.Init(ctx)
+	ctx.start(game.InitialState)
 
 	for {
 		// 1. Pump OS events + get dt
 		dt, closed := nativePumpEvents()
-		if closed {
+		if closed || ctx.closed {
 			break
 		}
 
 		// 2. Handle resize
 		w, h := nativeWindowSize()
-		ctx.handleResize(w, h, game)
+		ctx.handleResize(w, h)
 
 		// 3. Poll input
 		inputBytes := pollInput()
 		ctx.Input.unpackEvents(inputBytes)
 
 		// 4. Game logic (user steps physics/animations as needed)
-		game.Update(ctx, dt)
+		ctx.Advance(dt)
+		if ctx.closed {
+			ctx.Input.endFrame()
+			break
+		}
 
 		// 5. Encode + submit draw commands (same frame)
 		ctx.Draw.reset()
-		game.Draw(ctx)
+		ctx.States.Draw()
 		nativeSubmitFrame(ctx.Draw.bytes())
 
 		ctx.Input.endFrame()

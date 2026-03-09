@@ -13,6 +13,8 @@ const (
 	inputPointerUp   = 0x04
 	inputPointerMove = 0x05
 	inputScroll      = 0x06
+	inputBindingKey     = 0x01
+	inputBindingPointer = 0x02
 )
 
 // InputState holds the current state of keyboard and pointer input.
@@ -33,8 +35,43 @@ type InputState struct {
 	scrollX, scrollY float64
 }
 
+type InputBinding struct {
+	kind   byte
+	key    string
+	button int
+}
+
+type ActionMap struct {
+	input   *InputState
+	actions map[string][]InputBinding
+}
+
 // NewInputState creates a new InputState with empty state.
 func NewInputState() *InputState { return newInputState() }
+
+func NewActionMap(input *InputState) *ActionMap {
+	if input == nil {
+		panic("NewActionMap: input must not be nil")
+	}
+	return &ActionMap{
+		input:   input,
+		actions: map[string][]InputBinding{},
+	}
+}
+
+func KeyBinding(key string) InputBinding {
+	if key == "" {
+		panic("KeyBinding: key must not be empty")
+	}
+	return InputBinding{kind: inputBindingKey, key: key}
+}
+
+func PointerBinding(button int) InputBinding {
+	if button < 0 {
+		panic("PointerBinding: button must be >= 0")
+	}
+	return InputBinding{kind: inputBindingPointer, button: button}
+}
 
 func newInputState() *InputState {
 	return &InputState{
@@ -42,6 +79,172 @@ func newInputState() *InputState {
 		keysPressed:  map[string]bool{},
 		keysReleased: map[string]bool{},
 	}
+}
+
+func (m *ActionMap) Bind(action string, bindings ...InputBinding) {
+	validateActionBindingArgs(action, bindings)
+	m.actions[action] = append(m.actions[action], cloneInputBindings(bindings)...)
+}
+
+func (m *ActionMap) Rebind(action string, bindings ...InputBinding) {
+	validateActionBindingArgs(action, bindings)
+	m.actions[action] = cloneInputBindings(bindings)
+}
+
+func (m *ActionMap) Unbind(action string) {
+	if action == "" {
+		panic("Unbind: action must not be empty")
+	}
+	delete(m.actions, action)
+}
+
+func (m *ActionMap) IsDown(action string) bool {
+	bindings := m.mustBindings(action)
+	for _, binding := range bindings {
+		if binding.isDown(m.input) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ActionMap) IsPressed(action string) bool {
+	bindings := m.mustBindings(action)
+	for _, binding := range bindings {
+		if binding.isPressed(m.input) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ActionMap) IsReleased(action string) bool {
+	bindings := m.mustBindings(action)
+	for _, binding := range bindings {
+		if binding.isReleased(m.input) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ActionMap) Axis(negativeAction, positiveAction string) float64 {
+	negativeDown := m.IsDown(negativeAction)
+	positiveDown := m.IsDown(positiveAction)
+	if negativeDown == positiveDown {
+		return 0
+	}
+	if negativeDown {
+		return -1
+	}
+	return 1
+}
+
+func (m *ActionMap) mustBindings(action string) []InputBinding {
+	if action == "" {
+		panic("ActionMap: action must not be empty")
+	}
+	bindings := m.actions[action]
+	if len(bindings) == 0 {
+		panic("ActionMap: action is not bound: " + action)
+	}
+	return bindings
+}
+
+func validateActionBindingArgs(action string, bindings []InputBinding) {
+	if action == "" {
+		panic("ActionMap: action must not be empty")
+	}
+	if len(bindings) == 0 {
+		panic("ActionMap: bindings must not be empty")
+	}
+}
+
+func cloneInputBindings(bindings []InputBinding) []InputBinding {
+	cloned := make([]InputBinding, len(bindings))
+	copy(cloned, bindings)
+	return cloned
+}
+
+func (binding InputBinding) isDown(input *InputState) bool {
+	switch binding.kind {
+	case inputBindingKey:
+		return input.IsKeyDown(binding.key)
+	case inputBindingPointer:
+		return input.IsPointerDown(binding.button)
+	default:
+		panic("InputBinding: unsupported binding kind")
+	}
+}
+
+func (binding InputBinding) isPressed(input *InputState) bool {
+	switch binding.kind {
+	case inputBindingKey:
+		return input.IsKeyPressed(binding.key)
+	case inputBindingPointer:
+		return input.IsPointerPressed(binding.button)
+	default:
+		panic("InputBinding: unsupported binding kind")
+	}
+}
+
+func (binding InputBinding) isReleased(input *InputState) bool {
+	switch binding.kind {
+	case inputBindingKey:
+		return input.IsKeyReleased(binding.key)
+	case inputBindingPointer:
+		return input.IsPointerReleased(binding.button)
+	default:
+		panic("InputBinding: unsupported binding kind")
+	}
+}
+
+func (inp *InputState) KeyDown(key string) {
+	if key == "" {
+		panic("KeyDown: key must not be empty")
+	}
+	if !inp.keysDown[key] {
+		inp.keysPressed[key] = true
+	}
+	inp.keysDown[key] = true
+}
+
+func (inp *InputState) KeyUp(key string) {
+	if key == "" {
+		panic("KeyUp: key must not be empty")
+	}
+	inp.keysDown[key] = false
+	inp.keysReleased[key] = true
+}
+
+func (inp *InputState) PointerDown(x, y float64, button int) {
+	if button < 0 {
+		panic("PointerDown: button must be >= 0")
+	}
+	inp.pointerX = x
+	inp.pointerY = y
+	inp.pointerButtons |= 1 << button
+	inp.pointerPressed |= 1 << button
+}
+
+func (inp *InputState) PointerUp(x, y float64, button int) {
+	if button < 0 {
+		panic("PointerUp: button must be >= 0")
+	}
+	inp.pointerX = x
+	inp.pointerY = y
+	inp.pointerButtons &^= 1 << button
+	inp.pointerReleased |= 1 << button
+}
+
+func (inp *InputState) PointerMove(x, y float64) {
+	inp.pointerX = x
+	inp.pointerY = y
+}
+
+func (inp *InputState) ScrollBy(dx, dy float64) {
+	inp.scrollX += dx
+	inp.scrollY += dy
 }
 
 // unpackEvents decodes binary input events from pollInput.
@@ -52,33 +255,27 @@ func (inp *InputState) unpackEvents(data []byte) {
 		switch kind {
 		case inputKeyDown:
 			key := decodeKeyEvent(&r)
-			if !inp.keysDown[key] {
-				inp.keysPressed[key] = true
-			}
-			inp.keysDown[key] = true
+			inp.KeyDown(key)
 		case inputKeyUp:
 			key := decodeKeyEvent(&r)
-			inp.keysDown[key] = false
-			inp.keysReleased[key] = true
+			inp.KeyUp(key)
 		case inputPointerDown:
-			inp.pointerX = r.ReadF64()
-			inp.pointerY = r.ReadF64()
+			x := r.ReadF64()
+			y := r.ReadF64()
 			btn := int(r.ReadByte())
-			inp.pointerButtons |= 1 << btn
-			inp.pointerPressed |= 1 << btn
+			inp.PointerDown(x, y, btn)
 		case inputPointerUp:
-			inp.pointerX = r.ReadF64()
-			inp.pointerY = r.ReadF64()
+			x := r.ReadF64()
+			y := r.ReadF64()
 			btn := int(r.ReadByte())
-			inp.pointerButtons &^= 1 << btn
-			inp.pointerReleased |= 1 << btn
+			inp.PointerUp(x, y, btn)
 		case inputPointerMove:
-			inp.pointerX = r.ReadF64()
-			inp.pointerY = r.ReadF64()
+			x := r.ReadF64()
+			y := r.ReadF64()
+			inp.PointerMove(x, y)
 			_ = r.ReadByte() // button byte present in wire format but ignored for move events
 		case inputScroll:
-			inp.scrollX += r.ReadF64()
-			inp.scrollY += r.ReadF64()
+			inp.ScrollBy(r.ReadF64(), r.ReadF64())
 		default:
 			return // unknown event, stop parsing
 		}
@@ -99,6 +296,10 @@ func (inp *InputState) endFrame() {
 	inp.prevPointerY = inp.pointerY
 	inp.scrollX = 0
 	inp.scrollY = 0
+}
+
+func (inp *InputState) EndFrame() {
+	inp.endFrame()
 }
 
 // --- Keyboard polling ---
@@ -171,7 +372,7 @@ func (inp *InputState) WorldPointerPos(camX, camY, camZoom, camRotation, screenW
 
 // --- binary decode helpers ---
 
-func decodeKeyEvent(r *ByteReader) string {
+func decodeKeyEvent(r *codec.ByteReader) string {
 	nameLen := int(r.ReadByte())
 	return string(r.ReadBytes(nameLen))
 }

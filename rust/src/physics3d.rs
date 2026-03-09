@@ -55,6 +55,8 @@ pub struct BodyDesc3D {
     pub qw: f32,
     pub collider_kind: ColliderKind3D,
     pub collider_args: [f32; 3],
+    pub layer: u16,
+    pub mask: u16,
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
@@ -147,6 +149,11 @@ impl PhysicsWorld3D {
 
         let handle = self.rigid_body_set.insert(rb);
 
+        let groups = InteractionGroups::new(
+            Group::from_bits_truncate(desc.layer.into()),
+            Group::from_bits_truncate(desc.mask.into()),
+        );
+
         let collider = match desc.collider_kind {
             ColliderKind3D::Box3D => {
                 ColliderBuilder::cuboid(desc.collider_args[0], desc.collider_args[1], desc.collider_args[2])
@@ -160,6 +167,7 @@ impl PhysicsWorld3D {
         };
 
         let collider = collider
+            .collision_groups(groups)
             .density(if desc.density > 0.0 { desc.density } else { 1.0 })
             .friction(desc.friction)
             .restitution(desc.restitution)

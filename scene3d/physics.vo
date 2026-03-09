@@ -17,6 +17,8 @@ const (
 type Physics struct {
 	Type          BodyType
 	Collider      Collider
+	Layer         int
+	Mask          int
 	Density       float64
 	Friction      float64
 	Restitution   float64
@@ -143,10 +145,13 @@ func (e *Entity) Velocity() voplay.Vec3 {
 // serializeBodyDesc encodes a 3D body description for the physics extern.
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
-	w := codec.NewByteWriter(128)
+	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
+	w := codec.NewByteWriter(119)
 	w.WriteByte(byte(p.Type))
 	w.WriteByte(byte(p.Collider.kind))
 	w.WriteBool(p.FixedRotation)
+	w.WriteU16(p.Layer)
+	w.WriteU16(p.Mask)
 	w.WriteF64(e.Position.X)
 	w.WriteF64(e.Position.Y)
 	w.WriteF64(e.Position.Z)

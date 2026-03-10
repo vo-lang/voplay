@@ -1,6 +1,7 @@
 // Tilemap, TileSet, and TileLayer types for 2D tile-based rendering.
 package scene2d
 
+import "math"
 import "github.com/vo-lang/voplay"
 
 // TileSet describes the texture atlas used by a tilemap.
@@ -119,12 +120,14 @@ func (t *Tilemap) PixelHeight() int {
 }
 
 // WorldToTile converts world coordinates to tile coordinates.
+// Uses math.Floor so that negative world coordinates map to the correct tile
+// (e.g. wx = -0.5, TileW = 32 → col = -1, not 0).
 func (t *Tilemap) WorldToTile(wx, wy float64) (int, int) {
 	if t.TileSet == nil {
 		return 0, 0
 	}
-	col := int(wx) / t.TileSet.TileW
-	row := int(wy) / t.TileSet.TileH
+	col := int(math.Floor(wx / float64(t.TileSet.TileW)))
+	row := int(math.Floor(wy / float64(t.TileSet.TileH)))
 	return col, row
 }
 

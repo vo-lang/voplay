@@ -1,0 +1,162 @@
+// Scheduler provides delayed and repeating callback timers.
+// Within a single Update call, the firing order of simultaneously-due callbacks is
+// not guaranteed. New entries added inside a callback are deferred to the next Update call.
+package voplay
+
+// SchedulerHandle is an opaque identifier for a scheduled entry.
+// Handles are unique per Scheduler instance and start at 1.
+type SchedulerHandle int
+
+type schedulerEntry struct {
+	handle    SchedulerHandle
+	timer     float64
+	interval  float64
+	repeating bool
+	fn        func()
+	cancelled bool
+}
+
+// Scheduler manages delayed and repeating callbacks driven by a manual Update clock.
+type Scheduler struct {
+	entries    []*schedulerEntry
+	pending    []*schedulerEntry
+	nextHandle SchedulerHandle
+	updating   bool
+}
+
+// NewScheduler creates a new empty Scheduler.
+func NewScheduler() *Scheduler {
+	return &Scheduler{}
+}
+
+// After schedules fn to be called once after delay seconds.
+// delay may be 0 (fires on the first Update that consumes >= 0 seconds).
+// Returns a handle that can be used to cancel the callback before it fires.
+func (s *Scheduler) After(delay float64, fn func()) SchedulerHandle {
+	if delay < 0 {
+		panic("Scheduler.After: delay must be >= 0")
+	}
+	if fn == nil {
+		panic("Scheduler.After: fn must not be nil")
+	}
+	return s.addEntry(&schedulerEntry{
+		timer:     delay,
+		repeating: false,
+		fn:        fn,
+	})
+}
+
+// Every schedules fn to be called repeatedly every interval seconds.
+// The first call fires after the first full interval has elapsed.
+// Returns a handle that can be used to cancel the repeating callback.
+func (s *Scheduler) Every(interval float64, fn func()) SchedulerHandle {
+	if interval <= 0 {
+		panic("Scheduler.Every: interval must be > 0")
+	}
+	if fn == nil {
+		panic("Scheduler.Every: fn must not be nil")
+	}
+	return s.addEntry(&schedulerEntry{
+		timer:     interval,
+		interval:  interval,
+		repeating: true,
+		fn:        fn,
+	})
+}
+
+// Cancel cancels the scheduled entry with the given handle.
+// Cancelling an already-fired or already-cancelled handle is a no-op.
+func (s *Scheduler) Cancel(h SchedulerHandle) {
+	for _, e := range s.entries {
+		if e.handle == h {
+			e.cancelled = true
+			return
+		}
+	}
+	for _, e := range s.pending {
+		if e.handle == h {
+			e.cancelled = true
+			return
+		}
+	}
+}
+
+// Update advances all timers by dt seconds and fires any callbacks that become due.
+// Multiple firings of a repeating callback may occur in a single Update if dt is large.
+// Entries added inside a callback are deferred and will start on the next Update call.
+func (s *Scheduler) Update(dt float64) {
+	if dt < 0 {
+		panic("Scheduler.Update: dt must not be negative")
+	}
+	s.updating = true
+	i := 0
+	for i < len(s.entries) {
+		e := s.entries[i]
+		if e.cancelled {
+			s.removeAt(i)
+			continue
+		}
+		e.timer -= dt
+		if e.timer <= 0 {
+			if e.repeating {
+				for e.timer <= 0 && !e.cancelled {
+					e.fn()
+					e.timer += e.interval
+				}
+				if e.cancelled {
+					s.removeAt(i)
+				} else {
+					i++
+				}
+			} else {
+				e.fn()
+				s.removeAt(i)
+			}
+		} else {
+			i++
+		}
+	}
+	s.updating = false
+	if len(s.pending) > 0 {
+		s.entries = append(s.entries, s.pending...)
+		s.pending = s.pending[:0]
+	}
+}
+
+// Len returns the number of active (non-cancelled) scheduled entries,
+// including any entries added during the current Update.
+func (s *Scheduler) Len() int {
+	n := 0
+	for _, e := range s.entries {
+		if !e.cancelled {
+			n++
+		}
+	}
+	return n + len(s.pending)
+}
+
+// Clear cancels all currently scheduled entries.
+func (s *Scheduler) Clear() {
+	for _, e := range s.entries {
+		e.cancelled = true
+	}
+	s.pending = s.pending[:0]
+}
+
+func (s *Scheduler) addEntry(e *schedulerEntry) SchedulerHandle {
+	s.nextHandle++
+	e.handle = s.nextHandle
+	if s.updating {
+		s.pending = append(s.pending, e)
+	} else {
+		s.entries = append(s.entries, e)
+	}
+	return e.handle
+}
+
+func (s *Scheduler) removeAt(i int) {
+	last := len(s.entries) - 1
+	s.entries[i] = s.entries[last]
+	s.entries[last] = nil
+	s.entries = s.entries[:last]
+}

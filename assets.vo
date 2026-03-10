@@ -1,154 +1,143 @@
 package voplay
 
+import "github.com/vo-lang/vopack"
+
 const (
-	assetSourcePath  = 1
+	assetSourceFile  = 1
 	assetSourceBytes = 2
 )
 
-type AssetRuntime struct {
-	LoadTexture      func(path string) (TextureID, error)
-	LoadTextureBytes func(data []byte) (TextureID, error)
-	FreeTexture      func(id TextureID)
-	LoadFont         func(path string) (FontID, error)
-	LoadFontBytes    func(data []byte) (FontID, error)
-	FreeFont         func(id FontID)
-	LoadModel        func(path string) (ModelID, error)
-	LoadModelBytes   func(data []byte) (ModelID, error)
-	FreeModel        func(id ModelID)
-	LoadAudio        func(path string) (AudioClipID, error)
-	LoadAudioBytes   func(data []byte) (AudioClipID, error)
-	FreeAudio        func(id AudioClipID)
+// AssetLoader defines platform-specific load/free functions for one asset type.
+type AssetLoader struct {
+	LoadFile  func(path string) (int, error)
+	LoadBytes func(data []byte) (int, error)
+	Free      func(id int)
 }
 
+// AssetLoaders groups loaders for all supported asset types.
+type AssetLoaders struct {
+	Texture AssetLoader
+	Font    AssetLoader
+	Model   AssetLoader
+	Audio   AssetLoader
+}
+
+// managedAsset tracks a loaded asset handle with group-based ownership.
+type managedAsset struct {
+	id     int
+	source int
+	owners map[string]bool
+}
+
+// assetStore manages assets of one type (textures, fonts, models, or audio).
+// All four asset types share this single implementation.
+type assetStore struct {
+	label   string
+	loader  AssetLoader
+	entries map[string]*managedAsset
+	groups  map[string]map[string]bool
+}
+
+// Assets manages game resource loading with vopack integration and group-based lifecycle.
+//
+// Assets can optionally be backed by one or more .vpak archives via Mount.
+// When loading by path, mounted archives are searched first (highest priority wins),
+// then the filesystem is used as fallback. Path is the key for deduplication.
+//
+// Group-based ownership tracks which assets belong to which loading phase.
+// Multiple groups can share the same asset; the asset is freed only when its
+// last owning group is released.
 type Assets struct {
-	runtime    AssetRuntime
+	mounts     *vopack.MountSet
 	groupStack []string
-	groups     map[string]*assetGroup
-	textures   map[string]*managedTexture
-	fonts      map[string]*managedFont
-	models     map[string]*managedModel
-	audio      map[string]*managedAudio
+	groupNames map[string]bool
+	textures   *assetStore
+	fonts      *assetStore
+	models     *assetStore
+	audio      *assetStore
 }
 
-type assetGroup struct {
-	textures map[string]bool
-	fonts    map[string]bool
-	models   map[string]bool
-	audio    map[string]bool
-}
-
-type managedTexture struct {
-	id         TextureID
-	sourceKind int
-	source     string
-	owners     map[string]bool
-}
-
-type managedFont struct {
-	id         FontID
-	sourceKind int
-	source     string
-	owners     map[string]bool
-}
-
-type managedModel struct {
-	id         ModelID
-	sourceKind int
-	source     string
-	owners     map[string]bool
-}
-
-type managedAudio struct {
-	id         AudioClipID
-	sourceKind int
-	source     string
-	owners     map[string]bool
+func newAssetStore(label string, loader AssetLoader) *assetStore {
+	return &assetStore{
+		label:   label,
+		loader:  loader,
+		entries: map[string]*managedAsset{},
+		groups:  map[string]map[string]bool{},
+	}
 }
 
 func NewAssets() *Assets {
-	return NewAssetsWithRuntime(defaultAssetRuntime())
+	return NewAssetsWithLoaders(defaultAssetLoaders())
 }
 
-func NewAssetsWithRuntime(runtime AssetRuntime) *Assets {
-	validateAssetRuntime(runtime)
+func NewAssetsWithLoaders(loaders AssetLoaders) *Assets {
+	validateAssetLoaders(loaders)
 	return &Assets{
-		runtime:  runtime,
-		groups:   map[string]*assetGroup{},
-		textures: map[string]*managedTexture{},
-		fonts:    map[string]*managedFont{},
-		models:   map[string]*managedModel{},
-		audio:    map[string]*managedAudio{},
+		groupNames: map[string]bool{},
+		textures:   newAssetStore("Texture", loaders.Texture),
+		fonts:      newAssetStore("Font", loaders.Font),
+		models:     newAssetStore("Model", loaders.Model),
+		audio:      newAssetStore("Audio", loaders.Audio),
 	}
 }
 
-func defaultAssetRuntime() AssetRuntime {
-	return AssetRuntime{
-		LoadTexture: func(path string) (TextureID, error) {
-			return LoadTexture(path)
+func defaultAssetLoaders() AssetLoaders {
+	return AssetLoaders{
+		Texture: AssetLoader{
+			LoadFile:  func(path string) (int, error) { return loadTexture(path) },
+			LoadBytes: func(data []byte) (int, error) { return loadTextureBytes(data) },
+			Free:      func(id int) { freeTexture(id) },
 		},
-		LoadTextureBytes: func(data []byte) (TextureID, error) {
-			return LoadTextureBytes(data)
+		Font: AssetLoader{
+			LoadFile:  func(path string) (int, error) { return loadFont(path) },
+			LoadBytes: func(data []byte) (int, error) { return loadFontBytes(data) },
+			Free:      func(id int) { freeFont(id) },
 		},
-		FreeTexture: func(id TextureID) {
-			id.Free()
+		Model: AssetLoader{
+			LoadFile:  func(path string) (int, error) { return loadModel(path) },
+			LoadBytes: func(data []byte) (int, error) { return loadModelBytes(data) },
+			Free:      func(id int) { freeModel(id) },
 		},
-		LoadFont: func(path string) (FontID, error) {
-			return LoadFont(path)
-		},
-		LoadFontBytes: func(data []byte) (FontID, error) {
-			return LoadFontBytes(data)
-		},
-		FreeFont: func(id FontID) {
-			id.Free()
-		},
-		LoadModel: func(path string) (ModelID, error) {
-			return LoadModel(path)
-		},
-		LoadModelBytes: func(data []byte) (ModelID, error) {
-			return LoadModelBytes(data)
-		},
-		FreeModel: func(id ModelID) {
-			id.Free()
-		},
-		LoadAudio: func(path string) (AudioClipID, error) {
-			return LoadAudio(path)
-		},
-		LoadAudioBytes: func(data []byte) (AudioClipID, error) {
-			return LoadAudioBytes(data)
-		},
-		FreeAudio: func(id AudioClipID) {
-			id.Free()
+		Audio: AssetLoader{
+			LoadFile:  func(path string) (int, error) { return audioLoad(path) },
+			LoadBytes: func(data []byte) (int, error) { return audioLoadBytes(data) },
+			Free:      func(id int) { audioFree(id) },
 		},
 	}
 }
 
-func validateAssetRuntime(runtime AssetRuntime) {
-	if runtime.LoadTexture == nil || runtime.LoadTextureBytes == nil || runtime.FreeTexture == nil {
-		panic("NewAssetsWithRuntime: texture runtime must be complete")
+func validateAssetLoader(l AssetLoader, label string) {
+	if l.LoadFile == nil || l.LoadBytes == nil || l.Free == nil {
+		panic("NewAssetsWithLoaders: " + label + " loader must be complete")
 	}
-	if runtime.LoadFont == nil || runtime.LoadFontBytes == nil || runtime.FreeFont == nil {
-		panic("NewAssetsWithRuntime: font runtime must be complete")
+}
+
+func validateAssetLoaders(loaders AssetLoaders) {
+	validateAssetLoader(loaders.Texture, "Texture")
+	validateAssetLoader(loaders.Font, "Font")
+	validateAssetLoader(loaders.Model, "Model")
+	validateAssetLoader(loaders.Audio, "Audio")
+}
+
+// Mount opens a .vpak archive and registers it at the given priority.
+// Higher priority archives are searched first when loading assets by path.
+func (a *Assets) Mount(path string, priority int) error {
+	if a.mounts == nil {
+		a.mounts = vopack.NewMountSet()
 	}
-	if runtime.LoadModel == nil || runtime.LoadModelBytes == nil || runtime.FreeModel == nil {
-		panic("NewAssetsWithRuntime: model runtime must be complete")
-	}
-	if runtime.LoadAudio == nil || runtime.LoadAudioBytes == nil || runtime.FreeAudio == nil {
-		panic("NewAssetsWithRuntime: audio runtime must be complete")
-	}
+	return a.mounts.Mount(path, priority)
+}
+
+// Unmount removes and closes the archive at the given path.
+func (a *Assets) Unmount(path string) error {
+	return a.mounts.Unmount(path)
 }
 
 func (a *Assets) BeginGroup(name string) {
 	if name == "" {
 		panic("Assets.BeginGroup: name must not be empty")
 	}
-	if a.groups[name] == nil {
-		a.groups[name] = &assetGroup{
-			textures: map[string]bool{},
-			fonts:    map[string]bool{},
-			models:   map[string]bool{},
-			audio:    map[string]bool{},
-		}
-	}
+	a.groupNames[name] = true
 	a.groupStack = append(a.groupStack, name)
 }
 
@@ -175,48 +164,19 @@ func (a *Assets) ReleaseGroup(name string) {
 			panic("Assets.ReleaseGroup: group is currently active: " + name)
 		}
 	}
-	group := a.groups[name]
-	if group == nil {
+	if !a.groupNames[name] {
 		panic("Assets.ReleaseGroup: unknown group: " + name)
 	}
-	for key := range group.textures {
-		entry := a.textures[key]
-		delete(entry.owners, name)
-		if len(entry.owners) == 0 {
-			a.runtime.FreeTexture(entry.id)
-			delete(a.textures, key)
-		}
-	}
-	for key := range group.fonts {
-		entry := a.fonts[key]
-		delete(entry.owners, name)
-		if len(entry.owners) == 0 {
-			a.runtime.FreeFont(entry.id)
-			delete(a.fonts, key)
-		}
-	}
-	for key := range group.models {
-		entry := a.models[key]
-		delete(entry.owners, name)
-		if len(entry.owners) == 0 {
-			a.runtime.FreeModel(entry.id)
-			delete(a.models, key)
-		}
-	}
-	for key := range group.audio {
-		entry := a.audio[key]
-		delete(entry.owners, name)
-		if len(entry.owners) == 0 {
-			a.runtime.FreeAudio(entry.id)
-			delete(a.audio, key)
-		}
-	}
-	delete(a.groups, name)
+	a.textures.releaseGroup(name)
+	a.fonts.releaseGroup(name)
+	a.models.releaseGroup(name)
+	a.audio.releaseGroup(name)
+	delete(a.groupNames, name)
 }
 
 func (a *Assets) ReleaseAll() {
-	names := make([]string, 0, len(a.groups))
-	for name := range a.groups {
+	names := make([]string, 0, len(a.groupNames))
+	for name := range a.groupNames {
 		names = append(names, name)
 	}
 	a.groupStack = a.groupStack[:0]
@@ -225,172 +185,139 @@ func (a *Assets) ReleaseAll() {
 	}
 }
 
-func (a *Assets) Texture(key, path string) (TextureID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if path == "" {
-		panic("Assets.Texture: path must not be empty")
+// Close releases all assets and closes any mounted archives.
+func (a *Assets) Close() error {
+	a.ReleaseAll()
+	if a.mounts == nil {
+		return nil
 	}
-	if entry := a.textures[key]; entry != nil {
-		entry.requireSource(assetSourcePath, path)
-		a.attachTextureOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadTexture(path)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedTexture{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
-	a.textures[key] = entry
-	a.attachTextureOwner(group, key, entry)
-	return id, nil
+	err := a.mounts.Close()
+	a.mounts = nil
+	return err
 }
 
+// Texture loads a texture by path. Mounted archives are searched first,
+// then the filesystem. The path is the deduplication key.
+func (a *Assets) Texture(path string) (TextureID, error) {
+	id, err := a.textures.get(a.mounts, a.requireCurrentGroup(), path)
+	return TextureID(id), err
+}
+
+// TextureBytes loads a texture from raw bytes under the given key.
 func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if len(data) == 0 {
-		panic("Assets.TextureBytes: data must not be empty")
-	}
-	if entry := a.textures[key]; entry != nil {
-		entry.requireSource(assetSourceBytes, key)
-		a.attachTextureOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadTextureBytes(data)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedTexture{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
-	a.textures[key] = entry
-	a.attachTextureOwner(group, key, entry)
-	return id, nil
+	id, err := a.textures.getBytes(a.requireCurrentGroup(), key, data)
+	return TextureID(id), err
 }
 
-func (a *Assets) Font(key, path string) (FontID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if path == "" {
-		panic("Assets.Font: path must not be empty")
-	}
-	if entry := a.fonts[key]; entry != nil {
-		entry.requireSource(assetSourcePath, path)
-		a.attachFontOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadFont(path)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedFont{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
-	a.fonts[key] = entry
-	a.attachFontOwner(group, key, entry)
-	return id, nil
+// Font loads a font by path. Mounted archives are searched first,
+// then the filesystem. The path is the deduplication key.
+func (a *Assets) Font(path string) (FontID, error) {
+	id, err := a.fonts.get(a.mounts, a.requireCurrentGroup(), path)
+	return FontID(id), err
 }
 
+// FontBytes loads a font from raw bytes under the given key.
 func (a *Assets) FontBytes(key string, data []byte) (FontID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if len(data) == 0 {
-		panic("Assets.FontBytes: data must not be empty")
-	}
-	if entry := a.fonts[key]; entry != nil {
-		entry.requireSource(assetSourceBytes, key)
-		a.attachFontOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadFontBytes(data)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedFont{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
-	a.fonts[key] = entry
-	a.attachFontOwner(group, key, entry)
-	return id, nil
+	id, err := a.fonts.getBytes(a.requireCurrentGroup(), key, data)
+	return FontID(id), err
 }
 
-func (a *Assets) Model(key, path string) (ModelID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if path == "" {
-		panic("Assets.Model: path must not be empty")
-	}
-	if entry := a.models[key]; entry != nil {
-		entry.requireSource(assetSourcePath, path)
-		a.attachModelOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadModel(path)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedModel{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
-	a.models[key] = entry
-	a.attachModelOwner(group, key, entry)
-	return id, nil
+// Model loads a model by path. Mounted archives are searched first,
+// then the filesystem. The path is the deduplication key.
+func (a *Assets) Model(path string) (ModelID, error) {
+	id, err := a.models.get(a.mounts, a.requireCurrentGroup(), path)
+	return ModelID(id), err
 }
 
+// ModelBytes loads a model from raw bytes under the given key.
 func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if len(data) == 0 {
-		panic("Assets.ModelBytes: data must not be empty")
-	}
-	if entry := a.models[key]; entry != nil {
-		entry.requireSource(assetSourceBytes, key)
-		a.attachModelOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadModelBytes(data)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedModel{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
-	a.models[key] = entry
-	a.attachModelOwner(group, key, entry)
-	return id, nil
+	id, err := a.models.getBytes(a.requireCurrentGroup(), key, data)
+	return ModelID(id), err
 }
 
-func (a *Assets) Audio(key, path string) (AudioClipID, error) {
-	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if path == "" {
-		panic("Assets.Audio: path must not be empty")
-	}
-	if entry := a.audio[key]; entry != nil {
-		entry.requireSource(assetSourcePath, path)
-		a.attachAudioOwner(group, key, entry)
-		return entry.id, nil
-	}
-	id, err := a.runtime.LoadAudio(path)
-	if err != nil {
-		return 0, err
-	}
-	entry := &managedAudio{id: id, sourceKind: assetSourcePath, source: path, owners: map[string]bool{}}
-	a.audio[key] = entry
-	a.attachAudioOwner(group, key, entry)
-	return id, nil
+// Audio loads an audio clip by path. Mounted archives are searched first,
+// then the filesystem. The path is the deduplication key.
+func (a *Assets) Audio(path string) (AudioClipID, error) {
+	id, err := a.audio.get(a.mounts, a.requireCurrentGroup(), path)
+	return AudioClipID(id), err
 }
 
+// AudioBytes loads an audio clip from raw bytes under the given key.
 func (a *Assets) AudioBytes(key string, data []byte) (AudioClipID, error) {
+	id, err := a.audio.getBytes(a.requireCurrentGroup(), key, data)
+	return AudioClipID(id), err
+}
+
+// --- assetStore methods ---
+
+// get loads an asset by path, using vopack mounts first, then filesystem.
+func (s *assetStore) get(mounts *vopack.MountSet, group, key string) (int, error) {
 	requireAssetKey(key)
-	group := a.requireCurrentGroup()
-	if len(data) == 0 {
-		panic("Assets.AudioBytes: data must not be empty")
-	}
-	if entry := a.audio[key]; entry != nil {
-		entry.requireSource(assetSourceBytes, key)
-		a.attachAudioOwner(group, key, entry)
+	if entry := s.entries[key]; entry != nil {
+		if entry.source != assetSourceFile {
+			panic("Assets." + s.label + ": key loaded via bytes, not path: " + key)
+		}
+		s.attachOwner(group, key, entry)
 		return entry.id, nil
 	}
-	id, err := a.runtime.LoadAudioBytes(data)
-	if err != nil {
-		return 0, err
+	var id int
+	if mounts != nil && mounts.Has(key) {
+		data := mounts.Read(key)?
+		id = s.loader.LoadBytes(data)?
+	} else {
+		id = s.loader.LoadFile(key)?
 	}
-	entry := &managedAudio{id: id, sourceKind: assetSourceBytes, source: key, owners: map[string]bool{}}
-		a.audio[key] = entry
-		a.attachAudioOwner(group, key, entry)
+	entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
+	s.entries[key] = entry
+	s.attachOwner(group, key, entry)
 	return id, nil
+}
+
+// getBytes loads an asset from raw bytes under the given key.
+func (s *assetStore) getBytes(group, key string, data []byte) (int, error) {
+	requireAssetKey(key)
+	if len(data) == 0 {
+		panic("Assets." + s.label + "Bytes: data must not be empty")
+	}
+	if entry := s.entries[key]; entry != nil {
+		if entry.source != assetSourceBytes {
+			panic("Assets." + s.label + ": key loaded via path, not bytes: " + key)
+		}
+		s.attachOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id := s.loader.LoadBytes(data)?
+	entry := &managedAsset{id: id, source: assetSourceBytes, owners: map[string]bool{}}
+	s.entries[key] = entry
+	s.attachOwner(group, key, entry)
+	return id, nil
+}
+
+func (s *assetStore) attachOwner(group, key string, entry *managedAsset) {
+	if entry.owners[group] {
+		return
+	}
+	entry.owners[group] = true
+	if s.groups[group] == nil {
+		s.groups[group] = map[string]bool{}
+	}
+	s.groups[group][key] = true
+}
+
+func (s *assetStore) releaseGroup(name string) {
+	keys := s.groups[name]
+	if keys == nil {
+		return
+	}
+	for key := range keys {
+		entry := s.entries[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			s.loader.Free(entry.id)
+			delete(s.entries, key)
+		}
+	}
+	delete(s.groups, name)
 }
 
 func (a *Assets) requireCurrentGroup() string {
@@ -401,76 +328,8 @@ func (a *Assets) requireCurrentGroup() string {
 	return group
 }
 
-func (a *Assets) group(name string) *assetGroup {
-	group := a.groups[name]
-	if group == nil {
-		panic("Assets: unknown group: " + name)
-	}
-	return group
-}
-
-func (a *Assets) attachTextureOwner(groupName, key string, entry *managedTexture) {
-	if entry.owners[groupName] {
-		return
-	}
-	entry.owners[groupName] = true
-	group := a.group(groupName)
-	group.textures[key] = true
-}
-
-func (a *Assets) attachFontOwner(groupName, key string, entry *managedFont) {
-	if entry.owners[groupName] {
-		return
-	}
-	entry.owners[groupName] = true
-	group := a.group(groupName)
-	group.fonts[key] = true
-}
-
-func (a *Assets) attachModelOwner(groupName, key string, entry *managedModel) {
-	if entry.owners[groupName] {
-		return
-	}
-	entry.owners[groupName] = true
-	group := a.group(groupName)
-	group.models[key] = true
-}
-
-func (a *Assets) attachAudioOwner(groupName, key string, entry *managedAudio) {
-	if entry.owners[groupName] {
-		return
-	}
-	entry.owners[groupName] = true
-	group := a.group(groupName)
-	group.audio[key] = true
-}
-
 func requireAssetKey(key string) {
 	if key == "" {
 		panic("Assets: key must not be empty")
-	}
-}
-
-func (m *managedTexture) requireSource(kind int, source string) {
-	if m.sourceKind != kind || m.source != source {
-		panic("Assets.Texture: key reused with different source")
-	}
-}
-
-func (m *managedFont) requireSource(kind int, source string) {
-	if m.sourceKind != kind || m.source != source {
-		panic("Assets.Font: key reused with different source")
-	}
-}
-
-func (m *managedModel) requireSource(kind int, source string) {
-	if m.sourceKind != kind || m.source != source {
-		panic("Assets.Model: key reused with different source")
-	}
-}
-
-func (m *managedAudio) requireSource(kind int, source string) {
-	if m.sourceKind != kind || m.source != source {
-		panic("Assets.Audio: key reused with different source")
 	}
 }

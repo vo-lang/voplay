@@ -55,7 +55,7 @@ func resolveFixedStep(step float64) float64 {
 	if step < 0 {
 		panic("Run: FixedStep must be > 0")
 	}
-	return float64(step)
+	return step
 }
 
 func resolveMaxCatchUpSteps(steps int) int {

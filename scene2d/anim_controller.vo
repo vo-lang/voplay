@@ -1,0 +1,169 @@
+// AnimController manages named animation clips with explicit state transitions.
+// It replaces direct Animation use on Sprite for entities with multiple animation states
+// (idle, walk, run, attack, death, etc.).
+package scene2d
+
+// AnimClip defines a named animation sequence: a set of frame indices into a SpriteSheet
+// played at a given FPS, optionally looping.
+type AnimClip struct {
+	Sheet  *SpriteSheet
+	Frames []int
+	FPS    float64
+	Loop   bool
+}
+
+// AnimController manages a named set of AnimClips and tracks the currently active state.
+// Call SetState to transition, Update each frame to advance playback, and
+// ApplyToSprite or CurrentFrame to obtain the current source rect.
+type AnimController struct {
+	clips   map[string]*AnimClip
+	current string
+	time    float64
+	frame   int
+	done    bool
+	onDone  func()
+}
+
+// NewAnimController creates an empty AnimController with no clips registered.
+func NewAnimController() *AnimController {
+	return &AnimController{clips: map[string]*AnimClip{}}
+}
+
+// AddClip registers a named clip. Panics if the name is already registered or any field is invalid.
+func (ac *AnimController) AddClip(name string, clip *AnimClip) {
+	if name == "" {
+		panic("AnimController.AddClip: name must not be empty")
+	}
+	if clip == nil {
+		panic("AnimController.AddClip: clip must not be nil")
+	}
+	if clip.Sheet == nil {
+		panic("AnimController.AddClip: clip.Sheet must not be nil")
+	}
+	if len(clip.Frames) == 0 {
+		panic("AnimController.AddClip: clip.Frames must not be empty")
+	}
+	if clip.FPS <= 0 {
+		panic("AnimController.AddClip: clip.FPS must be > 0")
+	}
+	if ac.clips[name] != nil {
+		panic("AnimController.AddClip: clip already registered: " + name)
+	}
+	ac.clips[name] = clip
+}
+
+// SetState transitions to the named clip, restarting from frame 0.
+// If name is already the current clip, this is a no-op (no restart).
+// Panics if name is not registered.
+func (ac *AnimController) SetState(name string) {
+	if name == "" {
+		panic("AnimController.SetState: name must not be empty")
+	}
+	if ac.clips[name] == nil {
+		panic("AnimController.SetState: unknown clip: " + name)
+	}
+	if ac.current == name {
+		return
+	}
+	ac.current = name
+	ac.time = 0
+	ac.frame = 0
+	ac.done = false
+}
+
+// SetStateForce transitions to the named clip and always restarts from frame 0,
+// even if it is already the current clip. Panics if name is not registered.
+func (ac *AnimController) SetStateForce(name string) {
+	if name == "" {
+		panic("AnimController.SetStateForce: name must not be empty")
+	}
+	if ac.clips[name] == nil {
+		panic("AnimController.SetStateForce: unknown clip: " + name)
+	}
+	ac.current = name
+	ac.time = 0
+	ac.frame = 0
+	ac.done = false
+}
+
+// HasClip reports whether a clip with the given name has been registered.
+func (ac *AnimController) HasClip(name string) bool {
+	return ac.clips[name] != nil
+}
+
+// OnDone registers a callback that fires once each time a non-looping clip plays
+// through its last frame. The callback receives the controller so the game can
+// inspect CurrentClip() and call SetState to chain into the next animation.
+// Pass nil to clear an existing callback.
+func (ac *AnimController) OnDone(fn func()) {
+	ac.onDone = fn
+}
+
+// CurrentClip returns the name of the currently active clip, or "" if none has been set.
+func (ac *AnimController) CurrentClip() string {
+	return ac.current
+}
+
+// Done returns true if the current non-looping clip has played through its last frame.
+func (ac *AnimController) Done() bool {
+	return ac.done
+}
+
+// Update advances the current clip by dt seconds.
+// Has no effect if no state is set or the current clip is a non-looping clip that has finished.
+func (ac *AnimController) Update(dt float64) {
+	if dt < 0 {
+		panic("AnimController.Update: dt must not be negative")
+	}
+	if ac.current == "" || ac.done {
+		return
+	}
+	clip := ac.clips[ac.current]
+	ac.time += dt
+	frameDur := 1.0 / clip.FPS
+	for ac.time >= frameDur {
+		ac.time -= frameDur
+		ac.frame++
+		if ac.frame >= len(clip.Frames) {
+			if clip.Loop {
+				ac.frame = 0
+			} else {
+				ac.frame = len(clip.Frames) - 1
+				ac.done = true
+				if ac.onDone != nil {
+					ac.onDone()
+				}
+				return
+			}
+		}
+	}
+}
+
+// CurrentFrame returns the source rect (x, y, w, h) in texture pixels for the active frame.
+// Returns (0, 0, 0, 0) if no state has been set.
+func (ac *AnimController) CurrentFrame() (float64, float64, float64, float64) {
+	if ac.current == "" {
+		return 0, 0, 0, 0
+	}
+	clip := ac.clips[ac.current]
+	return clip.Sheet.Frame(clip.Frames[ac.frame])
+}
+
+// ApplyToSprite updates spr's Texture, SrcX, SrcY, SrcW, SrcH to match the current frame.
+// Call this after Update each frame to keep the entity sprite in sync with the controller.
+// Panics if spr is nil.
+func (ac *AnimController) ApplyToSprite(spr *Sprite) {
+	if spr == nil {
+		panic("AnimController.ApplyToSprite: spr must not be nil")
+	}
+	if ac.current == "" {
+		return
+	}
+	clip := ac.clips[ac.current]
+	sx, sy, sw, sh := clip.Sheet.Frame(clip.Frames[ac.frame])
+	spr.Texture = clip.Sheet.Texture
+	spr.SrcX = sx
+	spr.SrcY = sy
+	spr.SrcW = sw
+	spr.SrcH = sh
+}

@@ -1,0 +1,288 @@
+// Tween provides float64 interpolation with configurable easing.
+// Tweens are self-contained value animators; call Update each frame.
+// Built-in easing functions cover the standard Robert Penner set.
+package voplay
+
+import "math"
+
+// EaseFn maps a normalized time t ∈ [0,1] to a progress value, typically also ∈ [0,1].
+// Overshooting functions (back, elastic) may produce values outside [0,1].
+type EaseFn func(t float64) float64
+
+// Tween interpolates a float64 from a start to an end value over a fixed duration.
+// Loop and PingPong modes control what happens when the end is reached.
+// OnUpdate and OnDone callbacks are optional.
+type Tween struct {
+	from     float64
+	to       float64
+	duration float64
+	ease     EaseFn
+	elapsed  float64
+	done     bool
+	loop     bool
+	pingPong bool
+	reverse  bool
+	onUpdate func(value float64)
+	onDone   func()
+}
+
+// NewTween creates a Tween from `from` to `to` over `duration` seconds using `ease`.
+// If ease is nil, EaseLinear is used. duration must be > 0.
+func NewTween(from, to, duration float64, ease EaseFn) *Tween {
+	if duration <= 0 {
+		panic("NewTween: duration must be > 0")
+	}
+	if ease == nil {
+		ease = EaseLinear
+	}
+	return &Tween{
+		from:     from,
+		to:       to,
+		duration: duration,
+		ease:     ease,
+	}
+}
+
+// WithOnUpdate sets a callback invoked with the current interpolated value each Update step.
+// Pass nil to clear a previously set callback. Returns the tween for chaining.
+func (t *Tween) WithOnUpdate(fn func(value float64)) *Tween {
+	t.onUpdate = fn
+	return t
+}
+
+// WithOnDone sets a callback invoked once when a non-looping tween completes.
+// Not called when a loop cycle ends. Pass nil to clear a previously set callback.
+// Returns the tween for chaining.
+func (t *Tween) WithOnDone(fn func()) *Tween {
+	t.onDone = fn
+	return t
+}
+
+// WithLoop makes the tween restart from the beginning each time it reaches the end.
+// Clears any PingPong setting. Returns the tween for chaining.
+func (t *Tween) WithLoop() *Tween {
+	t.loop = true
+	t.pingPong = false
+	return t
+}
+
+// WithPingPong makes the tween alternate direction each time it reaches an endpoint.
+// Clears the loop setting. Returns the tween for chaining.
+func (t *Tween) WithPingPong() *Tween {
+	t.pingPong = true
+	t.loop = false
+	return t
+}
+
+// Update advances the tween by dt seconds and fires any registered callbacks.
+// Has no effect once Done() returns true.
+func (t *Tween) Update(dt float64) {
+	if dt < 0 {
+		panic("Tween.Update: dt must not be negative")
+	}
+	if t.done {
+		return
+	}
+	t.elapsed += dt
+	if t.elapsed >= t.duration {
+		if t.loop {
+			for t.elapsed >= t.duration {
+				t.elapsed -= t.duration
+			}
+		} else if t.pingPong {
+			for t.elapsed >= t.duration {
+				t.elapsed -= t.duration
+				t.reverse = !t.reverse
+			}
+		} else {
+			t.elapsed = t.duration
+			t.done = true
+		}
+	}
+	if t.onUpdate != nil {
+		t.onUpdate(t.Value())
+	}
+	if t.done && t.onDone != nil {
+		t.onDone()
+	}
+}
+
+// Value returns the current interpolated float64 value.
+func (t *Tween) Value() float64 {
+	raw := t.elapsed / t.duration
+	if raw > 1 {
+		raw = 1
+	}
+	if raw < 0 {
+		raw = 0
+	}
+	if t.reverse {
+		raw = 1 - raw
+	}
+	return t.from + (t.to-t.from)*t.ease(raw)
+}
+
+// Progress returns the raw normalized time in [0,1], ignoring easing and pingpong direction.
+func (t *Tween) Progress() float64 {
+	p := t.elapsed / t.duration
+	if p > 1 {
+		return 1
+	}
+	return p
+}
+
+// Done returns true if a non-looping, non-pingpong tween has completed its full duration.
+func (t *Tween) Done() bool {
+	return t.done
+}
+
+// Reset restarts the tween from the beginning.
+func (t *Tween) Reset() {
+	t.elapsed = 0
+	t.done = false
+	t.reverse = false
+}
+
+// --- Built-in easing functions ---
+
+// EaseLinear is identity: no curve applied.
+func EaseLinear(t float64) float64 { return t }
+
+// EaseInQuad accelerates from zero.
+func EaseInQuad(t float64) float64 { return t * t }
+
+// EaseOutQuad decelerates to zero.
+func EaseOutQuad(t float64) float64 { return 1 - (1-t)*(1-t) }
+
+// EaseInOutQuad accelerates then decelerates.
+func EaseInOutQuad(t float64) float64 {
+	if t < 0.5 {
+		return 2 * t * t
+	}
+	return 1 - 2*(1-t)*(1-t)
+}
+
+// EaseInCubic accelerates from zero with a cubic curve.
+func EaseInCubic(t float64) float64 { return t * t * t }
+
+// EaseOutCubic decelerates to zero with a cubic curve.
+func EaseOutCubic(t float64) float64 {
+	u := 1 - t
+	return 1 - u*u*u
+}
+
+// EaseInOutCubic accelerates then decelerates with a cubic curve.
+func EaseInOutCubic(t float64) float64 {
+	if t < 0.5 {
+		return 4 * t * t * t
+	}
+	u := 2*t - 2
+	return 1 + u*u*u/2
+}
+
+// EaseInSine follows a sine curve from zero.
+func EaseInSine(t float64) float64 {
+	return 1 - math.Cos(t*math.Pi/2)
+}
+
+// EaseOutSine follows a sine curve to zero.
+func EaseOutSine(t float64) float64 {
+	return math.Sin(t * math.Pi / 2)
+}
+
+// EaseInOutSine follows a full sine curve.
+func EaseInOutSine(t float64) float64 {
+	return -(math.Cos(math.Pi*t) - 1) / 2
+}
+
+const tweenBackOvershoot = 1.70158
+
+// EaseInBack starts with a slight pullback before accelerating forward.
+func EaseInBack(t float64) float64 {
+	c := tweenBackOvershoot
+	return (c+1)*t*t*t - c*t*t
+}
+
+// EaseOutBack overshoots the target slightly before settling.
+func EaseOutBack(t float64) float64 {
+	c := tweenBackOvershoot
+	u := t - 1
+	return 1 + (c+1)*u*u*u + c*u*u
+}
+
+// EaseInOutBack combines in and out back easing.
+func EaseInOutBack(t float64) float64 {
+	c := tweenBackOvershoot * 1.525
+	if t < 0.5 {
+		return 2 * t * t * ((c+1)*2*t - c)
+	}
+	u := 2*t - 2
+	return (u*u*((c+1)*u+c) + 2) / 2
+}
+
+// EaseOutBounce simulates a bouncing ball decelerating to rest.
+func EaseOutBounce(t float64) float64 {
+	if t < 1.0/2.75 {
+		return 7.5625 * t * t
+	} else if t < 2.0/2.75 {
+		t -= 1.5 / 2.75
+		return 7.5625*t*t + 0.75
+	} else if t < 2.5/2.75 {
+		t -= 2.25 / 2.75
+		return 7.5625*t*t + 0.9375
+	}
+	t -= 2.625 / 2.75
+	return 7.5625*t*t + 0.984375
+}
+
+// EaseInBounce is the time-reversed EaseOutBounce.
+func EaseInBounce(t float64) float64 {
+	return 1 - EaseOutBounce(1-t)
+}
+
+// EaseInOutBounce combines in and out bounce easing.
+func EaseInOutBounce(t float64) float64 {
+	if t < 0.5 {
+		return (1 - EaseOutBounce(1-2*t)) / 2
+	}
+	return (1 + EaseOutBounce(2*t-1)) / 2
+}
+
+const tweenElasticC4 = (2 * math.Pi) / 3
+const tweenElasticC5 = (2 * math.Pi) / 4.5
+
+// EaseInElastic recoils backward then snaps to the target.
+func EaseInElastic(t float64) float64 {
+	if t == 0 {
+		return 0
+	}
+	if t == 1 {
+		return 1
+	}
+	return -math.Pow(2, 10*t-10) * math.Sin((t*10-10.75)*tweenElasticC4)
+}
+
+// EaseOutElastic overshoots then settles at the target.
+func EaseOutElastic(t float64) float64 {
+	if t == 0 {
+		return 0
+	}
+	if t == 1 {
+		return 1
+	}
+	return math.Pow(2, -10*t)*math.Sin((t*10-0.75)*tweenElasticC4) + 1
+}
+
+// EaseInOutElastic combines in and out elastic easing.
+func EaseInOutElastic(t float64) float64 {
+	if t == 0 {
+		return 0
+	}
+	if t == 1 {
+		return 1
+	}
+	if t < 0.5 {
+		return -(math.Pow(2, 20*t-10) * math.Sin((20*t-11.125)*tweenElasticC5)) / 2
+	}
+	return (math.Pow(2, -20*t+10)*math.Sin((20*t-11.125)*tweenElasticC5))/2 + 1
+}

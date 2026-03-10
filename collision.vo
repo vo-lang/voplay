@@ -5,11 +5,11 @@ const (
 	CollisionMaskAll     = 0xFFFF
 )
 
- func ValidateCollisionFilter(layer, mask int) {
+func ValidateCollisionFilter(layer, mask int) {
 	if layer < 0 || layer > CollisionMaskAll {
 		panic("ValidateCollisionFilter: layer must be in range 0..65535")
 	}
 	if mask < 0 || mask > CollisionMaskAll {
 		panic("ValidateCollisionFilter: mask must be in range 0..65535")
 	}
- }
+}

@@ -12,8 +12,12 @@ files (
     draw.vo
     input.vo
     audio.vo
+    scheduler.vo
+    tween.vo
     host_vogui.vo
     vo.ext.toml
 )
 
+require github.com/vo-lang/vopack v0.1.0
 require github.com/vo-lang/vogui v0.1.0
+

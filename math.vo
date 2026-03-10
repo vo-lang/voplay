@@ -25,6 +25,8 @@ func (a Vec2) Normalize() Vec2 {
 	return Vec2{a.X / l, a.Y / l}
 }
 
+func (a Vec2) Negate() Vec2 { return Vec2{-a.X, -a.Y} }
+
 func (a Vec2) Lerp(b Vec2, t float64) Vec2 {
 	return Vec2{a.X + (b.X-a.X)*t, a.Y + (b.Y-a.Y)*t}
 }

@@ -1,0 +1,184 @@
+// Debug rendering for scene2d.
+// Draws physics collider outlines, contact midpoints, entity labels,
+// camera view rect, camera bounds rect, and occupied spatial hash cells.
+// All drawing happens in world space; DrawDebugFull sets the camera internally.
+package scene2d
+
+import (
+	"math"
+
+	"github.com/vo-lang/voplay"
+)
+
+// DebugColors holds the colors used for each debug layer.
+type DebugColors struct {
+	Collider     voplay.Color
+	Contact      voplay.Color
+	CameraView   voplay.Color
+	CameraBounds voplay.Color
+	SpatialGrid  voplay.Color
+	Label        voplay.Color
+}
+
+// DefaultDebugColors returns a sensible default color scheme.
+func DefaultDebugColors() DebugColors {
+	return DebugColors{
+		Collider:     voplay.Color{R: 0, G: 1, B: 0, A: 0.8},
+		Contact:      voplay.Color{R: 1, G: 0, B: 0, A: 1},
+		CameraView:   voplay.Color{R: 1, G: 1, B: 0, A: 0.5},
+		CameraBounds: voplay.Color{R: 0, G: 0.5, B: 1, A: 0.5},
+		SpatialGrid:  voplay.Color{R: 0.3, G: 0.3, B: 0.3, A: 0.4},
+		Label:        voplay.Color{R: 1, G: 1, B: 1, A: 1},
+	}
+}
+
+// DrawDebugOptions controls which debug layers are rendered.
+type DrawDebugOptions struct {
+	Colliders    bool
+	Contacts     bool
+	Labels       bool
+	CameraView   bool
+	CameraBounds bool
+	SpatialGrid  bool
+}
+
+// DrawDebugAll returns DrawDebugOptions with the standard layers enabled.
+// SpatialGrid is off by default because it is visually noisy for large scenes.
+func DrawDebugAll() DrawDebugOptions {
+	return DrawDebugOptions{
+		Colliders:    true,
+		Contacts:     true,
+		Labels:       true,
+		CameraView:   true,
+		CameraBounds: true,
+		SpatialGrid:  false,
+	}
+}
+
+// DrawDebug draws a standard debug overlay using DrawDebugAll and DefaultDebugColors.
+// It sets its own camera (camX/camY from scene) and resets it at the end.
+func DrawDebug(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
+	DrawDebugFull(d, s, screenW, screenH, DrawDebugAll(), DefaultDebugColors())
+}
+
+// DrawDebugFull draws the debug overlay with full control over options and colors.
+// This function sets its own camera transform and resets it at the end, so it may
+// be called independently of DrawScene.
+func DrawDebugFull(d *voplay.DrawCtx, s *Scene, screenW, screenH float64, opts DrawDebugOptions, colors DebugColors) {
+	zoom := s.Camera.Zoom
+	if zoom == 0 {
+		zoom = 1
+	}
+	lineW := 1.5 / zoom
+
+	camX, camY := s.Camera.renderCenter(screenW, screenH)
+	d.SetCamera2D(camX, camY, zoom, s.Camera.Rotation)
+
+	if opts.SpatialGrid {
+		drawDebugSpatialGrid(d, s, screenW, screenH, lineW, colors.SpatialGrid)
+	}
+	if opts.Colliders {
+		drawDebugColliders(d, s, lineW, colors.Collider)
+	}
+	if opts.Contacts {
+		drawDebugContacts(d, s, zoom, colors.Contact)
+	}
+	if opts.Labels {
+		drawDebugLabels(d, s, zoom, colors.Label)
+	}
+	if opts.CameraView {
+		vr := s.Camera.ViewRect(screenW, screenH)
+		d.DrawRectOutline(vr.X, vr.Y, vr.W, vr.H, lineW, colors.CameraView)
+	}
+	if opts.CameraBounds && s.Camera.Bounds.W > 0 && s.Camera.Bounds.H > 0 {
+		b := s.Camera.Bounds
+		d.DrawRectOutline(b.X, b.Y, b.W, b.H, lineW, colors.CameraBounds)
+	}
+
+	d.ResetCamera()
+}
+
+func drawRotatedRectOutline(d *voplay.DrawCtx, cx, cy, halfW, halfH, angle, lineW float64, color voplay.Color) {
+	cos := math.Cos(angle)
+	sin := math.Sin(angle)
+	rotate := func(lx, ly float64) (float64, float64) {
+		return cx + lx*cos - ly*sin, cy + lx*sin + ly*cos
+	}
+	x0, y0 := rotate(-halfW, -halfH)
+	x1, y1 := rotate(halfW, -halfH)
+	x2, y2 := rotate(halfW, halfH)
+	x3, y3 := rotate(-halfW, halfH)
+	d.DrawLine(x0, y0, x1, y1, lineW, color)
+	d.DrawLine(x1, y1, x2, y2, lineW, color)
+	d.DrawLine(x2, y2, x3, y3, lineW, color)
+	d.DrawLine(x3, y3, x0, y0, lineW, color)
+}
+
+func drawDebugColliders(d *voplay.DrawCtx, s *Scene, lineW float64, color voplay.Color) {
+	for _, e := range s.entities {
+		if !e.Active || e.Physics == nil {
+			continue
+		}
+		p := e.Physics
+		switch p.Collider.kind {
+		case colliderBox2D:
+			halfW := p.Collider.args[0]
+			halfH := p.Collider.args[1]
+			drawRotatedRectOutline(d, e.position.X, e.position.Y, halfW, halfH, e.rotation, lineW, color)
+		case colliderCircle2D:
+			radius := p.Collider.args[0]
+			d.DrawCircleOutline(e.position.X, e.position.Y, radius, lineW, 24, color)
+		case colliderCapsule:
+			halfH := p.Collider.args[0]
+			radius := p.Collider.args[1]
+			// Draw the rectangular shaft rotated along the capsule axis.
+			drawRotatedRectOutline(d, e.position.X, e.position.Y, radius, halfH, e.rotation, lineW, color)
+			// End caps: circles at ±halfH along the rotated Y axis.
+			dx := -math.Sin(e.rotation) * halfH
+			dy := math.Cos(e.rotation) * halfH
+			d.DrawCircleOutline(e.position.X+dx, e.position.Y+dy, radius, lineW, 16, color)
+			d.DrawCircleOutline(e.position.X-dx, e.position.Y-dy, radius, lineW, 16, color)
+		}
+	}
+}
+
+func drawDebugContacts(d *voplay.DrawCtx, s *Scene, zoom float64, color voplay.Color) {
+	contacts := s.Contacts()
+	dotRadius := 3.0 / zoom
+	for _, c := range contacts {
+		mx := (c.A.position.X + c.B.position.X) / 2
+		my := (c.A.position.Y + c.B.position.Y) / 2
+		d.DrawCircle(mx, my, dotRadius, color)
+	}
+}
+
+func drawDebugLabels(d *voplay.DrawCtx, s *Scene, zoom float64, color voplay.Color) {
+	labelSize := 12.0 / zoom
+	for _, e := range s.entities {
+		if !e.Active || e.Tag == "" {
+			continue
+		}
+		b := e.Bounds()
+		yOffset := b.H/2 + labelSize*1.2
+		d.DrawText(e.Tag, e.position.X, e.position.Y-yOffset, labelSize, color)
+	}
+}
+
+func drawDebugSpatialGrid(d *voplay.DrawCtx, s *Scene, screenW, screenH, lineW float64, color voplay.Color) {
+	vr := s.Camera.ViewRect(screenW, screenH)
+	cellSize := s.spatialCellSize
+	minCX := int(math.Floor(vr.X/cellSize)) - 1
+	maxCX := int(math.Floor((vr.X+vr.W)/cellSize)) + 1
+	minCY := int(math.Floor(vr.Y/cellSize)) - 1
+	maxCY := int(math.Floor((vr.Y+vr.H)/cellSize)) + 1
+	for cx := minCX; cx <= maxCX; cx++ {
+		for cy := minCY; cy <= maxCY; cy++ {
+			key := spatialCellKey(cx, cy)
+			if len(s.spatialBuckets[key]) > 0 {
+				wx := float64(cx) * cellSize
+				wy := float64(cy) * cellSize
+				d.DrawRectOutline(wx, wy, cellSize, cellSize, lineW, color)
+			}
+		}
+	}
+}

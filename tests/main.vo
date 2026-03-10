@@ -26,6 +26,7 @@ type assetRuntimeStats struct {
 	modelFrees    int
 	audioLoads    int
 	audioFrees    int
+	fileLoads     int
 }
 
 type testState struct {
@@ -97,59 +98,71 @@ func newTestCtx() *voplay.GameCtx {
 	return ctx
 }
 
-func newMockAssetRuntime(stats *assetRuntimeStats) voplay.AssetRuntime {
-	return voplay.AssetRuntime{
-		LoadTexture: func(path string) (voplay.TextureID, error) {
-			stats.textureLoads++
-			stats.nextTextureID++
-			return voplay.TextureID(stats.nextTextureID), nil
+func newMockAssetLoaders(stats *assetRuntimeStats) voplay.AssetLoaders {
+	return voplay.AssetLoaders{
+		Texture: voplay.AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				stats.textureLoads++
+				stats.fileLoads++
+				stats.nextTextureID++
+				return stats.nextTextureID, nil
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				stats.textureLoads++
+				stats.nextTextureID++
+				return stats.nextTextureID, nil
+			},
+			Free: func(id int) {
+				stats.textureFrees++
+			},
 		},
-		LoadTextureBytes: func(data []byte) (voplay.TextureID, error) {
-			stats.textureLoads++
-			stats.nextTextureID++
-			return voplay.TextureID(stats.nextTextureID), nil
+		Font: voplay.AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				stats.fontLoads++
+				stats.fileLoads++
+				stats.nextFontID++
+				return stats.nextFontID, nil
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				stats.fontLoads++
+				stats.nextFontID++
+				return stats.nextFontID, nil
+			},
+			Free: func(id int) {
+				stats.fontFrees++
+			},
 		},
-		FreeTexture: func(id voplay.TextureID) {
-			stats.textureFrees++
+		Model: voplay.AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				stats.modelLoads++
+				stats.fileLoads++
+				stats.nextModelID++
+				return stats.nextModelID, nil
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				stats.modelLoads++
+				stats.nextModelID++
+				return stats.nextModelID, nil
+			},
+			Free: func(id int) {
+				stats.modelFrees++
+			},
 		},
-		LoadFont: func(path string) (voplay.FontID, error) {
-			stats.fontLoads++
-			stats.nextFontID++
-			return voplay.FontID(stats.nextFontID), nil
-		},
-		LoadFontBytes: func(data []byte) (voplay.FontID, error) {
-			stats.fontLoads++
-			stats.nextFontID++
-			return voplay.FontID(stats.nextFontID), nil
-		},
-		FreeFont: func(id voplay.FontID) {
-			stats.fontFrees++
-		},
-		LoadModel: func(path string) (voplay.ModelID, error) {
-			stats.modelLoads++
-			stats.nextModelID++
-			return voplay.ModelID(stats.nextModelID), nil
-		},
-		LoadModelBytes: func(data []byte) (voplay.ModelID, error) {
-			stats.modelLoads++
-			stats.nextModelID++
-			return voplay.ModelID(stats.nextModelID), nil
-		},
-		FreeModel: func(id voplay.ModelID) {
-			stats.modelFrees++
-		},
-		LoadAudio: func(path string) (voplay.AudioClipID, error) {
-			stats.audioLoads++
-			stats.nextAudioID++
-			return voplay.AudioClipID(stats.nextAudioID), nil
-		},
-		LoadAudioBytes: func(data []byte) (voplay.AudioClipID, error) {
-			stats.audioLoads++
-			stats.nextAudioID++
-			return voplay.AudioClipID(stats.nextAudioID), nil
-		},
-		FreeAudio: func(id voplay.AudioClipID) {
-			stats.audioFrees++
+		Audio: voplay.AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				stats.audioLoads++
+				stats.fileLoads++
+				stats.nextAudioID++
+				return stats.nextAudioID, nil
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				stats.audioLoads++
+				stats.nextAudioID++
+				return stats.nextAudioID, nil
+			},
+			Free: func(id int) {
+				stats.audioFrees++
+			},
 		},
 	}
 }
@@ -359,18 +372,22 @@ func testCollisionFilterValidation() {
 
 func testAssets() {
 	stats := &assetRuntimeStats{}
-	assets := voplay.NewAssetsWithRuntime(newMockAssetRuntime(stats))
+	assets := voplay.NewAssetsWithLoaders(newMockAssetLoaders(stats))
+
+	// Path-based loading with deduplication
 	assets.BeginGroup("global")
-	tex1, err := assets.Texture("ui.atlas", "ui.png")
+	tex1, err := assets.Texture("ui.png")
 	assert(err == nil, "assets texture load")
-	tex2, err := assets.Texture("ui.atlas", "ui.png")
+	tex2, err := assets.Texture("ui.png")
 	assert(err == nil, "assets texture dedupe load")
 	assert(tex1 == tex2, "assets texture dedupe id")
 	assert(stats.textureLoads == 1, "assets texture loaded once in same group")
+	assert(stats.fileLoads == 1, "assets texture loaded via file")
 	assets.EndGroup()
 
+	// Cross-group sharing and bytes-based loading
 	assets.BeginGroup("level")
-	tex3, err := assets.Texture("ui.atlas", "ui.png")
+	tex3, err := assets.Texture("ui.png")
 	assert(err == nil, "assets texture cross-group load")
 	assert(tex3 == tex1, "assets texture shared across groups")
 	font1, err := assets.FontBytes("hud.font", []byte{1, 2, 3})
@@ -381,16 +398,19 @@ func testAssets() {
 	assert(audio1 != 0, "assets audio id")
 	assets.EndGroup()
 
+	// Releasing a group frees assets not shared with other groups
 	assets.ReleaseGroup("level")
 	assert(stats.textureFrees == 0, "shared texture not freed with remaining owner")
 	assert(stats.fontFrees == 1, "font freed with owning group")
 	assert(stats.audioFrees == 1, "audio freed with owning group")
 
+	// Source mismatch: loading same key via path then bytes panics
 	_, didPanic := capturePanic(func() {
 		assets.BeginGroup("mismatch")
-		_, _ = assets.Texture("ui.atlas", "other.png")
+		_, _ = assets.Texture("conflict.png")
+		_, _ = assets.TextureBytes("conflict.png", []byte{9, 9})
 	})
-	assert(didPanic, "assets key mismatch panics")
+	assert(didPanic, "assets source mismatch panics")
 	assets.EndGroup()
 
 	assets.ReleaseGroup("global")
@@ -457,6 +477,292 @@ func testResizeAndReset() {
 	assertEvents(log.items, []string{"b:exit", "a:exit", "c:enter"}, "reset events")
 }
 
+func testScheduler() {
+	s := voplay.NewScheduler()
+	assert(s.Len() == 0, "scheduler empty on creation")
+
+	fired := 0
+	h := s.After(0.1, func() { fired++ })
+	assert(s.Len() == 1, "scheduler len after After")
+
+	s.Update(0.05)
+	assert(fired == 0, "not fired before delay")
+	s.Update(0.05)
+	assert(fired == 1, "fired exactly at delay")
+	assert(s.Len() == 0, "one-shot removed after fire")
+
+	s.Update(0.1)
+	assert(fired == 1, "one-shot does not re-fire")
+
+	repeatCount := 0
+	s.Every(0.1, func() { repeatCount++ })
+	s.Update(0.25)
+	assert(repeatCount == 2, "every fires twice in 0.25s with 0.1s interval")
+	s.Update(0.1)
+	assert(repeatCount == 3, "every fires third time")
+	assert(s.Len() == 1, "repeating entry stays active")
+
+	cancelCount := 0
+	ch := s.After(0.2, func() { cancelCount++ })
+	s.Cancel(ch)
+	s.Update(0.3)
+	assert(cancelCount == 0, "cancelled one-shot does not fire")
+
+	s.Clear()
+	assert(s.Len() == 0, "clear empties scheduler")
+
+	deferredFired := 0
+	s.After(0.0, func() {
+		s.After(0.0, func() { deferredFired++ })
+	})
+	s.Update(0.0)
+	assert(deferredFired == 0, "entry added in callback deferred to next update")
+	s.Update(0.0)
+	assert(deferredFired == 1, "deferred entry fires on next update")
+
+	cancelDuringCount := 0
+	var hCancel voplay.SchedulerHandle
+	hCancel = s.Every(0.05, func() {
+		cancelDuringCount++
+		s.Cancel(hCancel)
+	})
+	s.Update(0.1)
+	assert(cancelDuringCount == 1, "self-cancelling every fires exactly once")
+	s.Update(0.1)
+	assert(cancelDuringCount == 1, "self-cancelled every does not fire again")
+
+	_, didPanic := capturePanic(func() { s.After(-1, func() {}) })
+	assert(didPanic, "After negative delay panics")
+	_, didPanic = capturePanic(func() { s.Every(0, func() {}) })
+	assert(didPanic, "Every zero interval panics")
+	_, didPanic = capturePanic(func() { s.After(0, nil) })
+	assert(didPanic, "After nil fn panics")
+}
+
+func testTween() {
+	tw := voplay.NewTween(0, 100, 1.0, voplay.EaseLinear)
+	assertFloatNear(tw.Value(), 0, 0.000001, "tween initial value")
+	assert(!tw.Done(), "tween not done initially")
+
+	tw.Update(0.5)
+	assertFloatNear(tw.Value(), 50, 0.000001, "tween midpoint linear")
+	assertFloatNear(tw.Progress(), 0.5, 0.000001, "tween progress midpoint")
+
+	tw.Update(0.5)
+	assertFloatNear(tw.Value(), 100, 0.000001, "tween at end")
+	assert(tw.Done(), "tween done after full duration")
+
+	tw.Update(0.5)
+	assertFloatNear(tw.Value(), 100, 0.000001, "tween stays at end after done")
+
+	tw.Reset()
+	assert(!tw.Done(), "tween not done after reset")
+	assertFloatNear(tw.Value(), 0, 0.000001, "tween resets to start")
+
+	doneFired := 0
+	updateValues := []float64{}
+	tw2 := voplay.NewTween(10, 20, 0.5, voplay.EaseLinear).
+		WithOnUpdate(func(v float64) { updateValues = append(updateValues, v) }).
+		WithOnDone(func() { doneFired++ })
+	tw2.Update(0.5)
+	assert(doneFired == 1, "OnDone fired on completion")
+	assert(len(updateValues) == 1, "OnUpdate called once")
+	assertFloatNear(updateValues[0], 20, 0.000001, "OnUpdate receives final value")
+
+	twLoop := voplay.NewTween(0, 1, 0.5, voplay.EaseLinear).WithLoop()
+	twLoop.Update(0.75)
+	assert(!twLoop.Done(), "looping tween never done")
+	assertFloatNear(twLoop.Progress(), 0.5, 0.001, "loop tween at midpoint of second cycle after 0.75s")
+
+	twPP := voplay.NewTween(0, 100, 0.5, voplay.EaseLinear).WithPingPong()
+	twPP.Update(0.5)
+	assertFloatNear(twPP.Value(), 100, 0.000001, "pingpong at endpoint")
+	twPP.Update(0.25)
+	assertFloatNear(twPP.Value(), 50, 0.000001, "pingpong reversed at midpoint")
+	twPP.Update(0.25)
+	assertFloatNear(twPP.Value(), 0, 0.000001, "pingpong back to start")
+	assert(!twPP.Done(), "pingpong never done")
+
+	twEase := voplay.NewTween(0, 1, 1.0, voplay.EaseInQuad)
+	twEase.Update(0.5)
+	assertFloatNear(twEase.Value(), 0.25, 0.000001, "EaseInQuad at 0.5 = 0.25")
+
+	twOut := voplay.NewTween(0, 1, 1.0, voplay.EaseOutQuad)
+	twOut.Update(0.5)
+	assertFloatNear(twOut.Value(), 0.75, 0.000001, "EaseOutQuad at 0.5 = 0.75")
+
+	assertFloatNear(voplay.EaseOutBounce(1.0), 1.0, 0.000001, "EaseOutBounce at 1.0")
+	assertFloatNear(voplay.EaseOutBounce(0.0), 0.0, 0.000001, "EaseOutBounce at 0.0")
+	assertFloatNear(voplay.EaseInBounce(0.0), 0.0, 0.000001, "EaseInBounce at 0.0")
+	assertFloatNear(voplay.EaseInBounce(1.0), 1.0, 0.000001, "EaseInBounce at 1.0")
+
+	assertFloatNear(voplay.EaseInOutBack(0.0), 0.0, 0.000001, "EaseInOutBack at 0.0")
+	assertFloatNear(voplay.EaseInOutBack(0.5), 0.5, 0.000001, "EaseInOutBack at 0.5 = 0.5")
+	assertFloatNear(voplay.EaseInOutBack(1.0), 1.0, 0.000001, "EaseInOutBack at 1.0")
+
+	assertFloatNear(voplay.EaseInElastic(0.0), 0.0, 0.000001, "EaseInElastic at 0.0")
+	assertFloatNear(voplay.EaseInElastic(1.0), 1.0, 0.000001, "EaseInElastic at 1.0")
+	assertFloatNear(voplay.EaseOutElastic(0.0), 0.0, 0.000001, "EaseOutElastic at 0.0")
+	assertFloatNear(voplay.EaseOutElastic(1.0), 1.0, 0.000001, "EaseOutElastic at 1.0")
+	assertFloatNear(voplay.EaseInOutElastic(0.0), 0.0, 0.000001, "EaseInOutElastic at 0.0")
+	assertFloatNear(voplay.EaseInOutElastic(0.5), 0.5, 0.000001, "EaseInOutElastic at 0.5")
+	assertFloatNear(voplay.EaseInOutElastic(1.0), 1.0, 0.000001, "EaseInOutElastic at 1.0")
+
+	// WithOnUpdate(nil) and WithOnDone(nil) clear their callbacks.
+	clearUpdateCount := 0
+	clearDoneCount := 0
+	twClear := voplay.NewTween(0, 1, 0.1, voplay.EaseLinear).
+		WithOnUpdate(func(v float64) { clearUpdateCount++ }).
+		WithOnDone(func() { clearDoneCount++ })
+	twClear.WithOnUpdate(nil)
+	twClear.WithOnDone(nil)
+	twClear.Update(0.1)
+	assert(clearUpdateCount == 0, "WithOnUpdate(nil) clears callback")
+	assert(clearDoneCount == 0, "WithOnDone(nil) clears callback")
+
+	_, didPanic := capturePanic(func() { voplay.NewTween(0, 1, 0, nil) })
+	assert(didPanic, "NewTween zero duration panics")
+	_, didPanic = capturePanic(func() { voplay.NewTween(0, 1, -1, nil) })
+	assert(didPanic, "NewTween negative duration panics")
+}
+
+func testMath() {
+	v := voplay.Vec2{X: 3, Y: -5}
+	neg := v.Negate()
+	assert(neg.X == -3, "Vec2.Negate X")
+	assert(neg.Y == 5, "Vec2.Negate Y")
+
+	v3 := voplay.Vec3{X: 1, Y: -2, Z: 3}
+	neg3 := v3.Negate()
+	assert(neg3.X == -1, "Vec3.Negate X")
+	assert(neg3.Y == 2, "Vec3.Negate Y")
+	assert(neg3.Z == -3, "Vec3.Negate Z")
+}
+
+func testTilemapExtra() {
+	ts := &scene2d.TileSet{TileW: 32, TileH: 32, Columns: 4}
+	tm := scene2d.NewTilemap(ts, 8, 8)
+
+	// Positive coords: standard case.
+	col, row := tm.WorldToTile(33, 97)
+	assert(col == 1, "WorldToTile positive x")
+	assert(row == 3, "WorldToTile positive y")
+
+	// Exact boundary: wx = 32.0 should land in tile 1.
+	col, row = tm.WorldToTile(32.0, 0)
+	assert(col == 1, "WorldToTile exact boundary")
+
+	// Negative coords: int() truncates toward zero giving wrong tile;
+	// math.Floor must be used.
+	col, row = tm.WorldToTile(-0.5, -0.5)
+	assert(col == -1, "WorldToTile negative x maps to col -1")
+	assert(row == -1, "WorldToTile negative y maps to row -1")
+
+	col, row = tm.WorldToTile(-32.0, -32.0)
+	assert(col == -1, "WorldToTile exactly -TileW")
+	assert(row == -1, "WorldToTile exactly -TileH")
+
+	col, row = tm.WorldToTile(-33.0, -33.0)
+	assert(col == -2, "WorldToTile further negative x")
+	assert(row == -2, "WorldToTile further negative y")
+}
+
+func testAnimController() {
+	sheet := scene2d.NewSpriteSheet(voplay.TextureID(1), 16, 16, 4)
+	clipIdle := &scene2d.AnimClip{
+		Sheet:  sheet,
+		Frames: []int{0, 1, 2, 3},
+		FPS:    8,
+		Loop:   true,
+	}
+	clipAttack := &scene2d.AnimClip{
+		Sheet:  sheet,
+		Frames: []int{4, 5, 6},
+		FPS:    12,
+		Loop:   false,
+	}
+
+	ac := scene2d.NewAnimController()
+	assert(ac.CurrentClip() == "", "no clip initially")
+	assert(!ac.Done(), "not done with no clip")
+
+	ac.AddClip("idle", clipIdle)
+	ac.AddClip("attack", clipAttack)
+
+	ac.SetState("idle")
+	assert(ac.CurrentClip() == "idle", "clip set to idle")
+	assert(!ac.Done(), "idle loop not done")
+
+	frameDur := 1.0 / 8.0
+	ac.Update(frameDur * 2)
+	x, y, w, h := ac.CurrentFrame()
+	assert(w == 16, "frame width correct")
+	assert(h == 16, "frame height correct")
+	srcCol := int(x) / 16
+	assert(srcCol == 2, "advanced to frame index 2 after 2 frame durations")
+	_ = y
+
+	ac.SetState("idle")
+	assert(ac.CurrentClip() == "idle", "SetState no-op same clip")
+	assert(srcCol == 2, "frame not reset on same-clip SetState")
+
+	ac.SetState("attack")
+	assert(ac.CurrentClip() == "attack", "transitioned to attack")
+	assert(!ac.Done(), "attack not done immediately")
+
+	attackFrameDur := 1.0 / 12.0
+	ac.Update(attackFrameDur * 3)
+	assert(ac.Done(), "attack done after all frames")
+
+	ac.Update(attackFrameDur * 5)
+	assert(ac.Done(), "attack stays done")
+	x2, _, _, _ := ac.CurrentFrame()
+	srcCol2 := int(x2) / 16
+	assert(srcCol2 == 2, "attack stuck on last frame index (4+2=6 in sheet col 2)")
+
+	ac.SetStateForce("attack")
+	assert(!ac.Done(), "SetStateForce resets done")
+	assert(ac.CurrentClip() == "attack", "SetStateForce set to attack")
+
+	spr := &scene2d.Sprite{Tint: voplay.White}
+	ac.ApplyToSprite(spr)
+	assert(spr.Texture == voplay.TextureID(1), "ApplyToSprite sets texture")
+	assert(spr.SrcW == 16, "ApplyToSprite sets SrcW")
+	assert(spr.SrcH == 16, "ApplyToSprite sets SrcH")
+
+	assert(ac.HasClip("idle"), "HasClip returns true for registered clip")
+	assert(ac.HasClip("attack"), "HasClip returns true for attack")
+	assert(!ac.HasClip("jump"), "HasClip returns false for unregistered clip")
+	assert(!ac.HasClip(""), "HasClip returns false for empty name")
+
+	onDoneFired := 0
+	lastDoneClip := ""
+	ac.OnDone(func() {
+		onDoneFired++
+		lastDoneClip = ac.CurrentClip()
+	})
+	ac.SetState("attack")
+	ac.Update(attackFrameDur * 3)
+	assert(onDoneFired == 1, "OnDone fires when non-looping clip ends")
+	assert(lastDoneClip == "attack", "OnDone sees current clip as attack")
+
+	ac.SetState("idle")
+	ac.Update(1.0)
+	assert(onDoneFired == 1, "OnDone not fired for looping clip")
+
+	ac.OnDone(nil)
+	ac.SetState("attack")
+	ac.Update(attackFrameDur * 3)
+	assert(onDoneFired == 1, "OnDone nil clears callback")
+
+	_, didPanic := capturePanic(func() { ac.AddClip("idle", clipIdle) })
+	assert(didPanic, "AddClip duplicate name panics")
+	_, didPanic = capturePanic(func() { ac.SetState("unknown") })
+	assert(didPanic, "SetState unknown clip panics")
+	_, didPanic = capturePanic(func() { ac.ApplyToSprite(nil) })
+	assert(didPanic, "ApplyToSprite nil panics")
+}
+
 func main() {
 	testLifecycle()
 	testUpdateAndDrawBarriers()
@@ -466,5 +772,10 @@ func main() {
 	testAssets()
 	testScene2DCamera()
 	testResizeAndReset()
+	testScheduler()
+	testTween()
+	testMath()
+	testTilemapExtra()
+	testAnimController()
 	println("ALL TESTS PASSED")
 }

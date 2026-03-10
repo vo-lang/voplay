@@ -1,50 +1,50 @@
-// Game lifecycle: Game struct, GameCtx, Run, and extern declarations.
+// Game lifecycle: Game, GameCtx, Run, Advance.
 package voplay
 
 // Game defines a voplay game application.
 type Game struct {
-	Width    int
-	Height   int
-	Title    string
+	Width           int
+	Height          int
+	Title           string
 	FixedStep       float64
 	MaxCatchUpSteps int
-	InitialState State
-	OnClose  func(g *GameCtx)              // optional; called when the game loop exits
+	InitialState    State
+	OnClose         func(g *GameCtx) // optional; called when the game loop exits
 }
 
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
-	Input  *InputState
+	Input   *InputState
 	Actions *ActionMap
-	Assets *Assets
-	Draw   *DrawCtx
-	States *StateStack
-	Width  int // current viewport width (updated on resize)
-	Height int // current viewport height (updated on resize)
+	Assets  *Assets
+	Draw    *DrawCtx
+	States  *StateStack
+	Width   int     // current viewport width (updated on resize)
+	Height  int     // current viewport height (updated on resize)
 	FixedStep float64
 	Alpha     float64
+
+	MaxCatchUpSteps  int // 0 = use default (8); sets a ceiling on fixed steps per frame
 
 	// Internal lifecycle state (managed by host, not for game code).
 	surfaceInitiated bool
 	gameInitialized  bool
 	closed           bool
 	accumulator      float64
-	maxCatchUpSteps  int
 }
 
 func newGameCtx(game Game) *GameCtx {
-	fixedStep := resolveFixedStep(game.FixedStep)
 	ctx := &GameCtx{
-		Input:  newInputState(),
-		Draw:   newDrawCtx(),
-		Width:  game.Width,
-		Height: game.Height,
-		FixedStep:       fixedStep,
-		maxCatchUpSteps: resolveMaxCatchUpSteps(game.MaxCatchUpSteps),
+		Input:          NewInputState(),
+		Draw:           NewDrawCtx(),
+		Width:          game.Width,
+		Height:         game.Height,
+		FixedStep:      resolveFixedStep(game.FixedStep),
+		MaxCatchUpSteps: game.MaxCatchUpSteps,
 	}
 	ctx.Actions = NewActionMap(ctx.Input)
 	ctx.Assets = NewAssets()
-	ctx.States = newStateStack(ctx)
+	ctx.States = NewStateStack(ctx)
 	return ctx
 }
 
@@ -53,19 +53,9 @@ func resolveFixedStep(step float64) float64 {
 		return 1.0 / 60.0
 	}
 	if step < 0 {
-		panic("Run: FixedStep must be > 0")
+		panic("Game.FixedStep must be > 0")
 	}
 	return step
-}
-
-func resolveMaxCatchUpSteps(steps int) int {
-	if steps == 0 {
-		return 8
-	}
-	if steps < 0 {
-		panic("Run: MaxCatchUpSteps must be > 0")
-	}
-	return steps
 }
 
 // handleResize checks for size change and updates GameCtx dimensions.
@@ -103,16 +93,9 @@ func (g *GameCtx) Advance(dt float64) {
 		return
 	}
 	fixedStep := g.FixedStep
-	if fixedStep == 0 {
-		fixedStep = resolveFixedStep(0)
-		g.FixedStep = fixedStep
-	}
-	if fixedStep < 0 {
-		panic("Advance: FixedStep must be > 0")
-	}
-	maxCatchUpSteps := g.maxCatchUpSteps
-	if maxCatchUpSteps == 0 {
-		maxCatchUpSteps = resolveMaxCatchUpSteps(0)
+	maxCatchUpSteps := g.MaxCatchUpSteps
+	if maxCatchUpSteps <= 0 {
+		maxCatchUpSteps = 8
 	}
 	maxAccumulated := fixedStep * float64(maxCatchUpSteps)
 	frameDt := dt
@@ -155,114 +138,3 @@ func Run(game Game) {
 		runNative(ctx, &game)
 	}
 }
-
-// isWebEnvironment returns true when running in a WASM/browser context.
-func isWebEnvironment() bool {
-	return runtimeIsWeb()
-}
-
-// --- Extern declarations (implemented in Rust: vo-voplay crate) ---
-
-// Surface
-func initSurface(canvasRef string) error
-func submitFrame(cmds []byte) error
-
-// Input
-func pollInput() []byte
-
-// Runtime query
-func runtimeIsWeb() bool
-func isRendererReady() bool
-
-// Native game loop
-func nativeInit(width, height int, title string) error
-func nativePumpEvents() (float64, bool)
-func nativeSubmitFrame(cmds []byte)
-func nativeWindowSize() (int, int)
-
-// Texture loading
-func loadTexture(path string) (int, error)
-func loadTextureBytes(data []byte) (int, error)
-func freeTexture(id int)
-
-// Font loading
-func loadFont(path string) (int, error)
-func loadFontBytes(data []byte) (int, error)
-func freeFont(id int)
-func measureText(fontID int, text string, size float64) (float64, float64)
-
-// Model loading
-func loadModel(path string) (int, error)
-func loadModelBytes(data []byte) (int, error)
-func freeModel(id int)
-
-// Resource handle types.
-type TextureID int
-type ModelID int
-
-// LoadTexture loads an image file and returns a TextureID.
-func LoadTexture(path string) (TextureID, error) {
-	id, err := loadTexture(path)
-	return TextureID(id), err
-}
-
-// LoadTextureBytes loads a texture from encoded image bytes (PNG, JPEG, etc.).
-func LoadTextureBytes(data []byte) (TextureID, error) {
-	id, err := loadTextureBytes(data)
-	return TextureID(id), err
-}
-
-// Free releases this texture.
-func (id TextureID) Free() {
-	freeTexture(int(id))
-}
-
-// FontID is an opaque handle to a loaded font.
-type FontID int
-
-// LoadFont loads a TTF/OTF font file and returns a FontID.
-func LoadFont(path string) (FontID, error) {
-	id, err := loadFont(path)
-	return FontID(id), err
-}
-
-// LoadFontBytes loads a TTF/OTF font from raw bytes.
-func LoadFontBytes(data []byte) (FontID, error) {
-	id, err := loadFontBytes(data)
-	return FontID(id), err
-}
-
-// Free releases this font.
-func (id FontID) Free() {
-	freeFont(int(id))
-}
-
-// LoadModel loads a glTF/GLB model file and returns a ModelID.
-func LoadModel(path string) (ModelID, error) {
-	id, err := loadModel(path)
-	return ModelID(id), err
-}
-
-// LoadModelBytes loads a glTF/GLB model from raw bytes.
-func LoadModelBytes(data []byte) (ModelID, error) {
-	id, err := loadModelBytes(data)
-	return ModelID(id), err
-}
-
-// Free releases this model.
-func (id ModelID) Free() {
-	freeModel(int(id))
-}
-
-
-// Audio externs
-func audioLoad(path string) (int, error)
-func audioLoadBytes(data []byte) (int, error)
-func audioFree(clipID int)
-func audioPlaySound(clipID int, volume, pitch float64)
-func audioPlayMusic(clipID int, volume float64)
-func audioStopMusic()
-func audioPauseMusic()
-func audioResumeMusic()
-func audioSetSFXVolume(vol float64)
-func audioSetMusicVolume(vol float64)

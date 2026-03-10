@@ -1,0 +1,91 @@
+// Resource handle types: textures, fonts, models.
+// For group-managed lifecycle, use Assets in assets.vo.
+// For raw load/free without lifecycle management, use the functions below.
+package voplay
+
+// TextureID is an opaque handle to a loaded texture.
+type TextureID int
+
+// LoadTexture loads an image file and returns a TextureID.
+func LoadTexture(path string) (TextureID, error) {
+	id := loadTexture(path)?
+	return TextureID(id), nil
+}
+
+// LoadTextureBytes loads a texture from encoded image bytes (PNG, JPEG, etc.).
+func LoadTextureBytes(data []byte) (TextureID, error) {
+	id := loadTextureBytes(data)?
+	return TextureID(id), nil
+}
+
+// Free releases this texture.
+func (id TextureID) Free() {
+	freeTexture(int(id))
+}
+
+// FontID is an opaque handle to a loaded font.
+type FontID int
+
+// LoadFont loads a TTF/OTF font file and returns a FontID.
+func LoadFont(path string) (FontID, error) {
+	id := loadFont(path)?
+	return FontID(id), nil
+}
+
+// LoadFontBytes loads a TTF/OTF font from raw bytes.
+func LoadFontBytes(data []byte) (FontID, error) {
+	id := loadFontBytes(data)?
+	return FontID(id), nil
+}
+
+// Free releases this font.
+func (id FontID) Free() {
+	freeFont(int(id))
+}
+
+// MeasureText returns the pixel width and height of text at the given size,
+// using the default built-in font (font ID 0).
+func MeasureText(text string, size float64) (float64, float64) {
+	return measureText(0, text, size)
+}
+
+// MeasureTextFont returns the pixel width and height of text at the given size,
+// using the specified font.
+func MeasureTextFont(font FontID, text string, size float64) (float64, float64) {
+	return measureText(int(font), text, size)
+}
+
+// ModelID is an opaque handle to a loaded 3D model.
+type ModelID int
+
+// LoadModel loads a glTF/GLB model file and returns a ModelID.
+func LoadModel(path string) (ModelID, error) {
+	id := loadModel(path)?
+	return ModelID(id), nil
+}
+
+// LoadModelBytes loads a glTF/GLB model from raw bytes.
+func LoadModelBytes(data []byte) (ModelID, error) {
+	id := loadModelBytes(data)?
+	return ModelID(id), nil
+}
+
+// Free releases this model.
+func (id ModelID) Free() {
+	freeModel(int(id))
+}
+
+// --- Extern declarations for resources (implemented in Rust: vo-voplay crate) ---
+
+func loadTexture(path string) (int, error)
+func loadTextureBytes(data []byte) (int, error)
+func freeTexture(id int)
+
+func loadFont(path string) (int, error)
+func loadFontBytes(data []byte) (int, error)
+func freeFont(id int)
+func measureText(fontID int, text string, size float64) (float64, float64)
+
+func loadModel(path string) (int, error)
+func loadModelBytes(data []byte) (int, error)
+func freeModel(id int)

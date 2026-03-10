@@ -99,11 +99,25 @@ func (t *Tilemap) FillRect(layer, col, row, w, h, tileIdx int) {
 	if layer < 0 || layer >= len(t.Layers) {
 		panic("FillRect: layer index out of range")
 	}
-	for r := row; r < row+h && r < t.Height; r++ {
-		for c := col; c < col+w && c < t.Width; c++ {
-			if r >= 0 && c >= 0 {
-				t.Layers[layer].Tiles[r*t.Width+c] = tileIdx
-			}
+	startRow := row
+	if startRow < 0 {
+		startRow = 0
+	}
+	endRow := row + h
+	if endRow > t.Height {
+		endRow = t.Height
+	}
+	startCol := col
+	if startCol < 0 {
+		startCol = 0
+	}
+	endCol := col + w
+	if endCol > t.Width {
+		endCol = t.Width
+	}
+	for r := startRow; r < endRow; r++ {
+		for c := startCol; c < endCol; c++ {
+			t.Layers[layer].Tiles[r*t.Width+c] = tileIdx
 		}
 	}
 	t.dirty = true
@@ -123,9 +137,6 @@ func (t *Tilemap) PixelHeight() int {
 // Uses math.Floor so that negative world coordinates map to the correct tile
 // (e.g. wx = -0.5, TileW = 32 → col = -1, not 0).
 func (t *Tilemap) WorldToTile(wx, wy float64) (int, int) {
-	if t.TileSet == nil {
-		return 0, 0
-	}
 	col := int(math.Floor(wx / float64(t.TileSet.TileW)))
 	row := int(math.Floor(wy / float64(t.TileSet.TileH)))
 	return col, row

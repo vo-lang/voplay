@@ -179,7 +179,6 @@ func (a *Assets) ReleaseAll() {
 	for name := range a.groupNames {
 		names = append(names, name)
 	}
-	a.groupStack = a.groupStack[:0]
 	for _, name := range names {
 		a.ReleaseGroup(name)
 	}
@@ -199,53 +198,53 @@ func (a *Assets) Close() error {
 // Texture loads a texture by path. Mounted archives are searched first,
 // then the filesystem. The path is the deduplication key.
 func (a *Assets) Texture(path string) (TextureID, error) {
-	id, err := a.textures.get(a.mounts, a.requireCurrentGroup(), path)
-	return TextureID(id), err
+	id := a.textures.get(a.mounts, a.requireCurrentGroup(), path)?
+	return TextureID(id), nil
 }
 
 // TextureBytes loads a texture from raw bytes under the given key.
 func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
-	id, err := a.textures.getBytes(a.requireCurrentGroup(), key, data)
-	return TextureID(id), err
+	id := a.textures.getBytes(a.requireCurrentGroup(), key, data)?
+	return TextureID(id), nil
 }
 
 // Font loads a font by path. Mounted archives are searched first,
 // then the filesystem. The path is the deduplication key.
 func (a *Assets) Font(path string) (FontID, error) {
-	id, err := a.fonts.get(a.mounts, a.requireCurrentGroup(), path)
-	return FontID(id), err
+	id := a.fonts.get(a.mounts, a.requireCurrentGroup(), path)?
+	return FontID(id), nil
 }
 
 // FontBytes loads a font from raw bytes under the given key.
 func (a *Assets) FontBytes(key string, data []byte) (FontID, error) {
-	id, err := a.fonts.getBytes(a.requireCurrentGroup(), key, data)
-	return FontID(id), err
+	id := a.fonts.getBytes(a.requireCurrentGroup(), key, data)?
+	return FontID(id), nil
 }
 
 // Model loads a model by path. Mounted archives are searched first,
 // then the filesystem. The path is the deduplication key.
 func (a *Assets) Model(path string) (ModelID, error) {
-	id, err := a.models.get(a.mounts, a.requireCurrentGroup(), path)
-	return ModelID(id), err
+	id := a.models.get(a.mounts, a.requireCurrentGroup(), path)?
+	return ModelID(id), nil
 }
 
 // ModelBytes loads a model from raw bytes under the given key.
 func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
-	id, err := a.models.getBytes(a.requireCurrentGroup(), key, data)
-	return ModelID(id), err
+	id := a.models.getBytes(a.requireCurrentGroup(), key, data)?
+	return ModelID(id), nil
 }
 
 // Audio loads an audio clip by path. Mounted archives are searched first,
 // then the filesystem. The path is the deduplication key.
 func (a *Assets) Audio(path string) (AudioClipID, error) {
-	id, err := a.audio.get(a.mounts, a.requireCurrentGroup(), path)
-	return AudioClipID(id), err
+	id := a.audio.get(a.mounts, a.requireCurrentGroup(), path)?
+	return AudioClipID(id), nil
 }
 
 // AudioBytes loads an audio clip from raw bytes under the given key.
 func (a *Assets) AudioBytes(key string, data []byte) (AudioClipID, error) {
-	id, err := a.audio.getBytes(a.requireCurrentGroup(), key, data)
-	return AudioClipID(id), err
+	id := a.audio.getBytes(a.requireCurrentGroup(), key, data)?
+	return AudioClipID(id), nil
 }
 
 // --- assetStore methods ---

@@ -1,5 +1,14 @@
 package voplay
 
+// BodyType determines how the physics engine treats a body.
+type BodyType int
+
+const (
+	Dynamic   BodyType = 0
+	Static    BodyType = 1
+	Kinematic BodyType = 2
+)
+
 const (
 	CollisionLayerDefault = 1
 	CollisionMaskAll     = 0xFFFF

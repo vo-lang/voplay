@@ -1,0 +1,224 @@
+// Spatial hash index for efficient 2D entity queries.
+// Entities are bucketed by their axis-aligned bounding rect into a uniform grid.
+package scene2d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+const defaultSpatialCellSize = 128.0
+
+func spatialCellKey(x, y int) int64 {
+	return (int64(x) << 32) ^ int64(int32(y))
+}
+
+// spatialCellsIntoBuf fills s.cellScratch with the cell keys covering bounds,
+// growing it only when needed. The returned slice aliases s.cellScratch;
+// callers must not retain it across any call that reuses s.cellScratch.
+func (s *Scene) spatialCellsIntoBuf(bounds voplay.Rect) []int64 {
+	cellSize := s.spatialCellSize
+	minX := int(math.Floor(bounds.X / cellSize))
+	minY := int(math.Floor(bounds.Y / cellSize))
+	maxXEdge := bounds.X + bounds.W
+	maxYEdge := bounds.Y + bounds.H
+	if bounds.W > 0 {
+		maxXEdge -= 0.000001
+	}
+	if bounds.H > 0 {
+		maxYEdge -= 0.000001
+	}
+	if maxXEdge < bounds.X {
+		maxXEdge = bounds.X
+	}
+	if maxYEdge < bounds.Y {
+		maxYEdge = bounds.Y
+	}
+	maxX := int(math.Floor(maxXEdge / cellSize))
+	maxY := int(math.Floor(maxYEdge / cellSize))
+	n := (maxX - minX + 1) * (maxY - minY + 1)
+	if cap(s.cellScratch) < n {
+		s.cellScratch = make([]int64, 0, n)
+	} else {
+		s.cellScratch = s.cellScratch[:0]
+	}
+	for cy := minY; cy <= maxY; cy++ {
+		for cx := minX; cx <= maxX; cx++ {
+			s.cellScratch = append(s.cellScratch, spatialCellKey(cx, cy))
+		}
+	}
+	return s.cellScratch
+}
+
+// spatialCellsForBounds allocates a fresh slice owned by the caller (used in spatialInsert
+// where the entity needs to retain the cells slice).
+func (s *Scene) spatialCellsForBounds(bounds voplay.Rect) []int64 {
+	result := s.spatialCellsIntoBuf(bounds)
+	out := make([]int64, len(result))
+	copy(out, result)
+	return out
+}
+
+func spatialCellsEqual(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// spatialInsert inserts an entity into the spatial index.
+func (s *Scene) spatialInsert(e *Entity) {
+	if !e.Active {
+		return
+	}
+	cells := s.spatialCellsForBounds(e.Bounds())
+	e.spatialCells = cells
+	for _, cell := range cells {
+		s.spatialBuckets[cell] = append(s.spatialBuckets[cell], e)
+	}
+}
+
+// spatialRemove removes an entity from the spatial index.
+func (s *Scene) spatialRemove(e *Entity) {
+	for _, cell := range e.spatialCells {
+		bucket := s.spatialBuckets[cell]
+		for i, candidate := range bucket {
+			if candidate == e {
+				last := len(bucket) - 1
+				bucket[i] = bucket[last]
+				bucket[last] = nil
+				bucket = bucket[:last]
+				if len(bucket) == 0 {
+					delete(s.spatialBuckets, cell)
+				} else {
+					s.spatialBuckets[cell] = bucket
+				}
+				break
+			}
+		}
+	}
+	e.spatialCells = nil
+}
+
+// spatialUpdate updates the spatial index for an entity.
+func (s *Scene) spatialUpdate(e *Entity) {
+	if e.scene != s || !e.Active {
+		return
+	}
+	// Use scratch buffer to check if cells changed — avoids allocation in the common case
+	newCells := s.spatialCellsIntoBuf(e.Bounds())
+	if spatialCellsEqual(e.spatialCells, newCells) {
+		return
+	}
+	s.spatialRemove(e)
+	// Copy scratch to a permanent slice owned by the entity.
+	e.spatialCells = make([]int64, len(newCells))
+	copy(e.spatialCells, newCells)
+	for _, cell := range e.spatialCells {
+		s.spatialBuckets[cell] = append(s.spatialBuckets[cell], e)
+	}
+}
+
+func (s *Scene) rebuildSpatialIndex() {
+	for cell := range s.spatialBuckets {
+		delete(s.spatialBuckets, cell)
+	}
+	for _, e := range s.entities {
+		e.spatialCells = nil
+		if e.Active {
+			s.spatialInsert(e)
+		}
+	}
+}
+
+// nextSpatialQueryTick returns the next spatial query tick.
+func (s *Scene) nextSpatialQueryTick() int {
+	s.spatialQueryTick++
+	if s.spatialQueryTick == 0 {
+		s.spatialQueryTick = 1
+		for _, e := range s.entities {
+			e.spatialQueryTick = 0
+		}
+	}
+	return s.spatialQueryTick
+}
+
+// visibleInRect returns the visible entities in the given rect.
+func (s *Scene) visibleInRect(rect voplay.Rect) []*Entity {
+	queryTick := s.nextSpatialQueryTick()
+	s.visibleBuf = s.visibleBuf[:0]
+	for _, cell := range s.spatialCellsIntoBuf(rect) {
+		bucket := s.spatialBuckets[cell]
+		for _, e := range bucket {
+			if !e.Active || !e.Visible || e.spatialQueryTick == queryTick {
+				continue
+			}
+			e.spatialQueryTick = queryTick
+			if e.Bounds().Intersects(rect) {
+				s.visibleBuf = append(s.visibleBuf, e)
+			}
+		}
+	}
+	return s.visibleBuf
+}
+
+func (s *Scene) visibleInView(screenW, screenH float64) []*Entity {
+	return s.visibleInRect(s.Camera.ViewRect(screenW, screenH))
+}
+
+// --- Public spatial API ---
+
+func (s *Scene) SetSpatialCellSize(size float64) {
+	if size <= 0 {
+		panic("Scene.SetSpatialCellSize: size must be > 0")
+	}
+	s.spatialCellSize = size
+	s.rebuildSpatialIndex()
+}
+
+func (s *Scene) SpatialCellSize() float64 {
+	return s.spatialCellSize
+}
+
+func (s *Scene) FindInRadius(x, y, radius float64) []*Entity {
+	rSq := radius * radius
+	queryRect := voplay.Rect{X: x - radius, Y: y - radius, W: radius * 2, H: radius * 2}
+	queryTick := s.nextSpatialQueryTick()
+	var result []*Entity
+	for _, cell := range s.spatialCellsIntoBuf(queryRect) {
+		bucket := s.spatialBuckets[cell]
+		for _, e := range bucket {
+			if !e.Active || e.spatialQueryTick == queryTick {
+				continue
+			}
+			e.spatialQueryTick = queryTick
+			dx := e.position.X - x
+			dy := e.position.Y - y
+			if dx*dx+dy*dy <= rSq {
+				result = append(result, e)
+			}
+		}
+	}
+	return result
+}
+
+func (s *Scene) FindInRect(rect voplay.Rect) []*Entity {
+	queryTick := s.nextSpatialQueryTick()
+	var result []*Entity
+	for _, cell := range s.spatialCellsIntoBuf(rect) {
+		bucket := s.spatialBuckets[cell]
+		for _, e := range bucket {
+			if !e.Active || e.spatialQueryTick == queryTick {
+				continue
+			}
+			e.spatialQueryTick = queryTick
+			if e.Bounds().Intersects(rect) {
+				result = append(result, e)
+			}
+		}
+	}
+	return result
+}

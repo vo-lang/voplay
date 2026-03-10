@@ -91,12 +91,13 @@ func (ac *AnimController) HasClip(name string) bool {
 	return ac.clips[name] != nil
 }
 
-// OnDone registers a callback that fires once each time a non-looping clip plays
-// through its last frame. The callback receives the controller so the game can
-// inspect CurrentClip() and call SetState to chain into the next animation.
-// Pass nil to clear an existing callback.
-func (ac *AnimController) OnDone(fn func()) {
+// WithOnDone registers a callback that fires once each time a non-looping clip plays
+// through its last frame. Inspect CurrentClip() inside the callback to chain into
+// the next animation. Pass nil to clear an existing callback.
+// Returns ac for builder-style chaining.
+func (ac *AnimController) WithOnDone(fn func()) *AnimController {
 	ac.onDone = fn
+	return ac
 }
 
 // CurrentClip returns the name of the currently active clip, or "" if none has been set.

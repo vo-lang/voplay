@@ -68,7 +68,13 @@ type Animation struct {
 
 // Update advances the animation by dt seconds.
 func (a *Animation) Update(dt float64) {
-	if a.done || len(a.Frames) == 0 {
+	if len(a.Frames) == 0 {
+		panic("Animation.Update: Frames must not be empty")
+	}
+	if a.FPS <= 0 {
+		panic("Animation.Update: FPS must be > 0")
+	}
+	if a.done {
 		return
 	}
 	a.time += dt
@@ -90,9 +96,6 @@ func (a *Animation) Update(dt float64) {
 
 // CurrentFrame returns the source rect of the current animation frame.
 func (a *Animation) CurrentFrame() (float64, float64, float64, float64) {
-	if len(a.Frames) == 0 {
-		return 0, 0, 0, 0
-	}
 	return a.Sheet.Frame(a.Frames[a.current])
 }
 

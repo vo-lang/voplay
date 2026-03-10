@@ -9,9 +9,9 @@ func SetLights(d *voplay.DrawCtx, ambient voplay.Color, lights []Light) {
 	d.SetLights3D(ambient, lights)
 }
 
-// DrawScene draws the entire 3D scene: camera, lights, then all visible entities.
+// Draw renders the entire 3D scene: camera, lights, then all visible entities.
 // Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
-func DrawScene(d *voplay.DrawCtx, s *Scene) {
+func (s *Scene) Draw(d *voplay.DrawCtx) {
 	c := &s.Camera
 	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
 	SetLights(d, s.Ambient, s.Lights)
@@ -19,7 +19,7 @@ func DrawScene(d *voplay.DrawCtx, s *Scene) {
 		if n.Model == 0 {
 			continue
 		}
-		d.DrawModel(n.Model, n.Position, n.Rotation, n.Scale)
+		d.DrawModel(n.Model, n.position, n.rotation, n.scale)
 	}
 	d.ResetCamera()
 }

@@ -2,7 +2,6 @@
 // Events are unpacked from binary data returned by pollInput extern.
 package voplay
 
-import "math"
 import "github.com/vo-lang/voplay/codec"
 
 // Input event kinds (must match Rust encoder in input.rs).
@@ -47,7 +46,13 @@ type ActionMap struct {
 }
 
 // NewInputState creates a new InputState with empty state.
-func NewInputState() *InputState { return newInputState() }
+func NewInputState() *InputState {
+	return &InputState{
+		keysDown:     map[string]bool{},
+		keysPressed:  map[string]bool{},
+		keysReleased: map[string]bool{},
+	}
+}
 
 func NewActionMap(input *InputState) *ActionMap {
 	if input == nil {
@@ -73,13 +78,6 @@ func PointerBinding(button int) InputBinding {
 	return InputBinding{kind: inputBindingPointer, button: button}
 }
 
-func newInputState() *InputState {
-	return &InputState{
-		keysDown:     map[string]bool{},
-		keysPressed:  map[string]bool{},
-		keysReleased: map[string]bool{},
-	}
-}
 
 func (m *ActionMap) Bind(action string, bindings ...InputBinding) {
 	validateActionBindingArgs(action, bindings)
@@ -351,23 +349,6 @@ func (inp *InputState) ScrollDelta() (float64, float64) {
 // PointerDelta returns the pointer movement since the last frame.
 func (inp *InputState) PointerDelta() (float64, float64) {
 	return inp.pointerX - inp.prevPointerX, inp.pointerY - inp.prevPointerY
-}
-
-// WorldPointerPos converts pointer screen position to world coordinates
-// using the given 2D camera parameters (including rotation) and screen dimensions.
-func (inp *InputState) WorldPointerPos(camX, camY, camZoom, camRotation, screenW, screenH float64) (float64, float64) {
-	if camZoom == 0 {
-		panic("WorldPointerPos: camZoom must not be 0")
-	}
-	// Translate to camera-relative screen coords, then undo zoom
-	rx := (inp.pointerX - screenW/2) / camZoom
-	ry := (inp.pointerY - screenH/2) / camZoom
-	// Undo camera rotation (rotate by -camRotation)
-	cos := math.Cos(-camRotation)
-	sin := math.Sin(-camRotation)
-	wx := rx*cos - ry*sin + camX
-	wy := rx*sin + ry*cos + camY
-	return wx, wy
 }
 
 // --- binary decode helpers ---

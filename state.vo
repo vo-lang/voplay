@@ -35,14 +35,27 @@ type stateDrawBarrier interface {
 }
 
 type StateStack struct {
-	ctx    *GameCtx
-	states []State
+	ctx     *GameCtx
+	states  []State
+	iterBuf []State // reusable iteration buffer — avoids per-frame allocation
 }
 
-func NewStateStack(g *GameCtx) *StateStack { return newStateStack(g) }
-
-func newStateStack(g *GameCtx) *StateStack {
+func NewStateStack(g *GameCtx) *StateStack {
 	return &StateStack{ctx: g}
+}
+
+// reuseIterBuf copies src into s.iterBuf, growing it only when needed.
+// This eliminates the per-frame allocation that cloneStateSlice caused.
+// Callers iterate the returned slice; it is valid only until the next call.
+func (s *StateStack) reuseIterBuf(src []State) []State {
+	n := len(src)
+	if cap(s.iterBuf) < n {
+		s.iterBuf = make([]State, n)
+	} else {
+		s.iterBuf = s.iterBuf[:n]
+	}
+	copy(s.iterBuf, src)
+	return s.iterBuf
 }
 
 func (s *StateStack) Len() int {
@@ -173,7 +186,7 @@ func (s *StateStack) Draw() {
 }
 
 func (s *StateStack) Resize(w int, h int) {
-	active := cloneStateSlice(s.states)
+	active := s.reuseIterBuf(s.states)
 	for _, state := range active {
 		if hook, ok := state.(stateResize); ok {
 			hook.OnResize(s.ctx, w, h)
@@ -196,7 +209,7 @@ func (s *StateStack) updateSlice() []State {
 		}
 		start--
 	}
-	return cloneStateSlice(s.states[start:])
+	return s.reuseIterBuf(s.states[start:])
 }
 
 func (s *StateStack) drawSlice() []State {
@@ -211,14 +224,5 @@ func (s *StateStack) drawSlice() []State {
 		}
 		start--
 	}
-	return cloneStateSlice(s.states[start:])
-}
-
-func cloneStateSlice(src []State) []State {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]State, len(src))
-	copy(dst, src)
-	return dst
+	return s.reuseIterBuf(s.states[start:])
 }

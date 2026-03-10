@@ -1,0 +1,328 @@
+// Entity is a 2D game object managed by a Scene.
+// Supports parent-child transform hierarchy and per-entity sprite/animation.
+package scene2d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+func rotateVec2(v voplay.Vec2, angle float64) voplay.Vec2 {
+	if angle == 0 {
+		return v
+	}
+	cos := math.Cos(angle)
+	sin := math.Sin(angle)
+	return voplay.Vec2{
+		X: v.X*cos - v.Y*sin,
+		Y: v.X*sin + v.Y*cos,
+	}
+}
+
+type EntityDesc struct {
+	Position voplay.Vec2
+	Size     voplay.Vec2
+	Rotation float64
+	Scale    voplay.Vec2
+	Sprite   *Sprite
+	AnimCtrl *AnimController
+	Tag      string
+	ZOrder   int
+	Data     any
+	Physics  *Physics
+}
+
+type Entity struct {
+	id            int
+	localPosition voplay.Vec2
+	position      voplay.Vec2
+	size          voplay.Vec2
+	localRotation float64
+	rotation      float64
+	localScale    voplay.Vec2
+	scale         voplay.Vec2
+	Sprite        *Sprite
+	AnimCtrl      *AnimController
+	Tag           string
+	Active        bool
+	Visible       bool
+	ZOrder        int
+	Data          any
+	Physics       *Physics
+	scene         *Scene
+	parentID      int
+	childIDs      []int
+	spatialCells     []int64
+	spatialQueryTick int
+}
+
+// ID returns the entity's unique identifier within its scene.
+func (e *Entity) ID() int {
+	return e.id
+}
+
+// --- Transform hierarchy ---
+
+func (e *Entity) localPositionFromWorld(world voplay.Vec2) voplay.Vec2 {
+	parent := e.parentEntity()
+	if parent == nil {
+		return world
+	}
+	delta := world.Sub(parent.position)
+	local := rotateVec2(delta, -parent.rotation)
+	if parent.scale.X == 0 || parent.scale.Y == 0 {
+		panic("Entity: parent scale must not contain 0")
+	}
+	return voplay.Vec2{X: local.X / parent.scale.X, Y: local.Y / parent.scale.Y}
+}
+
+func (e *Entity) localRotationFromWorld(rotation float64) float64 {
+	parent := e.parentEntity()
+	if parent == nil {
+		return rotation
+	}
+	return rotation - parent.rotation
+}
+
+func (e *Entity) localScaleFromWorld(scale voplay.Vec2) voplay.Vec2 {
+	parent := e.parentEntity()
+	if parent == nil {
+		return scale
+	}
+	if parent.scale.X == 0 || parent.scale.Y == 0 {
+		panic("Entity: parent scale must not contain 0")
+	}
+	return voplay.Vec2{X: scale.X / parent.scale.X, Y: scale.Y / parent.scale.Y}
+}
+
+func (e *Entity) syncHierarchyWorldTransform(updateSpatial bool) {
+	parent := e.parentEntity()
+	if parent == nil {
+		e.position = e.localPosition
+		e.rotation = e.localRotation
+		e.scale = e.localScale
+	} else {
+		scaledLocal := voplay.Vec2{X: e.localPosition.X * parent.scale.X, Y: e.localPosition.Y * parent.scale.Y}
+		e.position = parent.position.Add(rotateVec2(scaledLocal, parent.rotation))
+		e.rotation = parent.rotation + e.localRotation
+		e.scale = voplay.Vec2{X: parent.scale.X * e.localScale.X, Y: parent.scale.Y * e.localScale.Y}
+	}
+	if updateSpatial && e.scene != nil {
+		e.scene.spatialUpdate(e)
+	}
+	for _, childID := range e.childIDs {
+		child := e.scene.entityByID[childID]
+		if child != nil {
+			child.syncHierarchyWorldTransform(updateSpatial)
+		}
+	}
+}
+
+func (e *Entity) removeChild(child *Entity) {
+	for i, childID := range e.childIDs {
+		if childID == child.id {
+			last := len(e.childIDs) - 1
+			e.childIDs[i] = e.childIDs[last]
+			e.childIDs = e.childIDs[:last]
+			return
+		}
+	}
+}
+
+func (e *Entity) parentEntity() *Entity {
+	if e.parentID == 0 {
+		return nil
+	}
+	return e.scene.entityByID[e.parentID]
+}
+
+func (e *Entity) Parent() *Entity {
+	return e.parentEntity()
+}
+
+func (e *Entity) Children() []*Entity {
+	result := make([]*Entity, 0, len(e.childIDs))
+	for _, childID := range e.childIDs {
+		child := e.scene.entityByID[childID]
+		if child != nil {
+			result = append(result, child)
+		}
+	}
+	return result
+}
+
+func (e *Entity) SetParent(parent *Entity, keepWorld bool) {
+	if parent == e {
+		panic("Entity.SetParent: entity cannot parent itself")
+	}
+	if parent != nil {
+		if e.scene == nil || parent.scene != e.scene {
+			panic("Entity.SetParent: parent must belong to the same scene")
+		}
+		if e.Physics != nil {
+			panic("Entity.SetParent: physics entities cannot be parented")
+		}
+		if parent.Physics != nil {
+			panic("Entity.SetParent: physics parents are not supported")
+		}
+		visited := make(map[*Entity]bool)
+		current := parent
+		for current != nil {
+			if visited[current] {
+				panic("Entity.SetParent: cycle detected")
+			}
+			visited[current] = true
+			if current == e {
+				panic("Entity.SetParent: cycle detected")
+			}
+			current = current.Parent()
+		}
+	}
+	currentParent := e.parentEntity()
+	if currentParent == parent {
+		return
+	}
+	worldPosition := e.position
+	worldRotation := e.rotation
+	worldScale := e.scale
+	if currentParent != nil {
+		currentParent.removeChild(e)
+	}
+	e.parentID = 0
+	if parent != nil {
+		e.parentID = parent.id
+		parent.childIDs = append(parent.childIDs, e.id)
+	}
+	if keepWorld {
+		e.localPosition = e.localPositionFromWorld(worldPosition)
+		e.localRotation = e.localRotationFromWorld(worldRotation)
+		e.localScale = e.localScaleFromWorld(worldScale)
+	}
+	e.syncHierarchyWorldTransform(true)
+}
+
+func (e *Entity) Detach(keepWorld bool) {
+	e.SetParent(nil, keepWorld)
+}
+
+// --- Accessors ---
+
+// Position returns the entity's world position.
+func (e *Entity) Position() voplay.Vec2 {
+	return e.position
+}
+
+func (e *Entity) LocalPosition() voplay.Vec2 {
+	return e.localPosition
+}
+
+// Size returns the entity's size.
+func (e *Entity) Size() voplay.Vec2 {
+	return e.size
+}
+
+// Scale returns the entity's world scale.
+func (e *Entity) Scale() voplay.Vec2 {
+	return e.scale
+}
+
+func (e *Entity) LocalScale() voplay.Vec2 {
+	return e.localScale
+}
+
+// Rotation returns the entity's world rotation.
+func (e *Entity) Rotation() float64 {
+	return e.rotation
+}
+
+func (e *Entity) LocalRotation() float64 {
+	return e.localRotation
+}
+
+// --- Mutators ---
+
+// SetSize sets the entity's size.
+func (e *Entity) SetSize(w, h float64) {
+	if e.Physics != nil {
+		panic("Entity.SetSize: physics collider resize is not supported")
+	}
+	e.size = voplay.Vec2{w, h}
+	if e.scene != nil {
+		e.scene.spatialUpdate(e)
+	}
+}
+
+// SetScale sets the entity's world scale.
+func (e *Entity) SetScale(x, y float64) {
+	if e.Physics != nil {
+		panic("Entity.SetScale: physics collider resize is not supported")
+	}
+	e.localScale = e.localScaleFromWorld(voplay.Vec2{x, y})
+	e.syncHierarchyWorldTransform(true)
+}
+
+func (e *Entity) SetLocalPosition(x, y float64) {
+	e.localPosition = voplay.Vec2{x, y}
+	e.syncHierarchyWorldTransform(true)
+}
+
+func (e *Entity) SetLocalRotation(rotation float64) {
+	e.localRotation = rotation
+	e.syncHierarchyWorldTransform(true)
+}
+
+func (e *Entity) SetLocalScale(x, y float64) {
+	if e.Physics != nil {
+		panic("Entity.SetLocalScale: physics collider resize is not supported")
+	}
+	e.localScale = voplay.Vec2{x, y}
+	e.syncHierarchyWorldTransform(true)
+}
+
+// SetPosition teleports the entity to the given world position.
+// For physics entities, also buffers a position command for the next physics step.
+func (e *Entity) SetPosition(x, y float64) {
+	e.localPosition = e.localPositionFromWorld(voplay.Vec2{x, y})
+	e.syncHierarchyWorldTransform(true)
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, x, y)
+	}
+}
+
+// SetRotation sets the entity's world rotation.
+// For physics entities, also buffers a rotation command for the next physics step.
+func (e *Entity) SetRotation(rotation float64) {
+	e.localRotation = e.localRotationFromWorld(rotation)
+	e.syncHierarchyWorldTransform(true)
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmd(physicsCmdSetRot, e.Physics.bodyID, rotation, 0)
+	}
+}
+
+// --- Geometry ---
+
+// Center returns the entity's center position.
+func (e *Entity) Center() voplay.Vec2 {
+	return e.position
+}
+
+// Bounds returns the entity's axis-aligned bounding rect (centered on position).
+func (e *Entity) Bounds() voplay.Rect {
+	w := e.size.X * e.scale.X
+	h := e.size.Y * e.scale.Y
+	if w < 0 {
+		w = -w
+	}
+	if h < 0 {
+		h = -h
+	}
+	return voplay.Rect{e.position.X - w/2, e.position.Y - h/2, w, h}
+}
+
+// Overlaps returns true if this entity's bounding rect intersects another's.
+func (e *Entity) Overlaps(other *Entity) bool {
+	return e.Bounds().Intersects(other.Bounds())
+}
+
+// DistanceTo returns the distance between the centers of two entities.
+func (e *Entity) DistanceTo(other *Entity) float64 {
+	return e.Center().Distance(other.Center())
+}

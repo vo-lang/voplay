@@ -18,10 +18,11 @@ type schedulerEntry struct {
 
 // Scheduler manages delayed and repeating callbacks driven by a manual Update clock.
 type Scheduler struct {
-	entries    []*schedulerEntry
-	pending    []*schedulerEntry
-	nextHandle SchedulerHandle
-	updating   bool
+	entries     []*schedulerEntry
+	pending     []*schedulerEntry
+	nextHandle  SchedulerHandle
+	activeCount int
+	updating    bool
 }
 
 // NewScheduler creates a new empty Scheduler.
@@ -68,14 +69,16 @@ func (s *Scheduler) Every(interval float64, fn func()) SchedulerHandle {
 // Cancelling an already-fired or already-cancelled handle is a no-op.
 func (s *Scheduler) Cancel(h SchedulerHandle) {
 	for _, e := range s.entries {
-		if e.handle == h {
+		if e.handle == h && !e.cancelled {
 			e.cancelled = true
+			s.activeCount--
 			return
 		}
 	}
 	for _, e := range s.pending {
-		if e.handle == h {
+		if e.handle == h && !e.cancelled {
 			e.cancelled = true
+			s.activeCount--
 			return
 		}
 	}
@@ -126,13 +129,7 @@ func (s *Scheduler) Update(dt float64) {
 // Len returns the number of active (non-cancelled) scheduled entries,
 // including any entries added during the current Update.
 func (s *Scheduler) Len() int {
-	n := 0
-	for _, e := range s.entries {
-		if !e.cancelled {
-			n++
-		}
-	}
-	return n + len(s.pending)
+	return s.activeCount
 }
 
 // Clear cancels all currently scheduled entries.
@@ -141,11 +138,13 @@ func (s *Scheduler) Clear() {
 		e.cancelled = true
 	}
 	s.pending = s.pending[:0]
+	s.activeCount = 0
 }
 
 func (s *Scheduler) addEntry(e *schedulerEntry) SchedulerHandle {
 	s.nextHandle++
 	e.handle = s.nextHandle
+	s.activeCount++
 	if s.updating {
 		s.pending = append(s.pending, e)
 	} else {
@@ -155,6 +154,9 @@ func (s *Scheduler) addEntry(e *schedulerEntry) SchedulerHandle {
 }
 
 func (s *Scheduler) removeAt(i int) {
+	if !s.entries[i].cancelled {
+		s.activeCount--
+	}
 	last := len(s.entries) - 1
 	s.entries[i] = s.entries[last]
 	s.entries[last] = nil

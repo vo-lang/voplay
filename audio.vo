@@ -1,19 +1,32 @@
 // Audio playback: load clips, play SFX and music, volume control.
 package voplay
 
+// --- Extern declarations for audio (implemented in Rust: vo-voplay crate) ---
+
+func audioLoad(path string) (int, error)
+func audioLoadBytes(data []byte) (int, error)
+func audioFree(clipID int)
+func audioPlaySound(clipID int, volume, pitch float64)
+func audioPlayMusic(clipID int, volume float64)
+func audioStopMusic()
+func audioPauseMusic()
+func audioResumeMusic()
+func audioSetSFXVolume(vol float64)
+func audioSetMusicVolume(vol float64)
+
 // AudioClipID is a handle to a loaded audio resource (WAV, OGG, MP3).
 type AudioClipID int
 
 // LoadAudio loads an audio file from disk and returns an AudioClipID.
 func LoadAudio(path string) (AudioClipID, error) {
-	id, err := audioLoad(path)
-	return AudioClipID(id), err
+	id := audioLoad(path)?
+	return AudioClipID(id), nil
 }
 
 // LoadAudioBytes loads an audio clip from encoded bytes (WAV, OGG, MP3).
 func LoadAudioBytes(data []byte) (AudioClipID, error) {
-	id, err := audioLoadBytes(data)
-	return AudioClipID(id), err
+	id := audioLoadBytes(data)?
+	return AudioClipID(id), nil
 }
 
 // Free releases a loaded audio clip.

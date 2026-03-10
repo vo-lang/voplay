@@ -4,11 +4,8 @@
 // All drawing happens in world space; DrawDebugFull sets the camera internally.
 package scene2d
 
-import (
-	"math"
-
-	"github.com/vo-lang/voplay"
-)
+import "math"
+import "github.com/vo-lang/voplay"
 
 // DebugColors holds the colors used for each debug layer.
 type DebugColors struct {
@@ -57,18 +54,15 @@ func DrawDebugAll() DrawDebugOptions {
 
 // DrawDebug draws a standard debug overlay using DrawDebugAll and DefaultDebugColors.
 // It sets its own camera (camX/camY from scene) and resets it at the end.
-func DrawDebug(d *voplay.DrawCtx, s *Scene, screenW, screenH float64) {
-	DrawDebugFull(d, s, screenW, screenH, DrawDebugAll(), DefaultDebugColors())
+func (s *Scene) DrawDebug(d *voplay.DrawCtx, screenW, screenH float64) {
+	s.DrawDebugFull(d, screenW, screenH, DrawDebugAll(), DefaultDebugColors())
 }
 
 // DrawDebugFull draws the debug overlay with full control over options and colors.
-// This function sets its own camera transform and resets it at the end, so it may
-// be called independently of DrawScene.
-func DrawDebugFull(d *voplay.DrawCtx, s *Scene, screenW, screenH float64, opts DrawDebugOptions, colors DebugColors) {
+// This method sets its own camera transform and resets it at the end, so it may
+// be called independently of Scene.Draw.
+func (s *Scene) DrawDebugFull(d *voplay.DrawCtx, screenW, screenH float64, opts DrawDebugOptions, colors DebugColors) {
 	zoom := s.Camera.Zoom
-	if zoom == 0 {
-		zoom = 1
-	}
 	lineW := 1.5 / zoom
 
 	camX, camY := s.Camera.renderCenter(screenW, screenH)

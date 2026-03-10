@@ -33,9 +33,7 @@ type DrawCtx struct {
 }
 
 // NewDrawCtx creates a new draw command context.
-func NewDrawCtx() *DrawCtx { return newDrawCtx() }
-
-func newDrawCtx() *DrawCtx {
+func NewDrawCtx() *DrawCtx {
 	return &DrawCtx{
 		w: codec.NewByteWriter(4096),
 	}
@@ -43,10 +41,6 @@ func newDrawCtx() *DrawCtx {
 
 func (d *DrawCtx) reset() {
 	d.w.Reset()
-}
-
-func (d *DrawCtx) bytes() []byte {
-	return d.w.Bytes()
 }
 
 // Bytes returns the encoded command buffer.
@@ -169,18 +163,6 @@ func (d *DrawCtx) DrawCircleOutline(cx, cy, radius, thickness float64, segments 
 	}
 }
 
-// MeasureText returns the pixel width and height of text at the given size,
-// using the default built-in font (font ID 0).
-func MeasureText(text string, size float64) (float64, float64) {
-	return measureText(0, text, size)
-}
-
-// MeasureTextFont returns the pixel width and height of text at the given size,
-// using the specified font.
-func MeasureTextFont(font FontID, text string, size float64) (float64, float64) {
-	return measureText(int(font), text, size)
-}
-
 // DrawText draws text at the given position.
 func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
 	d.w.WriteByte(opDrawText)
@@ -205,13 +187,18 @@ type SpriteParams struct {
 	Tint     Color    // color tint (use White for no tint)
 }
 
-// DrawSpriteParams draws a textured quad using a SpriteParams struct.
-func (d *DrawCtx) DrawSpriteParams(p SpriteParams) {
-	d.DrawSprite(p.Tex, p.Src.X, p.Src.Y, p.Src.W, p.Src.H, p.Dst.X, p.Dst.Y, p.Dst.W, p.Dst.H, p.FlipX, p.FlipY, p.Rotation, p.Tint)
+// DrawSprite draws a textured quad using a SpriteParams struct.
+// Zero Tint is treated as White (fully visible, no tint).
+func (d *DrawCtx) DrawSprite(p SpriteParams) {
+	tint := p.Tint
+	if tint == (Color{}) {
+		tint = White
+	}
+	d.writeSprite(p.Tex, p.Src.X, p.Src.Y, p.Src.W, p.Src.H, p.Dst.X, p.Dst.Y, p.Dst.W, p.Dst.H, p.FlipX, p.FlipY, p.Rotation, tint)
 }
 
-// DrawSprite draws a textured quad with full control over source/dest rects, flipping, rotation, and tint.
-func (d *DrawCtx) DrawSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH float64, flipX, flipY bool, rotation float64, tint Color) {
+// writeSprite encodes a sprite draw command into the binary buffer.
+func (d *DrawCtx) writeSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH float64, flipX, flipY bool, rotation float64, tint Color) {
 	d.w.WriteByte(opDrawSprite)
 	d.w.WriteU32(int(tex))
 	d.w.WriteF32(srcX)
@@ -233,12 +220,12 @@ func (d *DrawCtx) DrawSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY, 
 
 // DrawTexture draws a full texture at the given position and size with no rotation or flipping.
 func (d *DrawCtx) DrawTexture(tex TextureID, x, y, w, h float64) {
-	d.DrawSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, White)
+	d.writeSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, White)
 }
 
 // DrawTextureColor draws a full texture at the given position and size, tinted with the given color.
 func (d *DrawCtx) DrawTextureColor(tex TextureID, x, y, w, h float64, tint Color) {
-	d.DrawSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, tint)
+	d.writeSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, tint)
 }
 
 // SetCamera3D sets the 3D camera for subsequent 3D draw commands.
@@ -282,7 +269,7 @@ func (d *DrawCtx) SetLights3D(ambient Color, lights []LightDesc) {
 	d.w.WriteF32(ambient.B)
 	count := len(lights)
 	if count > 8 {
-		count = 8
+		panic("SetLights3D: lights must not exceed 8")
 	}
 	d.w.WriteByte(byte(count))
 	for i := 0; i < count; i++ {

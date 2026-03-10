@@ -737,7 +737,7 @@ func testAnimController() {
 
 	onDoneFired := 0
 	lastDoneClip := ""
-	ac.OnDone(func() {
+	ac.WithOnDone(func() {
 		onDoneFired++
 		lastDoneClip = ac.CurrentClip()
 	})
@@ -750,10 +750,10 @@ func testAnimController() {
 	ac.Update(1.0)
 	assert(onDoneFired == 1, "OnDone not fired for looping clip")
 
-	ac.OnDone(nil)
+	ac.WithOnDone(nil)
 	ac.SetState("attack")
 	ac.Update(attackFrameDur * 3)
-	assert(onDoneFired == 1, "OnDone nil clears callback")
+	assert(onDoneFired == 1, "WithOnDone nil clears callback")
 
 	_, didPanic := capturePanic(func() { ac.AddClip("idle", clipIdle) })
 	assert(didPanic, "AddClip duplicate name panics")
@@ -761,6 +761,79 @@ func testAnimController() {
 	assert(didPanic, "SetState unknown clip panics")
 	_, didPanic = capturePanic(func() { ac.ApplyToSprite(nil) })
 	assert(didPanic, "ApplyToSprite nil panics")
+}
+
+func testScene2DFindByID() {
+	s := scene2d.New()
+
+	e1 := s.Spawn(scene2d.EntityDesc{
+		Position: voplay.Vec2{10, 20},
+		Size:     voplay.Vec2{8, 8},
+		Tag:      "a",
+	})
+	e2 := s.Spawn(scene2d.EntityDesc{
+		Position: voplay.Vec2{50, 60},
+		Size:     voplay.Vec2{8, 8},
+		Tag:      "b",
+	})
+
+	// FindByID returns the correct entity.
+	found := s.FindByID(e1.ID())
+	assert(found == e1, "FindByID returns e1")
+	found = s.FindByID(e2.ID())
+	assert(found == e2, "FindByID returns e2")
+
+	// FindByID returns nil for unknown ID.
+	assert(s.FindByID(9999) == nil, "FindByID unknown returns nil")
+
+	// After Destroy, FindByID returns nil.
+	s.Destroy(e1)
+	assert(s.FindByID(e1.ID()) == nil, "FindByID after destroy returns nil")
+	assert(s.FindByID(e2.ID()) == e2, "FindByID e2 still valid after e1 destroyed")
+
+	s.Close()
+}
+
+func testScene2DSetActive() {
+	s := scene2d.New()
+
+	e := s.Spawn(scene2d.EntityDesc{
+		Position: voplay.Vec2{10, 20},
+		Size:     voplay.Vec2{16, 16},
+		Tag:      "player",
+	})
+
+	// Entity is found in spatial query when active.
+	result := s.FindInRect(voplay.Rect{X: 0, Y: 0, W: 100, H: 100})
+	assert(len(result) == 1, "active entity found in rect")
+
+	// Deactivate via SetActive — entity removed from spatial index.
+	s.SetActive(e, false)
+	assert(!e.Active, "SetActive false sets Active")
+	result = s.FindInRect(voplay.Rect{X: 0, Y: 0, W: 100, H: 100})
+	assert(len(result) == 0, "inactive entity not found in rect")
+
+	// Move entity while inactive.
+	e.SetLocalPosition(500, 500)
+
+	// Reactivate via SetActive — spatial index updated to new position.
+	s.SetActive(e, true)
+	assert(e.Active, "SetActive true sets Active")
+
+	// Old position: should NOT find it.
+	result = s.FindInRect(voplay.Rect{X: 0, Y: 0, W: 50, H: 50})
+	assert(len(result) == 0, "reactivated entity not at old position")
+
+	// New position: should find it.
+	result = s.FindInRect(voplay.Rect{X: 490, Y: 490, W: 30, H: 30})
+	assert(len(result) == 1, "reactivated entity found at new position")
+
+	// SetActive is idempotent.
+	s.SetActive(e, true)
+	result = s.FindInRect(voplay.Rect{X: 490, Y: 490, W: 30, H: 30})
+	assert(len(result) == 1, "SetActive idempotent")
+
+	s.Close()
 }
 
 func main() {
@@ -777,5 +850,7 @@ func main() {
 	testMath()
 	testTilemapExtra()
 	testAnimController()
+	testScene2DFindByID()
+	testScene2DSetActive()
 	println("ALL TESTS PASSED")
 }

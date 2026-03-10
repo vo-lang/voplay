@@ -1,67 +1,9 @@
 // Scene manages 3D entities, camera, lighting, and physics.
+// Camera is in camera.vo, physics types in physics.vo.
 package scene3d
 
-import "math"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
-
-// Camera defines the 3D viewport.
-type Camera struct {
-	Position voplay.Vec3
-	Target   voplay.Vec3    // look-at point
-	Up       voplay.Vec3    // up vector (default: 0, 1, 0)
-	Fov      float64 // field of view in degrees (default: 60)
-	Near     float64 // near clip plane (default: 0.1)
-	Far      float64 // far clip plane (default: 1000)
-}
-
-// LookAt sets the camera position and target.
-func (c *Camera) LookAt(position, target voplay.Vec3) {
-	c.Position = position
-	c.Target = target
-}
-
-// Orbit positions the camera at a given distance from center,
-// looking at center, using spherical coordinates (yaw, pitch in radians).
-func (c *Camera) Orbit(center voplay.Vec3, distance, yaw, pitch float64) {
-	// Clamp pitch to avoid flipping
-	if pitch > 1.5 {
-		pitch = 1.5
-	}
-	if pitch < -1.5 {
-		pitch = -1.5
-	}
-	cp := math.Cos(pitch)
-	c.Position = voplay.Vec3{
-		center.X + distance*math.Cos(yaw)*cp,
-		center.Y + distance*math.Sin(pitch),
-		center.Z + distance*math.Sin(yaw)*cp,
-	}
-	c.Target = center
-}
-
-// ScreenToRay returns a ray origin and direction for a screen-space pixel.
-// screenW, screenH are the window dimensions.
-func (c *Camera) ScreenToRay(screenX, screenY, screenW, screenH float64) (voplay.Vec3, voplay.Vec3) {
-	// Compute normalized device coordinates (-1 to 1)
-	nx := (2.0*screenX/screenW - 1.0)
-	ny := (1.0 - 2.0*screenY/screenH)
-
-	// Build camera basis vectors
-	forward := c.Target.Sub(c.Position).Normalize()
-	right := forward.Cross(c.Up).Normalize()
-	up := right.Cross(forward)
-
-	// Compute half-extents based on FOV and aspect
-	fovRad := c.Fov * math.Pi / 180.0
-	half_h := math.Tan(fovRad / 2.0)
-	aspect := screenW / screenH
-	half_w := half_h * aspect
-
-	// Ray direction in world space
-	dir := forward.Add(right.Scale(nx * half_w)).Add(up.Scale(ny * half_h)).Normalize()
-	return c.Position, dir
-}
 
 // Light is a light source in the 3D scene (alias for voplay.LightDesc).
 type Light = voplay.LightDesc
@@ -79,12 +21,14 @@ type Scene struct {
 	Ambient voplay.Color
 	Gravity voplay.Vec3
 
-	entities    []*Entity
-	visibleBuf []*Entity
-	worldID    int
-	nextBodyID int
-	physCmds   codec.ByteWriter
-	bodyMap    map[int]*Entity
+	entities     []*Entity
+	visibleBuf   []*Entity
+	nextEntityID int
+	entityByID   map[int]*Entity
+	worldID      int
+	nextBodyID   int
+	physCmds     codec.ByteWriter
+	bodyMap      map[int]*Entity
 }
 
 // New creates a new 3D scene with default camera and gravity.
@@ -98,12 +42,25 @@ func New() *Scene {
 			Near:     0.1,
 			Far:      1000,
 		},
-		Ambient:    voplay.Color{0.1, 0.1, 0.1, 1},
-		Gravity:    voplay.Vec3{0, -9.8, 0},
-		nextBodyID: 1,
-		physCmds:   codec.NewByteWriter(256),
-		bodyMap:    make(map[int]*Entity),
+		Ambient:      voplay.Color{0.1, 0.1, 0.1, 1},
+		Gravity:      voplay.Vec3{0, -9.8, 0},
+		nextEntityID: 1,
+		entityByID:   make(map[int]*Entity),
+		nextBodyID:   1,
+		physCmds:     codec.NewByteWriter(256),
+		bodyMap:      make(map[int]*Entity),
 	}
+}
+
+// EntityDesc describes a new 3D entity to spawn.
+type EntityDesc struct {
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Scale    voplay.Vec3
+	Model    voplay.ModelID
+	Tag      string
+	Data     any
+	Physics  *Physics
 }
 
 // Entity is a 3D game object managed by the scene.
@@ -111,9 +68,10 @@ func New() *Scene {
 // are zero/nil when not used. Physics runtime state (bodyID, velocity) lives
 // in the Physics struct, not on Entity.
 type Entity struct {
-	Position voplay.Vec3
-	Rotation voplay.Quat
-	Scale    voplay.Vec3
+	id       int
+	position voplay.Vec3
+	rotation voplay.Quat
+	scale    voplay.Vec3
 	Model    voplay.ModelID
 	Tag      string
 	Active   bool
@@ -123,25 +81,58 @@ type Entity struct {
 	scene    *Scene
 }
 
-// Spawn creates an entity in the scene.
+// Position returns the entity's world position.
+func (e *Entity) Position() voplay.Vec3 {
+	return e.position
+}
+
+// Rotation returns the entity's world rotation.
+func (e *Entity) Rotation() voplay.Quat {
+	return e.rotation
+}
+
+// Scale returns the entity's world scale.
+func (e *Entity) Scale() voplay.Vec3 {
+	return e.scale
+}
+
+// ID returns the entity's unique identifier within its scene.
+func (e *Entity) ID() int {
+	return e.id
+}
+
+// Spawn creates an entity in the scene from a descriptor.
 // If Physics is set, a Rapier3D body is created via extern.
-func (s *Scene) Spawn(e Entity) *Entity {
-	if e.Scale == (voplay.Vec3{}) {
-		e.Scale = voplay.Vec3{1, 1, 1}
+func (s *Scene) Spawn(desc EntityDesc) *Entity {
+	scale := desc.Scale
+	if scale == (voplay.Vec3{}) {
+		scale = voplay.Vec3{1, 1, 1}
 	}
-	if e.Rotation == (voplay.Quat{}) {
-		e.Rotation = voplay.QuatIdentity()
+	rotation := desc.Rotation
+	if rotation == (voplay.Quat{}) {
+		rotation = voplay.QuatIdentity()
 	}
-	e.Active = true
-	e.Visible = true
-	e.scene = s
-	if e.Physics != nil {
+	ent := &Entity{
+		id:       s.nextEntityID,
+		position: desc.Position,
+		rotation: rotation,
+		scale:    scale,
+		Model:    desc.Model,
+		Tag:      desc.Tag,
+		Active:   true,
+		Visible:  true,
+		Data:     desc.Data,
+		Physics:  desc.Physics,
+		scene:    s,
+	}
+	s.nextEntityID++
+	if ent.Physics != nil {
 		s.ensurePhysics()
-		e.Physics.bodyID = s.nextBodyID
+		ent.Physics.bodyID = s.nextBodyID
 		s.nextBodyID++
 	}
-	ent := &e
 	s.entities = append(s.entities, ent)
+	s.entityByID[ent.id] = ent
 	if ent.Physics != nil {
 		s.bodyMap[ent.Physics.bodyID] = ent
 		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
@@ -151,6 +142,9 @@ func (s *Scene) Spawn(e Entity) *Entity {
 
 // Destroy removes an entity from the scene.
 func (s *Scene) Destroy(e *Entity) {
+	if e.scene != s {
+		panic("Scene.Destroy: entity does not belong to this scene")
+	}
 	e.Active = false
 	if e.Physics != nil {
 		delete(s.bodyMap, e.Physics.bodyID)
@@ -158,6 +152,7 @@ func (s *Scene) Destroy(e *Entity) {
 		e.Physics.bodyID = 0
 	}
 	e.scene = nil
+	delete(s.entityByID, e.id)
 	// Swap-remove: O(1) instead of O(n) shift
 	for i, ent := range s.entities {
 		if ent == e {
@@ -179,7 +174,10 @@ func (s *Scene) Clear() {
 		e.scene = nil
 		e.Active = false
 	}
-	s.entities = nil
+	s.entities = s.entities[:0]
+	for id := range s.entityByID {
+		delete(s.entityByID, id)
+	}
 	for k := range s.bodyMap {
 		delete(s.bodyMap, k)
 	}
@@ -195,6 +193,15 @@ func (s *Scene) EntityCount() int {
 		}
 	}
 	return n
+}
+
+// FindByID returns the entity with the given ID, or nil if not found.
+func (s *Scene) FindByID(id int) *Entity {
+	e := s.entityByID[id]
+	if e != nil && e.Active {
+		return e
+	}
+	return nil
 }
 
 // FindByTag returns the first active entity with the given tag, or nil if not found.
@@ -323,8 +330,8 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 		vz := r.ReadF64()
 
 		if ent, ok := s.bodyMap[bodyID]; ok {
-			ent.Position = voplay.Vec3{x, y, z}
-			ent.Rotation = voplay.Quat{qx, qy, qz, qw}
+			ent.position = voplay.Vec3{x, y, z}
+			ent.rotation = voplay.Quat{qx, qy, qz, qw}
 			ent.Physics.velocity = voplay.Vec3{vx, vy, vz}
 		}
 	}

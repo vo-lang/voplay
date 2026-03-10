@@ -1,173 +1,9 @@
 // Scene manages 2D entities, camera, and physics.
+// Entity types are in entity.vo, camera in camera.vo, spatial index in spatial.vo.
 package scene2d
 
-import "math"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
-
-const defaultSpatialCellSize = 128.0
-
-type Camera struct {
-	X, Y     float64 // center position
-	Zoom     float64 // 1.0 = no zoom
-	Rotation float64 // radians
-	Bounds   voplay.Rect
-	shakeIntensity float64
-	shakeDuration  float64
-	shakeTimer     float64
-	shakePhase     float64
-}
-
-func (c *Camera) Follow(x, y float64) {
-	c.X = x
-	c.Y = y
-}
-
-func (c *Camera) LerpFollow(x, y, t float64) {
-	c.X += (x - c.X) * t
-	c.Y += (y - c.Y) * t
-}
-
-func (c *Camera) FollowWithDeadzone(x, y, deadzoneW, deadzoneH, t float64) {
-	halfW := deadzoneW / 2
-	halfH := deadzoneH / 2
-	targetX := c.X
-	targetY := c.Y
-	if x < c.X-halfW {
-		targetX = x + halfW
-	} else if x > c.X+halfW {
-		targetX = x - halfW
-	}
-	if y < c.Y-halfH {
-		targetY = y + halfH
-	} else if y > c.Y+halfH {
-		targetY = y - halfH
-	}
-	c.X += (targetX - c.X) * t
-	c.Y += (targetY - c.Y) * t
-}
-
-func (c *Camera) Shake(intensity, duration float64) {
-	if intensity < 0 {
-		panic("Camera.Shake: intensity must be >= 0")
-	}
-	if duration < 0 {
-		panic("Camera.Shake: duration must be >= 0")
-	}
-	c.shakeIntensity = intensity
-	c.shakeDuration = duration
-	c.shakeTimer = duration
-	if duration == 0 || intensity == 0 {
-		c.shakePhase = 0
-	}
-}
-
-func (c *Camera) Update(dt float64) {
-	if dt < 0 {
-		panic("Camera.Update: dt must not be negative")
-	}
-	if c.shakeTimer <= 0 {
-		c.shakeTimer = 0
-		return
-	}
-	c.shakeTimer -= dt
-	if c.shakeTimer < 0 {
-		c.shakeTimer = 0
-	}
-	c.shakePhase += dt
-	if c.shakeTimer == 0 {
-		c.shakePhase = 0
-	}
-}
-
-func (c *Camera) clampCenter(x, y, screenW, screenH float64) (float64, float64) {
-	if c.Bounds.W <= 0 || c.Bounds.H <= 0 {
-		return x, y
-	}
-	halfW := screenW / c.Zoom / 2
-	halfH := screenH / c.Zoom / 2
-	minX := c.Bounds.X + halfW
-	maxX := c.Bounds.X + c.Bounds.W - halfW
-	minY := c.Bounds.Y + halfH
-	maxY := c.Bounds.Y + c.Bounds.H - halfH
-	if minX > maxX {
-		x = c.Bounds.X + c.Bounds.W/2
-	} else {
-		if x < minX {
-			x = minX
-		}
-		if x > maxX {
-			x = maxX
-		}
-	}
-	if minY > maxY {
-		y = c.Bounds.Y + c.Bounds.H/2
-	} else {
-		if y < minY {
-			y = minY
-		}
-		if y > maxY {
-			y = maxY
-		}
-	}
-	return x, y
-}
-
-func (c *Camera) renderCenter(screenW, screenH float64) (float64, float64) {
-	x, y := c.clampCenter(c.X, c.Y, screenW, screenH)
-	if c.shakeTimer <= 0 || c.shakeIntensity == 0 || c.shakeDuration == 0 {
-		return x, y
-	}
-	strength := c.shakeIntensity * (c.shakeTimer / c.shakeDuration)
-	renderX := x + math.Sin(c.shakePhase*13.0)*strength
-	renderY := y + math.Cos(c.shakePhase*17.0)*strength
-	return c.clampCenter(renderX, renderY, screenW, screenH)
-}
-
-func (c *Camera) ScreenToWorld(screenX, screenY, screenW, screenH float64) (float64, float64) {
-	if c.Zoom == 0 {
-		panic("Camera.Zoom must not be 0")
-	}
-	centerX, centerY := c.renderCenter(screenW, screenH)
-	rx := (screenX - screenW/2) / c.Zoom
-	ry := (screenY - screenH/2) / c.Zoom
-	cos := math.Cos(-c.Rotation)
-	sin := math.Sin(-c.Rotation)
-	wx := rx*cos - ry*sin + centerX
-	wy := rx*sin + ry*cos + centerY
-	return wx, wy
-}
-
-func (c *Camera) WorldToScreen(worldX, worldY, screenW, screenH float64) (float64, float64) {
-	if c.Zoom == 0 {
-		panic("Camera.Zoom must not be 0")
-	}
-	centerX, centerY := c.renderCenter(screenW, screenH)
-	dx := worldX - centerX
-	dy := worldY - centerY
-	cos := math.Cos(c.Rotation)
-	sin := math.Sin(c.Rotation)
-	rx := dx*cos - dy*sin
-	ry := dx*sin + dy*cos
-	sx := rx*c.Zoom + screenW/2
-	sy := ry*c.Zoom + screenH/2
-	return sx, sy
-}
-
-func (c *Camera) ViewRect(screenW, screenH float64) voplay.Rect {
-	if c.Zoom == 0 {
-		panic("Camera.Zoom must not be 0")
-	}
-	w := screenW / c.Zoom
-	h := screenH / c.Zoom
-	centerX, centerY := c.renderCenter(screenW, screenH)
-	return voplay.Rect{
-		X: centerX - w/2,
-		Y: centerY - h/2,
-		W: w,
-		H: h,
-	}
-}
 
 type Scene struct {
 	Camera  Camera
@@ -185,6 +21,7 @@ type Scene struct {
 	spatialCellSize  float64
 	spatialBuckets   map[int64][]*Entity
 	spatialQueryTick int
+	cellScratch      []int64 // reusable scratch for per-frame spatial queries
 }
 
 func New() *Scene {
@@ -201,40 +38,7 @@ func New() *Scene {
 	}
 }
 
-type EntityDesc struct {
-	Position voplay.Vec2
-	Size     voplay.Vec2
-	Rotation float64
-	Scale    voplay.Vec2
-	Sprite   *Sprite
-	Tag      string
-	ZOrder   int
-	Data     any
-	Physics  *Physics
-}
-
-type Entity struct {
-	id int
-	localPosition voplay.Vec2
-	position voplay.Vec2
-	size     voplay.Vec2
-	localRotation float64
-	rotation float64
-	localScale voplay.Vec2
-	scale    voplay.Vec2
-	Sprite   *Sprite
-	Tag      string
-	Active   bool
-	Visible  bool
-	ZOrder   int
-	Data     any
-	Physics  *Physics
-	scene    *Scene
-	parentID int
-	childIDs []int
-	spatialCells []int64
-	spatialQueryTick int
-}
+// --- Entity lifecycle ---
 
 func (s *Scene) Spawn(desc EntityDesc) *Entity {
 	scale := desc.Scale
@@ -245,22 +49,23 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 		scale.Y = 1
 	}
 	ent := &Entity{
-		id:       s.nextEntityID,
+		id:            s.nextEntityID,
 		localPosition: desc.Position,
-		position: desc.Position,
-		size:     desc.Size,
+		position:      desc.Position,
+		size:          desc.Size,
 		localRotation: desc.Rotation,
-		rotation: desc.Rotation,
-		localScale: scale,
-		scale:    scale,
-		Sprite:   desc.Sprite,
-		Tag:      desc.Tag,
-		Active:   true,
-		Visible:  true,
-		ZOrder:   desc.ZOrder,
-		Data:     desc.Data,
-		Physics:  desc.Physics,
-		scene:    s,
+		rotation:      desc.Rotation,
+		localScale:    scale,
+		scale:         scale,
+		Sprite:        desc.Sprite,
+		AnimCtrl:      desc.AnimCtrl,
+		Tag:           desc.Tag,
+		Active:        true,
+		Visible:       true,
+		ZOrder:        desc.ZOrder,
+		Data:          desc.Data,
+		Physics:       desc.Physics,
+		scene:         s,
 	}
 	s.nextEntityID++
 	if ent.Physics != nil {
@@ -276,163 +81,6 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
 	}
 	return ent
-}
-
-func rotateVec2(v voplay.Vec2, angle float64) voplay.Vec2 {
-	if angle == 0 {
-		return v
-	}
-	cos := math.Cos(angle)
-	sin := math.Sin(angle)
-	return voplay.Vec2{
-		X: v.X*cos - v.Y*sin,
-		Y: v.X*sin + v.Y*cos,
-	}
-}
-
-func (e *Entity) localPositionFromWorld(world voplay.Vec2) voplay.Vec2 {
-	parent := e.parentEntity()
-	if parent == nil {
-		return world
-	}
-	delta := world.Sub(parent.position)
-	local := rotateVec2(delta, -parent.rotation)
-	if parent.scale.X == 0 || parent.scale.Y == 0 {
-		panic("Entity: parent scale must not contain 0")
-	}
-	return voplay.Vec2{X: local.X / parent.scale.X, Y: local.Y / parent.scale.Y}
-}
-
-func (e *Entity) localRotationFromWorld(rotation float64) float64 {
-	parent := e.parentEntity()
-	if parent == nil {
-		return rotation
-	}
-	return rotation - parent.rotation
-}
-
-func (e *Entity) localScaleFromWorld(scale voplay.Vec2) voplay.Vec2 {
-	parent := e.parentEntity()
-	if parent == nil {
-		return scale
-	}
-	if parent.scale.X == 0 || parent.scale.Y == 0 {
-		panic("Entity: parent scale must not contain 0")
-	}
-	return voplay.Vec2{X: scale.X / parent.scale.X, Y: scale.Y / parent.scale.Y}
-}
-
-func (e *Entity) syncHierarchyWorldTransform(updateSpatial bool) {
-	parent := e.parentEntity()
-	if parent == nil {
-		e.position = e.localPosition
-		e.rotation = e.localRotation
-		e.scale = e.localScale
-	} else {
-		scaledLocal := voplay.Vec2{X: e.localPosition.X * parent.scale.X, Y: e.localPosition.Y * parent.scale.Y}
-		e.position = parent.position.Add(rotateVec2(scaledLocal, parent.rotation))
-		e.rotation = parent.rotation + e.localRotation
-		e.scale = voplay.Vec2{X: parent.scale.X * e.localScale.X, Y: parent.scale.Y * e.localScale.Y}
-	}
-	if updateSpatial && e.scene != nil {
-		e.scene.spatialUpdate(e)
-	}
-	for _, childID := range e.childIDs {
-		child := e.scene.entityByID[childID]
-		if child != nil {
-			child.syncHierarchyWorldTransform(updateSpatial)
-		}
-	}
-}
-
-func (e *Entity) removeChild(child *Entity) {
-	for i, childID := range e.childIDs {
-		if childID == child.id {
-			last := len(e.childIDs) - 1
-			e.childIDs[i] = e.childIDs[last]
-			e.childIDs = e.childIDs[:last]
-			return
-		}
-	}
-}
-
-func (e *Entity) parentEntity() *Entity {
-	if e.scene == nil || e.parentID == 0 {
-		return nil
-	}
-	return e.scene.entityByID[e.parentID]
-}
-
-func (e *Entity) Parent() *Entity {
-	return e.parentEntity()
-}
-
-func (e *Entity) Children() []*Entity {
-	result := make([]*Entity, 0, len(e.childIDs))
-	if e.scene == nil {
-		return result
-	}
-	for _, childID := range e.childIDs {
-		child := e.scene.entityByID[childID]
-		if child != nil {
-			result = append(result, child)
-		}
-	}
-	return result
-}
-
-func (e *Entity) SetParent(parent *Entity, keepWorld bool) {
-	if parent == e {
-		panic("Entity.SetParent: entity cannot parent itself")
-	}
-	if parent != nil {
-		if e.scene == nil || parent.scene != e.scene {
-			panic("Entity.SetParent: parent must belong to the same scene")
-		}
-		if e.Physics != nil {
-			panic("Entity.SetParent: physics entities cannot be parented")
-		}
-		if parent.Physics != nil {
-			panic("Entity.SetParent: physics parents are not supported")
-		}
-		visited := make(map[*Entity]bool)
-		current := parent
-		for current != nil {
-			if visited[current] {
-				panic("Entity.SetParent: cycle detected")
-			}
-			visited[current] = true
-			if current == e {
-				panic("Entity.SetParent: cycle detected")
-			}
-			current = current.Parent()
-		}
-	}
-	currentParent := e.parentEntity()
-	if currentParent == parent {
-		return
-	}
-	worldPosition := e.position
-	worldRotation := e.rotation
-	worldScale := e.scale
-	if currentParent != nil {
-		currentParent.removeChild(e)
-	}
-	e.parentID = 0
-	if parent != nil {
-		e.parentID = parent.id
-		parent.childIDs = append(parent.childIDs, e.id)
-	}
-	if keepWorld {
-		e.localPosition = e.localPositionFromWorld(worldPosition)
-		e.localRotation = e.localRotationFromWorld(worldRotation)
-		e.localScale = e.localScaleFromWorld(worldScale)
-	}
-	e.syncHierarchyWorldTransform(true)
-}
-
-func (e *Entity) Detach(keepWorld bool) {
-	e.SetParent(nil, keepWorld)
 }
 
 func (s *Scene) destroyEntityRecursive(e *Entity) {
@@ -466,10 +114,151 @@ func (s *Scene) destroyEntityRecursive(e *Entity) {
 }
 
 func (s *Scene) Destroy(e *Entity) {
-	if e == nil || e.scene != s {
-		return
+	if e.scene != s {
+		panic("Scene.Destroy: entity does not belong to this scene")
 	}
 	s.destroyEntityRecursive(e)
+}
+
+func (s *Scene) Clear() {
+	for _, e := range s.entities {
+		if e.Physics != nil {
+			physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		}
+		e.parentID = 0
+		e.childIDs = nil
+		e.scene = nil
+		e.Active = false
+		e.spatialCells = nil
+	}
+	s.entities = s.entities[:0]
+	for id := range s.entityByID {
+		delete(s.entityByID, id)
+	}
+	for k := range s.bodyMap {
+		delete(s.bodyMap, k)
+	}
+	for cell := range s.spatialBuckets {
+		delete(s.spatialBuckets, cell)
+	}
+	s.physCmds.Reset()
+}
+
+func (s *Scene) Close() {
+	s.Clear()
+	if s.worldID != 0 {
+		physicsDestroy(s.worldID)
+		s.worldID = 0
+	}
+}
+
+// --- Entity queries ---
+
+// FindByID returns the entity with the given ID, or nil if not found.
+func (s *Scene) FindByID(id int) *Entity {
+	e := s.entityByID[id]
+	if e != nil && e.Active {
+		return e
+	}
+	return nil
+}
+
+func (s *Scene) FindByTag(tag string) *Entity {
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			return e
+		}
+	}
+	return nil
+}
+
+func (s *Scene) FindAllByTag(tag string) []*Entity {
+	var result []*Entity
+	for _, e := range s.entities {
+		if e.Active && e.Tag == tag {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+func (s *Scene) ForEach(fn func(e *Entity)) {
+	for _, e := range s.entities {
+		if e.Active {
+			fn(e)
+		}
+	}
+}
+
+func (s *Scene) VisibleEntities() []*Entity {
+	s.visibleBuf = s.visibleBuf[:0]
+	for _, e := range s.entities {
+		if e.Active && e.Visible {
+			s.visibleBuf = append(s.visibleBuf, e)
+		}
+	}
+	return s.visibleBuf
+}
+
+func (s *Scene) EntityCount() int {
+	n := 0
+	for _, e := range s.entities {
+		if e.Active {
+			n++
+		}
+	}
+	return n
+}
+
+// SetActive sets an entity's active state and updates the spatial index accordingly.
+// Prefer this over setting e.Active directly when the entity may have moved while inactive.
+func (s *Scene) SetActive(e *Entity, active bool) {
+	if e.scene != s {
+		panic("Scene.SetActive: entity does not belong to this scene")
+	}
+	if e.Active == active {
+		return
+	}
+	e.Active = active
+	if active {
+		s.spatialInsert(e)
+	} else {
+		s.spatialRemove(e)
+	}
+}
+
+func (s *Scene) Entities() []*Entity {
+	result := make([]*Entity, 0, len(s.entities))
+	for _, e := range s.entities {
+		if e.Active {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// --- Animation ---
+
+func (s *Scene) UpdateAnimations(dt float64) {
+	for _, e := range s.entities {
+		if !e.Active {
+			continue
+		}
+		if e.AnimCtrl != nil {
+			e.AnimCtrl.Update(dt)
+			if e.Sprite != nil {
+				e.AnimCtrl.ApplyToSprite(e.Sprite)
+			}
+		} else if e.Sprite != nil && e.Sprite.Anim != nil {
+			e.Sprite.Anim.Update(dt)
+		}
+	}
+}
+
+// --- Physics bridge ---
+
+func (s *Scene) HasPhysics() bool {
+	return s.worldID != 0
 }
 
 func (s *Scene) ensurePhysics() {
@@ -483,6 +272,39 @@ func (s *Scene) SetGravity(g voplay.Vec2) {
 	s.Gravity = g
 	if s.worldID != 0 {
 		physicsSetGravity(s.worldID, g.X, g.Y)
+	}
+}
+
+func (s *Scene) StepAndSyncPhysics(dt float64) {
+	if s.worldID == 0 {
+		return
+	}
+	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
+	s.physCmds.Reset()
+	r := codec.NewByteReader(state)
+	if r.Remaining() < 4 {
+		return
+	}
+
+	count := r.ReadU32()
+
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 44 {
+			break
+		}
+		bodyID := r.ReadU32()
+		x := r.ReadF64()
+		y := r.ReadF64()
+		rotation := r.ReadF64()
+		vx := r.ReadF64()
+		vy := r.ReadF64()
+
+		if e, ok := s.bodyMap[bodyID]; ok && e.Active {
+			e.position = voplay.Vec2{x, y}
+			e.rotation = rotation
+			e.Physics.velocity = voplay.Vec2{vx, vy}
+			s.spatialUpdate(e)
+		}
 	}
 }
 
@@ -560,448 +382,4 @@ func (s *Scene) QueryRect(rect voplay.Rect) []*Entity {
 		}
 	}
 	return result
-}
-
-func (s *Scene) FindByTag(tag string) *Entity {
-	for _, e := range s.entities {
-		if e.Active && e.Tag == tag {
-			return e
-		}
-	}
-	return nil
-}
-
-func (s *Scene) FindAllByTag(tag string) []*Entity {
-	var result []*Entity
-	for _, e := range s.entities {
-		if e.Active && e.Tag == tag {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-func (s *Scene) FindInRadius(x, y, radius float64) []*Entity {
-	rSq := radius * radius
-	queryRect := voplay.Rect{X: x - radius, Y: y - radius, W: radius * 2, H: radius * 2}
-	queryTick := s.nextSpatialQueryTick()
-	var result []*Entity
-	for _, cell := range s.spatialCellsForBounds(queryRect) {
-		bucket := s.spatialBuckets[cell]
-		for _, e := range bucket {
-			if !e.Active || e.spatialQueryTick == queryTick {
-				continue
-			}
-			e.spatialQueryTick = queryTick
-			dx := e.position.X - x
-			dy := e.position.Y - y
-			if dx*dx+dy*dy <= rSq {
-				result = append(result, e)
-			}
-		}
-	}
-	return result
-}
-
-func (s *Scene) FindInRect(rect voplay.Rect) []*Entity {
-	queryTick := s.nextSpatialQueryTick()
-	var result []*Entity
-	for _, cell := range s.spatialCellsForBounds(rect) {
-		bucket := s.spatialBuckets[cell]
-		for _, e := range bucket {
-			if !e.Active || e.spatialQueryTick == queryTick {
-				continue
-			}
-			e.spatialQueryTick = queryTick
-			if e.Bounds().Intersects(rect) {
-				result = append(result, e)
-			}
-		}
-	}
-	return result
-}
-
-func (s *Scene) Clear() {
-	for _, e := range s.entities {
-		if e.Physics != nil {
-			physicsDestroyBody(s.worldID, e.Physics.bodyID)
-		}
-		e.parentID = 0
-		e.childIDs = nil
-		e.scene = nil
-		e.Active = false
-		e.spatialCells = nil
-	}
-	s.entities = s.entities[:0]
-	for id := range s.entityByID {
-		delete(s.entityByID, id)
-	}
-	for k := range s.bodyMap {
-		delete(s.bodyMap, k)
-	}
-	for cell := range s.spatialBuckets {
-		delete(s.spatialBuckets, cell)
-	}
-	s.physCmds.Reset()
-}
-
-func (s *Scene) ForEach(fn func(e *Entity)) {
-	for _, e := range s.entities {
-		if e.Active {
-			fn(e)
-		}
-	}
-}
-
-func (s *Scene) VisibleEntities() []*Entity {
-	s.visibleBuf = s.visibleBuf[:0]
-	for _, e := range s.entities {
-		if e.Active && e.Visible {
-			s.visibleBuf = append(s.visibleBuf, e)
-		}
-	}
-	return s.visibleBuf
-}
-
-func (s *Scene) visibleInView(screenW, screenH float64) []*Entity {
-	return s.visibleInRect(s.Camera.ViewRect(screenW, screenH))
-}
-
-func (s *Scene) EntityCount() int {
-	n := 0
-	for _, e := range s.entities {
-		if e.Active {
-			n++
-		}
-	}
-	return n
-}
-
-func (s *Scene) Entities() []*Entity {
-	result := make([]*Entity, 0, len(s.entities))
-	for _, e := range s.entities {
-		if e.Active {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-func (s *Scene) UpdateAnimations(dt float64) {
-	for _, e := range s.entities {
-		if e.Active && e.Sprite != nil && e.Sprite.Anim != nil {
-			e.Sprite.Anim.Update(dt)
-		}
-	}
-}
-
-func (s *Scene) HasPhysics() bool {
-	return s.worldID != 0
-}
-
-func (s *Scene) Close() {
-	s.Clear()
-	if s.worldID != 0 {
-		physicsDestroy(s.worldID)
-		s.worldID = 0
-	}
-}
-func (s *Scene) StepAndSyncPhysics(dt float64) {
-	if s.worldID == 0 {
-		return
-	}
-	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
-	s.physCmds.Reset()
-	r := codec.NewByteReader(state)
-	if r.Remaining() < 4 {
-		return
-	}
-
-	count := r.ReadU32()
-
-	for i := 0; i < count; i++ {
-		if r.Remaining() < 44 {
-			break
-		}
-		bodyID := r.ReadU32()
-		x := r.ReadF64()
-		y := r.ReadF64()
-		rotation := r.ReadF64()
-		vx := r.ReadF64()
-		vy := r.ReadF64()
-
-		if e, ok := s.bodyMap[bodyID]; ok && e.Active {
-			e.position = voplay.Vec2{x, y}
-			e.rotation = rotation
-			e.Physics.velocity = voplay.Vec2{vx, vy}
-			s.spatialUpdate(e)
-		}
-	}
-}
-
-func (s *Scene) SetSpatialCellSize(size float64) {
-	if size <= 0 {
-		panic("Scene.SetSpatialCellSize: size must be > 0")
-	}
-	s.spatialCellSize = size
-	s.rebuildSpatialIndex()
-}
-
-func (s *Scene) SpatialCellSize() float64 {
-	return s.spatialCellSize
-}
-
-func (s *Scene) rebuildSpatialIndex() {
-	for cell := range s.spatialBuckets {
-		delete(s.spatialBuckets, cell)
-	}
-	for _, e := range s.entities {
-		e.spatialCells = nil
-		if e.Active {
-			s.spatialInsert(e)
-		}
-	}
-}
-
-func spatialCellKey(x, y int) int64 {
-	return (int64(x) << 32) ^ int64(int32(y))
-}
-
-func (s *Scene) spatialCellsForBounds(bounds voplay.Rect) []int64 {
-	cellSize := s.spatialCellSize
-	minX := int(math.Floor(bounds.X / cellSize))
-	minY := int(math.Floor(bounds.Y / cellSize))
-	maxXEdge := bounds.X + bounds.W
-	maxYEdge := bounds.Y + bounds.H
-	if bounds.W > 0 {
-		maxXEdge -= 0.000001
-	}
-	if bounds.H > 0 {
-		maxYEdge -= 0.000001
-	}
-	if maxXEdge < bounds.X {
-		maxXEdge = bounds.X
-	}
-	if maxYEdge < bounds.Y {
-		maxYEdge = bounds.Y
-	}
-	maxX := int(math.Floor(maxXEdge / cellSize))
-	maxY := int(math.Floor(maxYEdge / cellSize))
-	cells := make([]int64, 0, (maxX-minX+1)*(maxY-minY+1))
-	for cy := minY; cy <= maxY; cy++ {
-		for cx := minX; cx <= maxX; cx++ {
-			cells = append(cells, spatialCellKey(cx, cy))
-		}
-	}
-	return cells
-}
-
-func spatialCellsEqual(a, b []int64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// spatialInsert inserts an entity into the spatial index.
-func (s *Scene) spatialInsert(e *Entity) {
-	if !e.Active {
-		return
-	}
-	cells := s.spatialCellsForBounds(e.Bounds())
-	e.spatialCells = cells
-	for _, cell := range cells {
-		s.spatialBuckets[cell] = append(s.spatialBuckets[cell], e)
-	}
-}
-
-// spatialRemove removes an entity from the spatial index.
-func (s *Scene) spatialRemove(e *Entity) {
-	for _, cell := range e.spatialCells {
-		bucket := s.spatialBuckets[cell]
-		for i, candidate := range bucket {
-			if candidate == e {
-				last := len(bucket) - 1
-				bucket[i] = bucket[last]
-				bucket[last] = nil
-				bucket = bucket[:last]
-				if len(bucket) == 0 {
-					delete(s.spatialBuckets, cell)
-				} else {
-					s.spatialBuckets[cell] = bucket
-				}
-				break
-			}
-		}
-	}
-	e.spatialCells = nil
-}
-
-// spatialUpdate updates the spatial index for an entity.
-func (s *Scene) spatialUpdate(e *Entity) {
-	if e.scene != s || !e.Active {
-		return
-	}
-	newCells := s.spatialCellsForBounds(e.Bounds())
-	if spatialCellsEqual(e.spatialCells, newCells) {
-		return
-	}
-	s.spatialRemove(e)
-	e.spatialCells = newCells
-	for _, cell := range newCells {
-		s.spatialBuckets[cell] = append(s.spatialBuckets[cell], e)
-	}
-}
-
-// nextSpatialQueryTick returns the next spatial query tick.
-func (s *Scene) nextSpatialQueryTick() int {
-	s.spatialQueryTick++
-	if s.spatialQueryTick == 0 {
-		s.spatialQueryTick = 1
-		for _, e := range s.entities {
-			e.spatialQueryTick = 0
-		}
-	}
-	return s.spatialQueryTick
-}
-
-// findInRectInternal finds entities in the given rect.
-func (s *Scene) findInRectInternal(rect voplay.Rect, predicate func(e *Entity) bool) []*Entity {
-	queryTick := s.nextSpatialQueryTick()
-	var result []*Entity
-	for _, cell := range s.spatialCellsForBounds(rect) {
-		bucket := s.spatialBuckets[cell]
-		for _, e := range bucket {
-			if !e.Active || e.spatialQueryTick == queryTick {
-				continue
-			}
-			e.spatialQueryTick = queryTick
-			if predicate(e) {
-				result = append(result, e)
-			}
-		}
-	}
-	return result
-}
-
-// visibleInRect returns the visible entities in the given rect.
-func (s *Scene) visibleInRect(rect voplay.Rect) []*Entity {
-	queryTick := s.nextSpatialQueryTick()
-	s.visibleBuf = s.visibleBuf[:0]
-	for _, cell := range s.spatialCellsForBounds(rect) {
-		bucket := s.spatialBuckets[cell]
-		for _, e := range bucket {
-			if !e.Active || !e.Visible || e.spatialQueryTick == queryTick {
-				continue
-			}
-			e.spatialQueryTick = queryTick
-			if e.Bounds().Intersects(rect) {
-				s.visibleBuf = append(s.visibleBuf, e)
-			}
-		}
-	}
-	return s.visibleBuf
-}
-
-// Position returns the entity's position.
-func (e *Entity) Position() voplay.Vec2 {
-	return e.position
-}
-
-func (e *Entity) LocalPosition() voplay.Vec2 {
-	return e.localPosition
-}
-
-// Size returns the entity's size.
-func (e *Entity) Size() voplay.Vec2 {
-	return e.size
-}
-
-// Scale returns the entity's scale.
-func (e *Entity) Scale() voplay.Vec2 {
-	return e.scale
-}
-
-func (e *Entity) LocalScale() voplay.Vec2 {
-	return e.localScale
-}
-
-// Rotation returns the entity's rotation.
-func (e *Entity) Rotation() float64 {
-	return e.rotation
-}
-
-func (e *Entity) LocalRotation() float64 {
-	return e.localRotation
-}
-
-// SetSize sets the entity's size.
-func (e *Entity) SetSize(w, h float64) {
-	if e.Physics != nil {
-		panic("Entity.SetSize: physics collider resize is not supported")
-	}
-	e.size = voplay.Vec2{w, h}
-	if e.scene != nil {
-		e.scene.spatialUpdate(e)
-	}
-}
-
-// SetScale sets the entity's scale.
-func (e *Entity) SetScale(x, y float64) {
-	if e.Physics != nil {
-		panic("Entity.SetScale: physics collider resize is not supported")
-	}
-	e.localScale = e.localScaleFromWorld(voplay.Vec2{x, y})
-	e.syncHierarchyWorldTransform(true)
-}
-
-func (e *Entity) SetLocalPosition(x, y float64) {
-	e.localPosition = voplay.Vec2{x, y}
-	e.syncHierarchyWorldTransform(true)
-}
-
-func (e *Entity) SetLocalRotation(rotation float64) {
-	e.localRotation = rotation
-	e.syncHierarchyWorldTransform(true)
-}
-
-func (e *Entity) SetLocalScale(x, y float64) {
-	if e.Physics != nil {
-		panic("Entity.SetLocalScale: physics collider resize is not supported")
-	}
-	e.localScale = voplay.Vec2{x, y}
-	e.syncHierarchyWorldTransform(true)
-}
-
-// Center returns the entity's center position.
-func (e *Entity) Center() voplay.Vec2 {
-	return e.position
-}
-
-// Bounds returns the entity's axis-aligned bounding rect (centered on X,Y).
-func (e *Entity) Bounds() voplay.Rect {
-	w := e.size.X * e.scale.X
-	h := e.size.Y * e.scale.Y
-	if w < 0 {
-		w = -w
-	}
-	if h < 0 {
-		h = -h
-	}
-	return voplay.Rect{e.position.X - w/2, e.position.Y - h/2, w, h}
-}
-
-// Overlaps returns true if this entity's bounding rect intersects another's.
-func (e *Entity) Overlaps(other *Entity) bool {
-	return e.Bounds().Intersects(other.Bounds())
-}
-
-// DistanceTo returns the distance between the centers of two entities.
-func (e *Entity) DistanceTo(other *Entity) float64 {
-	return e.Center().Distance(other.Center())
 }

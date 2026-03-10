@@ -5,12 +5,12 @@ import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
 
 // BodyType determines how the physics engine treats a body.
-type BodyType int
+type BodyType = voplay.BodyType
 
 const (
-	Dynamic   BodyType = 0
-	Static    BodyType = 1
-	Kinematic BodyType = 2
+	Dynamic   = voplay.Dynamic
+	Static    = voplay.Static
+	Kinematic = voplay.Kinematic
 )
 
 // Physics is the physics configuration and runtime state for a 2D entity.
@@ -105,45 +105,17 @@ func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2 float64) {
 
 // ApplyForce applies a force to a physics entity (buffered until next step).
 func (e *Entity) ApplyForce(fx, fy float64) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, fx, fy)
 }
 
 // ApplyImpulse applies an impulse to a physics entity (buffered until next step).
 func (e *Entity) ApplyImpulse(ix, iy float64) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, ix, iy)
 }
 
 // SetVelocity sets the linear velocity of a physics entity (buffered until next step).
 func (e *Entity) SetVelocity(vx, vy float64) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vx, vy)
-}
-
-// SetPosition teleports a physics entity to the given position (buffered until next step).
-// For non-physics entities, sets X/Y directly.
-func (e *Entity) SetPosition(x, y float64) {
-	e.localPosition = e.localPositionFromWorld(voplay.Vec2{x, y})
-	e.syncHierarchyWorldTransform(true)
-	if e.scene != nil && e.Physics != nil {
-		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, x, y)
-	}
-}
-
-// SetRotation sets the rotation of a physics entity (buffered until next step).
-func (e *Entity) SetRotation(rotation float64) {
-	e.localRotation = e.localRotationFromWorld(rotation)
-	e.syncHierarchyWorldTransform(true)
-	if e.scene != nil && e.Physics != nil {
-		e.scene.writePhysCmd(physicsCmdSetRot, e.Physics.bodyID, rotation, 0)
-	}
 }
 
 // Velocity returns the current linear velocity (updated after each physics step).

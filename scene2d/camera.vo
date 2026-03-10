@@ -1,0 +1,167 @@
+// Camera manages the 2D viewport: position, zoom, rotation, bounds clamping, and screen shake.
+package scene2d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+type Camera struct {
+	X, Y     float64 // center position
+	Zoom     float64 // 1.0 = no zoom
+	Rotation float64 // radians
+	Bounds   voplay.Rect
+	shakeIntensity float64
+	shakeDuration  float64
+	shakeTimer     float64
+	shakePhase     float64
+}
+
+func (c *Camera) Follow(x, y float64) {
+	c.X = x
+	c.Y = y
+}
+
+func (c *Camera) LerpFollow(x, y, t float64) {
+	c.X += (x - c.X) * t
+	c.Y += (y - c.Y) * t
+}
+
+func (c *Camera) FollowWithDeadzone(x, y, deadzoneW, deadzoneH, t float64) {
+	halfW := deadzoneW / 2
+	halfH := deadzoneH / 2
+	targetX := c.X
+	targetY := c.Y
+	if x < c.X-halfW {
+		targetX = x + halfW
+	} else if x > c.X+halfW {
+		targetX = x - halfW
+	}
+	if y < c.Y-halfH {
+		targetY = y + halfH
+	} else if y > c.Y+halfH {
+		targetY = y - halfH
+	}
+	c.X += (targetX - c.X) * t
+	c.Y += (targetY - c.Y) * t
+}
+
+func (c *Camera) Shake(intensity, duration float64) {
+	if intensity < 0 {
+		panic("Camera.Shake: intensity must be >= 0")
+	}
+	if duration < 0 {
+		panic("Camera.Shake: duration must be >= 0")
+	}
+	c.shakeIntensity = intensity
+	c.shakeDuration = duration
+	c.shakeTimer = duration
+	if duration == 0 || intensity == 0 {
+		c.shakePhase = 0
+	}
+}
+
+func (c *Camera) Update(dt float64) {
+	if dt < 0 {
+		panic("Camera.Update: dt must not be negative")
+	}
+	if c.shakeTimer <= 0 {
+		c.shakeTimer = 0
+		return
+	}
+	c.shakeTimer -= dt
+	if c.shakeTimer < 0 {
+		c.shakeTimer = 0
+	}
+	c.shakePhase += dt
+	if c.shakeTimer == 0 {
+		c.shakePhase = 0
+	}
+}
+
+func (c *Camera) clampCenter(x, y, screenW, screenH float64) (float64, float64) {
+	if c.Bounds.W <= 0 || c.Bounds.H <= 0 {
+		return x, y
+	}
+	halfW := screenW / c.Zoom / 2
+	halfH := screenH / c.Zoom / 2
+	minX := c.Bounds.X + halfW
+	maxX := c.Bounds.X + c.Bounds.W - halfW
+	minY := c.Bounds.Y + halfH
+	maxY := c.Bounds.Y + c.Bounds.H - halfH
+	if minX > maxX {
+		x = c.Bounds.X + c.Bounds.W/2
+	} else {
+		if x < minX {
+			x = minX
+		}
+		if x > maxX {
+			x = maxX
+		}
+	}
+	if minY > maxY {
+		y = c.Bounds.Y + c.Bounds.H/2
+	} else {
+		if y < minY {
+			y = minY
+		}
+		if y > maxY {
+			y = maxY
+		}
+	}
+	return x, y
+}
+
+func (c *Camera) renderCenter(screenW, screenH float64) (float64, float64) {
+	x, y := c.clampCenter(c.X, c.Y, screenW, screenH)
+	if c.shakeTimer <= 0 || c.shakeIntensity == 0 || c.shakeDuration == 0 {
+		return x, y
+	}
+	strength := c.shakeIntensity * (c.shakeTimer / c.shakeDuration)
+	renderX := x + math.Sin(c.shakePhase*13.0)*strength
+	renderY := y + math.Cos(c.shakePhase*17.0)*strength
+	return c.clampCenter(renderX, renderY, screenW, screenH)
+}
+
+func (c *Camera) ScreenToWorld(screenX, screenY, screenW, screenH float64) (float64, float64) {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	centerX, centerY := c.renderCenter(screenW, screenH)
+	rx := (screenX - screenW/2) / c.Zoom
+	ry := (screenY - screenH/2) / c.Zoom
+	cos := math.Cos(-c.Rotation)
+	sin := math.Sin(-c.Rotation)
+	wx := rx*cos - ry*sin + centerX
+	wy := rx*sin + ry*cos + centerY
+	return wx, wy
+}
+
+func (c *Camera) WorldToScreen(worldX, worldY, screenW, screenH float64) (float64, float64) {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	centerX, centerY := c.renderCenter(screenW, screenH)
+	dx := worldX - centerX
+	dy := worldY - centerY
+	cos := math.Cos(c.Rotation)
+	sin := math.Sin(c.Rotation)
+	rx := dx*cos - dy*sin
+	ry := dx*sin + dy*cos
+	sx := rx*c.Zoom + screenW/2
+	sy := ry*c.Zoom + screenH/2
+	return sx, sy
+}
+
+func (c *Camera) ViewRect(screenW, screenH float64) voplay.Rect {
+	if c.Zoom == 0 {
+		panic("Camera.Zoom must not be 0")
+	}
+	w := screenW / c.Zoom
+	h := screenH / c.Zoom
+	centerX, centerY := c.renderCenter(screenW, screenH)
+	return voplay.Rect{
+		X: centerX - w/2,
+		Y: centerY - h/2,
+		W: w,
+		H: h,
+	}
+}

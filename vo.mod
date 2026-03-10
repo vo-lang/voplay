@@ -5,6 +5,7 @@ vo 0.1
 files (
     state.vo
     game.vo
+    resources.vo
     assets.vo
     math.vo
     color.vo
@@ -14,7 +15,7 @@ files (
     audio.vo
     scheduler.vo
     tween.vo
-    host_vogui.vo
+    host.vo
     vo.ext.toml
 )
 

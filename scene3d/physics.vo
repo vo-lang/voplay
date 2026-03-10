@@ -5,12 +5,12 @@ import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
 
 // BodyType determines how the physics engine treats a body.
-type BodyType int
+type BodyType = voplay.BodyType
 
 const (
-	Dynamic   BodyType = 0
-	Static    BodyType = 1
-	Kinematic BodyType = 2
+	Dynamic   = voplay.Dynamic
+	Static    = voplay.Static
+	Kinematic = voplay.Kinematic
 )
 
 // Physics is the physics configuration and runtime state for a 3D entity.
@@ -92,6 +92,7 @@ const (
 	physicsCmdImpulse byte = 2
 	physicsCmdSetVel  byte = 3
 	physicsCmdSetPos  byte = 4
+	physicsCmdSetRot  byte = 5
 )
 
 // writePhysCmd appends a 3D physics command to this scene's command buffer.
@@ -103,37 +104,56 @@ func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2, v3 float64) {
 	s.physCmds.WriteF64(v3)
 }
 
+// writePhysCmdQuat appends a quaternion-valued physics command (rotation teleport).
+func (s *Scene) writePhysCmdQuat(cmd byte, bodyID int, q voplay.Quat) {
+	s.physCmds.WriteByte(cmd)
+	s.physCmds.WriteU32(bodyID)
+	s.physCmds.WriteF64(q.X)
+	s.physCmds.WriteF64(q.Y)
+	s.physCmds.WriteF64(q.Z)
+	s.physCmds.WriteF64(q.W)
+}
+
 // ApplyForce applies a force to a 3D physics entity (buffered until next step).
 func (e *Entity) ApplyForce(force voplay.Vec3) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, force.X, force.Y, force.Z)
 }
 
 // ApplyImpulse applies an impulse to a 3D physics entity (buffered until next step).
 func (e *Entity) ApplyImpulse(impulse voplay.Vec3) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, impulse.X, impulse.Y, impulse.Z)
 }
 
 // SetVelocity sets the linear velocity of a 3D physics entity (buffered until next step).
 func (e *Entity) SetVelocity(vel voplay.Vec3) {
-	if e.scene == nil || e.Physics == nil {
-		return
-	}
 	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vel.X, vel.Y, vel.Z)
 }
 
-// SetPosition teleports a 3D physics entity to the given position (buffered until next step).
-// For non-physics entities, sets Position directly.
+// SetPosition teleports the entity to the given world position.
+// For physics entities, also buffers a position command for the next physics step.
 func (e *Entity) SetPosition(pos voplay.Vec3) {
-	e.Position = pos
+	e.position = pos
 	if e.scene != nil && e.Physics != nil {
 		e.scene.writePhysCmd(physicsCmdSetPos, e.Physics.bodyID, pos.X, pos.Y, pos.Z)
 	}
+}
+
+// SetRotation sets the entity's world rotation.
+// For physics entities, also buffers a rotation command for the next physics step.
+func (e *Entity) SetRotation(rot voplay.Quat) {
+	e.rotation = rot
+	if e.scene != nil && e.Physics != nil {
+		e.scene.writePhysCmdQuat(physicsCmdSetRot, e.Physics.bodyID, rot)
+	}
+}
+
+// SetScale sets the entity's world scale.
+// Panics if the entity has a physics collider (collider resize is not supported).
+func (e *Entity) SetScale(s voplay.Vec3) {
+	if e.Physics != nil {
+		panic("Entity.SetScale: physics collider resize is not supported")
+	}
+	e.scale = s
 }
 
 // Velocity returns the current linear velocity (updated after each physics step).
@@ -152,13 +172,13 @@ func serializeBodyDesc(e *Entity) []byte {
 	w.WriteBool(p.FixedRotation)
 	w.WriteU16(p.Layer)
 	w.WriteU16(p.Mask)
-	w.WriteF64(e.Position.X)
-	w.WriteF64(e.Position.Y)
-	w.WriteF64(e.Position.Z)
-	w.WriteF64(e.Rotation.X)
-	w.WriteF64(e.Rotation.Y)
-	w.WriteF64(e.Rotation.Z)
-	w.WriteF64(e.Rotation.W)
+	w.WriteF64(e.position.X)
+	w.WriteF64(e.position.Y)
+	w.WriteF64(e.position.Z)
+	w.WriteF64(e.rotation.X)
+	w.WriteF64(e.rotation.Y)
+	w.WriteF64(e.rotation.Z)
+	w.WriteF64(e.rotation.W)
 	w.WriteF64(p.Collider.args[0])
 	w.WriteF64(p.Collider.args[1])
 	w.WriteF64(p.Collider.args[2])

@@ -1,0 +1,62 @@
+// Camera defines the 3D viewport: position, target, field of view, and clip planes.
+package scene3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+type Camera struct {
+	Position voplay.Vec3
+	Target   voplay.Vec3    // look-at point
+	Up       voplay.Vec3    // up vector (default: 0, 1, 0)
+	Fov      float64 // field of view in degrees (default: 60)
+	Near     float64 // near clip plane (default: 0.1)
+	Far      float64 // far clip plane (default: 1000)
+}
+
+// LookAt sets the camera position and target.
+func (c *Camera) LookAt(position, target voplay.Vec3) {
+	c.Position = position
+	c.Target = target
+}
+
+// Orbit positions the camera at a given distance from center,
+// looking at center, using spherical coordinates (yaw, pitch in radians).
+func (c *Camera) Orbit(center voplay.Vec3, distance, yaw, pitch float64) {
+	// Clamp pitch to avoid flipping
+	if pitch > 1.5 {
+		pitch = 1.5
+	}
+	if pitch < -1.5 {
+		pitch = -1.5
+	}
+	cp := math.Cos(pitch)
+	c.Position = voplay.Vec3{
+		center.X + distance*math.Cos(yaw)*cp,
+		center.Y + distance*math.Sin(pitch),
+		center.Z + distance*math.Sin(yaw)*cp,
+	}
+	c.Target = center
+}
+
+// ScreenToRay returns a ray origin and direction for a screen-space pixel.
+// screenW, screenH are the window dimensions.
+func (c *Camera) ScreenToRay(screenX, screenY, screenW, screenH float64) (voplay.Vec3, voplay.Vec3) {
+	// Compute normalized device coordinates (-1 to 1)
+	nx := (2.0*screenX/screenW - 1.0)
+	ny := (1.0 - 2.0*screenY/screenH)
+
+	// Build camera basis vectors
+	forward := c.Target.Sub(c.Position).Normalize()
+	right := forward.Cross(c.Up).Normalize()
+	up := right.Cross(forward)
+
+	// Compute half-extents based on FOV and aspect
+	fovRad := c.Fov * math.Pi / 180.0
+	halfH := math.Tan(fovRad / 2.0)
+	aspect := screenW / screenH
+	halfW := halfH * aspect
+
+	// Ray direction in world space
+	dir := forward.Add(right.Scale(nx * halfW)).Add(up.Scale(ny * halfH)).Normalize()
+	return c.Position, dir
+}

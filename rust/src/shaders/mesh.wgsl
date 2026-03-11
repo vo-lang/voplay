@@ -127,11 +127,10 @@ fn shade(albedo: vec4<f32>, in: VertexOutput) -> vec4<f32> {
             attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
         }
 
-        let shadow = if light_type == 0u && i == light_uni.count.z {
-            shadow_factor(in.world_pos)
-        } else {
-            1.0
-        };
+        var shadow = 1.0;
+        if light_type == 0u && i == light_uni.count.z {
+            shadow = shadow_factor(in.world_pos);
+        }
 
         let diff = max(dot(N, L), 0.0);
         color += albedo.rgb * light_color * diff * attenuation * shadow;

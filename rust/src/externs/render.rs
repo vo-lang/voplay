@@ -1,4 +1,4 @@
-//! Surface init, frame submit, input poll, runtime query, native loop, and texture externs.
+//! Surface init, frame submit, input poll, renderer query, and texture externs.
 
 use vo_ext::prelude::*;
 
@@ -24,9 +24,7 @@ pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
     }
     #[cfg(not(feature = "wasm"))]
     {
-        let _ = canvas_ref;
-        // Non-wasm, non-native: renderer can be injected via set_renderer().
-        write_unit_result(call, 0, Ok(()));
+        write_unit_result(call, 0, create_native_renderer(&canvas_ref));
     }
 
     ExternResult::Ok
@@ -89,6 +87,58 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
     result
 }
 
+#[cfg(not(feature = "wasm"))]
+fn create_native_renderer(canvas_ref: &str) -> Result<(), String> {
+    use std::ptr::NonNull;
+    use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
+    use crate::renderer::Renderer;
+
+    let desc = crate::host_api::request_surface(canvas_ref)?;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let surface = match desc.kind {
+        crate::host_api::SURFACE_KIND_APPKIT => {
+            let ns_view = NonNull::new(desc.native_handle)
+                .ok_or_else(|| format!("voplay: native host returned null AppKit view for '{}'", canvas_ref))?;
+            let raw_window_handle = RawWindowHandle::AppKit(AppKitWindowHandle::new(ns_view));
+            let raw_display_handle = RawDisplayHandle::AppKit(AppKitDisplayHandle::new());
+            unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle,
+                    raw_window_handle,
+                })
+            }
+        }
+        crate::host_api::SURFACE_KIND_CORE_ANIMATION_LAYER => {
+            if desc.native_handle.is_null() {
+                return Err(format!(
+                    "voplay: native host returned null CoreAnimationLayer for '{}'",
+                    canvas_ref,
+                ));
+            }
+            unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(desc.native_handle))
+            }
+        }
+        kind => {
+            return Err(format!(
+                "voplay: unsupported native surface kind {} for '{}'",
+                kind,
+                canvas_ref,
+            ));
+        }
+    }
+    .map_err(|e| format!("voplay: create_surface failed: {}", e))?;
+
+    let renderer = pollster::block_on(Renderer::new(
+        &instance,
+        surface,
+        desc.width.max(1),
+        desc.height.max(1),
+    ))?;
+    crate::renderer_runtime::set_renderer(renderer);
+    Ok(())
+}
+
 // --- submitFrame ---
 
 #[vo_fn("voplay", "submitFrame")]
@@ -107,66 +157,6 @@ pub fn submit_frame(call: &mut ExternCallContext) -> ExternResult {
 pub fn poll_input(call: &mut ExternCallContext) -> ExternResult {
     let events = input::drain_input();
     ret_bytes(call, 0, &events);
-    ExternResult::Ok
-}
-
-// --- Native game loop externs (only on native feature) ---
-
-#[vo_fn("voplay", "nativeInit")]
-pub fn native_init(call: &mut ExternCallContext) -> ExternResult {
-    #[cfg(feature = "native")]
-    {
-        let width = call.arg_u64(0) as u32;
-        let height = call.arg_u64(1) as u32;
-        let title = call.arg_str(2).to_string();
-        write_unit_result(call, 0, crate::native::init(width, height, &title));
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        write_unit_result(call, 0, Err("nativeInit not available on this platform".to_string()));
-    }
-    ExternResult::Ok
-}
-
-#[vo_fn("voplay", "nativePumpEvents")]
-pub fn native_pump_events(call: &mut ExternCallContext) -> ExternResult {
-    #[cfg(feature = "native")]
-    {
-        let (dt, closed) = crate::native::pump_events();
-        call.ret_f64(0, dt);
-        call.ret_bool(1, closed);
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        call.ret_f64(0, 0.0);
-        call.ret_bool(1, true);
-    }
-    ExternResult::Ok
-}
-
-#[vo_fn("voplay", "nativeSubmitFrame")]
-pub fn native_submit_frame(_call: &mut ExternCallContext) -> ExternResult {
-    #[cfg(feature = "native")]
-    {
-        let cmds = _call.arg_bytes(0).to_vec();
-        crate::native::submit_frame(cmds);
-    }
-    ExternResult::Ok
-}
-
-#[vo_fn("voplay", "nativeWindowSize")]
-pub fn native_window_size(call: &mut ExternCallContext) -> ExternResult {
-    #[cfg(feature = "native")]
-    {
-        let (w, h) = crate::native::window_size();
-        call.ret_u64(0, w as u64);
-        call.ret_u64(1, h as u64);
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        call.ret_u64(0, 0);
-        call.ret_u64(1, 0);
-    }
     ExternResult::Ok
 }
 
@@ -240,15 +230,6 @@ pub fn load_cubemap_bytes(call: &mut ExternCallContext) -> ExternResult {
 pub fn free_cubemap(call: &mut ExternCallContext) -> ExternResult {
     let id = call.arg_u64(0) as u32;
     let _ = with_renderer(|r| r.free_cubemap(id));
-    ExternResult::Ok
-}
-
-// --- runtimeIsWeb ---
-
-#[vo_fn("voplay", "runtimeIsWeb")]
-pub fn runtime_is_web(call: &mut ExternCallContext) -> ExternResult {
-    let is_web = cfg!(target_arch = "wasm32");
-    call.ret_bool(0, is_web);
     ExternResult::Ok
 }
 

@@ -126,15 +126,11 @@ func (g *GameCtx) Advance(dt float64) {
 	g.States.Update(frameDt)
 }
 
-// Run starts the game. Dispatches to web or native host.
+// Run starts the game via the vogui platform (web or native Studio).
 func Run(game Game) {
 	if game.InitialState == nil {
 		panic("Run: InitialState must not be nil")
 	}
 	ctx := newGameCtx(game)
-	if isWebEnvironment() {
-		runWeb(ctx, &game)
-	} else {
-		runNative(ctx, &game)
-	}
+	runGame(ctx, &game)
 }

@@ -81,69 +81,25 @@ pub fn set_renderer(renderer: Renderer) {
 }
 
 pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String> {
-    let hosted_state = with_hosted_renderer_ref(|state| match state {
-        HostedRenderer::Ready(_) => 0u8,
+    with_hosted_renderer_mut(|state| match state {
+        HostedRenderer::Ready(renderer) => Ok(f(renderer)),
         #[cfg(feature = "wasm")]
-        HostedRenderer::Initializing => 1u8,
+        HostedRenderer::Initializing => Err("voplay: renderer is initializing".to_string()),
         #[cfg(feature = "wasm")]
-        HostedRenderer::Failed(_) => 2u8,
-        HostedRenderer::Empty => 3u8,
-    });
-    match hosted_state {
-        0 => {
-            return with_hosted_renderer_mut(|state| match state {
-                HostedRenderer::Ready(renderer) => Ok(f(renderer)),
-                _ => unreachable!("voplay: hosted renderer state changed during dispatch"),
-            });
-        }
-        #[cfg(feature = "wasm")]
-        1 => {
-            return Err("voplay: renderer is initializing".to_string());
-        }
-        #[cfg(feature = "wasm")]
-        2 => {
-            return with_hosted_renderer_ref(|state| match state {
-                HostedRenderer::Failed(msg) => Err(msg.clone()),
-                _ => unreachable!("voplay: hosted renderer state changed during dispatch"),
-            });
-        }
-        _ => {}
-    }
-    #[cfg(feature = "native")]
-    {
-        crate::native::with_renderer(f)
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        Err("voplay: renderer not initialized".to_string())
-    }
+        HostedRenderer::Failed(msg) => Err(msg.clone()),
+        HostedRenderer::Empty => Err("voplay: renderer not initialized".to_string()),
+    })
 }
 
 pub fn renderer_ready() -> bool {
-    let hosted_ready = with_hosted_renderer_ref(|state| match state {
-        HostedRenderer::Ready(_) => Some(true),
+    with_hosted_renderer_ref(|state| match state {
+        HostedRenderer::Ready(_) => true,
         #[cfg(feature = "wasm")]
-        HostedRenderer::Initializing | HostedRenderer::Failed(_) => Some(false),
-        HostedRenderer::Empty => {
-            None
-        }
-    });
-    if let Some(ready) = hosted_ready {
-        return ready;
-    }
-    #[cfg(feature = "native")]
-    {
-        crate::native::is_renderer_ready()
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        false
-    }
+        HostedRenderer::Initializing | HostedRenderer::Failed(_) => false,
+        HostedRenderer::Empty => false,
+    })
 }
 
 pub fn submit_renderer_frame(data: &[u8]) -> Result<(), String> {
-    match with_renderer(|renderer| renderer.submit_frame(data)) {
-        Ok(result) => result,
-        Err(msg) => Err(msg),
-    }
+    with_renderer(|renderer| renderer.submit_frame(data)).and_then(|result| result)
 }

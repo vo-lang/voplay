@@ -1,15 +1,10 @@
-// Game loop hosts: web (via vogui canvas) and native (winit window).
-// Frame order for both hosts: poll input → advance → draw → submit.
+// Game loop host: runs via vogui platform (web or native Studio).
+// Frame order: poll input → advance → draw → submit.
 package voplay
 
 import "github.com/vo-lang/vogui"
 
-// isWebEnvironment returns true when running in a WASM/browser context.
-func isWebEnvironment() bool {
-	return runtimeIsWeb()
-}
-
-func runWeb(ctx *GameCtx, game *Game) {
+func runGame(ctx *GameCtx, game *Game) {
 	vogui.Run(vogui.App{
 		Init: func() any {
 			startGameLoop(ctx, game)
@@ -18,7 +13,10 @@ func runWeb(ctx *GameCtx, game *Game) {
 		View: func(state any) vogui.Node {
 			return vogui.Canvas(vogui.CanvasProps{
 				Fullscreen: true,
-			})
+				OnResize: vogui.OnResize(func(_ any, e vogui.ResizeEvent) {
+					ctx.handleResize(e.Width, e.Height)
+				}),
+			}).Ref("canvas").Attr("id", "canvas")
 		},
 	})
 }
@@ -74,50 +72,6 @@ func startGameLoop(ctx *GameCtx, game *Game) {
 	})
 }
 
-// runNative opens a native window (winit) and runs the game loop.
-func runNative(ctx *GameCtx, game *Game) {
-	err := nativeInit(game.Width, game.Height, game.Title)
-	if err != nil {
-		panic(err)
-	}
-
-	ctx.start(game.InitialState)
-
-	for {
-		// 1. Pump OS events + get dt
-		dt, closed := nativePumpEvents()
-		if closed || ctx.closed {
-			break
-		}
-
-		// 2. Handle resize
-		w, h := nativeWindowSize()
-		ctx.handleResize(w, h)
-
-		// 3. Poll input
-		inputBytes := pollInput()
-		ctx.Input.unpackEvents(inputBytes)
-
-		// 4. Game logic
-		ctx.Advance(dt)
-		if ctx.closed {
-			ctx.Input.endFrame()
-			break
-		}
-
-		// 5. Encode + submit draw commands (same frame)
-		ctx.Draw.reset()
-		ctx.States.Draw()
-		nativeSubmitFrame(ctx.Draw.Bytes())
-
-		ctx.Input.endFrame()
-	}
-
-	if game.OnClose != nil {
-		game.OnClose(ctx)
-	}
-}
-
 // --- Extern declarations for the host layer (implemented in Rust: vo-voplay crate) ---
 
 // Surface
@@ -128,11 +82,4 @@ func submitFrame(cmds []byte) error
 func pollInput() []byte
 
 // Runtime query
-func runtimeIsWeb() bool
 func isRendererReady() bool
-
-// Native game loop
-func nativeInit(width, height int, title string) error
-func nativePumpEvents() (float64, bool)
-func nativeSubmitFrame(cmds []byte)
-func nativeWindowSize() (int, int)

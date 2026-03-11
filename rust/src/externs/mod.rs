@@ -1,7 +1,7 @@
 //! Vo extern implementations for voplay.
 //!
 //! Split into sub-modules by domain:
-//!   render   — surface init, frame submit, input poll, runtime query, native loop, texture
+//!   render   — surface init, frame submit, input poll, renderer query, texture
 //!   physics2d — scene2d physics externs
 //!   physics3d — scene3d physics externs
 //!   animation — scene3d skeletal animation externs
@@ -46,17 +46,12 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     render::__EXT_voplay_initSurface,
     render::__EXT_voplay_submitFrame,
     render::__EXT_voplay_pollInput,
-    render::__EXT_voplay_nativeInit,
-    render::__EXT_voplay_nativePumpEvents,
-    render::__EXT_voplay_nativeSubmitFrame,
-    render::__EXT_voplay_nativeWindowSize,
     render::__EXT_voplay_loadTexture,
     render::__EXT_voplay_loadTextureBytes,
     render::__EXT_voplay_freeTexture,
     render::__EXT_voplay_loadCubemap,
     render::__EXT_voplay_loadCubemapBytes,
     render::__EXT_voplay_freeCubemap,
-    render::__EXT_voplay_runtimeIsWeb,
     render::__EXT_voplay_isRendererReady,
     resource::__EXT_voplay_loadFont,
     resource::__EXT_voplay_loadFontBytes,

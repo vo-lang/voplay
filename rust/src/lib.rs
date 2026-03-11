@@ -21,6 +21,8 @@ mod draw_list;
 mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod font_manager;
+#[cfg(feature = "native")]
+mod host_api;
 #[allow(dead_code)]
 mod math3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -49,11 +51,19 @@ mod pipeline_sprite;
 mod texture;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod input;
-#[cfg(feature = "native")]
-pub mod native;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use renderer::Renderer;
+
+#[cfg(feature = "native")]
+pub use host_api::{
+    vo_voplay_push_key_event,
+    vo_voplay_push_pointer_down,
+    vo_voplay_push_pointer_move,
+    vo_voplay_push_pointer_up,
+    vo_voplay_push_scroll_event,
+    vo_voplay_set_host_api,
+};
 
 #[cfg(feature = "native")]
 vo_ext::export_extensions!();

@@ -3,12 +3,15 @@
 //! Renders loaded glTF models with per-node transforms, directional/point lights,
 //! and optional albedo textures. Uses depth testing for proper occlusion.
 
+use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
-use crate::model_loader::{ModelId, ModelManager, MeshVertex};
+use crate::animation;
+use crate::model_loader::{ModelId, ModelManager, MeshVertex, SkinnedMeshVertex};
 use crate::texture::TextureManager;
 
 /// Maximum number of lights per frame.
 const MAX_LIGHTS: usize = 8;
+const MAX_JOINTS: usize = animation::MAX_JOINTS;
 
 /// Camera uniform for 3D rendering (group 0).
 #[repr(C)]
@@ -26,6 +29,18 @@ pub struct ModelUniform {
     pub model: [[f32; 4]; 4],
     pub normal_matrix: [[f32; 4]; 4],
     pub base_color: [f32; 4],
+    pub material_params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct SkinnedModelUniform {
+    pub model: [[f32; 4]; 4],
+    pub normal_matrix: [[f32; 4]; 4],
+    pub base_color: [f32; 4],
+    pub material_params: [f32; 4],
+    pub joint_count: [u32; 4],
+    pub joints: [[[f32; 4]; 4]; MAX_JOINTS],
 }
 
 /// Single light data matching the shader struct.
@@ -41,28 +56,43 @@ pub struct LightData {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct LightUniform {
     pub ambient: [f32; 4],    // rgb = ambient color, a = unused
-    pub count: [u32; 4],      // x = number of lights
+    pub count: [u32; 4],      // x = number of lights, y = fog mode
     pub lights: [LightData; MAX_LIGHTS],
+    pub fog_color: [f32; 4],
+    pub fog_params: [f32; 4],
+    pub shadow_vp: [[f32; 4]; 4],
+    pub shadow_params: [f32; 4],
 }
 
 /// A pending 3D model draw.
 pub struct ModelDraw {
     pub model_id: ModelId,
     pub model_uniform: ModelUniform,
+    pub tint: [f32; 4],
+    pub animation_world_id: u32,
+    pub animation_target_id: u32,
 }
 
 /// The 3D mesh rendering pipeline.
 pub struct Pipeline3D {
     pipeline_textured: wgpu::RenderPipeline,
     pipeline_untextured: wgpu::RenderPipeline,
+    pipeline_terrain_splat: wgpu::RenderPipeline,
+    pipeline_skinned_textured: wgpu::RenderPipeline,
+    pipeline_skinned_untextured: wgpu::RenderPipeline,
     // GPU buffers
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     model_buffer: wgpu::Buffer,
     model_bind_group: wgpu::BindGroup,
+    skinned_model_buffer: wgpu::Buffer,
+    skinned_model_bind_group: wgpu::BindGroup,
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
+    main_texture_bind_group_layout: wgpu::BindGroupLayout,
     // 1x1 white fallback texture for untextured meshes
+    white_texture_view: wgpu::TextureView,
+    white_sampler: wgpu::Sampler,
     white_texture_bind_group: wgpu::BindGroup,
 }
 
@@ -73,9 +103,17 @@ impl Pipeline3D {
         surface_format: wgpu::TextureFormat,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let static_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
+        });
+        let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("voplay_mesh_terrain"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh_terrain.wgsl").into()),
+        });
+        let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("voplay_mesh_skinned"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh_skinned.wgsl").into()),
         });
 
         // Group 0: Camera
@@ -123,10 +161,62 @@ impl Pipeline3D {
             }],
         });
 
-        // Group 3: Texture (reuse existing texture_bind_group_layout)
+        let main_texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("voplay_mesh_main_texture_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+
+        // Group 3: Main texture + shadow map
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("voplay_mesh_layout"),
-            bind_group_layouts: &[&camera_bgl, &model_bgl, &light_bgl, texture_bind_group_layout],
+            bind_group_layouts: &[&camera_bgl, &model_bgl, &light_bgl, &main_texture_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let terrain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("voplay_mesh_terrain_layout"),
+            bind_group_layouts: &[
+                &camera_bgl,
+                &model_bgl,
+                &light_bgl,
+                &main_texture_bind_group_layout,
+                texture_bind_group_layout,
+                texture_bind_group_layout,
+                texture_bind_group_layout,
+                texture_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -139,7 +229,7 @@ impl Pipeline3D {
         });
 
         let vertex_state = wgpu::VertexState {
-            module: &shader,
+            module: &static_shader,
             entry_point: Some("vs_main"),
             buffers: &[MeshVertex::layout()],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -161,8 +251,86 @@ impl Pipeline3D {
             layout: Some(&pipeline_layout),
             vertex: vertex_state.clone(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &static_shader,
                 entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive,
+            depth_stencil: depth_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let pipeline_terrain_splat = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("voplay_mesh_terrain_splat"),
+            layout: Some(&terrain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &terrain_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[MeshVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &terrain_shader,
+                entry_point: Some("fs_main_terrain"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive,
+            depth_stencil: depth_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let pipeline_skinned_textured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("voplay_mesh_skinned_textured"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &skinned_shader,
+                entry_point: Some("vs_skinned"),
+                buffers: &[SkinnedMeshVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &skinned_shader,
+                entry_point: Some("fs_skinned"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive,
+            depth_stencil: depth_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let pipeline_skinned_untextured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("voplay_mesh_skinned_untextured"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &skinned_shader,
+                entry_point: Some("vs_skinned"),
+                buffers: &[SkinnedMeshVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &skinned_shader,
+                entry_point: Some("fs_skinned_no_tex"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -182,13 +350,13 @@ impl Pipeline3D {
             label: Some("voplay_mesh_untextured"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &static_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[MeshVertex::layout()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &static_shader,
                 entry_point: Some("fs_main_no_tex"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -232,6 +400,21 @@ impl Pipeline3D {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: model_buffer.as_entire_binding(),
+            }],
+        });
+
+        let skinned_model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voplay_mesh_skinned_model_ub"),
+            size: std::mem::size_of::<SkinnedModelUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let skinned_model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voplay_mesh_skinned_model_bg"),
+            layout: &model_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: skinned_model_buffer.as_entire_binding(),
             }],
         });
 
@@ -290,14 +473,42 @@ impl Pipeline3D {
         Self {
             pipeline_textured,
             pipeline_untextured,
+            pipeline_terrain_splat,
+            pipeline_skinned_textured,
+            pipeline_skinned_untextured,
             camera_buffer,
             camera_bind_group,
             model_buffer,
             model_bind_group,
+            skinned_model_buffer,
+            skinned_model_bind_group,
             light_buffer,
             light_bind_group,
+            main_texture_bind_group_layout,
+            white_texture_view: white_view,
+            white_sampler,
             white_texture_bind_group,
         }
+    }
+
+    fn create_main_texture_bind_group(
+        &self,
+        device: &wgpu::Device,
+        texture_view: &wgpu::TextureView,
+        texture_sampler: &wgpu::Sampler,
+        shadow_view: &wgpu::TextureView,
+        shadow_sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voplay_mesh_main_texture_bg"),
+            layout: &self.main_texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(texture_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(texture_sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
+            ],
+        })
     }
 
     /// Upload camera and light uniforms for this frame.
@@ -314,15 +525,20 @@ impl Pipeline3D {
     /// Draw a list of models within an active render pass.
     pub fn draw_models<'a>(
         &'a self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'a>,
         draws: &[ModelDraw],
         models: &'a ModelManager,
         textures: &'a TextureManager,
+        shadow_view: &'a wgpu::TextureView,
+        shadow_sampler: &'a wgpu::Sampler,
     ) {
         if draws.is_empty() {
             return;
         }
+
+        let mut main_texture_bind_groups: HashMap<u32, wgpu::BindGroup> = HashMap::new();
 
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(2, &self.light_bind_group, &[]);
@@ -333,23 +549,102 @@ impl Pipeline3D {
                 None => continue,
             };
 
-            // Upload per-model transform
-            queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&draw.model_uniform));
-            pass.set_bind_group(1, &self.model_bind_group, &[]);
-
             for mesh in &gpu_model.meshes {
-                // Select pipeline and bind texture
-                if let Some(tex_id) = mesh.material.texture_id {
-                    if let Some(gpu_tex) = textures.get(tex_id) {
-                        pass.set_pipeline(&self.pipeline_textured);
-                        pass.set_bind_group(3, &gpu_tex.bind_group, &[]);
+                let base_color = [
+                    mesh.material.base_color[0] * draw.tint[0],
+                    mesh.material.base_color[1] * draw.tint[1],
+                    mesh.material.base_color[2] * draw.tint[2],
+                    mesh.material.base_color[3] * draw.tint[3],
+                ];
+
+                if mesh.skinned {
+                    let mut skinned_uniform = SkinnedModelUniform {
+                        model: draw.model_uniform.model,
+                        normal_matrix: draw.model_uniform.normal_matrix,
+                        base_color,
+                        material_params: mesh.material.uv_scales,
+                        joint_count: [0, 0, 0, 0],
+                        joints: [[[0.0; 4]; 4]; MAX_JOINTS],
+                    };
+                    let palette = if draw.animation_world_id != 0 && draw.animation_target_id != 0 {
+                        animation::get_palette(draw.animation_world_id, draw.animation_target_id)
                     } else {
-                        pass.set_pipeline(&self.pipeline_untextured);
-                        pass.set_bind_group(3, &self.white_texture_bind_group, &[]);
+                        None
+                    };
+                    let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
+                    assert!(joint_palette.len() <= MAX_JOINTS, "voplay: joint palette exceeds MAX_JOINTS");
+                    skinned_uniform.joint_count[0] = joint_palette.len() as u32;
+                    for (index, matrix) in joint_palette.iter().enumerate() {
+                        skinned_uniform.joints[index] = *matrix;
                     }
+                    queue.write_buffer(&self.skinned_model_buffer, 0, bytemuck::bytes_of(&skinned_uniform));
+                    pass.set_bind_group(1, &self.skinned_model_bind_group, &[]);
+
+                    let use_textured_pipeline = mesh.material.texture_id.and_then(|tex_id| textures.get(tex_id)).is_some();
+                    let (texture_key, texture_view, texture_sampler) = if let Some(tex_id) = mesh.material.texture_id {
+                        if let Some(gpu_tex) = textures.get(tex_id) {
+                            (tex_id, &gpu_tex.view, textures.sampler())
+                        } else {
+                            (0, &self.white_texture_view, &self.white_sampler)
+                        }
+                    } else {
+                        (0, &self.white_texture_view, &self.white_sampler)
+                    };
+                    let main_texture_bind_group = main_texture_bind_groups.entry(texture_key).or_insert_with(|| {
+                        self.create_main_texture_bind_group(device, texture_view, texture_sampler, shadow_view, shadow_sampler)
+                    });
+                    if use_textured_pipeline {
+                        pass.set_pipeline(&self.pipeline_skinned_textured);
+                    } else {
+                        pass.set_pipeline(&self.pipeline_skinned_untextured);
+                    }
+                    pass.set_bind_group(3, &*main_texture_bind_group, &[]);
                 } else {
-                    pass.set_pipeline(&self.pipeline_untextured);
-                    pass.set_bind_group(3, &self.white_texture_bind_group, &[]);
+                    let mut model_uniform = draw.model_uniform;
+                    model_uniform.base_color = base_color;
+                    model_uniform.material_params = mesh.material.uv_scales;
+                    queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&model_uniform));
+                    pass.set_bind_group(1, &self.model_bind_group, &[]);
+
+                    if let Some(control_id) = mesh.material.control_texture_id {
+                        pass.set_pipeline(&self.pipeline_terrain_splat);
+                        let (texture_key, texture_view, texture_sampler) = if let Some(gpu_tex) = textures.get(control_id) {
+                            (control_id, &gpu_tex.view, textures.sampler())
+                        } else {
+                            (0, &self.white_texture_view, &self.white_sampler)
+                        };
+                        let main_texture_bind_group = main_texture_bind_groups.entry(texture_key).or_insert_with(|| {
+                            self.create_main_texture_bind_group(device, texture_view, texture_sampler, shadow_view, shadow_sampler)
+                        });
+                        pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+                        for (index, tex_id) in mesh.material.layer_texture_ids.iter().enumerate() {
+                            if let Some(id) = tex_id.and_then(|value| textures.get(value)) {
+                                pass.set_bind_group(4 + index as u32, &id.bind_group, &[]);
+                            } else {
+                                pass.set_bind_group(4 + index as u32, &self.white_texture_bind_group, &[]);
+                            }
+                        }
+                    } else if let Some(tex_id) = mesh.material.texture_id {
+                        if let Some(gpu_tex) = textures.get(tex_id) {
+                            let main_texture_bind_group = main_texture_bind_groups.entry(tex_id).or_insert_with(|| {
+                                self.create_main_texture_bind_group(device, &gpu_tex.view, textures.sampler(), shadow_view, shadow_sampler)
+                            });
+                            pass.set_pipeline(&self.pipeline_textured);
+                            pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+                        } else {
+                            let main_texture_bind_group = main_texture_bind_groups.entry(0).or_insert_with(|| {
+                                self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view, shadow_sampler)
+                            });
+                            pass.set_pipeline(&self.pipeline_untextured);
+                            pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+                        }
+                    } else {
+                        let main_texture_bind_group = main_texture_bind_groups.entry(0).or_insert_with(|| {
+                            self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view, shadow_sampler)
+                        });
+                        pass.set_pipeline(&self.pipeline_untextured);
+                        pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+                    }
                 }
 
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));

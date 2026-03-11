@@ -70,6 +70,118 @@ func (a Vec3) Lerp(b Vec3, t float64) Vec3 {
 	}
 }
 
+type AABB struct {
+	Min Vec3
+	Max Vec3
+}
+
+func (a AABB) Center() Vec3 {
+	return a.Min.Add(a.Max).Scale(0.5)
+}
+
+func (a AABB) Size() Vec3 {
+	return a.Max.Sub(a.Min)
+}
+
+func (a AABB) Transform(position Vec3, rotation Quat, scale Vec3) AABB {
+	localCenter := a.Center()
+	worldCenter := rotation.RotateVec3(Vec3{
+		X: localCenter.X * scale.X,
+		Y: localCenter.Y * scale.Y,
+		Z: localCenter.Z * scale.Z,
+	}).Add(position)
+	half := Vec3{
+		X: math.Abs(a.Max.X-a.Min.X) * math.Abs(scale.X) * 0.5,
+		Y: math.Abs(a.Max.Y-a.Min.Y) * math.Abs(scale.Y) * 0.5,
+		Z: math.Abs(a.Max.Z-a.Min.Z) * math.Abs(scale.Z) * 0.5,
+	}
+	xAxis := rotation.RotateVec3(Vec3{X: half.X})
+	yAxis := rotation.RotateVec3(Vec3{Y: half.Y})
+	zAxis := rotation.RotateVec3(Vec3{Z: half.Z})
+	worldHalf := Vec3{
+		X: math.Abs(xAxis.X) + math.Abs(yAxis.X) + math.Abs(zAxis.X),
+		Y: math.Abs(xAxis.Y) + math.Abs(yAxis.Y) + math.Abs(zAxis.Y),
+		Z: math.Abs(xAxis.Z) + math.Abs(yAxis.Z) + math.Abs(zAxis.Z),
+	}
+	return AABB{
+		Min: worldCenter.Sub(worldHalf),
+		Max: worldCenter.Add(worldHalf),
+	}
+}
+
+func RayHitAABB(origin, dir Vec3, box AABB, maxDist float64) (bool, float64) {
+	if maxDist < 0 {
+		return false, 0
+	}
+	parallelEpsilon := 0.000000000001
+	tmin := -math.MaxFloat64
+	tmax := math.MaxFloat64
+	if math.Abs(dir.X) < parallelEpsilon {
+		if origin.X < box.Min.X || origin.X > box.Max.X {
+			return false, 0
+		}
+	} else {
+		tx1 := (box.Min.X - origin.X) / dir.X
+		tx2 := (box.Max.X - origin.X) / dir.X
+		if tx1 > tx2 {
+			tx1, tx2 = tx2, tx1
+		}
+		if tx1 > tmin {
+			tmin = tx1
+		}
+		if tx2 < tmax {
+			tmax = tx2
+		}
+	}
+	if math.Abs(dir.Y) < parallelEpsilon {
+		if origin.Y < box.Min.Y || origin.Y > box.Max.Y {
+			return false, 0
+		}
+	} else {
+		ty1 := (box.Min.Y - origin.Y) / dir.Y
+		ty2 := (box.Max.Y - origin.Y) / dir.Y
+		if ty1 > ty2 {
+			ty1, ty2 = ty2, ty1
+		}
+		if ty1 > tmin {
+			tmin = ty1
+		}
+		if ty2 < tmax {
+			tmax = ty2
+		}
+	}
+	if math.Abs(dir.Z) < parallelEpsilon {
+		if origin.Z < box.Min.Z || origin.Z > box.Max.Z {
+			return false, 0
+		}
+	} else {
+		tz1 := (box.Min.Z - origin.Z) / dir.Z
+		tz2 := (box.Max.Z - origin.Z) / dir.Z
+		if tz1 > tz2 {
+			tz1, tz2 = tz2, tz1
+		}
+		if tz1 > tmin {
+			tmin = tz1
+		}
+		if tz2 < tmax {
+			tmax = tz2
+		}
+	}
+	if tmin > tmax || tmax < 0 {
+		return false, 0
+	}
+	if tmin > maxDist {
+		return false, 0
+	}
+	if tmin >= 0 {
+		return true, tmin
+	}
+	if tmax > maxDist {
+		return false, 0
+	}
+	return true, tmax
+}
+
 // Quat is a quaternion for 3D rotations.
 type Quat struct {
 	X, Y, Z, W float64

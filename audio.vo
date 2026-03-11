@@ -1,79 +1,173 @@
-// Audio playback: load clips, play SFX and music, volume control.
+// Audio playback for voplay games.
+//
+// Delegates all audio operations to vogui's audio engine. voplay adds:
+//   - Path-based loading (via readFileBytes extern / file_io layer)
+//   - AudioBackend interface for test injection
+//   - Vec3-based convenience wrappers
 package voplay
 
-// --- Extern declarations for audio (implemented in Rust: vo-voplay crate) ---
+import "github.com/vo-lang/vogui"
 
-func audioLoad(path string) (int, error)
-func audioLoadBytes(data []byte) (int, error)
-func audioFree(clipID int)
-func audioPlaySound(clipID int, volume, pitch float64)
-func audioPlayMusic(clipID int, volume float64)
-func audioStopMusic()
-func audioPauseMusic()
-func audioResumeMusic()
-func audioSetSFXVolume(vol float64)
-func audioSetMusicVolume(vol float64)
+// ============ Extern: path-based file reading (Rust file_io layer) ============
+
+func audioLoadFile(path string) (int, error)
+
+// ============ Public Types ============
 
 // AudioClipID is a handle to a loaded audio resource (WAV, OGG, MP3).
+// Same underlying type as vogui.AudioClipID (int).
 type AudioClipID int
 
+// AudioSourceID is a handle to a persistent 3D audio source.
+type AudioSourceID int
+
+// AudioBackend abstracts spatial audio operations so they can be
+// replaced in tests without per-function hook boilerplate.
+type AudioBackend interface {
+	SetListener(position, forward, up Vec3)
+	PlaySound3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64)
+	CreateSource3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64) (AudioSourceID, error)
+	UpdateSpatial()
+	SetSource3DPos(id AudioSourceID, pos Vec3)
+	RemoveSource3D(id AudioSourceID)
+}
+
+// ============ Helpers: convert between voplay Vec3 and vogui AudioVec3 ============
+
+func toAudioVec3(v Vec3) vogui.AudioVec3 {
+	return vogui.AudioVec3{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+func toVoguiClip(c AudioClipID) vogui.AudioClipID {
+	return vogui.AudioClipID(int(c))
+}
+
+// ============ AudioBackend (test-injectable) ============
+
+type defaultAudioBackend struct{}
+
+func (defaultAudioBackend) SetListener(position, forward, up Vec3) {
+	vogui.SetAudioListener(toAudioVec3(position), toAudioVec3(forward), toAudioVec3(up))
+}
+
+func (defaultAudioBackend) PlaySound3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64) {
+	toVoguiClip(clip).PlaySound3D(toAudioVec3(pos), volume, refDistance, maxDistance)
+}
+
+func (defaultAudioBackend) CreateSource3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64) (AudioSourceID, error) {
+	src := vogui.CreateAudioSource3D(toVoguiClip(clip), toAudioVec3(pos), volume, refDistance, maxDistance)?
+	return AudioSourceID(int(src)), nil
+}
+
+func (defaultAudioBackend) UpdateSpatial() {
+	vogui.UpdateSpatialAudio()
+}
+
+func (defaultAudioBackend) SetSource3DPos(id AudioSourceID, pos Vec3) {
+	vogui.AudioSourceID(int(id)).SetPosition(toAudioVec3(pos))
+}
+
+func (defaultAudioBackend) RemoveSource3D(id AudioSourceID) {
+	vogui.AudioSourceID(int(id)).Remove()
+}
+
+var audioBackend AudioBackend = defaultAudioBackend{}
+
+// SetAudioBackend replaces the active audio backend and returns the previous one.
+func SetAudioBackend(b AudioBackend) AudioBackend {
+	prev := audioBackend
+	audioBackend = b
+	return prev
+}
+
+// ============ Loading ============
+
 // LoadAudio loads an audio file from disk and returns an AudioClipID.
+// Uses voplay's file_io layer (WASM-safe via VirtualFS).
 func LoadAudio(path string) (AudioClipID, error) {
-	id := audioLoad(path)?
+	id := audioLoadFile(path)?
 	return AudioClipID(id), nil
 }
 
 // LoadAudioBytes loads an audio clip from encoded bytes (WAV, OGG, MP3).
 func LoadAudioBytes(data []byte) (AudioClipID, error) {
-	id := audioLoadBytes(data)?
-	return AudioClipID(id), nil
+	clip := vogui.LoadAudioBytes(data)?
+	return AudioClipID(int(clip)), nil
 }
+
+// ============ Basic Playback ============
 
 // Free releases a loaded audio clip.
 func (c AudioClipID) Free() {
-	audioFree(int(c))
+	toVoguiClip(c).Free()
 }
 
 // Play plays this clip as a one-shot sound effect.
-// volume: 0.0–1.0 (scaled by global SFX volume).
 func (c AudioClipID) Play() {
-	audioPlaySound(int(c), 1.0, 1.0)
+	toVoguiClip(c).Play()
 }
 
 // PlayEx plays this clip as a sound effect with explicit parameters.
-// volume: amplitude scale (1.0 = normal).
-// pitch: playback speed (1.0 = normal, 2.0 = double speed/octave up).
 func (c AudioClipID) PlayEx(volume, pitch float64) {
-	audioPlaySound(int(c), volume, pitch)
+	toVoguiClip(c).PlayEx(volume, pitch)
 }
 
 // PlayMusic starts this clip as looping background music.
-// Stops any currently playing music. volume: 0.0–1.0 (scaled by global music volume).
 func (c AudioClipID) PlayMusic(volume float64) {
-	audioPlayMusic(int(c), volume)
+	toVoguiClip(c).PlayMusic(volume)
 }
 
 // StopMusic stops the currently playing background music.
 func StopMusic() {
-	audioStopMusic()
+	vogui.StopMusic()
 }
 
 // PauseMusic pauses the currently playing background music.
 func PauseMusic() {
-	audioPauseMusic()
+	vogui.PauseMusic()
 }
 
 // ResumeMusic resumes paused background music.
 func ResumeMusic() {
-	audioResumeMusic()
+	vogui.ResumeMusic()
 }
 
 // SetSFXVolume sets the global volume multiplier for sound effects (0.0–1.0).
 func SetSFXVolume(vol float64) {
-	audioSetSFXVolume(vol)
+	vogui.SetSFXVolume(vol)
 }
 
 // SetMusicVolume sets the global volume multiplier for music (0.0–1.0).
 func SetMusicVolume(vol float64) {
-	audioSetMusicVolume(vol)
+	vogui.SetMusicVolume(vol)
+}
+
+// ============ 3D Spatial (delegated via AudioBackend for Vec3 convenience) ============
+
+func SetAudioListenerTransform(position, forward, up Vec3) {
+	audioBackend.SetListener(position, forward.Normalize(), up)
+}
+
+func SetAudioListener(position, target, up Vec3) {
+	SetAudioListenerTransform(position, target.Sub(position), up)
+}
+
+func (c AudioClipID) PlaySound3D(pos Vec3, volume, refDistance, maxDistance float64) {
+	audioBackend.PlaySound3D(c, pos, volume, refDistance, maxDistance)
+}
+
+func CreateAudioSource3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64) (AudioSourceID, error) {
+	return audioBackend.CreateSource3D(clip, pos, volume, refDistance, maxDistance)
+}
+
+func UpdateSpatialAudio() {
+	audioBackend.UpdateSpatial()
+}
+
+func (s AudioSourceID) SetPosition(pos Vec3) {
+	audioBackend.SetSource3DPos(s, pos)
+}
+
+func (s AudioSourceID) Remove() {
+	audioBackend.RemoveSource3D(s)
 }

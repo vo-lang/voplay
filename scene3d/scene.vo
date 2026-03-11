@@ -2,6 +2,7 @@
 // Camera is in camera.vo, physics types in physics.vo.
 package scene3d
 
+import "errors"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
 
@@ -14,21 +15,50 @@ const (
 	PointLight       = voplay.PointLight
 )
 
+const (
+	FogNone       = voplay.FogNone
+	FogLinear     = voplay.FogLinear
+	FogExp        = voplay.FogExp
+	FogExpSquared = voplay.FogExpSquared
+)
+
+const (
+	PickDefault  = 0
+	PickEnabled  = 1
+	PickDisabled = 2
+)
+
+type FogConfig struct {
+	Mode    int
+	Color   voplay.Color
+	Start   float64
+	End     float64
+	Density float64
+}
+
 // Scene holds the 3D scene state.
 type Scene struct {
 	Camera  Camera
+	Skybox  voplay.CubemapID
 	Lights  []Light
 	Ambient voplay.Color
+	ShadowsEnabled bool
+	ShadowResolution int
+	Fog     FogConfig
 	Gravity voplay.Vec3
+	Emitters []*ParticleEmitter
 
 	entities     []*Entity
 	visibleBuf   []*Entity
 	nextEntityID int
 	entityByID   map[int]*Entity
 	worldID      int
+	animationWorldID      int
 	nextBodyID   int
+	nextAnimationTargetID int
 	physCmds     codec.ByteWriter
 	bodyMap      map[int]*Entity
+	animationInfoCache map[int]AnimationModelInfo
 }
 
 // New creates a new 3D scene with default camera and gravity.
@@ -43,12 +73,16 @@ func New() *Scene {
 			Far:      1000,
 		},
 		Ambient:      voplay.Color{0.1, 0.1, 0.1, 1},
+		ShadowsEnabled: false,
+		ShadowResolution: 2048,
 		Gravity:      voplay.Vec3{0, -9.8, 0},
 		nextEntityID: 1,
 		entityByID:   make(map[int]*Entity),
 		nextBodyID:   1,
+		nextAnimationTargetID: 1,
 		physCmds:     codec.NewByteWriter(256),
 		bodyMap:      make(map[int]*Entity),
+		animationInfoCache: make(map[int]AnimationModelInfo),
 	}
 }
 
@@ -58,6 +92,10 @@ type EntityDesc struct {
 	Rotation voplay.Quat
 	Scale    voplay.Vec3
 	Model    voplay.ModelID
+	OwnedModel voplay.ModelID
+	PickMode int
+	Tint     voplay.Color
+	TintSet  bool
 	Tag      string
 	Data     any
 	Physics  *Physics
@@ -73,11 +111,18 @@ type Entity struct {
 	rotation voplay.Quat
 	scale    voplay.Vec3
 	Model    voplay.ModelID
+	ownedModel voplay.ModelID
+	Pickable bool
+	Tint     voplay.Color
 	Tag      string
 	Active   bool
 	Visible  bool
 	Data     any
 	Physics  *Physics
+	audioSources []voplay.AudioSourceID
+	animationTargetID int
+	hasSkeleton     bool
+	hasSkeletonInit bool
 	scene    *Scene
 }
 
@@ -101,23 +146,125 @@ func (e *Entity) ID() int {
 	return e.id
 }
 
-// Spawn creates an entity in the scene from a descriptor.
-// If Physics is set, a Rapier3D body is created via extern.
-func (s *Scene) Spawn(desc EntityDesc) *Entity {
-	scale := desc.Scale
-	if scale == (voplay.Vec3{}) {
-		scale = voplay.Vec3{1, 1, 1}
+// HasSkeleton returns true if the entity's model has a skeleton for animation.
+// This is determined lazily on first access and cached.
+func (e *Entity) HasSkeleton() bool {
+	e.ensureHasSkeleton()
+	return e.hasSkeleton
+}
+
+func (e *Entity) ensureHasSkeleton() {
+	if e.hasSkeletonInit || e.Model == 0 || e.scene == nil {
+		return
 	}
-	rotation := desc.Rotation
-	if rotation == (voplay.Quat{}) {
-		rotation = voplay.QuatIdentity()
+	e.hasSkeletonInit = true
+	e.hasSkeleton = e.scene.AnimationModelInfo(e.Model).HasSkeleton
+}
+
+func (e *Entity) PlaySound3D(clip voplay.AudioClipID, volume float64) {
+	if e.scene == nil || !e.Active {
+		panic("scene3d.Entity.PlaySound3D: entity must belong to an active scene")
 	}
+	clip.PlaySound3D(e.position, volume, 1.0, 50.0)
+}
+
+func (e *Entity) AttachAudioSource(clip voplay.AudioClipID, volume, refDistance, maxDistance float64) (voplay.AudioSourceID, error) {
+	if e.scene == nil || !e.Active {
+		return 0, errors.New("scene3d.Entity.AttachAudioSource: entity must belong to an active scene")
+	}
+	source, err := voplay.CreateAudioSource3D(clip, e.position, volume, refDistance, maxDistance)
+	if err != nil {
+		return 0, err
+	}
+	e.audioSources = append(e.audioSources, source)
+	return source, nil
+}
+
+func (e *Entity) RemoveAudioSource(source voplay.AudioSourceID) {
+	if e.scene == nil || !e.Active {
+		panic("scene3d.Entity.RemoveAudioSource: entity must belong to an active scene")
+	}
+	for i, existing := range e.audioSources {
+		if existing != source {
+			continue
+		}
+		last := len(e.audioSources) - 1
+		e.audioSources[i] = e.audioSources[last]
+		e.audioSources[last] = 0
+		e.audioSources = e.audioSources[:last]
+		source.Remove()
+		return
+	}
+	panic("scene3d.Entity.RemoveAudioSource: source is not attached to entity")
+}
+
+func normalizeEntityModels(desc EntityDesc) (voplay.ModelID, voplay.ModelID) {
+	model := desc.Model
+	ownedModel := desc.OwnedModel
+	if ownedModel == 0 {
+		return model, 0
+	}
+	if model != 0 && model != ownedModel {
+		panic("Scene.Spawn: Model and OwnedModel must match when both are set")
+	}
+	return ownedModel, ownedModel
+}
+
+func resolveEntityPickable(desc EntityDesc, model voplay.ModelID) bool {
+	pickable := model != 0
+	if desc.PickMode == PickEnabled {
+		return true
+	}
+	if desc.PickMode == PickDisabled {
+		return false
+	}
+	return pickable
+}
+
+func isZeroColor(c voplay.Color) bool {
+	return c.R == 0 && c.G == 0 && c.B == 0 && c.A == 0
+}
+
+func isZeroQuat(q voplay.Quat) bool {
+	return q.X == 0 && q.Y == 0 && q.Z == 0 && q.W == 0
+}
+
+func isIdentityQuat(q voplay.Quat) bool {
+	return q.X == 0 && q.Y == 0 && q.Z == 0 && q.W == 1
+}
+
+func resolveEntityTint(desc EntityDesc) voplay.Color {
+	if desc.TintSet || !isZeroColor(desc.Tint) {
+		return desc.Tint
+	}
+	return voplay.White
+}
+
+func normalizeEntityScale(scale voplay.Vec3) voplay.Vec3 {
+	if scale.X == 0 && scale.Y == 0 && scale.Z == 0 {
+		return voplay.Vec3{1, 1, 1}
+	}
+	return scale
+}
+
+func normalizeEntityRotation(rotation voplay.Quat) voplay.Quat {
+	if isZeroQuat(rotation) {
+		return voplay.QuatIdentity()
+	}
+	return rotation
+}
+
+func (s *Scene) newEntity(desc EntityDesc) *Entity {
+	model, ownedModel := normalizeEntityModels(desc)
 	ent := &Entity{
 		id:       s.nextEntityID,
 		position: desc.Position,
-		rotation: rotation,
-		scale:    scale,
-		Model:    desc.Model,
+		rotation: normalizeEntityRotation(desc.Rotation),
+		scale:    normalizeEntityScale(desc.Scale),
+		Model:    model,
+		ownedModel: ownedModel,
+		Pickable: resolveEntityPickable(desc, model),
+		Tint:     resolveEntityTint(desc),
 		Tag:      desc.Tag,
 		Active:   true,
 		Visible:  true,
@@ -126,18 +273,191 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 		scene:    s,
 	}
 	s.nextEntityID++
-	if ent.Physics != nil {
-		s.ensurePhysics()
-		ent.Physics.bodyID = s.nextBodyID
-		s.nextBodyID++
+	return ent
+}
+
+func validateEntityPhysicsSpawn(ent *Entity) {
+	p := ent.Physics
+	if p == nil {
+		return
 	}
+	if p.Trimesh != nil && p.Heightfield != nil {
+		panic("Scene.Spawn: physics cannot use both trimesh and heightfield")
+	}
+	if p.Trimesh != nil && p.Type != Static {
+		panic("Scene.Spawn: trimesh collider requires Static body type")
+	}
+	if p.Heightfield != nil && p.Type != Static {
+		panic("Scene.Spawn: heightfield collider requires Static body type")
+	}
+	if p.Heightfield != nil && !isIdentityQuat(ent.rotation) {
+		panic("Scene.Spawn: heightfield collider does not support rotation")
+	}
+	if p.Heightfield != nil && (ent.scale.X != 1 || ent.scale.Y != 1 || ent.scale.Z != 1) {
+		panic("Scene.Spawn: heightfield collider uses baked terrain scale, entity scale must remain 1")
+	}
+	if p.Trimesh == nil && p.Heightfield == nil && p.Collider.kind != colliderBox3D && p.Collider.kind != colliderSphere && p.Collider.kind != colliderCapsule3D {
+		panic("Scene.Spawn: physics entity requires a valid Collider (use Box, Sphere, or Capsule), or set Trimesh/Heightfield")
+	}
+}
+
+func (s *Scene) spawnEntityPhysics(ent *Entity) bool {
+	p := ent.Physics
+	if p == nil {
+		return false
+	}
+	validateEntityPhysicsSpawn(ent)
+	s.ensurePhysics()
+	p.bodyID = s.nextBodyID
+	s.nextBodyID++
+	if p.Trimesh != nil {
+		physBackend.SpawnTrimeshBody(
+			s.worldID,
+			p.bodyID,
+			int(p.Trimesh.Model),
+			serializeTrimeshDesc(ent),
+		)
+		return true
+	}
+	if p.Heightfield != nil {
+		physBackend.SpawnHeightfield(
+			s.worldID,
+			p.bodyID,
+			HeightfieldSpawnDesc{
+				HeightData:  p.Heightfield.heightData,
+				Rows:        p.Heightfield.rows,
+				Cols:        p.Heightfield.cols,
+				Scale:       p.Heightfield.scale,
+				Position:    ent.position,
+				Layer:       p.Layer,
+				Mask:        p.Mask,
+				Friction:    p.Friction,
+				Restitution: p.Restitution,
+			},
+		)
+		return true
+	}
+	physBackend.SpawnBody(s.worldID, p.bodyID, serializeBodyDesc(ent))
+	return true
+}
+
+func (s *Scene) registerEntity(ent *Entity) {
 	s.entities = append(s.entities, ent)
 	s.entityByID[ent.id] = ent
 	if ent.Physics != nil {
 		s.bodyMap[ent.Physics.bodyID] = ent
-		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
 	}
+}
+
+func (s *Scene) cleanupSpawnFailure(ent *Entity, nextEntityID, nextBodyID int, hadWorld bool) {
+	if ent != nil {
+		if ent.Physics != nil && ent.Physics.bodyID != 0 {
+			physBackend.DestroyBody(s.worldID, ent.Physics.bodyID)
+			ent.Physics.bodyID = 0
+		}
+		s.releaseOwnedModel(ent)
+		ent.scene = nil
+	}
+	if !hadWorld && s.worldID != 0 {
+		physBackend.Destroy(s.worldID)
+		s.worldID = 0
+	}
+	s.nextEntityID = nextEntityID
+	s.nextBodyID = nextBodyID
+}
+
+func (s *Scene) releaseEntityState(e *Entity, removeEmitters bool, removeAnimationTarget bool) {
+	if removeEmitters {
+		s.removeAttachedEmitters(e)
+	}
+	s.removeAttachedAudioSources(e)
+	e.Active = false
+	if e.Physics != nil && e.Physics.bodyID != 0 {
+		delete(s.bodyMap, e.Physics.bodyID)
+		physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
+		e.Physics.bodyID = 0
+		e.Physics.velocity = voplay.Vec3{}
+	}
+	if removeAnimationTarget && e.animationTargetID != 0 && s.animationWorldID != 0 {
+		animBackend.RemoveTarget(s.animationWorldID, e.animationTargetID)
+	}
+	e.animationTargetID = 0
+	s.releaseOwnedModel(e)
+	e.scene = nil
+}
+
+func (s *Scene) removeEntityFromList(target *Entity) {
+	for i, ent := range s.entities {
+		if ent != target {
+			continue
+		}
+		last := len(s.entities) - 1
+		s.entities[i] = s.entities[last]
+		s.entities[last] = nil
+		s.entities = s.entities[:last]
+		return
+	}
+}
+
+// Spawn creates an entity in the scene from a descriptor.
+// If Physics is set, a Rapier3D body is created via extern.
+func (s *Scene) Spawn(desc EntityDesc) *Entity {
+	nextEntityID := s.nextEntityID
+	nextBodyID := s.nextBodyID
+	hadWorld := s.worldID != 0
+	ent := s.newEntity(desc)
+	defer func() {
+		if r := recover(); r != nil {
+			s.cleanupSpawnFailure(ent, nextEntityID, nextBodyID, hadWorld)
+			panic(r)
+		}
+	}()
+	s.spawnEntityPhysics(ent)
+	s.registerEntity(ent)
 	return ent
+}
+
+func (s *Scene) releaseOwnedModel(e *Entity) {
+	if e.ownedModel == 0 {
+		return
+	}
+	ownedModel := e.ownedModel
+	delete(s.animationInfoCache, int(e.ownedModel))
+	e.ownedModel.Free()
+	e.ownedModel = 0
+	if e.Model == ownedModel {
+		e.Model = 0
+	}
+}
+
+func (s *Scene) removeAttachedEmitters(target *Entity) {
+	if len(s.Emitters) == 0 {
+		return
+	}
+	write := 0
+	for _, emitter := range s.Emitters {
+		if emitter != nil && emitter.Attached == target {
+			emitter.scene = nil
+			emitter.Attached = nil
+			continue
+		}
+		s.Emitters[write] = emitter
+		write++
+	}
+	for i := write; i < len(s.Emitters); i++ {
+		s.Emitters[i] = nil
+	}
+	s.Emitters = s.Emitters[:write]
+}
+
+func (s *Scene) removeAttachedAudioSources(target *Entity) {
+	if target == nil || len(target.audioSources) == 0 {
+		return
+	}
+	for _, source := range target.audioSources {
+		source.Remove()
+	}
+	target.audioSources = nil
 }
 
 // Destroy removes an entity from the scene.
@@ -145,34 +465,15 @@ func (s *Scene) Destroy(e *Entity) {
 	if e.scene != s {
 		panic("Scene.Destroy: entity does not belong to this scene")
 	}
-	e.Active = false
-	if e.Physics != nil {
-		delete(s.bodyMap, e.Physics.bodyID)
-		physicsDestroyBody(s.worldID, e.Physics.bodyID)
-		e.Physics.bodyID = 0
-	}
-	e.scene = nil
+	s.releaseEntityState(e, true, true)
 	delete(s.entityByID, e.id)
-	// Swap-remove: O(1) instead of O(n) shift
-	for i, ent := range s.entities {
-		if ent == e {
-			last := len(s.entities) - 1
-			s.entities[i] = s.entities[last]
-			s.entities[last] = nil
-			s.entities = s.entities[:last]
-			return
-		}
-	}
+	s.removeEntityFromList(e)
 }
 
 // Clear removes all entities from the scene.
 func (s *Scene) Clear() {
 	for _, e := range s.entities {
-		if e.Physics != nil {
-			physicsDestroyBody(s.worldID, e.Physics.bodyID)
-		}
-		e.scene = nil
-		e.Active = false
+		s.releaseEntityState(e, false, false)
 	}
 	s.entities = s.entities[:0]
 	for id := range s.entityByID {
@@ -181,18 +482,25 @@ func (s *Scene) Clear() {
 	for k := range s.bodyMap {
 		delete(s.bodyMap, k)
 	}
+	if s.animationWorldID != 0 {
+		animBackend.Destroy(s.animationWorldID)
+		s.animationWorldID = 0
+	}
+	for _, emitter := range s.Emitters {
+		if emitter != nil {
+			emitter.scene = nil
+			emitter.Attached = nil
+		}
+	}
+	s.Emitters = nil
+	s.nextAnimationTargetID = 1
 	s.physCmds.Reset()
 }
 
-// EntityCount returns the number of active entities in the scene.
+// EntityCount returns the number of entities in the scene.
+// All entities in the scene are active; Destroy removes them immediately.
 func (s *Scene) EntityCount() int {
-	n := 0
-	for _, e := range s.entities {
-		if e.Active {
-			n++
-		}
-	}
-	return n
+	return len(s.entities)
 }
 
 // FindByID returns the entity with the given ID, or nil if not found.
@@ -267,6 +575,55 @@ func (s *Scene) ClearLights() {
 	s.Lights = nil
 }
 
+func (s *Scene) AddEmitter(emitter *ParticleEmitter) {
+	if emitter == nil {
+		panic("Scene.AddEmitter: emitter must not be nil")
+	}
+	if emitter.scene != nil && emitter.scene != s {
+		panic("Scene.AddEmitter: emitter already belongs to another scene")
+	}
+	if emitter.Attached != nil && emitter.Attached.scene != s {
+		panic("Scene.AddEmitter: attached entity must belong to this scene")
+	}
+	for _, existing := range s.Emitters {
+		if existing == emitter {
+			panic("Scene.AddEmitter: emitter already added")
+		}
+	}
+	emitter.scene = s
+	s.Emitters = append(s.Emitters, emitter)
+}
+
+func (s *Scene) RemoveEmitter(emitter *ParticleEmitter) {
+	if emitter == nil {
+		panic("Scene.RemoveEmitter: emitter must not be nil")
+	}
+	if emitter.scene != nil && emitter.scene != s {
+		panic("Scene.RemoveEmitter: emitter belongs to another scene")
+	}
+	for i, existing := range s.Emitters {
+		if existing == emitter {
+			last := len(s.Emitters) - 1
+			s.Emitters[i] = s.Emitters[last]
+			s.Emitters[last] = nil
+			s.Emitters = s.Emitters[:last]
+			emitter.scene = nil
+			emitter.Attached = nil
+			return
+		}
+	}
+	panic("Scene.RemoveEmitter: emitter not found")
+}
+
+func (s *Scene) UpdateEmitters(dt float64) {
+	if dt < 0 {
+		panic("Scene.UpdateEmitters: dt must be >= 0")
+	}
+	for _, emitter := range s.Emitters {
+		emitter.Update(dt)
+	}
+}
+
 // HasPhysics returns true if a physics world is initialized.
 func (s *Scene) HasPhysics() bool {
 	return s.worldID != 0
@@ -276,7 +633,7 @@ func (s *Scene) HasPhysics() bool {
 func (s *Scene) Close() {
 	s.Clear()
 	if s.worldID != 0 {
-		physicsDestroy(s.worldID)
+		physBackend.Destroy(s.worldID)
 		s.worldID = 0
 	}
 }
@@ -286,15 +643,28 @@ func (s *Scene) ensurePhysics() {
 	if s.worldID != 0 {
 		return
 	}
-	s.worldID = physicsInit(s.Gravity.X, s.Gravity.Y, s.Gravity.Z)
+	s.worldID = physBackend.Init(s.Gravity)
 }
 
 // SetGravity changes the 3D physics gravity at runtime.
 func (s *Scene) SetGravity(g voplay.Vec3) {
 	s.Gravity = g
 	if s.worldID != 0 {
-		physicsSetGravity(s.worldID, g.X, g.Y, g.Z)
+		physBackend.SetGravity(s.worldID, g)
 	}
+}
+
+func (s *Scene) UpdateAudio() {
+	for _, e := range s.entities {
+		if !e.Active || len(e.audioSources) == 0 {
+			continue
+		}
+		for _, source := range e.audioSources {
+			source.SetPosition(e.position)
+		}
+	}
+	voplay.SetAudioListener(s.Camera.Position, s.Camera.Target, s.Camera.Up)
+	voplay.UpdateSpatialAudio()
 }
 
 // StepAndSyncPhysics runs one 3D physics step and syncs body state back to entities.
@@ -302,7 +672,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
 	}
-	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
+	state := physBackend.Step(s.worldID, dt, s.physCmds.Bytes())
 	s.physCmds.Reset()
 
 	// Decode state: count(u32), then per body:
@@ -342,7 +712,7 @@ func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsRayCast(s.worldID, origin.X, origin.Y, origin.Z, dir.X, dir.Y, dir.Z, maxDist)
+	data := physBackend.RayCast(s.worldID, origin, dir, maxDist)
 	if len(data) < 1 || data[0] == 0 {
 		return nil
 	}
@@ -372,7 +742,7 @@ func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsQueryAABB(s.worldID, min.X, min.Y, min.Z, max.X, max.Y, max.Z)
+	data := physBackend.QueryAABB(s.worldID, min, max)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
 		return nil
@@ -396,7 +766,7 @@ func (s *Scene) Contacts() []Contact {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsContacts(s.worldID)
+	data := physBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
 		return nil

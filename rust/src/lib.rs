@@ -8,7 +8,11 @@
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod externs;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod file_io;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_runtime;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -20,9 +24,17 @@ mod font_manager;
 #[allow(dead_code)]
 mod math3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod animation;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod model_loader;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod primitives;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline3d;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline_shadow;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline_skybox;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics_registry;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -30,7 +42,7 @@ mod physics;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod audio;
+mod terrain;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_sprite;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -47,14 +59,20 @@ pub use renderer::Renderer;
 vo_ext::export_extensions!();
 
 #[cfg(any(feature = "native", feature = "wasm"))]
+use vo_runtime::ffi::ExternRegistry;
+#[cfg(any(feature = "native", feature = "wasm"))]
+use vo_runtime::bytecode::ExternDef;
+
+#[cfg(any(feature = "native", feature = "wasm"))]
+pub fn register_externs(registry: &mut ExternRegistry, externs: &[ExternDef]) {
+    externs::vo_ext_register(registry, externs);
+}
+
+#[cfg(any(feature = "native", feature = "wasm"))]
 /// Force link this crate's FFI functions (including vogui's).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ensure_linked() {
-    // Link voplay externs
-    extern "C" {
-        fn vo_ext_get_entries() -> vo_ext::ExtensionTable;
-    }
-    let _ = std::hint::black_box(unsafe { vo_ext_get_entries() });
-    // Link vogui externs (voplay imports vogui, so VM needs them resolved)
+    let _ = std::hint::black_box(register_externs as fn(&mut ExternRegistry, &[ExternDef]));
     #[cfg(feature = "native")]
     vogui::ensure_linked();
 }

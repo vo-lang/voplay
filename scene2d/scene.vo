@@ -78,7 +78,7 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 	s.spatialInsert(ent)
 	if ent.Physics != nil {
 		s.bodyMap[ent.Physics.bodyID] = ent
-		physicsSpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
+		physBackend.SpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
 	}
 	return ent
 }
@@ -96,7 +96,7 @@ func (s *Scene) destroyEntityRecursive(e *Entity) {
 	}
 	if e.Physics != nil {
 		delete(s.bodyMap, e.Physics.bodyID)
-		physicsDestroyBody(s.worldID, e.Physics.bodyID)
+		physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
 		e.Physics.bodyID = 0
 	}
 	e.childIDs = nil
@@ -123,7 +123,7 @@ func (s *Scene) Destroy(e *Entity) {
 func (s *Scene) Clear() {
 	for _, e := range s.entities {
 		if e.Physics != nil {
-			physicsDestroyBody(s.worldID, e.Physics.bodyID)
+			physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
 		}
 		e.parentID = 0
 		e.childIDs = nil
@@ -147,7 +147,7 @@ func (s *Scene) Clear() {
 func (s *Scene) Close() {
 	s.Clear()
 	if s.worldID != 0 {
-		physicsDestroy(s.worldID)
+		physBackend.Destroy(s.worldID)
 		s.worldID = 0
 	}
 }
@@ -200,6 +200,8 @@ func (s *Scene) VisibleEntities() []*Entity {
 	return s.visibleBuf
 }
 
+// EntityCount returns the number of active entities in the scene.
+// Note: scene2d supports deactivating entities via SetActive without removing them.
 func (s *Scene) EntityCount() int {
 	n := 0
 	for _, e := range s.entities {
@@ -265,13 +267,13 @@ func (s *Scene) ensurePhysics() {
 	if s.worldID != 0 {
 		return
 	}
-	s.worldID = physicsInit(s.Gravity.X, s.Gravity.Y)
+	s.worldID = physBackend.Init(s.Gravity.X, s.Gravity.Y)
 }
 
 func (s *Scene) SetGravity(g voplay.Vec2) {
 	s.Gravity = g
 	if s.worldID != 0 {
-		physicsSetGravity(s.worldID, g.X, g.Y)
+		physBackend.SetGravity(s.worldID, g.X, g.Y)
 	}
 }
 
@@ -279,7 +281,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
 	}
-	state := physicsStep(s.worldID, dt, s.physCmds.Bytes())
+	state := physBackend.Step(s.worldID, dt, s.physCmds.Bytes())
 	s.physCmds.Reset()
 	r := codec.NewByteReader(state)
 	if r.Remaining() < 4 {
@@ -312,7 +314,7 @@ func (s *Scene) Contacts() []Contact {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsContacts(s.worldID)
+	data := physBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
 		return nil
@@ -338,7 +340,7 @@ func (s *Scene) RayCast(origin, dir voplay.Vec2, maxDist float64) *RayCastHit {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsRayCast(s.worldID, origin.X, origin.Y, dir.X, dir.Y, maxDist)
+	data := physBackend.RayCast(s.worldID, origin.X, origin.Y, dir.X, dir.Y, maxDist)
 	if len(data) < 1 || data[0] == 0 {
 		return nil
 	}
@@ -365,7 +367,7 @@ func (s *Scene) QueryRect(rect voplay.Rect) []*Entity {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physicsQueryRect(s.worldID, rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
+	data := physBackend.QueryRect(s.worldID, rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
 		return nil

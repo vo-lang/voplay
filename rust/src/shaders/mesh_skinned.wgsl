@@ -1,28 +1,26 @@
-// 3D mesh shader — Blinn-Phong lighting.
-// Supports directional and point lights, base color tint, and optional albedo texture.
-
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
     _pad: f32,
 };
 
-struct ModelUniform {
+struct SkinnedModelUniform {
     model: mat4x4<f32>,
-    normal_matrix: mat4x4<f32>, // transpose(inverse(model)) — upper 3x3 in 4x4
+    normal_matrix: mat4x4<f32>,
     base_color: vec4<f32>,
     material_params: vec4<f32>,
+    joint_count: vec4<u32>,
+    joints: array<mat4x4<f32>, 128>,
 };
 
-// Light types: 0 = directional, 1 = point
 struct LightData {
-    position_or_dir: vec4<f32>, // xyz = position (point) or direction (dir), w = type (0/1)
-    color_intensity: vec4<f32>, // rgb = color, a = intensity
+    position_or_dir: vec4<f32>,
+    color_intensity: vec4<f32>,
 };
 
 struct LightUniform {
-    ambient: vec4<f32>,   // rgb = ambient color, a = unused
-    count: vec4<u32>,     // x = number of lights, y = fog mode
+    ambient: vec4<f32>,
+    count: vec4<u32>,
     lights: array<LightData, 8>,
     fog_color: vec4<f32>,
     fog_params: vec4<f32>,
@@ -31,17 +29,19 @@ struct LightUniform {
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
-@group(1) @binding(0) var<uniform> model: ModelUniform;
+@group(1) @binding(0) var<uniform> skinned_model: SkinnedModelUniform;
 @group(2) @binding(0) var<uniform> light_uni: LightUniform;
 @group(3) @binding(0) var albedo_tex: texture_2d<f32>;
 @group(3) @binding(1) var albedo_sampler: sampler;
 @group(3) @binding(2) var shadow_tex: texture_depth_2d;
 @group(3) @binding(3) var shadow_sampler: sampler_comparison;
 
-struct VertexInput {
+struct SkinnedVertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) joint_indices: vec4<u32>,
+    @location(4) joint_weights: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -104,6 +104,28 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
     return visibility / 9.0;
 }
 
+fn skin_matrix(joint_indices: vec4<u32>, joint_weights: vec4<f32>) -> mat4x4<f32> {
+    return joint_weights.x * skinned_model.joints[joint_indices.x]
+        + joint_weights.y * skinned_model.joints[joint_indices.y]
+        + joint_weights.z * skinned_model.joints[joint_indices.z]
+        + joint_weights.w * skinned_model.joints[joint_indices.w];
+}
+
+@vertex
+fn vs_skinned(in: SkinnedVertexInput) -> VertexOutput {
+    let skin = skin_matrix(in.joint_indices, in.joint_weights);
+    let skinned_pos = skin * vec4<f32>(in.position, 1.0);
+    let skinned_normal = skin * vec4<f32>(in.normal, 0.0);
+
+    var out: VertexOutput;
+    let world_pos = skinned_model.model * skinned_pos;
+    out.clip_position = camera.view_proj * world_pos;
+    out.world_pos = world_pos.xyz;
+    out.world_normal = normalize((skinned_model.normal_matrix * skinned_normal).xyz);
+    out.uv = in.uv;
+    return out;
+}
+
 fn shade(albedo: vec4<f32>, in: VertexOutput) -> vec4<f32> {
     let N = normalize(in.world_normal);
     let V = normalize(camera.camera_pos - in.world_pos);
@@ -145,26 +167,14 @@ fn shade(albedo: vec4<f32>, in: VertexOutput) -> vec4<f32> {
     return vec4<f32>(color, albedo.a);
 }
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    let world_pos = model.model * vec4<f32>(in.position, 1.0);
-    out.clip_position = camera.view_proj * world_pos;
-    out.world_pos = world_pos.xyz;
-    out.world_normal = normalize((model.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz);
-    out.uv = in.uv;
-    return out;
-}
-
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv_scale = model.material_params.x;
-    let albedo = textureSample(albedo_tex, albedo_sampler, in.uv * vec2<f32>(uv_scale, uv_scale)) * model.base_color;
+fn fs_skinned(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv_scale = skinned_model.material_params.x;
+    let albedo = textureSample(albedo_tex, albedo_sampler, in.uv * vec2<f32>(uv_scale, uv_scale)) * skinned_model.base_color;
     return shade(albedo, in);
 }
 
-// Fragment shader variant without texture (uses base_color only).
 @fragment
-fn fs_main_no_tex(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(model.base_color, in);
+fn fs_skinned_no_tex(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(skinned_model.base_color, in);
 }

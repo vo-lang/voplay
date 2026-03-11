@@ -341,6 +341,10 @@ pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String>
     })
 }
 
+pub fn is_renderer_ready() -> bool {
+    APP.with(|app| app.borrow().renderer.is_some())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

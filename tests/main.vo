@@ -1,7 +1,9 @@
 package main
 
+import "math"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/scene2d"
+import "github.com/vo-lang/voplay/scene3d"
 
 func assert(cond bool, msg string) {
 	if !cond {
@@ -38,6 +40,18 @@ type testState struct {
 	resizeCount      int
 	blockUpdateBelow bool
 	blockDrawBelow   bool
+}
+
+var scene3DPickTestBounds map[int]voplay.AABB
+var scene3DPickTestBoundsPresent map[int]bool
+var scene3DPickTestBoundsCalls int
+
+func scene3DPickModelBounds(id int) (voplay.AABB, bool) {
+	scene3DPickTestBoundsCalls++
+	if scene3DPickTestBoundsPresent[id] {
+		return scene3DPickTestBounds[id], true
+	}
+	return voplay.AABB{}, false
 }
 
 func (s *testState) Enter(g *voplay.GameCtx) {
@@ -93,7 +107,7 @@ func newTestCtx() *voplay.GameCtx {
 		FixedStep: 1.0 / 60.0,
 	}
 	ctx.Actions = voplay.NewActionMap(ctx.Input)
-	ctx.Assets = voplay.NewAssets()
+	ctx.Assets = voplay.NewAssetsWithLoaders(newMockAssetLoaders(&assetRuntimeStats{}))
 	ctx.States = voplay.NewStateStack(ctx)
 	return ctx
 }
@@ -164,6 +178,11 @@ func newMockAssetLoaders(stats *assetRuntimeStats) voplay.AssetLoaders {
 				stats.audioFrees++
 			},
 		},
+		Cubemap: voplay.CubemapLoader{
+			LoadFiles: func(paths [6]string) (int, error) { return 1, nil },
+			LoadBytes: func(faces [6][]byte) (int, error) { return 1, nil },
+			Free:      func(id int) {},
+		},
 	}
 }
 
@@ -190,6 +209,19 @@ func assertFloatFar(got, want, tol float64, label string) {
 	assert(diff > tol, label)
 }
 
+func assertVec3Near(got, want voplay.Vec3, tol float64, label string) {
+	assertFloatNear(got.X, want.X, tol, label+": x")
+	assertFloatNear(got.Y, want.Y, tol, label+": y")
+	assertFloatNear(got.Z, want.Z, tol, label+": z")
+}
+
+func assertQuatNear(got, want voplay.Quat, tol float64, label string) {
+	assertFloatNear(got.X, want.X, tol, label+": x")
+	assertFloatNear(got.Y, want.Y, tol, label+": y")
+	assertFloatNear(got.Z, want.Z, tol, label+": z")
+	assertFloatNear(got.W, want.W, tol, label+": w")
+}
+
 func capturePanic(fn func()) (any, bool) {
 	var recovered any
 	var didPanic bool
@@ -201,6 +233,208 @@ func capturePanic(fn func()) (any, bool) {
 		fn()
 	}()
 	return recovered, didPanic
+}
+
+// --- Test backend implementations ---
+
+type testPickModelBackend struct{}
+
+func (testPickModelBackend) Free(id int) {}
+
+func (testPickModelBackend) Bounds(id int) (voplay.AABB, bool) {
+	return scene3DPickModelBounds(id)
+}
+
+type intList struct {
+	items []int
+}
+
+type testFreeModelBackend struct {
+	freed *intList
+	prev  voplay.ModelBackend
+}
+
+func (b *testFreeModelBackend) Free(id int) {
+	b.freed.items = append(b.freed.items, id)
+}
+
+func (b *testFreeModelBackend) Bounds(id int) (voplay.AABB, bool) {
+	return b.prev.Bounds(id)
+}
+
+type testAudioBackend struct {
+	listenerPos     voplay.Vec3
+	listenerForward voplay.Vec3
+	listenerUp      voplay.Vec3
+	playedClip      voplay.AudioClipID
+	playedPos       voplay.Vec3
+	playedVolume    float64
+	playedRefDist   float64
+	playedMaxDist   float64
+	nextSourceID    int
+	created         []int
+	positions       map[int]voplay.Vec3
+	removed         []int
+	updateCalls     int
+}
+
+func (a *testAudioBackend) SetListener(position, forward, up voplay.Vec3) {
+	a.listenerPos = position
+	a.listenerForward = forward
+	a.listenerUp = up
+}
+
+func (a *testAudioBackend) PlaySound3D(clip voplay.AudioClipID, pos voplay.Vec3, volume, refDistance, maxDistance float64) {
+	a.playedClip = clip
+	a.playedPos = pos
+	a.playedVolume = volume
+	a.playedRefDist = refDistance
+	a.playedMaxDist = maxDistance
+}
+
+func (a *testAudioBackend) CreateSource3D(clip voplay.AudioClipID, pos voplay.Vec3, volume, refDistance, maxDistance float64) (voplay.AudioSourceID, error) {
+	id := voplay.AudioSourceID(a.nextSourceID)
+	a.nextSourceID++
+	a.created = append(a.created, int(id))
+	a.positions[int(id)] = pos
+	return id, nil
+}
+
+func (a *testAudioBackend) UpdateSpatial() {
+	a.updateCalls++
+}
+
+func (a *testAudioBackend) SetSource3DPos(id voplay.AudioSourceID, pos voplay.Vec3) {
+	a.positions[int(id)] = pos
+}
+
+func (a *testAudioBackend) RemoveSource3D(id voplay.AudioSourceID) {
+	a.removed = append(a.removed, int(id))
+	delete(a.positions, int(id))
+}
+
+type testAnimationBackend struct {
+	initCalls       int
+	playWorld       int
+	playTarget      int
+	playClip        scene3d.AnimationClipID
+	playLoop        bool
+	playSpeed       float64
+	stopCalls       int
+	crossfadeWorld  int
+	crossfadeTarget int
+	crossfadeClip   scene3d.AnimationClipID
+	crossfadeDur    float64
+	setSpeedWorld   int
+	setSpeedTarget  int
+	setSpeedValue   float64
+	removedTargets  []int
+	destroyWorlds   []int
+	tickWorld       int
+	tickDT          float64
+	tickBytes       []byte
+	modelInfoCalls  int
+}
+
+func (a *testAnimationBackend) Init() int {
+	a.initCalls++
+	return 77
+}
+
+func (a *testAnimationBackend) Destroy(worldID int) {
+	a.destroyWorlds = append(a.destroyWorlds, worldID)
+}
+
+func (a *testAnimationBackend) Play(worldID, targetID int, clip scene3d.AnimationClipID, loop bool, speed float64) {
+	a.playWorld = worldID
+	a.playTarget = targetID
+	a.playClip = clip
+	a.playLoop = loop
+	a.playSpeed = speed
+}
+
+func (a *testAnimationBackend) Stop(worldID, targetID int) {
+	a.stopCalls++
+}
+
+func (a *testAnimationBackend) Crossfade(worldID, targetID int, clip scene3d.AnimationClipID, duration float64) {
+	a.crossfadeWorld = worldID
+	a.crossfadeTarget = targetID
+	a.crossfadeClip = clip
+	a.crossfadeDur = duration
+}
+
+func (a *testAnimationBackend) SetSpeed(worldID, targetID int, speed float64) {
+	a.setSpeedWorld = worldID
+	a.setSpeedTarget = targetID
+	a.setSpeedValue = speed
+}
+
+func (a *testAnimationBackend) RemoveTarget(worldID, targetID int) {
+	a.removedTargets = append(a.removedTargets, targetID)
+}
+
+func (a *testAnimationBackend) Tick(worldID int, dt float64, data []byte) {
+	a.tickWorld = worldID
+	a.tickDT = dt
+	a.tickBytes = append([]byte{}, data...)
+}
+
+func (a *testAnimationBackend) Progress(worldID, targetID int, model voplay.ModelID) float64 {
+	return 0.25
+}
+
+func (a *testAnimationBackend) ModelInfo(model voplay.ModelID) scene3d.AnimationModelInfo {
+	a.modelInfoCalls++
+	if model == voplay.ModelID(901) {
+		return scene3d.AnimationModelInfo{
+			HasSkeleton: true,
+			JointCount:  24,
+			Clips: []scene3d.AnimationClipInfo{
+				{Name: "idle", Duration: 1.0},
+				{Name: "run", Duration: 0.5},
+			},
+		}
+	}
+	if model == voplay.ModelID(902) {
+		return scene3d.AnimationModelInfo{HasSkeleton: false}
+	}
+	return scene3d.AnimationModelInfo{}
+}
+
+type testTerrainBackend struct {
+	createCalls int
+	heightCalls int
+}
+
+func (t *testTerrainBackend) Create(desc scene3d.TerrainCreateDesc) (scene3d.TerrainCreateResult, error) {
+	t.createCalls++
+	assert(len(desc.Data) == 1 && desc.Data[0] == 7, "scene3d terrain create hook receives heightmap data")
+	assertFloatNear(desc.Scale.X, 4, 0.000001, "scene3d terrain create hook scale x")
+	assertFloatNear(desc.Scale.Y, 2, 0.000001, "scene3d terrain create hook scale y")
+	assertFloatNear(desc.Scale.Z, 4, 0.000001, "scene3d terrain create hook scale z")
+	assertFloatNear(desc.UVScale, 1, 0.000001, "scene3d terrain create hook uv scale")
+	assert(desc.Texture == 0, "scene3d terrain create hook texture id")
+	return scene3d.TerrainCreateResult{
+		ModelID: 901,
+		Rows:    2,
+		Cols:    2,
+		HeightData: []byte{
+			0, 0, 0, 0,
+			0, 0, 0, 0,
+			0, 0, 0, 0,
+			0, 0, 0, 0,
+		},
+	}, nil
+}
+
+func (t *testTerrainBackend) HeightAt(worldID, bodyID int, x, z float64) (float64, bool) {
+	t.heightCalls++
+	assert(worldID != 0, "scene3d terrain height hook world id")
+	assert(bodyID != 0, "scene3d terrain height hook body id")
+	assertFloatNear(x, 0, 0.000001, "scene3d terrain height hook x")
+	assertFloatNear(z, 0, 0.000001, "scene3d terrain height hook z")
+	return 1.25, true
 }
 
 func testLifecycle() {
@@ -482,7 +716,7 @@ func testScheduler() {
 	assert(s.Len() == 0, "scheduler empty on creation")
 
 	fired := 0
-	h := s.After(0.1, func() { fired++ })
+	_ = s.After(0.1, func() { fired++ })
 	assert(s.Len() == 1, "scheduler len after After")
 
 	s.Update(0.05)
@@ -836,6 +1070,719 @@ func testScene2DSetActive() {
 	s.Close()
 }
 
+func testScene3DThirdPersonCamera() {
+	s := scene3d.New()
+	target := s.Spawn(scene3d.EntityDesc{
+		Position: voplay.Vec3{X: 1, Y: 2, Z: 3},
+	})
+	camCtl := scene3d.NewThirdPersonCamera(target)
+	camCtl.PivotOffset = voplay.Vec3{Y: 1}
+	camCtl.Distance = 4
+	camCtl.MinDistance = 2
+	camCtl.MaxDistance = 6
+	camCtl.Smoothing = 0
+	camCtl.CollisionEnabled = false
+	camCtl.Yaw = 0
+	camCtl.Pitch = 0
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	pivot := voplay.Vec3{X: 1, Y: 3, Z: 3}
+	assertVec3Near(s.Camera.Target, pivot, 0.000001, "third person initial target")
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person initial position")
+
+	camCtl.HandleInput(0, -10)
+	assertFloatNear(camCtl.Pitch, camCtl.MaxPitch, 0.000001, "third person pitch clamp max")
+	camCtl.HandleInput(0, 20)
+	assertFloatNear(camCtl.Pitch, camCtl.MinPitch, 0.000001, "third person pitch clamp min")
+
+	camCtl.Zoom(100)
+	assertFloatNear(camCtl.Distance, camCtl.MaxDistance, 0.000001, "third person zoom clamp max")
+	camCtl.Zoom(-100)
+	assertFloatNear(camCtl.Distance, camCtl.MinDistance, 0.000001, "third person zoom clamp min")
+
+	camCtl.Distance = 4
+	camCtl.Pitch = 0
+	camCtl.Smoothing = 2
+	target.SetPosition(voplay.Vec3{X: 10, Y: 2, Z: 3})
+	camCtl.UpdateCamera(&s.Camera, s, 0.1)
+	assertVec3Near(s.Camera.Target, voplay.Vec3{X: 10, Y: 3, Z: 3}, 0.000001, "third person target follows entity")
+	assert(s.Camera.Position.X > 1, "third person smoothing advances camera")
+	assert(s.Camera.Position.X < 10, "third person smoothing does not teleport")
+
+	other := s.Spawn(scene3d.EntityDesc{
+		Position: voplay.Vec3{X: -4, Y: 0, Z: 8},
+	})
+	camCtl.Target = other
+	camCtl.UpdateCamera(&s.Camera, s, 0.1)
+	assertVec3Near(s.Camera.Target, voplay.Vec3{X: -4, Y: 1, Z: 8}, 0.000001, "third person target switch target")
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: -4, Y: 1, Z: 12}, 0.000001, "third person target switch snaps position")
+
+	frozenPos := s.Camera.Position
+	frozenTarget := s.Camera.Target
+	camCtl.Target = nil
+	other.SetPosition(voplay.Vec3{X: 100, Y: 100, Z: 100})
+	camCtl.UpdateCamera(&s.Camera, s, 0.1)
+	assertVec3Near(s.Camera.Position, frozenPos, 0.000001, "third person nil target freezes position")
+	assertVec3Near(s.Camera.Target, frozenTarget, 0.000001, "third person nil target freezes target")
+
+	staleTarget := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: 20, Y: 1, Z: -5}})
+	camCtl.Target = staleTarget
+	camCtl.UpdateCamera(&s.Camera, s, 0.1)
+	frozenPos = s.Camera.Position
+	frozenTarget = s.Camera.Target
+	s.Destroy(staleTarget)
+	camCtl.UpdateCamera(&s.Camera, s, 0.1)
+	assertVec3Near(s.Camera.Position, frozenPos, 0.000001, "third person destroyed target freezes position")
+	assertVec3Near(s.Camera.Target, frozenTarget, 0.000001, "third person destroyed target freezes target")
+	s.Close()
+}
+
+func testScene3DParticles() {
+	s := scene3d.New()
+	emitter := scene3d.NewParticleEmitter(3)
+	emitter.Texture = voplay.TextureID(1)
+	emitter.Rate = 10
+	emitter.LifetimeMin = 10
+	emitter.LifetimeMax = 10
+	emitter.SpeedMin = 0
+	emitter.SpeedMax = 0
+	emitter.Gravity = voplay.Vec3{}
+	emitter.Damping = 1
+	s.AddEmitter(emitter)
+	assert(len(s.Emitters) == 1, "scene3d add emitter")
+	s.UpdateEmitters(0.25)
+	assert(emitter.LiveCount() == 2, "scene3d emitter spawns from rate")
+	s.UpdateEmitters(0.25)
+	assert(emitter.LiveCount() == 3, "scene3d emitter ring buffer caps live particles")
+
+	burst := scene3d.NewParticleEmitter(4)
+	burst.Texture = voplay.TextureID(1)
+	burst.Rate = 0
+	burst.LifetimeMin = 0.5
+	burst.LifetimeMax = 0.5
+	burst.SpeedMin = 0
+	burst.SpeedMax = 0
+	burst.Gravity = voplay.Vec3{}
+	burst.Damping = 1
+	burst.EmitBurst(2)
+	assert(burst.LiveCount() == 2, "scene3d burst emits particles")
+	burst.Enabled = false
+	burst.Update(1.0)
+	assert(burst.LiveCount() == 0, "scene3d disabled emitter still advances live particles")
+
+	d := voplay.NewDrawCtx()
+	d.SetCamera3D(s.Camera.Position, s.Camera.Target, s.Camera.Up, s.Camera.Fov, s.Camera.Near, s.Camera.Far)
+	baseLen := len(d.Bytes())
+	emitter.Draw(d)
+	assert(len(d.Bytes()) > baseLen, "scene3d particles write billboard draw commands")
+
+	target := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: 4, Y: 5, Z: 6}})
+	attached := scene3d.NewParticleEmitter(2)
+	attached.Texture = voplay.TextureID(1)
+	attached.Attached = target
+	attached.Rate = 0
+	attached.LifetimeMin = 1
+	attached.LifetimeMax = 1
+	attached.SpeedMin = 0
+	attached.SpeedMax = 0
+	attached.Gravity = voplay.Vec3{}
+	attached.Damping = 1
+	attached.EmitBurst(1)
+	s.AddEmitter(attached)
+	assert(len(s.Emitters) == 2, "scene3d second emitter added")
+	s.Destroy(target)
+	assert(len(s.Emitters) == 1, "scene3d destroy removes attached emitters")
+	assert(attached.Attached == nil, "scene3d destroy clears attached emitter target")
+	s.RemoveEmitter(emitter)
+	assert(len(s.Emitters) == 0, "scene3d remove emitter")
+	assert(emitter.Attached == nil, "scene3d remove emitter clears attached target")
+
+	clearTarget := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: 1, Y: 2, Z: 3}})
+	clearEmitter := scene3d.NewParticleEmitter(1)
+	clearEmitter.Texture = voplay.TextureID(1)
+	clearEmitter.Attached = clearTarget
+	clearEmitter.Rate = 0
+	clearEmitter.LifetimeMin = 1
+	clearEmitter.LifetimeMax = 1
+	clearEmitter.SpeedMin = 0
+	clearEmitter.SpeedMax = 0
+	clearEmitter.Gravity = voplay.Vec3{}
+	clearEmitter.Damping = 1
+	s.AddEmitter(clearEmitter)
+	s.Clear()
+	assert(clearEmitter.Attached == nil, "scene3d clear clears attached emitter target")
+	s.Close()
+}
+
+func testScene3DShadowSemantics() {
+	d := voplay.NewDrawCtx()
+	_, didPanic := capturePanic(func() {
+		d.SetShadow3D(false, 0)
+	})
+	assert(!didPanic, "scene3d disabled shadows allow zero resolution")
+	baseLen := len(d.Bytes())
+	assert(baseLen > 0, "scene3d disabled shadows still write draw command")
+
+	_, didPanic = capturePanic(func() {
+		d.SetShadow3D(true, 0)
+	})
+	assert(didPanic, "scene3d enabled shadows require positive resolution")
+
+	s := scene3d.New()
+	s.ShadowsEnabled = false
+	s.ShadowResolution = 0
+	d2 := voplay.NewDrawCtx()
+	_, didPanic = capturePanic(func() {
+		s.Draw(d2)
+	})
+	assert(!didPanic, "scene3d draw tolerates zero shadow resolution when shadows disabled")
+	assert(len(d2.Bytes()) > 0, "scene3d draw writes commands with disabled shadows")
+	s.Close()
+}
+
+func testScene3DTerrainHeightAtLifecycle() {
+	var nilTerrain *scene3d.Terrain
+	_, ok := nilTerrain.HeightAt(0, 0)
+	assert(!ok, "scene3d nil terrain height query returns false")
+
+	tb := &testTerrainBackend{}
+	prevBackend := scene3d.SetTerrainBackend(tb)
+	defer scene3d.SetTerrainBackend(prevBackend)
+
+	s := scene3d.New()
+	terrain, err := scene3d.NewTerrain(s, scene3d.TerrainDesc{
+		HeightmapData: []byte{7},
+		Width:         4,
+		Height:        2,
+		Depth:         4,
+	})
+	assert(err == nil, "scene3d new terrain err")
+	assert(tb.createCalls == 1, "scene3d terrain create hook called once")
+	assert(terrain.Rows() == 2, "scene3d terrain rows")
+	assert(terrain.Cols() == 2, "scene3d terrain cols")
+	height, ok := terrain.HeightAt(0, 0)
+	assert(ok, "scene3d active terrain height query succeeds")
+	assertFloatNear(height, 1.25, 0.000001, "scene3d active terrain height query forwards hook result")
+	assert(tb.heightCalls == 1, "scene3d active terrain height query calls hook")
+
+	s.Destroy(terrain.Entity())
+	tb.heightCalls = 0
+	_, ok = terrain.HeightAt(0, 0)
+	assert(!ok, "scene3d destroyed terrain height query returns false")
+	assert(tb.heightCalls == 0, "scene3d destroyed terrain height query does not call hook")
+
+	terrain2, err := scene3d.NewTerrain(s, scene3d.TerrainDesc{
+		HeightmapData: []byte{7},
+		Width:         4,
+		Height:        2,
+		Depth:         4,
+	})
+	assert(err == nil, "scene3d second terrain err")
+	s.Clear()
+	tb.heightCalls = 0
+	_, ok = terrain2.HeightAt(0, 0)
+	assert(!ok, "scene3d cleared terrain height query returns false")
+	assert(tb.heightCalls == 0, "scene3d cleared terrain height query does not call hook")
+	s.Close()
+}
+
+func testScene3DLevelPlanning() {
+	spawnNode := scene3d.LevelNodeInfo{
+		Name:     "spawn_player",
+		ModelID:  voplay.ModelID(11),
+		Position: voplay.Vec3{X: 1, Y: 2, Z: 3},
+		Rotation: voplay.Quat{X: 0, Y: 0, Z: 0, W: 1},
+		Scale:    voplay.Vec3{X: 1, Y: 1, Z: 1},
+	}
+	spawnPlan, err := scene3d.PlanLevelNode(spawnNode)
+	assert(err == nil, "scene3d spawn plan err")
+	assert(spawnPlan.Desc.Model == 0, "scene3d spawn strips model")
+	assert(spawnPlan.Desc.OwnedModel == 0, "scene3d spawn strips owned model")
+	assert(!spawnPlan.Visible, "scene3d spawn hidden")
+	assertVec3Near(spawnPlan.Desc.Position, spawnNode.Position, 0.000001, "scene3d spawn keeps position")
+	assertQuatNear(spawnPlan.Desc.Rotation, spawnNode.Rotation, 0.000001, "scene3d spawn keeps rotation")
+
+	boxNode := scene3d.LevelNodeInfo{
+		Name:     "col_box_wall",
+		ModelID:  voplay.ModelID(21),
+		Scale:    voplay.Vec3{X: -2, Y: 3, Z: 4},
+		AABBMin:  voplay.Vec3{X: -1, Y: -2, Z: -3},
+		AABBMax:  voplay.Vec3{X: 3, Y: 4, Z: 5},
+	}
+	boxPlan, err := scene3d.PlanLevelNode(boxNode)
+	assert(err == nil, "scene3d box plan err")
+	assert(boxPlan.Visible, "scene3d box visible")
+	assert(boxPlan.Desc.Model == boxNode.ModelID, "scene3d box keeps model")
+	assert(boxPlan.Desc.OwnedModel == boxNode.ModelID, "scene3d box owned model")
+	assert(boxPlan.Desc.Physics != nil, "scene3d box has physics")
+	assert(boxPlan.Desc.Physics.Trimesh == nil, "scene3d box not trimesh")
+	assert(boxPlan.Desc.Physics.Collider.Kind() == scene3d.ColliderBox, "scene3d box collider kind")
+	args := boxPlan.Desc.Physics.Collider.Args()
+	assertFloatNear(args[0], 4.0, 0.000001, "scene3d box half x")
+	assertFloatNear(args[1], 9.0, 0.000001, "scene3d box half y")
+	assertFloatNear(args[2], 16.0, 0.000001, "scene3d box half z")
+	assertVec3Near(
+		boxPlan.Desc.Physics.Collider.Offset(),
+		voplay.Vec3{X: -2, Y: 3, Z: 4},
+		0.000001,
+		"scene3d box collider offset",
+	)
+
+	colNode := scene3d.LevelNodeInfo{
+		Name:    "col_trimesh_floor",
+		ModelID: voplay.ModelID(31),
+	}
+	colPlan, err := scene3d.PlanLevelNode(colNode)
+	assert(err == nil, "scene3d trimesh plan err")
+	assert(colPlan.Visible, "scene3d trimesh visible")
+	assert(colPlan.Desc.OwnedModel == colNode.ModelID, "scene3d trimesh owned model")
+	assert(colPlan.Desc.Physics != nil, "scene3d trimesh physics present")
+	assert(colPlan.Desc.Physics.Trimesh != nil, "scene3d trimesh collider present")
+	assert(colPlan.Desc.Physics.Trimesh.Model == colNode.ModelID, "scene3d trimesh model link")
+
+	hiddenColNode := scene3d.LevelNodeInfo{
+		Name:    "col_trigger",
+		ModelID: voplay.ModelID(41),
+	}
+	hiddenPlan, err := scene3d.PlanLevelNode(hiddenColNode)
+	assert(err == nil, "scene3d hidden col plan err")
+	assert(!hiddenPlan.Visible, "scene3d generic col hidden")
+	assert(hiddenPlan.Desc.Physics != nil && hiddenPlan.Desc.Physics.Trimesh != nil, "scene3d generic col uses trimesh")
+
+	missingMeshNode := scene3d.LevelNodeInfo{Name: "col_box_broken"}
+	_, err = scene3d.PlanLevelNode(missingMeshNode)
+	assert(err != nil, "scene3d missing mesh should error")
+}
+
+func testScene3DLevelSpawnValidation() {
+	freed := &intList{}
+	mb := &testFreeModelBackend{freed: freed}
+	mb.prev = voplay.SetModelBackend(mb)
+	defer voplay.SetModelBackend(mb.prev)
+
+	s := scene3d.New()
+	duplicateNodes := []scene3d.LevelNodeInfo{
+		{Name: "spawn_player", ModelID: voplay.ModelID(501)},
+		{Name: "spawn_player", ModelID: voplay.ModelID(502)},
+	}
+	_, err := scene3d.SpawnLevelNodesDetailed(s, duplicateNodes)
+	assert(err != nil, "scene3d duplicate level node names should error")
+	assert(s.EntityCount() == 0, "scene3d duplicate level node names spawn nothing")
+	assert(duplicateNodes[0].ModelID == voplay.ModelID(501), "scene3d duplicate level node names keep first input model id")
+	assert(duplicateNodes[1].ModelID == voplay.ModelID(502), "scene3d duplicate level node names keep second input model id")
+	assert(len(freed.items) == 2, "scene3d duplicate level node names free owned models on failure")
+	freedSet := map[int]bool{}
+	for _, id := range freed.items {
+		freedSet[id] = true
+	}
+	assert(freedSet[501], "scene3d duplicate level node names free first model")
+	assert(freedSet[502], "scene3d duplicate level node names free second model")
+
+	freed.items = freed.items[:0]
+	_, err = scene3d.SpawnLevelNodesDetailed(s, []scene3d.LevelNodeInfo{{Name: "", ModelID: voplay.ModelID(503)}})
+	assert(err != nil, "scene3d empty level node name should error")
+	assert(s.EntityCount() == 0, "scene3d empty level node name spawns nothing")
+	assert(len(freed.items) == 1 && freed.items[0] == 503, "scene3d empty level node name frees owned model on failure")
+	s.Close()
+}
+
+func testScene3DLevelSpawnKeepsInputNodes() {
+	freed := &intList{}
+	mb := &testFreeModelBackend{freed: freed}
+	mb.prev = voplay.SetModelBackend(mb)
+	defer voplay.SetModelBackend(mb.prev)
+
+	s := scene3d.New()
+	nodes := []scene3d.LevelNodeInfo{
+		{Name: "spawn_player", ModelID: voplay.ModelID(601)},
+		{Name: "col_trigger", ModelID: voplay.ModelID(602)},
+	}
+	result, err := scene3d.SpawnLevelNodesDetailed(s, nodes)
+	assert(err == nil, "scene3d level spawn success err")
+	assert(len(result.Entities) == 2, "scene3d level spawn result entity count")
+	assert(nodes[0].ModelID == voplay.ModelID(601), "scene3d level spawn keeps spawn marker input model id")
+	assert(nodes[1].ModelID == voplay.ModelID(602), "scene3d level spawn keeps collider input model id")
+	assert(len(freed.items) == 1 && freed.items[0] == 601, "scene3d level spawn frees only unowned marker model during spawn")
+
+	s.Close()
+	assert(len(freed.items) == 2, "scene3d level spawn frees owned collider model on close")
+	freedSet := map[int]bool{}
+	for _, id := range freed.items {
+		freedSet[id] = true
+	}
+	assert(freedSet[601], "scene3d level spawn freed marker model")
+	assert(freedSet[602], "scene3d level spawn freed collider model")
+}
+
+func testScene3DAnimationSemantics() {
+	ab := &testAnimationBackend{}
+	prevBackend := scene3d.SetAnimationBackend(ab)
+	defer scene3d.SetAnimationBackend(prevBackend)
+
+	s := scene3d.New()
+	noModel := s.Spawn(scene3d.EntityDesc{Tag: "marker"})
+	_, didPanic := capturePanic(func() {
+		noModel.PlayAnimation(0, true)
+	})
+	assert(didPanic, "scene3d animation play without model panics")
+	assert(ab.initCalls == 0, "scene3d invalid animation play does not init animation world")
+
+	noSkeleton := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(902), Tag: "no-skeleton"})
+	_, didPanic = capturePanic(func() {
+		noSkeleton.PlayAnimation(0, true)
+	})
+	assert(didPanic, "scene3d animation play without skeleton panics")
+	assert(ab.initCalls == 0, "scene3d skeleton validation happens before animation world init")
+
+	animated := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(901), Tag: "animated"})
+	drawCtx := voplay.NewDrawCtx()
+	s.Draw(drawCtx)
+	assert(ab.initCalls == 0, "scene3d draw rest pose does not init animation world")
+	assertFloatNear(animated.AnimationProgress(), 0.0, 0.000001, "scene3d draw rest pose does not create animation progress state")
+	assert(len(drawCtx.Bytes()) > 0, "scene3d draw rest pose writes skinned draw commands")
+
+	_, didPanic = capturePanic(func() {
+		animated.PlayAnimation(3, true)
+	})
+	assert(didPanic, "scene3d animation play invalid clip panics")
+	assert(ab.initCalls == 0, "scene3d invalid clip does not init animation world")
+
+	_, didPanic = capturePanic(func() {
+		animated.CrossfadeTo(0, 0.1)
+	})
+	assert(didPanic, "scene3d crossfade without active animation state panics")
+	_, didPanic = capturePanic(func() {
+		animated.SetAnimationSpeed(1.5)
+	})
+	assert(didPanic, "scene3d set animation speed without active animation state panics")
+
+	animated.PlayAnimation(1, true)
+	assert(ab.initCalls == 1, "scene3d valid animation play inits animation world once")
+	assert(ab.playWorld == 77, "scene3d animation play uses hooked world id")
+	assert(ab.playTarget == 1, "scene3d animation play allocates first target id")
+	assert(ab.playClip == 1, "scene3d animation play clip forwarded")
+	assert(ab.playLoop, "scene3d animation play loop forwarded")
+	assertFloatNear(ab.playSpeed, 1.0, 0.000001, "scene3d animation play default speed")
+	assertFloatNear(animated.AnimationProgress(), 0.25, 0.000001, "scene3d animation progress uses hook")
+
+	info := animated.AnimationModelInfo()
+	assert(info.HasSkeleton, "scene3d animation model info has skeleton")
+	assert(info.JointCount == 24, "scene3d animation model info joint count")
+	assert(len(info.Clips) == 2, "scene3d animation model info clip count")
+
+	animated.CrossfadeTo(0, 0.2)
+	assert(ab.crossfadeWorld == 77, "scene3d crossfade uses hooked world id")
+	assert(ab.crossfadeTarget == 1, "scene3d crossfade uses active target")
+	assert(ab.crossfadeClip == 0, "scene3d crossfade clip forwarded")
+	assertFloatNear(ab.crossfadeDur, 0.2, 0.000001, "scene3d crossfade duration forwarded")
+
+	animated.SetAnimationSpeed(1.5)
+	assert(ab.setSpeedWorld == 77, "scene3d set animation speed uses hooked world id")
+	assert(ab.setSpeedTarget == 1, "scene3d set animation speed uses active target")
+	assertFloatNear(ab.setSpeedValue, 1.5, 0.000001, "scene3d set animation speed value forwarded")
+
+	s.TickAnimations(0.125)
+	assert(ab.tickWorld == 77, "scene3d tick animations uses hooked world id")
+	assertFloatNear(ab.tickDT, 0.125, 0.000001, "scene3d tick animations dt forwarded")
+	assert(len(ab.tickBytes) == 12, "scene3d tick animations serializes active animated entity map")
+
+	animated.StopAnimation()
+	assert(ab.stopCalls == 1, "scene3d stop animation forwards to backend")
+	s.Destroy(animated)
+	assert(len(ab.removedTargets) == 1 && ab.removedTargets[0] == 1, "scene3d destroy removes animation target")
+	s.Close()
+	assert(len(ab.destroyWorlds) == 1 && ab.destroyWorlds[0] == 77, "scene3d close destroys animation world")
+}
+
+type testScene3DPhysicsBackend struct {
+	initCalls     int
+	destroyWorlds []int
+	destroyBodies []int
+	panicOnSpawn  bool
+}
+
+func (b *testScene3DPhysicsBackend) Init(gravity voplay.Vec3) int {
+	b.initCalls++
+	return 91
+}
+
+func (b *testScene3DPhysicsBackend) Destroy(worldID int) {
+	b.destroyWorlds = append(b.destroyWorlds, worldID)
+}
+
+func (b *testScene3DPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
+	if b.panicOnSpawn {
+		panic("scene3d test physics spawn body panic")
+	}
+}
+
+func (b *testScene3DPhysicsBackend) SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte) {
+	if b.panicOnSpawn {
+		panic("scene3d test physics spawn trimesh panic")
+	}
+}
+
+func (b *testScene3DPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc scene3d.HeightfieldSpawnDesc) {
+	if b.panicOnSpawn {
+		panic("scene3d test physics spawn heightfield panic")
+	}
+}
+
+func (b *testScene3DPhysicsBackend) DestroyBody(worldID, bodyID int) {
+	b.destroyBodies = append(b.destroyBodies, bodyID)
+}
+
+func (b *testScene3DPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
+	return nil
+}
+
+func (b *testScene3DPhysicsBackend) Contacts(worldID int) []byte {
+	return nil
+}
+
+func (b *testScene3DPhysicsBackend) SetGravity(worldID int, gravity voplay.Vec3) {}
+
+func (b *testScene3DPhysicsBackend) RayCast(worldID int, origin, dir voplay.Vec3, maxDist float64) []byte {
+	return nil
+}
+
+func (b *testScene3DPhysicsBackend) QueryAABB(worldID int, min, max voplay.Vec3) []byte {
+	return nil
+}
+
+func testScene3DSpawnRollback() {
+	freed := &intList{}
+	mb := &testFreeModelBackend{freed: freed}
+	mb.prev = voplay.SetModelBackend(mb)
+	defer voplay.SetModelBackend(mb.prev)
+
+	pb := &testScene3DPhysicsBackend{panicOnSpawn: true}
+	prevPhys := scene3d.SetPhysicsBackend(pb)
+	defer scene3d.SetPhysicsBackend(prevPhys)
+
+	s := scene3d.New()
+	_, didPanic := capturePanic(func() {
+		s.Spawn(scene3d.EntityDesc{
+			OwnedModel: voplay.ModelID(701),
+			Physics: &scene3d.Physics{
+				Type:     scene3d.Dynamic,
+				Collider: scene3d.Box(1, 1, 1),
+				Layer:    voplay.CollisionLayerDefault,
+				Mask:     voplay.CollisionMaskAll,
+			},
+		})
+	})
+	assert(didPanic, "scene3d spawn rollback panics on backend failure")
+	assert(s.EntityCount() == 0, "scene3d spawn rollback leaves no entity behind")
+	assert(!s.HasPhysics(), "scene3d spawn rollback destroys newly created physics world")
+	assert(pb.initCalls == 1, "scene3d spawn rollback initializes physics once")
+	assert(len(pb.destroyBodies) == 1 && pb.destroyBodies[0] == 1, "scene3d spawn rollback destroys allocated body")
+	assert(len(pb.destroyWorlds) == 1 && pb.destroyWorlds[0] == 91, "scene3d spawn rollback destroys allocated world")
+	assert(len(freed.items) == 1 && freed.items[0] == 701, "scene3d spawn rollback frees owned model")
+
+	recovered := s.Spawn(scene3d.EntityDesc{Tag: "recovered"})
+	assert(recovered.ID() == 1, "scene3d spawn rollback restores next entity id")
+	s.Close()
+	assert(len(pb.destroyWorlds) == 1, "scene3d close after rolled back spawn does not destroy absent world twice")
+}
+
+func testScene3DTintSemantics() {
+	s := scene3d.New()
+	defaultTint := s.Spawn(scene3d.EntityDesc{Tag: "default"})
+	assert(defaultTint.Tint == voplay.White, "scene3d default tint is white")
+
+	explicitTint := voplay.Color{R: 0.2, G: 0.4, B: 0.6, A: 0.8}
+	tinted := s.Spawn(scene3d.EntityDesc{Tag: "tinted", Tint: explicitTint})
+	assert(tinted.Tint == explicitTint, "scene3d explicit non-zero tint is preserved")
+
+	transparent := s.Spawn(scene3d.EntityDesc{Tag: "transparent", Tint: voplay.Color{}, TintSet: true})
+	assert(transparent.Tint == (voplay.Color{}), "scene3d explicit zero tint is preserved when TintSet")
+	s.Close()
+}
+
+func testScene3DPicking() {
+	scene3DPickTestBounds = map[int]voplay.AABB{
+		1: {Min: voplay.Vec3{X: -1, Y: -1, Z: -1}, Max: voplay.Vec3{X: 1, Y: 1, Z: 1}},
+		2: {Min: voplay.Vec3{X: -1, Y: -1, Z: -1}, Max: voplay.Vec3{X: 1, Y: 1, Z: 1}},
+		3: {Min: voplay.Vec3{X: -1, Y: -1, Z: -1}, Max: voplay.Vec3{X: 1, Y: 1, Z: 1}},
+	}
+	scene3DPickTestBoundsPresent = map[int]bool{1: true, 2: true, 3: true}
+	scene3DPickTestBoundsCalls = 0
+	prevBackend := voplay.SetModelBackend(&testPickModelBackend{})
+	defer func() {
+		voplay.SetModelBackend(prevBackend)
+		scene3DPickTestBounds = nil
+		scene3DPickTestBoundsPresent = nil
+		scene3DPickTestBoundsCalls = 0
+	}()
+
+	s := scene3d.New()
+	near := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(1), Position: voplay.Vec3{Z: 0}, Tag: "near"})
+	far := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(2), Position: voplay.Vec3{Z: -6}, Tag: "far"})
+	_ = s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(3), Tag: "hidden", PickMode: scene3d.PickDisabled})
+
+	origin := voplay.Vec3{Z: 5}
+	dir := voplay.Vec3{Z: -1}
+	hit := s.PickRay(origin, dir, 20)
+	assert(hit != nil, "scene3d pick ray returns hit")
+	assert(hit.Entity == near, "scene3d pick ray returns nearest visible pickable entity")
+	assertFloatNear(hit.Distance, 4.0, 0.000001, "scene3d pick ray distance uses nearest face")
+
+	all := s.PickAllRay(origin, dir, 20)
+	assert(len(all) == 2, "scene3d pick all ray returns visible pickable hits")
+	assert(all[0].Entity == near, "scene3d pick all ray sorts nearest first")
+	assert(all[1].Entity == far, "scene3d pick all ray includes farther hit second")
+
+	filtered := s.PickRayFiltered(origin, dir, 20, func(e *scene3d.Entity) bool {
+		return e.Tag == "far"
+	})
+	assert(filtered != nil && filtered.Entity == far, "scene3d pick ray filter selects matching entity")
+	assert(scene3DPickTestBoundsCalls == 2, "scene3d pick caches bounds per model and skips disabled entities")
+	s.Close()
+}
+
+func testScene3DAttachedSpatialAudio() {
+	au := &testAudioBackend{
+		nextSourceID: 1,
+		positions:    map[int]voplay.Vec3{},
+	}
+	prevBackend := voplay.SetAudioBackend(au)
+	defer voplay.SetAudioBackend(prevBackend)
+
+	s := scene3d.New()
+	s.Camera.Position = voplay.Vec3{X: 0, Y: 2, Z: 5}
+	s.Camera.Target = voplay.Vec3{X: 0, Y: 2, Z: 0}
+	s.Camera.Up = voplay.Vec3{Y: 1}
+
+	e := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: 1, Y: 2, Z: 3}, Tag: "speaker"})
+	e.PlaySound3D(voplay.AudioClipID(7), 0.5)
+	assert(au.playedClip == voplay.AudioClipID(7), "scene3d entity play sound forwards clip")
+	assertVec3Near(au.playedPos, voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.000001, "scene3d entity play sound forwards position")
+	assertFloatNear(au.playedVolume, 0.5, 0.000001, "scene3d entity play sound forwards volume")
+	assertFloatNear(au.playedRefDist, 1.0, 0.000001, "scene3d entity play sound uses default ref distance")
+	assertFloatNear(au.playedMaxDist, 50.0, 0.000001, "scene3d entity play sound uses default max distance")
+
+	source, err := e.AttachAudioSource(voplay.AudioClipID(8), 0.7, 2.0, 30.0)
+	assert(err == nil, "scene3d attach audio source err")
+	assert(source == voplay.AudioSourceID(1), "scene3d attach audio source returns created id")
+	e.SetPosition(voplay.Vec3{X: 4, Y: 5, Z: 6})
+	s.UpdateAudio()
+	assert(au.updateCalls == 1, "scene3d update audio calls backend update")
+	assertVec3Near(au.positions[1], voplay.Vec3{X: 4, Y: 5, Z: 6}, 0.000001, "scene3d update audio syncs attached source position")
+	assertVec3Near(au.listenerPos, s.Camera.Position, 0.000001, "scene3d update audio forwards listener position")
+	assertVec3Near(au.listenerForward, voplay.Vec3{X: 0, Y: 0, Z: -1}, 0.000001, "scene3d update audio forwards listener forward")
+	assertVec3Near(au.listenerUp, s.Camera.Up, 0.000001, "scene3d update audio forwards listener up")
+
+	e.RemoveAudioSource(source)
+	assert(len(au.removed) == 1 && au.removed[0] == 1, "scene3d remove audio source forwards removal")
+	_, didPanic := capturePanic(func() {
+		e.RemoveAudioSource(source)
+	})
+	assert(didPanic, "scene3d removing missing audio source panics")
+
+	source2, err := e.AttachAudioSource(voplay.AudioClipID(9), 1.0, 1.0, 10.0)
+	assert(err == nil, "scene3d second attach audio source err")
+	assert(source2 == voplay.AudioSourceID(2), "scene3d second attach audio source returns next id")
+	s.Destroy(e)
+	assert(len(au.removed) == 2 && au.removed[1] == 2, "scene3d destroy removes attached audio sources")
+	s.Close()
+}
+
+func testScene3DOwnedModelLifecycle() {
+	freed := &intList{}
+	mb := &testFreeModelBackend{freed: freed}
+	mb.prev = voplay.SetModelBackend(mb)
+	defer voplay.SetModelBackend(mb.prev)
+
+	s := scene3d.New()
+	eOwned := s.Spawn(scene3d.EntityDesc{OwnedModel: voplay.ModelID(101)})
+	assert(eOwned.Model == voplay.ModelID(101), "scene3d owned model becomes entity model")
+	s.Destroy(eOwned)
+	assert(len(freed.items) == 1 && freed.items[0] == 101, "scene3d destroy frees owned model")
+
+	eBorrowed := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(102)})
+	s.Destroy(eBorrowed)
+	assert(len(freed.items) == 1, "scene3d destroy does not free borrowed model")
+
+	s.Spawn(scene3d.EntityDesc{OwnedModel: voplay.ModelID(103)})
+	s.Clear()
+	assert(len(freed.items) == 2 && freed.items[1] == 103, "scene3d clear frees owned model")
+
+	s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(104), OwnedModel: voplay.ModelID(104)})
+	s.Close()
+	assert(len(freed.items) == 3 && freed.items[2] == 104, "scene3d close frees owned model when model matches owned model")
+}
+
+func testScene3DColliderWithOffset() {
+	c := scene3d.Box(2, 3, 4)
+	assert(c.Kind() == scene3d.ColliderBox, "scene3d collider kind")
+	args := c.Args()
+	assertFloatNear(args[0], 2, 0.000001, "scene3d box arg x")
+	assertFloatNear(args[1], 3, 0.000001, "scene3d box arg y")
+	assertFloatNear(args[2], 4, 0.000001, "scene3d box arg z")
+	assertVec3Near(c.Offset(), voplay.Vec3{}, 0.000001, "scene3d box default offset")
+
+	shifted := c.WithOffset(voplay.Vec3{X: 1, Y: 2, Z: 3})
+	assertVec3Near(c.Offset(), voplay.Vec3{}, 0.000001, "scene3d box with offset returns copy")
+	assertVec3Near(shifted.Offset(), voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.000001, "scene3d box with offset value")
+
+	sphere := scene3d.Sphere(5).WithOffset(voplay.Vec3{Y: -1})
+	assert(sphere.Kind() == scene3d.ColliderSphere, "scene3d sphere collider kind")
+	args = sphere.Args()
+	assertFloatNear(args[0], 5, 0.000001, "scene3d sphere arg radius")
+	assertVec3Near(sphere.Offset(), voplay.Vec3{Y: -1}, 0.000001, "scene3d sphere with offset value")
+}
+
+func testScene3DEntityHasSkeleton() {
+	ab := &testAnimationBackend{}
+	prevBackend := scene3d.SetAnimationBackend(ab)
+	defer scene3d.SetAnimationBackend(prevBackend)
+
+	s := scene3d.New()
+	animated := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(901), Tag: "animated"})
+	plain := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(902), Tag: "plain"})
+	marker := s.Spawn(scene3d.EntityDesc{Tag: "marker"})
+
+	assert(animated.HasSkeleton(), "scene3d animated entity reports skeleton")
+	assert(!plain.HasSkeleton(), "scene3d plain entity reports no skeleton")
+	assert(!marker.HasSkeleton(), "scene3d entity without model reports no skeleton")
+	assert(ab.modelInfoCalls == 2, "scene3d HasSkeleton queries modeled entities once")
+
+	assert(animated.HasSkeleton(), "scene3d animated entity cached skeleton result")
+	assert(!plain.HasSkeleton(), "scene3d plain entity cached skeleton result")
+	assert(ab.modelInfoCalls == 2, "scene3d HasSkeleton reuses cached model info")
+	s.Close()
+}
+
+func testScene3DPickZeroDirection() {
+	scene3DPickTestBounds = map[int]voplay.AABB{
+		1: {Min: voplay.Vec3{X: -1, Y: -1, Z: -1}, Max: voplay.Vec3{X: 1, Y: 1, Z: 1}},
+	}
+	scene3DPickTestBoundsPresent = map[int]bool{1: true}
+	scene3DPickTestBoundsCalls = 0
+	prevBackend := voplay.SetModelBackend(&testPickModelBackend{})
+	defer func() {
+		voplay.SetModelBackend(prevBackend)
+		scene3DPickTestBounds = nil
+		scene3DPickTestBoundsPresent = nil
+		scene3DPickTestBoundsCalls = 0
+	}()
+
+	s := scene3d.New()
+	s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(1), Tag: "pickable"})
+	hit := s.PickRay(voplay.Vec3{}, voplay.Vec3{}, 10)
+	assert(hit == nil, "scene3d zero direction pick ray returns nil")
+	all := s.PickAllRay(voplay.Vec3{}, voplay.Vec3{}, 10)
+	assert(len(all) == 0, "scene3d zero direction pick all ray returns empty slice")
+	assert(scene3DPickTestBoundsCalls == 0, "scene3d zero direction pick skips bounds queries")
+	s.Close()
+}
+
+func testScene2DPhysicsBackend() {
+	prev := scene2d.SetPhysicsBackend(nil)
+	assert(prev != nil, "scene2d default physics backend is not nil")
+	scene2d.SetPhysicsBackend(prev)
+}
+
 func main() {
 	testLifecycle()
 	testUpdateAndDrawBarriers()
@@ -852,5 +1799,22 @@ func main() {
 	testAnimController()
 	testScene2DFindByID()
 	testScene2DSetActive()
+	testScene3DThirdPersonCamera()
+	testScene3DParticles()
+	testScene3DShadowSemantics()
+	testScene3DTerrainHeightAtLifecycle()
+	testScene3DAnimationSemantics()
+	testScene3DLevelPlanning()
+	testScene3DLevelSpawnValidation()
+	testScene3DLevelSpawnKeepsInputNodes()
+	testScene3DSpawnRollback()
+	testScene3DTintSemantics()
+	testScene3DPicking()
+	testScene3DAttachedSpatialAudio()
+	testScene3DOwnedModelLifecycle()
+	testScene3DColliderWithOffset()
+	testScene3DEntityHasSkeleton()
+	testScene3DPickZeroDirection()
+	testScene2DPhysicsBackend()
 	println("ALL TESTS PASSED")
 }

@@ -1,0 +1,300 @@
+package scene3d
+
+import "math"
+import "math/rand"
+import "github.com/vo-lang/voplay"
+
+type EmitterShape int
+
+const (
+	EmitPoint EmitterShape = 0
+	EmitCone  EmitterShape = 1
+)
+
+type Particle struct {
+	position voplay.Vec3
+	velocity voplay.Vec3
+	age      float64
+	lifetime float64
+	size0    float64
+	size1    float64
+	color0   voplay.Color
+	color1   voplay.Color
+	alive    bool
+}
+
+type ParticleEmitter struct {
+	Position voplay.Vec3
+	Attached *Entity
+
+	Rate      float64
+	Shape     EmitterShape
+	Direction voplay.Vec3
+	Spread    float64
+
+	LifetimeMin float64
+	LifetimeMax float64
+	SpeedMin    float64
+	SpeedMax    float64
+
+	StartColor voplay.Color
+	EndColor   voplay.Color
+	StartSize  float64
+	EndSize    float64
+
+	Gravity voplay.Vec3
+	Damping float64
+	Texture voplay.TextureID
+
+	MaxParticles int
+	Enabled      bool
+
+	particles   []Particle
+	cursor      int
+	accumulator float64
+	scene       *Scene
+}
+
+func NewParticleEmitter(maxParticles int) *ParticleEmitter {
+	if maxParticles <= 0 {
+		panic("NewParticleEmitter: maxParticles must be > 0")
+	}
+	return &ParticleEmitter{
+		Rate:         50,
+		Shape:        EmitPoint,
+		Direction:    voplay.Vec3{Y: 1},
+		Spread:       0.5,
+		LifetimeMin:  0.5,
+		LifetimeMax:  1.5,
+		SpeedMin:     1.0,
+		SpeedMax:     3.0,
+		StartColor:   voplay.White,
+		EndColor:     voplay.Color{R: 1, G: 1, B: 1, A: 0},
+		StartSize:    0.2,
+		EndSize:      0.05,
+		Gravity:      voplay.Vec3{Y: -9.8},
+		Damping:      1.0,
+		MaxParticles: maxParticles,
+		Enabled:      true,
+		particles:    make([]Particle, maxParticles),
+	}
+}
+
+func FireEmitter(texture voplay.TextureID, pos voplay.Vec3) *ParticleEmitter {
+	e := NewParticleEmitter(200)
+	e.Texture = texture
+	e.Position = pos
+	e.Shape = EmitCone
+	e.Direction = voplay.Vec3{Y: 1}
+	e.Spread = 0.3
+	e.Rate = 80
+	e.SpeedMin = 1.0
+	e.SpeedMax = 2.5
+	e.LifetimeMin = 0.3
+	e.LifetimeMax = 0.8
+	e.StartColor = voplay.Color{R: 1, G: 0.8, B: 0.2, A: 1}
+	e.EndColor = voplay.Color{R: 0.8, G: 0.2, B: 0, A: 0}
+	e.StartSize = 0.3
+	e.EndSize = 0.05
+	e.Gravity = voplay.Vec3{Y: 2}
+	return e
+}
+
+func DustEmitter(texture voplay.TextureID, pos voplay.Vec3) *ParticleEmitter {
+	e := NewParticleEmitter(50)
+	e.Texture = texture
+	e.Position = pos
+	e.Shape = EmitPoint
+	e.Rate = 30
+	e.SpeedMin = 0.5
+	e.SpeedMax = 1.5
+	e.LifetimeMin = 0.3
+	e.LifetimeMax = 0.6
+	e.StartColor = voplay.Color{R: 0.8, G: 0.75, B: 0.6, A: 0.6}
+	e.EndColor = voplay.Color{R: 0.8, G: 0.75, B: 0.6, A: 0}
+	e.StartSize = 0.1
+	e.EndSize = 0.4
+	e.Gravity = voplay.Vec3{Y: 0.5}
+	e.Damping = 0.9
+	return e
+}
+
+func (e *ParticleEmitter) LiveCount() int {
+	count := 0
+	for i := range e.particles {
+		if e.particles[i].alive {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *ParticleEmitter) Clear() {
+	for i := range e.particles {
+		e.particles[i].alive = false
+	}
+	e.cursor = 0
+	e.accumulator = 0
+}
+
+func (e *ParticleEmitter) EmitBurst(count int) {
+	if count < 0 {
+		panic("ParticleEmitter.EmitBurst: count must be >= 0")
+	}
+	e.validate()
+	for i := 0; i < count; i++ {
+		e.emit()
+	}
+}
+
+func (e *ParticleEmitter) Update(dt float64) {
+	if dt < 0 {
+		panic("ParticleEmitter.Update: dt must be >= 0")
+	}
+	e.validate()
+	if e.Enabled {
+		e.accumulator += e.Rate * dt
+		for e.accumulator >= 1.0 {
+			e.emit()
+			e.accumulator -= 1.0
+		}
+	}
+	dampFactor := math.Pow(e.Damping, dt)
+	for i := range e.particles {
+		p := &e.particles[i]
+		if !p.alive {
+			continue
+		}
+		p.age += dt
+		if p.age >= p.lifetime {
+			p.alive = false
+			continue
+		}
+		p.velocity = p.velocity.Add(e.Gravity.Scale(dt))
+		p.velocity = p.velocity.Scale(dampFactor)
+		p.position = p.position.Add(p.velocity.Scale(dt))
+	}
+}
+
+func (e *ParticleEmitter) Draw(d *voplay.DrawCtx) {
+	if e.Texture == 0 {
+		panic("ParticleEmitter.Draw: Texture must be non-zero")
+	}
+	for i := range e.particles {
+		p := &e.particles[i]
+		if !p.alive {
+			continue
+		}
+		t := p.age / p.lifetime
+		size := p.size0 + (p.size1-p.size0)*t
+		color := p.color0.Lerp(p.color1, t)
+		if size <= 0 || color.A <= 0 {
+			continue
+		}
+		d.DrawBillboardEx(voplay.BillboardParams{
+			Tex:      e.Texture,
+			WorldPos: p.position,
+			Width:    size,
+			Height:   size,
+			Tint:     color,
+		})
+	}
+}
+
+func (e *ParticleEmitter) validate() {
+	if e.MaxParticles <= 0 {
+		panic("ParticleEmitter: MaxParticles must be > 0")
+	}
+	if len(e.particles) != e.MaxParticles {
+		panic("ParticleEmitter: particle pool size mismatch")
+	}
+	if e.Rate < 0 {
+		panic("ParticleEmitter: Rate must be >= 0")
+	}
+	if e.LifetimeMin <= 0 || e.LifetimeMax < e.LifetimeMin {
+		panic("ParticleEmitter: invalid lifetime range")
+	}
+	if e.SpeedMin < 0 || e.SpeedMax < e.SpeedMin {
+		panic("ParticleEmitter: invalid speed range")
+	}
+	if e.StartSize < 0 || e.EndSize < 0 {
+		panic("ParticleEmitter: size must be >= 0")
+	}
+	if e.Damping <= 0 {
+		panic("ParticleEmitter: Damping must be > 0")
+	}
+	if e.Shape == EmitCone {
+		if e.Direction.LengthSq() == 0 {
+			panic("ParticleEmitter: cone Direction must be non-zero")
+		}
+		if e.Spread < 0 || e.Spread > math.Pi {
+			panic("ParticleEmitter: Spread must be in [0, pi]")
+		}
+		return
+	}
+	if e.Shape != EmitPoint {
+		panic("ParticleEmitter: unknown Shape")
+	}
+}
+
+func (e *ParticleEmitter) emit() {
+	origin := e.Position
+	if e.Attached != nil {
+		origin = e.Attached.Position().Add(e.Position)
+	}
+	velocity := e.randomDirection().Scale(randRange(e.SpeedMin, e.SpeedMax))
+	p := &e.particles[e.cursor]
+	p.position = origin
+	p.velocity = velocity
+	p.age = 0
+	p.lifetime = randRange(e.LifetimeMin, e.LifetimeMax)
+	p.size0 = e.StartSize
+	p.size1 = e.EndSize
+	p.color0 = e.StartColor
+	p.color1 = e.EndColor
+	p.alive = true
+	e.cursor = (e.cursor + 1) % e.MaxParticles
+}
+
+func (e *ParticleEmitter) randomDirection() voplay.Vec3 {
+	if e.Shape == EmitPoint {
+		return randomUnitSphere()
+	}
+	return randomInCone(e.Direction, e.Spread)
+}
+
+func randRange(lo, hi float64) float64 {
+	if hi == lo {
+		return lo
+	}
+	return lo + rand.Float64()*(hi-lo)
+}
+
+func randomUnitSphere() voplay.Vec3 {
+	z := randRange(-1, 1)
+	phi := rand.Float64() * math.Pi * 2
+	r := math.Sqrt(1 - z*z)
+	return voplay.Vec3{
+		X: r * math.Cos(phi),
+		Y: z,
+		Z: r * math.Sin(phi),
+	}
+}
+
+func randomInCone(axis voplay.Vec3, halfAngle float64) voplay.Vec3 {
+	axis = axis.Normalize()
+	cosMin := math.Cos(halfAngle)
+	cosTheta := 1 - rand.Float64()*(1-cosMin)
+	sinTheta := math.Sqrt(1 - cosTheta*cosTheta)
+	phi := rand.Float64() * math.Pi * 2
+	helper := voplay.Vec3{Y: 1}
+	if math.Abs(axis.Y) > 0.999 {
+		helper = voplay.Vec3{X: 1}
+	}
+	tangent := helper.Cross(axis).Normalize()
+	bitangent := axis.Cross(tangent)
+	return tangent.Scale(math.Cos(phi) * sinTheta).
+		Add(bitangent.Scale(math.Sin(phi) * sinTheta)).
+		Add(axis.Scale(cosTheta)).
+		Normalize()
+}

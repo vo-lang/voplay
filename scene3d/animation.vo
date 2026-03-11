@@ -1,0 +1,246 @@
+package scene3d
+
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+type AnimationClipID int
+
+type AnimationClipInfo struct {
+	Name     string
+	Duration float64
+}
+
+type AnimationModelInfo struct {
+	HasSkeleton bool
+	JointCount  int
+	Clips       []AnimationClipInfo
+}
+
+// AnimationBackend abstracts animation system operations so they can be
+// replaced in tests without per-function hook boilerplate.
+type AnimationBackend interface {
+	Init() int
+	Destroy(worldID int)
+	Play(worldID, targetID int, clip AnimationClipID, loop bool, speed float64)
+	Stop(worldID, targetID int)
+	Crossfade(worldID, targetID int, clip AnimationClipID, duration float64)
+	SetSpeed(worldID, targetID int, speed float64)
+	RemoveTarget(worldID, targetID int)
+	Tick(worldID int, dt float64, entityModelMap []byte)
+	Progress(worldID, targetID int, model voplay.ModelID) float64
+	ModelInfo(model voplay.ModelID) AnimationModelInfo
+}
+
+type defaultAnimationBackend struct{}
+
+func (defaultAnimationBackend) Init() int                { return animationInit() }
+func (defaultAnimationBackend) Destroy(worldID int)      { animationDestroy(worldID) }
+
+func (defaultAnimationBackend) Play(worldID, targetID int, clip AnimationClipID, loop bool, speed float64) {
+	animationPlay(worldID, targetID, int(clip), loop, speed)
+}
+
+func (defaultAnimationBackend) Stop(worldID, targetID int) {
+	animationStop(worldID, targetID)
+}
+
+func (defaultAnimationBackend) Crossfade(worldID, targetID int, clip AnimationClipID, duration float64) {
+	animationCrossfade(worldID, targetID, int(clip), duration)
+}
+
+func (defaultAnimationBackend) SetSpeed(worldID, targetID int, speed float64) {
+	animationSetSpeed(worldID, targetID, speed)
+}
+
+func (defaultAnimationBackend) RemoveTarget(worldID, targetID int) {
+	animationRemoveTarget(worldID, targetID)
+}
+
+func (defaultAnimationBackend) Tick(worldID int, dt float64, entityModelMap []byte) {
+	animationTick(worldID, dt, entityModelMap)
+}
+
+func (defaultAnimationBackend) Progress(worldID, targetID int, model voplay.ModelID) float64 {
+	return animationProgress(worldID, targetID, int(model))
+}
+
+func (defaultAnimationBackend) ModelInfo(model voplay.ModelID) AnimationModelInfo {
+	return decodeAnimationModelInfo(animationModelInfo(int(model)))
+}
+
+var animBackend AnimationBackend = defaultAnimationBackend{}
+
+// SetAnimationBackend replaces the active animation backend and returns the previous one.
+func SetAnimationBackend(b AnimationBackend) AnimationBackend {
+	prev := animBackend
+	animBackend = b
+	return prev
+}
+
+func (s *Scene) ensureAnimation() {
+	if s.animationWorldID != 0 {
+		return
+	}
+	s.animationWorldID = animBackend.Init()
+}
+
+func (s *Scene) ensureAnimationTarget(e *Entity) int {
+	if e.scene != s {
+		panic("Scene.ensureAnimationTarget: entity does not belong to this scene")
+	}
+	if e.animationTargetID != 0 {
+		return e.animationTargetID
+	}
+	s.ensureAnimation()
+	e.animationTargetID = s.nextAnimationTargetID
+	s.nextAnimationTargetID++
+	return e.animationTargetID
+}
+
+func decodeAnimationModelInfo(data []byte) AnimationModelInfo {
+	r := codec.NewByteReader(data)
+	info := AnimationModelInfo{}
+	info.HasSkeleton = r.ReadByte() != 0
+	info.JointCount = r.ReadU32()
+	clipCount := r.ReadU32()
+	if clipCount > 0 {
+		info.Clips = make([]AnimationClipInfo, 0, clipCount)
+	}
+	for i := 0; i < clipCount; i++ {
+		duration := r.ReadF32()
+		nameLen := r.ReadU16()
+		name := string(r.ReadBytes(nameLen))
+		info.Clips = append(info.Clips, AnimationClipInfo{
+			Name:     name,
+			Duration: duration,
+		})
+	}
+	return info
+}
+
+func (s *Scene) AnimationModelInfo(model voplay.ModelID) AnimationModelInfo {
+	if info, ok := s.animationInfoCache[int(model)]; ok {
+		return info
+	}
+	info := animBackend.ModelInfo(model)
+	s.animationInfoCache[int(model)] = info
+	return info
+}
+
+func (e *Entity) AnimationModelInfo() AnimationModelInfo {
+	if e.scene == nil {
+		panic("Entity.AnimationModelInfo: entity does not belong to a scene")
+	}
+	return e.scene.AnimationModelInfo(e.Model)
+}
+
+func (e *Entity) requireAnimationModel(method string) AnimationModelInfo {
+	if e.scene == nil || !e.Active {
+		panic(method + ": entity must belong to an active scene")
+	}
+	if e.Model == 0 {
+		panic(method + ": entity must have a model")
+	}
+	info := e.scene.AnimationModelInfo(e.Model)
+	if !info.HasSkeleton {
+		panic(method + ": model has no skeleton")
+	}
+	if len(info.Clips) == 0 {
+		panic(method + ": model has no animation clips")
+	}
+	return info
+}
+
+func validateAnimationClip(method string, info AnimationModelInfo, clip AnimationClipID) {
+	index := int(clip)
+	if index < 0 || index >= len(info.Clips) {
+		panic(method + ": clip index out of range")
+	}
+}
+
+func (e *Entity) requireAnimationState(method string) int {
+	if e.scene == nil || !e.Active {
+		panic(method + ": entity must belong to an active scene")
+	}
+	if e.animationTargetID == 0 || e.scene.animationWorldID == 0 {
+		panic(method + ": entity has no active animation state")
+	}
+	return e.animationTargetID
+}
+
+func (e *Entity) PlayAnimation(clip AnimationClipID, loop bool) {
+	info := e.requireAnimationModel("Entity.PlayAnimation")
+	validateAnimationClip("Entity.PlayAnimation", info, clip)
+	targetID := e.scene.ensureAnimationTarget(e)
+	animBackend.Play(e.scene.animationWorldID, targetID, clip, loop, 1.0)
+}
+
+func (e *Entity) PlayAnimationEx(clip AnimationClipID, loop bool, speed float64) {
+	info := e.requireAnimationModel("Entity.PlayAnimationEx")
+	validateAnimationClip("Entity.PlayAnimationEx", info, clip)
+	targetID := e.scene.ensureAnimationTarget(e)
+	animBackend.Play(e.scene.animationWorldID, targetID, clip, loop, speed)
+}
+
+func (e *Entity) StopAnimation() {
+	if e.scene == nil || e.animationTargetID == 0 || e.scene.animationWorldID == 0 {
+		return
+	}
+	animBackend.Stop(e.scene.animationWorldID, e.animationTargetID)
+}
+
+func (e *Entity) CrossfadeTo(clip AnimationClipID, duration float64) {
+	info := e.requireAnimationModel("Entity.CrossfadeTo")
+	validateAnimationClip("Entity.CrossfadeTo", info, clip)
+	targetID := e.requireAnimationState("Entity.CrossfadeTo")
+	animBackend.Crossfade(e.scene.animationWorldID, targetID, clip, duration)
+}
+
+func (e *Entity) SetAnimationSpeed(speed float64) {
+	e.requireAnimationModel("Entity.SetAnimationSpeed")
+	targetID := e.requireAnimationState("Entity.SetAnimationSpeed")
+	animBackend.SetSpeed(e.scene.animationWorldID, targetID, speed)
+}
+
+func (e *Entity) AnimationProgress() float64 {
+	if e.scene == nil || e.animationTargetID == 0 || e.scene.animationWorldID == 0 || e.Model == 0 {
+		return 0
+	}
+	return animBackend.Progress(e.scene.animationWorldID, e.animationTargetID, e.Model)
+}
+
+func (s *Scene) serializeAnimatedEntityModelMap() []byte {
+	count := 0
+	for _, e := range s.entities {
+		if e.Active && e.Model != 0 && e.animationTargetID != 0 {
+			count++
+		}
+	}
+	w := codec.NewByteWriter(4 + count*8)
+	w.WriteU32(count)
+	for _, e := range s.entities {
+		if e.Active && e.Model != 0 && e.animationTargetID != 0 {
+			w.WriteU32(e.animationTargetID)
+			w.WriteU32(int(e.Model))
+		}
+	}
+	return w.Bytes()
+}
+
+func (s *Scene) TickAnimations(dt float64) {
+	if s.animationWorldID == 0 {
+		return
+	}
+	animBackend.Tick(s.animationWorldID, dt, s.serializeAnimatedEntityModelMap())
+}
+
+func animationInit() int
+func animationDestroy(worldID int)
+func animationPlay(worldID, targetID, clipIndex int, loop bool, speed float64)
+func animationStop(worldID, targetID int)
+func animationCrossfade(worldID, targetID, toClipIndex int, duration float64)
+func animationSetSpeed(worldID, targetID int, speed float64)
+func animationRemoveTarget(worldID, targetID int)
+func animationTick(worldID int, dt float64, entityModelMap []byte)
+func animationProgress(worldID, targetID, modelID int) float64
+func animationModelInfo(modelID int) []byte

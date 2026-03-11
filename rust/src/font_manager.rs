@@ -5,6 +5,7 @@
 //! into a shelf-packed texture atlas.
 
 use std::collections::HashMap;
+use crate::file_io;
 use crate::pipeline_sprite::{SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
 
@@ -31,6 +32,7 @@ fn load_default_font() -> fontdue::Font {
         return font;
     }
 
+    #[cfg(not(feature = "wasm"))]
     for path in DEFAULT_FONT_PATHS {
         let data = match std::fs::read(path) {
             Ok(data) => data,
@@ -129,7 +131,7 @@ impl FontManager {
 
     /// Load a font from a file path. Returns font ID.
     pub fn load_file(&mut self, path: &str) -> Result<FontId, String> {
-        let data = std::fs::read(path)
+        let data = file_io::read_bytes(path)
             .map_err(|e| format!("read font '{}': {}", path, e))?;
         self.load_bytes(data)
     }

@@ -1,0 +1,385 @@
+package scene3d
+
+import "errors"
+import "math"
+import "strings"
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+const (
+	levelNodeEntity  = 0
+	levelNodeTerrain = 1
+)
+
+type LevelTerrainInfo struct {
+	Rows        int
+	Cols        int
+	Scale       voplay.Vec3
+	HeightData  []byte
+	Layer       int
+	Mask        int
+	Friction    float64
+	Restitution float64
+}
+
+type LevelNodeInfo struct {
+	Kind     int
+	Name     string
+	ModelID  voplay.ModelID
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Scale    voplay.Vec3
+	AABBMin  voplay.Vec3
+	AABBMax  voplay.Vec3
+	Terrain  *LevelTerrainInfo
+}
+
+type LevelNodePlan struct {
+	Desc    EntityDesc
+	Visible bool
+}
+
+type LevelSpawnResult struct {
+	Entities []*Entity
+	Terrains map[string]*Terrain
+}
+
+type levelNodePlanKind int
+
+const (
+	levelNodePlanDefault         levelNodePlanKind = 0
+	levelNodePlanSpawnMarker     levelNodePlanKind = 1
+	levelNodePlanBoxCollider     levelNodePlanKind = 2
+	levelNodePlanSphereCollider  levelNodePlanKind = 3
+	levelNodePlanCapsuleCollider levelNodePlanKind = 4
+	levelNodePlanTrimeshVisible  levelNodePlanKind = 5
+	levelNodePlanTrimeshHidden   levelNodePlanKind = 6
+)
+
+type levelNodeSpawnResult struct {
+	Entity                    *Entity
+	Terrain                   *Terrain
+	ModelOwnershipTransferred bool
+}
+
+func LoadLevel(scene *Scene, path string) ([]*Entity, error) {
+	result, err := LoadLevelDetailed(scene, path)
+	if err != nil {
+		return nil, err
+	}
+	return result.Entities, nil
+}
+
+func LoadLevelDetailed(scene *Scene, path string) (*LevelSpawnResult, error) {
+	data := loadLevel(path)?
+	return SpawnLevelNodesDetailed(scene, DecodeLevelNodes(data))
+}
+
+func SpawnLevelNodesDetailed(scene *Scene, nodes []LevelNodeInfo) (*LevelSpawnResult, error) {
+	result := &LevelSpawnResult{
+		Entities: make([]*Entity, 0, len(nodes)),
+		Terrains: map[string]*Terrain{},
+	}
+	modelHandled := make([]bool, len(nodes))
+	errdefer func() {
+		for _, e := range result.Entities {
+			if e != nil && e.scene == scene && e.Active {
+				scene.Destroy(e)
+			}
+		}
+		for i := 0; i < len(nodes); i++ {
+			if !modelHandled[i] {
+				releaseLevelNodeModel(nodes[i])
+			}
+		}
+	}()
+	validateLevelNodes(nodes)?
+	for i := 0; i < len(nodes); i++ {
+		spawned, err := spawnLevelNode(scene, nodes[i])
+		if err != nil {
+			return nil, err
+		}
+		result.Entities = append(result.Entities, spawned.Entity)
+		if spawned.Terrain != nil {
+			result.Terrains[nodes[i].Name] = spawned.Terrain
+		}
+		if spawned.ModelOwnershipTransferred {
+			modelHandled[i] = true
+			continue
+		}
+		if nodes[i].ModelID != 0 {
+			releaseLevelNodeModel(nodes[i])
+			modelHandled[i] = true
+		}
+	}
+	return result, nil
+}
+
+func validateLevelNodes(nodes []LevelNodeInfo) error {
+	seen := map[string]bool{}
+	for i := 0; i < len(nodes); i++ {
+		name := nodes[i].Name
+		if name == "" {
+			return errors.New("scene3d.LoadLevel: level node name must not be empty")
+		}
+		if seen[name] {
+			return errors.New("scene3d.LoadLevel: duplicate level node name: " + name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func DecodeLevelNodes(data []byte) []LevelNodeInfo {
+	r := codec.NewByteReader(data)
+	count := r.ReadU32()
+	nodes := make([]LevelNodeInfo, 0, count)
+	for i := 0; i < count; i++ {
+		nameLen := r.ReadU16()
+		name := string(r.ReadBytes(nameLen))
+		kind := int(r.ReadByte())
+		modelID := voplay.ModelID(r.ReadU32())
+		node := LevelNodeInfo{
+			Kind:     kind,
+			Name:     name,
+			ModelID:  modelID,
+			Position: voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+			Rotation: voplay.Quat{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64(), W: r.ReadF64()},
+			Scale:    voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+			AABBMin:  voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+			AABBMax:  voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+		}
+		if kind == levelNodeTerrain {
+			rows := r.ReadU32()
+			cols := r.ReadU32()
+			node.Terrain = &LevelTerrainInfo{
+				Rows:        rows,
+				Cols:        cols,
+				Scale:       voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+				Layer:       r.ReadU16(),
+				Mask:        r.ReadU16(),
+				Friction:    r.ReadF64(),
+				Restitution: r.ReadF64(),
+			}
+			heightLen := r.ReadU32()
+			node.Terrain.HeightData = r.ReadBytes(heightLen)
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes
+}
+
+func spawnLevelTerrainNode(scene *Scene, node LevelNodeInfo) (*Terrain, error) {
+	if node.ModelID == 0 {
+		return nil, errors.New("scene3d.LoadLevel: terrain node requires generated model: " + node.Name)
+	}
+	if node.Terrain == nil {
+		return nil, errors.New("scene3d.LoadLevel: terrain node missing terrain payload: " + node.Name)
+	}
+	info := node.Terrain
+	physics, err := buildTerrainPhysics(&Physics{
+		Type:        Static,
+		Layer:       info.Layer,
+		Mask:        info.Mask,
+		Friction:    info.Friction,
+		Restitution: info.Restitution,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return spawnTerrain(scene, TerrainDesc{
+		Position: node.Position,
+		Width:    info.Scale.X,
+		Height:   info.Scale.Y,
+		Depth:    info.Scale.Z,
+		Tag:      node.Name,
+		Physics:  physics,
+	}, physics, int(node.ModelID), info.Rows, info.Cols, info.HeightData), nil
+}
+
+func classifyLevelNode(node LevelNodeInfo) levelNodePlanKind {
+	switch {
+	case strings.HasPrefix(node.Name, "spawn_"):
+		return levelNodePlanSpawnMarker
+	case strings.HasPrefix(node.Name, "col_box_"):
+		return levelNodePlanBoxCollider
+	case strings.HasPrefix(node.Name, "col_sphere_"):
+		return levelNodePlanSphereCollider
+	case strings.HasPrefix(node.Name, "col_capsule_"):
+		return levelNodePlanCapsuleCollider
+	case strings.HasPrefix(node.Name, "col_trimesh_"):
+		return levelNodePlanTrimeshVisible
+	case strings.HasPrefix(node.Name, "col_"):
+		return levelNodePlanTrimeshHidden
+	default:
+		return levelNodePlanDefault
+	}
+}
+
+func newLevelNodePlan(node LevelNodeInfo) LevelNodePlan {
+	plan := LevelNodePlan{Desc: EntityDesc{
+		Position: node.Position,
+		Rotation: node.Rotation,
+		Scale:    node.Scale,
+		Model:    node.ModelID,
+		Tag:      node.Name,
+	}}
+	if plan.Desc.Model != 0 {
+		plan.Desc.OwnedModel = plan.Desc.Model
+	}
+	return plan
+}
+
+func requireLevelNodeMesh(node LevelNodeInfo, kind string) error {
+	if node.ModelID == 0 {
+		return errors.New("scene3d.LoadLevel: " + kind + " node requires mesh: " + node.Name)
+	}
+	return nil
+}
+
+func releaseLevelNodeModel(node LevelNodeInfo) {
+	if node.ModelID == 0 {
+		return
+	}
+	node.ModelID.Free()
+}
+
+func spawnLevelNode(scene *Scene, node LevelNodeInfo) (levelNodeSpawnResult, error) {
+	if node.Kind == levelNodeTerrain {
+		terrain, err := spawnLevelTerrainNode(scene, node)
+		if err != nil {
+			return levelNodeSpawnResult{}, err
+		}
+		return levelNodeSpawnResult{
+			Entity:                    terrain.Entity(),
+			Terrain:                   terrain,
+			ModelOwnershipTransferred: true,
+		}, nil
+	}
+	plan, err := PlanLevelNode(node)
+	if err != nil {
+		return levelNodeSpawnResult{}, err
+	}
+	ent := scene.Spawn(plan.Desc)
+	ent.Visible = plan.Visible
+	return levelNodeSpawnResult{
+		Entity:                    ent,
+		ModelOwnershipTransferred: plan.Desc.OwnedModel != 0,
+	}, nil
+}
+
+func PlanLevelNode(node LevelNodeInfo) (LevelNodePlan, error) {
+	plan := newLevelNodePlan(node)
+	switch classifyLevelNode(node) {
+	case levelNodePlanSpawnMarker:
+		plan.Desc.Model = 0
+		plan.Desc.OwnedModel = 0
+		plan.Visible = false
+		return plan, nil
+	case levelNodePlanBoxCollider:
+		collider, err := levelBoxCollider(node)
+		if err != nil {
+			return LevelNodePlan{}, err
+		}
+		plan.Desc.Physics = levelPhysics(collider)
+		plan.Visible = true
+		return plan, nil
+	case levelNodePlanSphereCollider:
+		collider, err := levelSphereCollider(node)
+		if err != nil {
+			return LevelNodePlan{}, err
+		}
+		plan.Desc.Physics = levelPhysics(collider)
+		plan.Visible = true
+		return plan, nil
+	case levelNodePlanCapsuleCollider:
+		collider, err := levelCapsuleCollider(node)
+		if err != nil {
+			return LevelNodePlan{}, err
+		}
+		plan.Desc.Physics = levelPhysics(collider)
+		plan.Visible = true
+		return plan, nil
+	case levelNodePlanTrimeshVisible:
+		requireLevelNodeMesh(node, "col_trimesh")?
+		plan.Desc.Physics = TrimeshPhysics(node.ModelID)
+		plan.Visible = true
+		return plan, nil
+	case levelNodePlanTrimeshHidden:
+		requireLevelNodeMesh(node, "col")?
+		plan.Desc.Physics = TrimeshPhysics(node.ModelID)
+		plan.Visible = false
+		return plan, nil
+	default:
+		plan.Visible = true
+		return plan, nil
+	}
+}
+
+func levelPhysics(c Collider) *Physics {
+	return &Physics{
+		Type:        Static,
+		Collider:    c,
+		Layer:       voplay.CollisionLayerDefault,
+		Mask:        voplay.CollisionMaskAll,
+		Friction:    0.5,
+		Restitution: 0.0,
+	}
+}
+
+func levelBoxCollider(node LevelNodeInfo) (Collider, error) {
+	requireLevelNodeMesh(node, "col_box")?
+	half := scaledHalfExtents(node)
+	center := scaledCenter(node)
+	return Collider{
+		kind:   colliderBox3D,
+		args:   [3]float64{half.X, half.Y, half.Z},
+		offset: center,
+	}, nil
+}
+
+func levelSphereCollider(node LevelNodeInfo) (Collider, error) {
+	requireLevelNodeMesh(node, "col_sphere")?
+	half := scaledHalfExtents(node)
+	radius := math.Max(half.X, math.Max(half.Y, half.Z))
+	return Collider{
+		kind:   colliderSphere,
+		args:   [3]float64{radius, 0, 0},
+		offset: scaledCenter(node),
+	}, nil
+}
+
+func levelCapsuleCollider(node LevelNodeInfo) (Collider, error) {
+	requireLevelNodeMesh(node, "col_capsule")?
+	half := scaledHalfExtents(node)
+	radius := math.Max(half.X, half.Z)
+	halfHeight := half.Y - radius
+	if halfHeight < 0 {
+		halfHeight = 0
+	}
+	return Collider{
+		kind:   colliderCapsule3D,
+		args:   [3]float64{halfHeight, radius, 0},
+		offset: scaledCenter(node),
+	}, nil
+}
+
+func scaledHalfExtents(node LevelNodeInfo) voplay.Vec3 {
+	size := node.AABBMax.Sub(node.AABBMin)
+	return voplay.Vec3{
+		X: math.Abs(size.X*node.Scale.X) * 0.5,
+		Y: math.Abs(size.Y*node.Scale.Y) * 0.5,
+		Z: math.Abs(size.Z*node.Scale.Z) * 0.5,
+	}
+}
+
+func scaledCenter(node LevelNodeInfo) voplay.Vec3 {
+	center := node.AABBMin.Add(node.AABBMax).Scale(0.5)
+	return voplay.Vec3{
+		X: center.X * node.Scale.X,
+		Y: center.Y * node.Scale.Y,
+		Z: center.Z * node.Scale.Z,
+	}
+}
+
+func loadLevel(path string) ([]byte, error)

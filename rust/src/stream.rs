@@ -1,6 +1,8 @@
 //! Binary draw command stream decoder.
 //! Reads opcodes + args from the []byte buffer produced by DrawCtx on the Vo side.
 
+use crate::math3d::{Vec3, Quat};
+
 /// Draw command opcodes (must match draw.vo constants).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,9 @@ pub enum Opcode {
     DrawModel = 0x20,
     DrawBillboard = 0x21,
     SetLights3D = 0x23,
+    SetFog3D = 0x24,
+    DrawSkybox = 0x25,
+    SetShadow3D = 0x27,
 }
 
 impl Opcode {
@@ -38,6 +43,9 @@ impl Opcode {
             0x20 => Some(Opcode::DrawModel),
             0x21 => Some(Opcode::DrawBillboard),
             0x23 => Some(Opcode::SetLights3D),
+            0x24 => Some(Opcode::SetFog3D),
+            0x25 => Some(Opcode::DrawSkybox),
+            0x27 => Some(Opcode::SetShadow3D),
             _ => None,
         }
     }
@@ -47,9 +55,9 @@ impl Opcode {
 #[derive(Debug, Clone)]
 pub struct DecodedLight {
     pub light_type: u8, // 0 = directional, 1 = point
-    pub px: f32, pub py: f32, pub pz: f32, // position (point) or unused (dir)
-    pub dx: f32, pub dy: f32, pub dz: f32, // direction (dir) or unused (point)
-    pub cr: f32, pub cg: f32, pub cb: f32, // color
+    pub position: Vec3,  // position (point) or unused (dir)
+    pub direction: Vec3, // direction (dir) or unused (point)
+    pub color: Vec3,     // RGB color
     pub intensity: f32,
 }
 
@@ -67,20 +75,37 @@ pub enum DrawCommand {
     DrawText { x: f32, y: f32, size: f32, r: f32, g: f32, b: f32, a: f32, text: String },
     SetFont { font_id: u32 },
     SetCamera3D {
-        eye_x: f32, eye_y: f32, eye_z: f32,
-        target_x: f32, target_y: f32, target_z: f32,
-        up_x: f32, up_y: f32, up_z: f32,
+        eye: Vec3,
+        target: Vec3,
+        up: Vec3,
         fov: f32, near: f32, far: f32,
     },
     SetLights3D {
         ambient_r: f32, ambient_g: f32, ambient_b: f32,
         lights: Vec<DecodedLight>,
     },
+    SetFog3D {
+        mode: u8,
+        color: Vec3,
+        start: f32,
+        end: f32,
+        density: f32,
+    },
+    SetShadow3D {
+        enabled: bool,
+        resolution: u32,
+    },
+    DrawSkybox {
+        cubemap_id: u32,
+    },
     DrawModel {
         model_id: u32,
-        px: f32, py: f32, pz: f32,
-        qx: f32, qy: f32, qz: f32, qw: f32,
-        sx: f32, sy: f32, sz: f32,
+        pos: Vec3,
+        rot: Quat,
+        scale: Vec3,
+        tint: [f32; 4],
+        animation_world_id: u32,
+        animation_target_id: u32,
     },
     DrawSprite {
         tex_id: u32,
@@ -93,8 +118,9 @@ pub enum DrawCommand {
     DrawBillboard {
         tex_id: u32,
         src_x: f32, src_y: f32, src_w: f32, src_h: f32,
-        world_x: f32, world_y: f32, world_z: f32,
+        world_pos: Vec3,
         w: f32, h: f32,
+        tint: [f32; 4],
     },
 }
 
@@ -264,16 +290,11 @@ impl<'a> StreamReader<'a> {
                 })
             }
             Opcode::SetCamera3D => {
-                let eye_x = self.read_f32(); let eye_y = self.read_f32(); let eye_z = self.read_f32();
-                let target_x = self.read_f32(); let target_y = self.read_f32(); let target_z = self.read_f32();
-                let up_x = self.read_f32(); let up_y = self.read_f32(); let up_z = self.read_f32();
+                let eye = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let target = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let up = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
                 let fov = self.read_f32(); let near = self.read_f32(); let far = self.read_f32();
-                Some(DrawCommand::SetCamera3D {
-                    eye_x, eye_y, eye_z,
-                    target_x, target_y, target_z,
-                    up_x, up_y, up_z,
-                    fov, near, far,
-                })
+                Some(DrawCommand::SetCamera3D { eye, target, up, fov, near, far })
             }
             Opcode::SetLights3D => {
                 let ambient_r = self.read_f32();
@@ -283,24 +304,42 @@ impl<'a> StreamReader<'a> {
                 let mut lights = Vec::with_capacity(count);
                 for _ in 0..count {
                     let light_type = self.read_u8();
-                    let px = self.read_f32(); let py = self.read_f32(); let pz = self.read_f32();
-                    let dx = self.read_f32(); let dy = self.read_f32(); let dz = self.read_f32();
-                    let cr = self.read_f32(); let cg = self.read_f32(); let cb = self.read_f32();
+                    let position = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                    let direction = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                    let color = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
                     let intensity = self.read_f32();
                     lights.push(DecodedLight {
-                        light_type, px, py, pz, dx, dy, dz, cr, cg, cb, intensity,
+                        light_type, position, direction, color, intensity,
                     });
                 }
                 Some(DrawCommand::SetLights3D { ambient_r, ambient_g, ambient_b, lights })
             }
+            Opcode::SetFog3D => {
+                let mode = self.read_u8();
+                let color = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let start = self.read_f32();
+                let end = self.read_f32();
+                let density = self.read_f32();
+                Some(DrawCommand::SetFog3D { mode, color, start, end, density })
+            }
+            Opcode::SetShadow3D => {
+                let enabled = self.read_u8() != 0;
+                let resolution = self.read_u32();
+                Some(DrawCommand::SetShadow3D { enabled, resolution })
+            }
+            Opcode::DrawSkybox => {
+                let cubemap_id = self.read_u32();
+                Some(DrawCommand::DrawSkybox { cubemap_id })
+            }
             Opcode::DrawModel => {
                 let model_id = self.read_u32();
-                let px = self.read_f32(); let py = self.read_f32(); let pz = self.read_f32();
-                let qx = self.read_f32(); let qy = self.read_f32(); let qz = self.read_f32(); let qw = self.read_f32();
-                let sx = self.read_f32(); let sy = self.read_f32(); let sz = self.read_f32();
-                Some(DrawCommand::DrawModel {
-                    model_id, px, py, pz, qx, qy, qz, qw, sx, sy, sz,
-                })
+                let pos = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let rot = Quat::new(self.read_f32(), self.read_f32(), self.read_f32(), self.read_f32());
+                let scale = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let tint = [self.read_f32(), self.read_f32(), self.read_f32(), self.read_f32()];
+                let animation_world_id = self.read_u32();
+                let animation_target_id = self.read_u32();
+                Some(DrawCommand::DrawModel { model_id, pos, rot, scale, tint, animation_world_id, animation_target_id })
             }
             Opcode::DrawBillboard => {
                 let tex_id = self.read_u32();
@@ -308,14 +347,13 @@ impl<'a> StreamReader<'a> {
                 let src_y = self.read_f32();
                 let src_w = self.read_f32();
                 let src_h = self.read_f32();
-                let world_x = self.read_f32();
-                let world_y = self.read_f32();
-                let world_z = self.read_f32();
+                let world_pos = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
                 let w = self.read_f32();
                 let h = self.read_f32();
+                let tint = [self.read_f32(), self.read_f32(), self.read_f32(), self.read_f32()];
                 Some(DrawCommand::DrawBillboard {
                     tex_id, src_x, src_y, src_w, src_h,
-                    world_x, world_y, world_z, w, h,
+                    world_pos, w, h, tint,
                 })
             }
         }

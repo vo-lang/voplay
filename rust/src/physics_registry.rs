@@ -1,8 +1,8 @@
-//! Generic physics world registry.
+//! Generic runtime world registry.
 //!
-//! Both 2D and 3D physics use the same pattern: a global Mutex-guarded
+//! Multiple runtime subsystems use the same pattern: a global Mutex-guarded
 //! HashMap of worlds keyed by u32 handle. This module extracts that
-//! boilerplate into a reusable generic.
+//! lifecycle boilerplate into a reusable generic.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,7 +37,12 @@ impl<W> WorldRegistry<W> {
     /// Access a world mutably by handle. Panics if not found.
     pub fn get_mut(&mut self, id: u32) -> &mut W {
         self.worlds.get_mut(&id)
-            .expect("voplay: physics world not found")
+            .expect("voplay: world not found")
+    }
+
+    /// Access a world immutably by handle.
+    pub fn get(&self, id: u32) -> Option<&W> {
+        self.worlds.get(&id)
     }
 }
 
@@ -49,9 +54,22 @@ pub fn with_world_in<W, R>(
     f: impl FnOnce(&mut W) -> R,
 ) -> R {
     let mut guard = mutex.lock().unwrap();
-    let reg = guard.as_mut().expect("voplay: physics registry not initialized");
+    let reg = guard.as_mut().expect("voplay: world registry not initialized");
     let world = reg.get_mut(world_id);
     f(world)
+}
+
+/// Helper to access a registry immutably inside a Mutex<Option<...>>,
+/// then run a closure with immutable access to a specific world.
+pub fn with_world_ref_in<W, R>(
+    mutex: &Mutex<Option<WorldRegistry<W>>>,
+    world_id: u32,
+    f: impl FnOnce(&W) -> R,
+) -> Option<R> {
+    let guard = mutex.lock().unwrap();
+    let reg = guard.as_ref()?;
+    let world = reg.get(world_id)?;
+    Some(f(world))
 }
 
 /// Shared body type enum used by both 2D and 3D physics.

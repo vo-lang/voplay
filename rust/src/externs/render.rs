@@ -1,9 +1,9 @@
 //! Surface init, frame submit, input poll, runtime query, native loop, and texture externs.
 
 use vo_ext::prelude::*;
-use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
 
-use super::{RENDERER, with_renderer};
+use super::util::{ret_bytes, with_renderer_result, write_u32_handle_result, write_unit_result};
+use super::{renderer_ready, submit_renderer_frame, with_renderer};
 use crate::input;
 
 // --- initSurface ---
@@ -12,28 +12,21 @@ use crate::input;
 pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
     let canvas_ref = call.arg_str(0).to_string();
 
-    if RENDERER.get().is_some() {
+    if renderer_ready() {
         // Already initialized.
-        write_nil_error(call, 0);
+        write_unit_result(call, 0, Ok(()));
         return ExternResult::Ok;
     }
 
     #[cfg(feature = "wasm")]
     {
-        match create_wasm_renderer(&canvas_ref) {
-            Ok(()) => {
-                write_nil_error(call, 0);
-            }
-            Err(msg) => {
-                write_error_to(call, 0, &msg);
-            }
-        }
+        write_unit_result(call, 0, create_wasm_renderer(&canvas_ref));
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = canvas_ref;
         // Non-wasm, non-native: renderer can be injected via set_renderer().
-        write_nil_error(call, 0);
+        write_unit_result(call, 0, Ok(()));
     }
 
     ExternResult::Ok
@@ -43,45 +36,57 @@ pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
 fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     use crate::renderer::Renderer;
-    use std::sync::Mutex;
 
-    let window = web_sys::window()
-        .ok_or_else(|| "voplay: no global window".to_string())?;
-    let document = window.document()
-        .ok_or_else(|| "voplay: no document".to_string())?;
-    let canvas = document.get_element_by_id(canvas_id)
-        .ok_or_else(|| format!("voplay: canvas element '{}' not found", canvas_id))?
-        .dyn_into::<web_sys::HtmlCanvasElement>()
-        .map_err(|_| format!("voplay: element '{}' is not a canvas", canvas_id))?;
+    let should_start = crate::renderer_runtime::begin_renderer_init()?;
+    if !should_start {
+        return Ok(());
+    }
 
-    let width = canvas.width();
-    let height = canvas.height();
+    let result: Result<(), String> = (|| {
+        let window = web_sys::window()
+            .ok_or_else(|| "voplay: no global window".to_string())?;
+        let document = window.document()
+            .ok_or_else(|| "voplay: no document".to_string())?;
+        let canvas = document.get_element_by_id(canvas_id)
+            .ok_or_else(|| format!("voplay: canvas element '{}' not found", canvas_id))?
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .map_err(|_| format!("voplay: element '{}' is not a canvas", canvas_id))?;
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
-        ..Default::default()
-    });
+        crate::input::install_wasm_input_handlers(&canvas)?;
 
-    let surface = instance
-        .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
-        .map_err(|e| format!("voplay: create_surface failed: {}", e))?;
+        let width = canvas.width();
+        let height = canvas.height();
 
-    // wgpu adapter/device requests are async on WASM.
-    // Spawn the async init; RENDERER will be set once complete.
-    // submitFrame checks RENDERER availability each frame.
-    wasm_bindgen_futures::spawn_local(async move {
-        match Renderer::new(&instance, surface, width, height).await {
-            Ok(renderer) => {
-                let _ = RENDERER.set(Mutex::new(renderer));
-                log::info!("voplay: WASM renderer initialized ({}x{})", width, height);
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+            ..Default::default()
+        });
+
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|e| format!("voplay: create_surface failed: {}", e))?;
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match Renderer::new(&instance, surface, width, height).await {
+                Ok(renderer) => {
+                    crate::renderer_runtime::set_renderer(renderer);
+                    log::info!("voplay: WASM renderer initialized ({}x{})", width, height);
+                }
+                Err(msg) => {
+                    crate::renderer_runtime::fail_renderer_init(msg.clone());
+                    log::error!("voplay: WASM renderer init failed: {}", msg);
+                }
             }
-            Err(msg) => {
-                log::error!("voplay: WASM renderer init failed: {}", msg);
-            }
-        }
-    });
+        });
 
-    Ok(())
+        Ok(())
+    })();
+
+    if let Err(msg) = &result {
+        crate::renderer_runtime::fail_renderer_init(msg.clone());
+    }
+
+    result
 }
 
 // --- submitFrame ---
@@ -90,18 +95,8 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
 pub fn submit_frame(call: &mut ExternCallContext) -> ExternResult {
     let cmds = call.arg_bytes(0);
 
-    match RENDERER.get() {
-        Some(renderer_mutex) => {
-            let mut renderer = renderer_mutex.lock().unwrap();
-            match renderer.submit_frame(cmds) {
-                Ok(()) => write_nil_error(call, 0),
-                Err(msg) => write_error_to(call, 0, &msg),
-            }
-        }
-        None => {
-            write_error_to(call, 0, "voplay: renderer not initialized (call initSurface first)");
-        }
-    }
+    let result = submit_renderer_frame(cmds);
+    write_unit_result(call, 0, result);
 
     ExternResult::Ok
 }
@@ -111,8 +106,7 @@ pub fn submit_frame(call: &mut ExternCallContext) -> ExternResult {
 #[vo_fn("voplay", "pollInput")]
 pub fn poll_input(call: &mut ExternCallContext) -> ExternResult {
     let events = input::drain_input();
-    let slice_ref = call.alloc_bytes(&events);
-    call.ret_ref(0, slice_ref);
+    ret_bytes(call, 0, &events);
     ExternResult::Ok
 }
 
@@ -125,14 +119,11 @@ pub fn native_init(call: &mut ExternCallContext) -> ExternResult {
         let width = call.arg_u64(0) as u32;
         let height = call.arg_u64(1) as u32;
         let title = call.arg_str(2).to_string();
-        match crate::native::init(width, height, &title) {
-            Ok(()) => write_nil_error(call, 0),
-            Err(msg) => write_error_to(call, 0, &msg),
-        }
+        write_unit_result(call, 0, crate::native::init(width, height, &title));
     }
     #[cfg(not(feature = "native"))]
     {
-        write_error_to(call, 0, "nativeInit not available on this platform");
+        write_unit_result(call, 0, Err("nativeInit not available on this platform".to_string()));
     }
     ExternResult::Ok
 }
@@ -154,10 +145,10 @@ pub fn native_pump_events(call: &mut ExternCallContext) -> ExternResult {
 }
 
 #[vo_fn("voplay", "nativeSubmitFrame")]
-pub fn native_submit_frame(call: &mut ExternCallContext) -> ExternResult {
+pub fn native_submit_frame(_call: &mut ExternCallContext) -> ExternResult {
     #[cfg(feature = "native")]
     {
-        let cmds = call.arg_bytes(0).to_vec();
+        let cmds = _call.arg_bytes(0).to_vec();
         crate::native::submit_frame(cmds);
     }
     ExternResult::Ok
@@ -184,32 +175,14 @@ pub fn native_window_size(call: &mut ExternCallContext) -> ExternResult {
 #[vo_fn("voplay", "loadTexture")]
 pub fn load_texture(call: &mut ExternCallContext) -> ExternResult {
     let path = call.arg_str(0).to_string();
-    match with_renderer(|r| r.load_texture(&path)) {
-        Ok(Ok(id)) => {
-            call.ret_u64(0, id as u64);
-            write_nil_error(call, 1);
-        }
-        Ok(Err(msg)) | Err(msg) => {
-            call.ret_u64(0, 0);
-            write_error_to(call, 1, &msg);
-        }
-    }
+    write_u32_handle_result(call, 0, 1, with_renderer_result(|r| r.load_texture(&path)));
     ExternResult::Ok
 }
 
 #[vo_fn("voplay", "loadTextureBytes")]
 pub fn load_texture_bytes(call: &mut ExternCallContext) -> ExternResult {
     let data = call.arg_bytes(0).to_vec();
-    match with_renderer(|r| r.load_texture_bytes(&data)) {
-        Ok(Ok(id)) => {
-            call.ret_u64(0, id as u64);
-            write_nil_error(call, 1);
-        }
-        Ok(Err(msg)) | Err(msg) => {
-            call.ret_u64(0, 0);
-            write_error_to(call, 1, &msg);
-        }
-    }
+    write_u32_handle_result(call, 0, 1, with_renderer_result(|r| r.load_texture_bytes(&data)));
     ExternResult::Ok
 }
 
@@ -217,6 +190,56 @@ pub fn load_texture_bytes(call: &mut ExternCallContext) -> ExternResult {
 pub fn free_texture(call: &mut ExternCallContext) -> ExternResult {
     let id = call.arg_u64(0) as u32;
     let _ = with_renderer(|r| r.free_texture(id));
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadCubemap")]
+pub fn load_cubemap(call: &mut ExternCallContext) -> ExternResult {
+    let right = call.arg_str(0).to_string();
+    let left = call.arg_str(1).to_string();
+    let top = call.arg_str(2).to_string();
+    let bottom = call.arg_str(3).to_string();
+    let front = call.arg_str(4).to_string();
+    let back = call.arg_str(5).to_string();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_cubemap([&right, &left, &top, &bottom, &front, &back])),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadCubemapBytes")]
+pub fn load_cubemap_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let right = call.arg_bytes(0).to_vec();
+    let left = call.arg_bytes(1).to_vec();
+    let top = call.arg_bytes(2).to_vec();
+    let bottom = call.arg_bytes(3).to_vec();
+    let front = call.arg_bytes(4).to_vec();
+    let back = call.arg_bytes(5).to_vec();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| {
+            r.load_cubemap_bytes([
+                right.as_slice(),
+                left.as_slice(),
+                top.as_slice(),
+                bottom.as_slice(),
+                front.as_slice(),
+                back.as_slice(),
+            ])
+        }),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "freeCubemap")]
+pub fn free_cubemap(call: &mut ExternCallContext) -> ExternResult {
+    let id = call.arg_u64(0) as u32;
+    let _ = with_renderer(|r| r.free_cubemap(id));
     ExternResult::Ok
 }
 
@@ -233,7 +256,7 @@ pub fn runtime_is_web(call: &mut ExternCallContext) -> ExternResult {
 
 #[vo_fn("voplay", "isRendererReady")]
 pub fn is_renderer_ready(call: &mut ExternCallContext) -> ExternResult {
-    let ready = RENDERER.get().is_some();
+    let ready = renderer_ready();
     call.ret_bool(0, ready);
     ExternResult::Ok
 }

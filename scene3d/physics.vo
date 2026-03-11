@@ -17,6 +17,8 @@ const (
 type Physics struct {
 	Type          BodyType
 	Collider      Collider
+	Trimesh       *Trimesh
+	Heightfield   *Heightfield
 	Layer         int
 	Mask          int
 	Density       float64
@@ -30,10 +32,35 @@ type Physics struct {
 	velocity voplay.Vec3
 }
 
+type Trimesh struct {
+	Model voplay.ModelID
+}
+
+type Heightfield struct {
+	heightData []byte
+	rows       int
+	cols       int
+	scale      voplay.Vec3
+}
+
+// HeightfieldSpawnDesc groups all parameters needed to spawn a heightfield physics body.
+type HeightfieldSpawnDesc struct {
+	HeightData  []byte
+	Rows        int
+	Cols        int
+	Scale       voplay.Vec3
+	Position    voplay.Vec3
+	Layer       int
+	Mask        int
+	Friction    float64
+	Restitution float64
+}
+
 // Collider is a tagged value type for 3D physics shapes.
 type Collider struct {
 	kind int
 	args [3]float64
+	offset voplay.Vec3
 }
 
 // Collider kind constants (must match Rust ColliderKind3D in physics3d.rs).
@@ -61,6 +88,17 @@ func Capsule(halfHeight, radius float64) Collider {
 	return Collider{kind: colliderCapsule3D, args: [3]float64{halfHeight, radius, 0}}
 }
 
+func TrimeshPhysics(model voplay.ModelID) *Physics {
+	return &Physics{
+		Type:        Static,
+		Trimesh:     &Trimesh{Model: model},
+		Layer:       voplay.CollisionLayerDefault,
+		Mask:        voplay.CollisionMaskAll,
+		Friction:    0.5,
+		Restitution: 0.0,
+	}
+}
+
 // Kind returns the collider shape type (ColliderBox, ColliderSphere, or ColliderCapsule).
 func (c Collider) Kind() int {
 	return c.kind
@@ -70,6 +108,16 @@ func (c Collider) Kind() int {
 // Box: [halfX, halfY, halfZ], Sphere: [radius, 0, 0], Capsule: [halfHeight, radius, 0].
 func (c Collider) Args() [3]float64 {
 	return c.args
+}
+
+func (c Collider) Offset() voplay.Vec3 {
+	return c.offset
+}
+
+// WithOffset returns a copy of the collider with the given local-space offset.
+func (c Collider) WithOffset(offset voplay.Vec3) Collider {
+	c.offset = offset
+	return c
 }
 
 // Contact represents an active collision pair between two entities.
@@ -166,7 +214,7 @@ func (e *Entity) Velocity() voplay.Vec3 {
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
 	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
-	w := codec.NewByteWriter(119)
+	w := codec.NewByteWriter(143)
 	w.WriteByte(byte(p.Type))
 	w.WriteByte(byte(p.Collider.kind))
 	w.WriteBool(p.FixedRotation)
@@ -182,6 +230,9 @@ func serializeBodyDesc(e *Entity) []byte {
 	w.WriteF64(p.Collider.args[0])
 	w.WriteF64(p.Collider.args[1])
 	w.WriteF64(p.Collider.args[2])
+	w.WriteF64(p.Collider.offset.X)
+	w.WriteF64(p.Collider.offset.Y)
+	w.WriteF64(p.Collider.offset.Z)
 	w.WriteF64(p.Density)
 	w.WriteF64(p.Friction)
 	w.WriteF64(p.Restitution)
@@ -189,11 +240,105 @@ func serializeBodyDesc(e *Entity) []byte {
 	return w.Bytes()
 }
 
+func serializeTrimeshDesc(e *Entity) []byte {
+	p := e.Physics
+	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
+	w := codec.NewByteWriter(100)
+	w.WriteF64(e.position.X)
+	w.WriteF64(e.position.Y)
+	w.WriteF64(e.position.Z)
+	w.WriteF64(e.rotation.X)
+	w.WriteF64(e.rotation.Y)
+	w.WriteF64(e.rotation.Z)
+	w.WriteF64(e.rotation.W)
+	w.WriteF64(e.scale.X)
+	w.WriteF64(e.scale.Y)
+	w.WriteF64(e.scale.Z)
+	w.WriteU16(p.Layer)
+	w.WriteU16(p.Mask)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	return w.Bytes()
+}
+
+// PhysicsBackend abstracts 3D physics world operations so they can be
+// replaced in tests without per-function hook boilerplate.
+type PhysicsBackend interface {
+	Init(gravity voplay.Vec3) int
+	Destroy(worldID int)
+	SpawnBody(worldID, bodyID int, data []byte)
+	SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte)
+	SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc)
+	DestroyBody(worldID, bodyID int)
+	Step(worldID int, dt float64, cmds []byte) []byte
+	Contacts(worldID int) []byte
+	SetGravity(worldID int, gravity voplay.Vec3)
+	RayCast(worldID int, origin, dir voplay.Vec3, maxDist float64) []byte
+	QueryAABB(worldID int, min, max voplay.Vec3) []byte
+}
+
+type defaultPhysicsBackend struct{}
+
+func (defaultPhysicsBackend) Init(gravity voplay.Vec3) int {
+	return physicsInit(gravity.X, gravity.Y, gravity.Z)
+}
+
+func (defaultPhysicsBackend) Destroy(worldID int) {
+	physicsDestroy(worldID)
+}
+
+func (defaultPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
+	physicsSpawnBody(worldID, bodyID, data)
+}
+
+func (defaultPhysicsBackend) SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte) {
+	physicsSpawnTrimeshBody(worldID, bodyID, modelID, data)
+}
+
+func (defaultPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc) {
+	physicsSpawnHeightfield(worldID, bodyID, desc.HeightData, desc.Rows, desc.Cols, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.Position.X, desc.Position.Y, desc.Position.Z, desc.Layer, desc.Mask, desc.Friction, desc.Restitution)
+}
+
+func (defaultPhysicsBackend) DestroyBody(worldID, bodyID int) {
+	physicsDestroyBody(worldID, bodyID)
+}
+
+func (defaultPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
+	return physicsStep(worldID, dt, cmds)
+}
+
+func (defaultPhysicsBackend) Contacts(worldID int) []byte {
+	return physicsContacts(worldID)
+}
+
+func (defaultPhysicsBackend) SetGravity(worldID int, gravity voplay.Vec3) {
+	physicsSetGravity(worldID, gravity.X, gravity.Y, gravity.Z)
+}
+
+func (defaultPhysicsBackend) RayCast(worldID int, origin, dir voplay.Vec3, maxDist float64) []byte {
+	return physicsRayCast(worldID, origin.X, origin.Y, origin.Z, dir.X, dir.Y, dir.Z, maxDist)
+}
+
+func (defaultPhysicsBackend) QueryAABB(worldID int, min, max voplay.Vec3) []byte {
+	return physicsQueryAABB(worldID, min.X, min.Y, min.Z, max.X, max.Y, max.Z)
+}
+
+var physBackend PhysicsBackend = defaultPhysicsBackend{}
+
+// SetPhysicsBackend replaces the active physics backend and returns the previous one.
+func SetPhysicsBackend(b PhysicsBackend) PhysicsBackend {
+	prev := physBackend
+	physBackend = b
+	return prev
+}
+
 // --- Physics 3D extern declarations (implemented in Rust) ---
 
 func physicsInit(gravityX, gravityY, gravityZ float64) int
 func physicsDestroy(worldID int)
 func physicsSpawnBody(worldID int, bodyID int, data []byte)
+func physicsSpawnTrimeshBody(worldID int, bodyID int, modelID int, data []byte)
+func physicsSpawnHeightfield(worldID, bodyID int, heightData []byte, rows, cols int, scaleX, scaleY, scaleZ, posX, posY, posZ float64, layer, mask int, friction, restitution float64)
 func physicsDestroyBody(worldID int, bodyID int)
 func physicsStep(worldID int, dt float64, cmds []byte) []byte
 func physicsContacts(worldID int) []byte

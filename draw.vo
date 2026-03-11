@@ -25,6 +25,9 @@ const (
 	opDrawModel     = 0x20
 	opDrawBillboard = 0x21
 	opSetLights3D   = 0x23
+	opSetFog3D      = 0x24
+	opDrawSkybox    = 0x25
+	opSetShadow3D   = 0x27
 )
 
 // DrawCtx buffers binary draw commands for the current frame.
@@ -218,6 +221,33 @@ func (d *DrawCtx) writeSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY,
 	d.w.WriteF32(tint.A)
 }
 
+type BillboardParams struct {
+	Tex      TextureID
+	Src      Rect
+	WorldPos Vec3
+	Width    float64
+	Height   float64
+	Tint     Color
+}
+
+func (d *DrawCtx) writeBillboard(tex TextureID, srcX, srcY, srcW, srcH float64, worldPos Vec3, w, h float64, tint Color) {
+	d.w.WriteByte(opDrawBillboard)
+	d.w.WriteU32(int(tex))
+	d.w.WriteF32(srcX)
+	d.w.WriteF32(srcY)
+	d.w.WriteF32(srcW)
+	d.w.WriteF32(srcH)
+	d.w.WriteF32(worldPos.X)
+	d.w.WriteF32(worldPos.Y)
+	d.w.WriteF32(worldPos.Z)
+	d.w.WriteF32(w)
+	d.w.WriteF32(h)
+	d.w.WriteF32(tint.R)
+	d.w.WriteF32(tint.G)
+	d.w.WriteF32(tint.B)
+	d.w.WriteF32(tint.A)
+}
+
 // DrawTexture draws a full texture at the given position and size with no rotation or flipping.
 func (d *DrawCtx) DrawTexture(tex TextureID, x, y, w, h float64) {
 	d.writeSprite(tex, 0, 0, 0, 0, x, y, w, h, false, false, 0, White)
@@ -249,6 +279,13 @@ func (d *DrawCtx) SetCamera3D(pos, target, up Vec3, fov, near, far float64) {
 const (
 	DirectionalLight = 0
 	PointLight       = 1
+)
+
+const (
+	FogNone       = 0
+	FogLinear     = 1
+	FogExp        = 2
+	FogExpSquared = 3
 )
 
 // LightDesc describes a light for the SetLights3D draw command.
@@ -288,8 +325,44 @@ func (d *DrawCtx) SetLights3D(ambient Color, lights []LightDesc) {
 	}
 }
 
+func (d *DrawCtx) SetFog3D(mode int, color Color, start, end, density float64) {
+	d.w.WriteByte(opSetFog3D)
+	d.w.WriteByte(byte(mode))
+	d.w.WriteF32(color.R)
+	d.w.WriteF32(color.G)
+	d.w.WriteF32(color.B)
+	d.w.WriteF32(start)
+	d.w.WriteF32(end)
+	d.w.WriteF32(density)
+}
+
+func (d *DrawCtx) SetShadow3D(enabled bool, resolution int) {
+	if enabled && resolution <= 0 {
+		panic("SetShadow3D: resolution must be > 0")
+	}
+	if resolution <= 0 {
+		resolution = 1
+	}
+	d.w.WriteByte(opSetShadow3D)
+	d.w.WriteBool(enabled)
+	d.w.WriteU32(resolution)
+}
+
+func (d *DrawCtx) DrawSkybox(cubemap CubemapID) {
+	d.w.WriteByte(opDrawSkybox)
+	d.w.WriteU32(int(cubemap))
+}
+
 // DrawModel draws a 3D model at the given transform.
-func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3) {
+func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color) {
+	d.writeModel(model, pos, rot, scale, tint, 0, 0)
+}
+
+func (d *DrawCtx) DrawSkinnedModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, animationWorldID, animationTargetID int) {
+	d.writeModel(model, pos, rot, scale, tint, animationWorldID, animationTargetID)
+}
+
+func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, animationWorldID, animationTargetID int) {
 	d.w.WriteByte(opDrawModel)
 	d.w.WriteU32(int(model))
 	d.w.WriteF32(pos.X)
@@ -302,21 +375,25 @@ func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3) {
 	d.w.WriteF32(scale.X)
 	d.w.WriteF32(scale.Y)
 	d.w.WriteF32(scale.Z)
+	d.w.WriteF32(tint.R)
+	d.w.WriteF32(tint.G)
+	d.w.WriteF32(tint.B)
+	d.w.WriteF32(tint.A)
+	d.w.WriteU32(animationWorldID)
+	d.w.WriteU32(animationTargetID)
 }
 
 // DrawBillboard draws a camera-facing sprite at a 3D world position.
 // The quad always faces the camera. Useful for health bars, name tags, damage numbers.
 // Requires a 3D camera to be active (SetCamera3D).
 func (d *DrawCtx) DrawBillboard(tex TextureID, srcX, srcY, srcW, srcH float64, worldPos Vec3, w, h float64) {
-	d.w.WriteByte(opDrawBillboard)
-	d.w.WriteU32(int(tex))
-	d.w.WriteF32(srcX)
-	d.w.WriteF32(srcY)
-	d.w.WriteF32(srcW)
-	d.w.WriteF32(srcH)
-	d.w.WriteF32(worldPos.X)
-	d.w.WriteF32(worldPos.Y)
-	d.w.WriteF32(worldPos.Z)
-	d.w.WriteF32(w)
-	d.w.WriteF32(h)
+	d.writeBillboard(tex, srcX, srcY, srcW, srcH, worldPos, w, h, White)
+}
+
+func (d *DrawCtx) DrawBillboardEx(p BillboardParams) {
+	tint := p.Tint
+	if tint == (Color{}) {
+		tint = White
+	}
+	d.writeBillboard(p.Tex, p.Src.X, p.Src.Y, p.Src.W, p.Src.H, p.WorldPos, p.Width, p.Height, tint)
 }

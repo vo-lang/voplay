@@ -3,6 +3,7 @@
 use vo_ext::prelude::*;
 use crate::physics::{BodyDesc, ColliderKind};
 use crate::physics_registry::PhysBodyType;
+use super::util::{read_f64_le, read_u16_le, ret_bytes};
 
 // --- Physics 2D world management ---
 
@@ -41,30 +42,19 @@ fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
     pos += 1;
     let fixed_rotation = data[pos] != 0;
     pos += 1;
-    let layer = u16::from_le_bytes([data[pos], data[pos + 1]]);
-    pos += 2;
-    let mask = u16::from_le_bytes([data[pos], data[pos + 1]]);
-    pos += 2;
+    let layer = read_u16_le(data, &mut pos);
+    let mask = read_u16_le(data, &mut pos);
 
-    let read_f64 = |p: &mut usize| -> f64 {
-        let v = f64::from_le_bytes([
-            data[*p], data[*p+1], data[*p+2], data[*p+3],
-            data[*p+4], data[*p+5], data[*p+6], data[*p+7],
-        ]);
-        *p += 8;
-        v
-    };
-
-    let x = read_f64(&mut pos) as f32;
-    let y = read_f64(&mut pos) as f32;
-    let rotation = read_f64(&mut pos) as f32;
-    let ca0 = read_f64(&mut pos) as f32;
-    let ca1 = read_f64(&mut pos) as f32;
-    let ca2 = read_f64(&mut pos) as f32;
-    let density = read_f64(&mut pos) as f32;
-    let friction = read_f64(&mut pos) as f32;
-    let restitution = read_f64(&mut pos) as f32;
-    let linear_damping = read_f64(&mut pos) as f32;
+    let x = read_f64_le(data, &mut pos) as f32;
+    let y = read_f64_le(data, &mut pos) as f32;
+    let rotation = read_f64_le(data, &mut pos) as f32;
+    let ca0 = read_f64_le(data, &mut pos) as f32;
+    let ca1 = read_f64_le(data, &mut pos) as f32;
+    let ca2 = read_f64_le(data, &mut pos) as f32;
+    let density = read_f64_le(data, &mut pos) as f32;
+    let friction = read_f64_le(data, &mut pos) as f32;
+    let restitution = read_f64_le(data, &mut pos) as f32;
+    let linear_damping = read_f64_le(data, &mut pos) as f32;
 
     BodyDesc {
         body_id,
@@ -113,8 +103,7 @@ pub fn physics_step(call: &mut ExternCallContext) -> ExternResult {
         world.serialize_state()
     });
 
-    let slice_ref = call.alloc_bytes(&state);
-    call.ret_ref(0, slice_ref);
+    ret_bytes(call, 0, &state);
     ExternResult::Ok
 }
 
@@ -138,8 +127,7 @@ pub fn physics_contacts(call: &mut ExternCallContext) -> ExternResult {
         buf.extend_from_slice(&a.to_le_bytes());
         buf.extend_from_slice(&b.to_le_bytes());
     }
-    let slice_ref = call.alloc_bytes(&buf);
-    call.ret_ref(0, slice_ref);
+    ret_bytes(call, 0, &buf);
     ExternResult::Ok
 }
 
@@ -166,13 +154,11 @@ pub fn physics_ray_cast(call: &mut ExternCallContext) -> ExternResult {
             buf.extend_from_slice(&(nx as f64).to_le_bytes());
             buf.extend_from_slice(&(ny as f64).to_le_bytes());
             buf.extend_from_slice(&(toi as f64).to_le_bytes());
-            let slice_ref = call.alloc_bytes(&buf);
-            call.ret_ref(0, slice_ref);
+            ret_bytes(call, 0, &buf);
         }
         None => {
             let buf = [0u8]; // not found
-            let slice_ref = call.alloc_bytes(&buf);
-            call.ret_ref(0, slice_ref);
+            ret_bytes(call, 0, &buf);
         }
     }
     ExternResult::Ok
@@ -193,7 +179,6 @@ pub fn physics_query_rect(call: &mut ExternCallContext) -> ExternResult {
     for id in &ids {
         buf.extend_from_slice(&id.to_le_bytes());
     }
-    let slice_ref = call.alloc_bytes(&buf);
-    call.ret_ref(0, slice_ref);
+    ret_bytes(call, 0, &buf);
     ExternResult::Ok
 }

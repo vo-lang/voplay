@@ -1,0 +1,266 @@
+package scene3d
+
+import "errors"
+import "github.com/vo-lang/voplay"
+
+type TerrainLayer struct {
+	Texture voplay.TextureID
+	UVScale float64
+}
+
+type TerrainSplatMaterial struct {
+	Control voplay.TextureID
+	Layers  [4]TerrainLayer
+}
+
+type TerrainDesc struct {
+	HeightmapPath string
+	HeightmapData []byte
+	Texture       voplay.TextureID
+	Splat         *TerrainSplatMaterial
+	Position      voplay.Vec3
+	Width         float64
+	Height        float64
+	Depth         float64
+	UVScale       float64
+	Tint          voplay.Color
+	TintSet       bool
+	Tag           string
+	Data          any
+	Physics       *Physics
+}
+
+type Terrain struct {
+	entity *Entity
+	rows   int
+	cols   int
+}
+
+// TerrainCreateDesc groups all parameters for terrain mesh creation.
+type TerrainCreateDesc struct {
+	Path    string
+	Data    []byte
+	Scale   voplay.Vec3
+	UVScale float64
+	Texture voplay.TextureID
+	Splat   *TerrainSplatMaterial
+}
+
+// TerrainCreateResult holds the outputs from terrain mesh creation.
+type TerrainCreateResult struct {
+	ModelID    int
+	Rows       int
+	Cols       int
+	HeightData []byte
+}
+
+// TerrainBackend abstracts terrain resource creation and height queries so
+// they can be replaced in tests without per-function hook boilerplate.
+type TerrainBackend interface {
+	Create(desc TerrainCreateDesc) (TerrainCreateResult, error)
+	HeightAt(worldID, bodyID int, x, z float64) (float64, bool)
+}
+
+type defaultTerrainBackend struct{}
+
+func (defaultTerrainBackend) Create(desc TerrainCreateDesc) (TerrainCreateResult, error) {
+	if desc.Splat != nil {
+		l := desc.Splat.Layers
+		if desc.Path != "" {
+			modelID, rows, cols, hd := createTerrainSplat(
+				desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
+				int(desc.Splat.Control),
+				int(l[0].Texture), l[0].UVScale,
+				int(l[1].Texture), l[1].UVScale,
+				int(l[2].Texture), l[2].UVScale,
+				int(l[3].Texture), l[3].UVScale,
+			)?
+			return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
+		}
+		modelID, rows, cols, hd := createTerrainBytesSplat(
+			desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
+			int(desc.Splat.Control),
+			int(l[0].Texture), l[0].UVScale,
+			int(l[1].Texture), l[1].UVScale,
+			int(l[2].Texture), l[2].UVScale,
+			int(l[3].Texture), l[3].UVScale,
+		)?
+		return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
+	}
+	if desc.Path != "" {
+		modelID, rows, cols, hd := createTerrain(desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture))?
+		return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
+	}
+	modelID, rows, cols, hd := createTerrainBytes(desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture))?
+	return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
+}
+
+func (defaultTerrainBackend) HeightAt(worldID, bodyID int, x, z float64) (float64, bool) {
+	return terrainHeightAt(worldID, bodyID, x, z)
+}
+
+var terrBackend TerrainBackend = defaultTerrainBackend{}
+
+// SetTerrainBackend replaces the active terrain backend and returns the previous one.
+func SetTerrainBackend(b TerrainBackend) TerrainBackend {
+	prev := terrBackend
+	terrBackend = b
+	return prev
+}
+
+func (t *Terrain) Entity() *Entity {
+	return t.entity
+}
+
+func (t *Terrain) Rows() int {
+	return t.rows
+}
+
+func (t *Terrain) Cols() int {
+	return t.cols
+}
+
+func (t *Terrain) HeightAt(x, z float64) (float64, bool) {
+	if t == nil || t.entity == nil || t.entity.scene == nil || t.entity.Physics == nil {
+		return 0, false
+	}
+	if t.entity.scene.worldID == 0 || t.entity.Physics.bodyID == 0 {
+		return 0, false
+	}
+	return terrBackend.HeightAt(t.entity.scene.worldID, t.entity.Physics.bodyID, x, z)
+}
+
+func spawnTerrain(scene *Scene, desc TerrainDesc, physics *Physics, modelID, rows, cols int, heightData []byte) *Terrain {
+	physics.Heightfield = &Heightfield{
+		heightData: heightData,
+		rows:       rows,
+		cols:       cols,
+		scale:      voplay.Vec3{desc.Width, desc.Height, desc.Depth},
+	}
+	ent := scene.Spawn(EntityDesc{
+		Position:   desc.Position,
+		Model:      voplay.ModelID(modelID),
+		OwnedModel: voplay.ModelID(modelID),
+		Tint:       desc.Tint,
+		TintSet:    desc.TintSet,
+		Tag:        desc.Tag,
+		Data:       desc.Data,
+		Physics:    physics,
+	})
+	return &Terrain{entity: ent, rows: rows, cols: cols}
+}
+
+func NewTerrain(scene *Scene, desc TerrainDesc) (*Terrain, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.NewTerrain: scene is nil")
+	}
+	if desc.HeightmapPath == "" && len(desc.HeightmapData) == 0 {
+		return nil, errors.New("scene3d.NewTerrain: heightmap path or bytes required")
+	}
+	if desc.HeightmapPath != "" && len(desc.HeightmapData) != 0 {
+		return nil, errors.New("scene3d.NewTerrain: choose either heightmap path or bytes")
+	}
+	if desc.Width <= 0 {
+		return nil, errors.New("scene3d.NewTerrain: Width must be > 0")
+	}
+	if desc.Height <= 0 {
+		return nil, errors.New("scene3d.NewTerrain: Height must be > 0")
+	}
+	if desc.Depth <= 0 {
+		return nil, errors.New("scene3d.NewTerrain: Depth must be > 0")
+	}
+	if desc.Splat != nil && desc.Texture != 0 {
+		return nil, errors.New("scene3d.NewTerrain: Texture and Splat are mutually exclusive")
+	}
+	physics, err := buildTerrainPhysics(desc.Physics)
+	if err != nil {
+		return nil, err
+	}
+	createDesc := TerrainCreateDesc{
+		Path:    desc.HeightmapPath,
+		Data:    desc.HeightmapData,
+		Scale:   voplay.Vec3{desc.Width, desc.Height, desc.Depth},
+		Texture: desc.Texture,
+	}
+	if desc.Splat != nil {
+		splat, splatErr := validateAndNormalizeSplat(desc.Splat)
+		if splatErr != nil {
+			return nil, splatErr
+		}
+		createDesc.Splat = splat
+	} else {
+		uvScale := desc.UVScale
+		if uvScale < 0 {
+			return nil, errors.New("scene3d.NewTerrain: UVScale must be >= 0 (0 defaults to 1)")
+		}
+		if uvScale == 0 {
+			uvScale = 1
+		}
+		createDesc.UVScale = uvScale
+	}
+	result, createErr := terrBackend.Create(createDesc)
+	if createErr != nil {
+		return nil, createErr
+	}
+	return spawnTerrain(scene, desc, physics, result.ModelID, result.Rows, result.Cols, result.HeightData), nil
+}
+
+func validateAndNormalizeSplat(splat *TerrainSplatMaterial) (*TerrainSplatMaterial, error) {
+	if splat.Control == 0 {
+		return nil, errors.New("scene3d.NewTerrain: Splat control texture must be non-zero")
+	}
+	normalized := &TerrainSplatMaterial{
+		Control: splat.Control,
+		Layers:  splat.Layers,
+	}
+	for i := 0; i < 4; i++ {
+		if normalized.Layers[i].Texture == 0 {
+			return nil, errors.New("scene3d.NewTerrain: all 4 splat layers must define a non-zero texture")
+		}
+		if normalized.Layers[i].UVScale == 0 {
+			normalized.Layers[i].UVScale = 1
+		}
+		if normalized.Layers[i].UVScale < 0 {
+			return nil, errors.New("scene3d.NewTerrain: splat layer UVScale must be > 0")
+		}
+	}
+	return normalized, nil
+}
+
+func buildTerrainPhysics(base *Physics) (*Physics, error) {
+	if base == nil {
+		return &Physics{
+			Type:        Static,
+			Layer:       voplay.CollisionLayerDefault,
+			Mask:        voplay.CollisionMaskAll,
+			Friction:    0.8,
+			Restitution: 0.0,
+		}, nil
+	}
+	if base.Type != Static {
+		return nil, errors.New("scene3d.NewTerrain: terrain physics must use Static body type")
+	}
+	if base.Collider != (Collider{}) {
+		return nil, errors.New("scene3d.NewTerrain: terrain physics must not define a parametric collider")
+	}
+	if base.Trimesh != nil || base.Heightfield != nil {
+		return nil, errors.New("scene3d.NewTerrain: terrain physics must not predefine trimesh or heightfield")
+	}
+	return &Physics{
+		Type:          base.Type,
+		Collider:      base.Collider,
+		Layer:         base.Layer,
+		Mask:          base.Mask,
+		Density:       base.Density,
+		Friction:      base.Friction,
+		Restitution:   base.Restitution,
+		LinearDamping: base.LinearDamping,
+		FixedRotation: base.FixedRotation,
+	}, nil
+}
+
+func createTerrain(path string, scaleX, scaleY, scaleZ, uvScale float64, textureID int) (int, int, int, []byte, error)
+func createTerrainSplat(path string, scaleX, scaleY, scaleZ float64, controlTextureID int, layer0TextureID int, layer0UVScale float64, layer1TextureID int, layer1UVScale float64, layer2TextureID int, layer2UVScale float64, layer3TextureID int, layer3UVScale float64) (int, int, int, []byte, error)
+func createTerrainBytes(data []byte, scaleX, scaleY, scaleZ, uvScale float64, textureID int) (int, int, int, []byte, error)
+func createTerrainBytesSplat(data []byte, scaleX, scaleY, scaleZ float64, controlTextureID int, layer0TextureID int, layer0UVScale float64, layer1TextureID int, layer1UVScale float64, layer2TextureID int, layer2UVScale float64, layer3TextureID int, layer3UVScale float64) (int, int, int, []byte, error)
+func terrainHeightAt(worldID, bodyID int, x, z float64) (float64, bool)

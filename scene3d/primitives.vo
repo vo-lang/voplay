@@ -1,0 +1,29 @@
+package scene3d
+
+import "github.com/vo-lang/voplay"
+
+func createPlaneMesh(width, depth float64, subX, subZ int) int
+func createCubeMesh() int
+func createSphereMesh(segments int) int
+func createCylinderMesh(segments int) int
+func createCapsuleMesh(segments int, halfHeight, radius float64) int
+
+func PlaneMesh(width, depth float64, subX, subZ int) voplay.ModelID {
+	return voplay.ModelID(createPlaneMesh(width, depth, subX, subZ))
+}
+
+func CubeMesh() voplay.ModelID {
+	return voplay.ModelID(createCubeMesh())
+}
+
+func SphereMesh(segments int) voplay.ModelID {
+	return voplay.ModelID(createSphereMesh(segments))
+}
+
+func CylinderMesh(segments int) voplay.ModelID {
+	return voplay.ModelID(createCylinderMesh(segments))
+}
+
+func CapsuleMesh(segments int, halfHeight, radius float64) voplay.ModelID {
+	return voplay.ModelID(createCapsuleMesh(segments, halfHeight, radius))
+}

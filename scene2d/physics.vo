@@ -147,6 +147,67 @@ func serializeBodyDesc(e *Entity) []byte {
 	return w.Bytes()
 }
 
+// PhysicsBackend abstracts 2D physics world operations so they can be
+// replaced in tests without per-function hook boilerplate.
+type PhysicsBackend interface {
+	Init(gravityX, gravityY float64) int
+	Destroy(worldID int)
+	SpawnBody(worldID, bodyID int, data []byte)
+	DestroyBody(worldID, bodyID int)
+	Step(worldID int, dt float64, cmds []byte) []byte
+	Contacts(worldID int) []byte
+	SetGravity(worldID int, gx, gy float64)
+	RayCast(worldID int, ox, oy, dx, dy, maxDist float64) []byte
+	QueryRect(worldID int, minX, minY, maxX, maxY float64) []byte
+}
+
+type defaultPhysicsBackend struct{}
+
+func (defaultPhysicsBackend) Init(gravityX, gravityY float64) int {
+	return physicsInit(gravityX, gravityY)
+}
+
+func (defaultPhysicsBackend) Destroy(worldID int) {
+	physicsDestroy(worldID)
+}
+
+func (defaultPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
+	physicsSpawnBody(worldID, bodyID, data)
+}
+
+func (defaultPhysicsBackend) DestroyBody(worldID, bodyID int) {
+	physicsDestroyBody(worldID, bodyID)
+}
+
+func (defaultPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
+	return physicsStep(worldID, dt, cmds)
+}
+
+func (defaultPhysicsBackend) Contacts(worldID int) []byte {
+	return physicsContacts(worldID)
+}
+
+func (defaultPhysicsBackend) SetGravity(worldID int, gx, gy float64) {
+	physicsSetGravity(worldID, gx, gy)
+}
+
+func (defaultPhysicsBackend) RayCast(worldID int, ox, oy, dx, dy, maxDist float64) []byte {
+	return physicsRayCast(worldID, ox, oy, dx, dy, maxDist)
+}
+
+func (defaultPhysicsBackend) QueryRect(worldID int, minX, minY, maxX, maxY float64) []byte {
+	return physicsQueryRect(worldID, minX, minY, maxX, maxY)
+}
+
+var physBackend PhysicsBackend = defaultPhysicsBackend{}
+
+// SetPhysicsBackend replaces the active physics backend and returns the previous one.
+func SetPhysicsBackend(b PhysicsBackend) PhysicsBackend {
+	prev := physBackend
+	physBackend = b
+	return prev
+}
+
 // --- Physics extern declarations (implemented in Rust) ---
 
 func physicsInit(gravityX, gravityY float64) int

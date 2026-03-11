@@ -14,12 +14,33 @@ func SetLights(d *voplay.DrawCtx, ambient voplay.Color, lights []Light) {
 func (s *Scene) Draw(d *voplay.DrawCtx) {
 	c := &s.Camera
 	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
+	d.SetShadow3D(s.ShadowsEnabled, s.ShadowResolution)
+	if s.Skybox != 0 {
+		d.DrawSkybox(s.Skybox)
+	}
 	SetLights(d, s.Ambient, s.Lights)
+	if s.Fog.Mode != voplay.FogNone {
+		d.SetFog3D(s.Fog.Mode, s.Fog.Color, s.Fog.Start, s.Fog.End, s.Fog.Density)
+	}
 	for _, n := range s.VisibleEntities() {
 		if n.Model == 0 {
 			continue
 		}
-		d.DrawModel(n.Model, n.position, n.rotation, n.scale)
+		n.ensureHasSkeleton()
+		if n.hasSkeleton {
+			animationWorldID := 0
+			animationTargetID := 0
+			if s.animationWorldID != 0 && n.animationTargetID != 0 {
+				animationWorldID = s.animationWorldID
+				animationTargetID = n.animationTargetID
+			}
+			d.DrawSkinnedModel(n.Model, n.position, n.rotation, n.scale, n.Tint, animationWorldID, animationTargetID)
+		} else {
+			d.DrawModel(n.Model, n.position, n.rotation, n.scale, n.Tint)
+		}
+	}
+	for _, emitter := range s.Emitters {
+		emitter.Draw(d)
 	}
 	d.ResetCamera()
 }

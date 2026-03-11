@@ -1,6 +1,8 @@
 package voplay
 
+import "os"
 import "github.com/vo-lang/vopack"
+import "github.com/vo-lang/vogui"
 
 const (
 	assetSourceFile  = 1
@@ -14,12 +16,19 @@ type AssetLoader struct {
 	Free      func(id int)
 }
 
+type CubemapLoader struct {
+	LoadFiles func(paths [6]string) (int, error)
+	LoadBytes func(faces [6][]byte) (int, error)
+	Free      func(id int)
+}
+
 // AssetLoaders groups loaders for all supported asset types.
 type AssetLoaders struct {
 	Texture AssetLoader
 	Font    AssetLoader
 	Model   AssetLoader
 	Audio   AssetLoader
+	Cubemap CubemapLoader
 }
 
 // managedAsset tracks a loaded asset handle with group-based ownership.
@@ -38,6 +47,12 @@ type assetStore struct {
 	groups  map[string]map[string]bool
 }
 
+type cubemapStore struct {
+	loader  CubemapLoader
+	entries map[string]*managedAsset
+	groups  map[string]map[string]bool
+}
+
 // Assets manages game resource loading with vopack integration and group-based lifecycle.
 //
 // Assets can optionally be backed by one or more .vpak archives via Mount.
@@ -52,6 +67,7 @@ type Assets struct {
 	groupStack []string
 	groupNames map[string]bool
 	textures   *assetStore
+	cubemaps   *cubemapStore
 	fonts      *assetStore
 	models     *assetStore
 	audio      *assetStore
@@ -60,6 +76,14 @@ type Assets struct {
 func newAssetStore(label string, loader AssetLoader) *assetStore {
 	return &assetStore{
 		label:   label,
+		loader:  loader,
+		entries: map[string]*managedAsset{},
+		groups:  map[string]map[string]bool{},
+	}
+}
+
+func newCubemapStore(loader CubemapLoader) *cubemapStore {
+	return &cubemapStore{
 		loader:  loader,
 		entries: map[string]*managedAsset{},
 		groups:  map[string]map[string]bool{},
@@ -75,6 +99,7 @@ func NewAssetsWithLoaders(loaders AssetLoaders) *Assets {
 	return &Assets{
 		groupNames: map[string]bool{},
 		textures:   newAssetStore("Texture", loaders.Texture),
+		cubemaps:   newCubemapStore(loaders.Cubemap),
 		fonts:      newAssetStore("Font", loaders.Font),
 		models:     newAssetStore("Model", loaders.Model),
 		audio:      newAssetStore("Audio", loaders.Audio),
@@ -99,9 +124,23 @@ func defaultAssetLoaders() AssetLoaders {
 			Free:      func(id int) { freeModel(id) },
 		},
 		Audio: AssetLoader{
-			LoadFile:  func(path string) (int, error) { return audioLoad(path) },
-			LoadBytes: func(data []byte) (int, error) { return audioLoadBytes(data) },
-			Free:      func(id int) { audioFree(id) },
+			LoadFile: func(path string) (int, error) { return audioLoadFile(path) },
+			LoadBytes: func(data []byte) (int, error) {
+				clip := vogui.LoadAudioBytes(data)?
+				return int(clip), nil
+			},
+			Free: func(id int) { vogui.AudioClipID(id).Free() },
+		},
+		Cubemap: CubemapLoader{
+			LoadFiles: func(paths [6]string) (int, error) {
+				return loadCubemap(paths[0], paths[1], paths[2], paths[3], paths[4], paths[5])
+			},
+			LoadBytes: func(faces [6][]byte) (int, error) {
+				return loadCubemapBytes(faces[0], faces[1], faces[2], faces[3], faces[4], faces[5])
+			},
+			Free: func(id int) {
+				freeCubemap(id)
+			},
 		},
 	}
 }
@@ -112,11 +151,18 @@ func validateAssetLoader(l AssetLoader, label string) {
 	}
 }
 
+func validateCubemapLoader(l CubemapLoader) {
+	if l.LoadFiles == nil || l.LoadBytes == nil || l.Free == nil {
+		panic("NewAssetsWithLoaders: Cubemap loader must be complete")
+	}
+}
+
 func validateAssetLoaders(loaders AssetLoaders) {
 	validateAssetLoader(loaders.Texture, "Texture")
 	validateAssetLoader(loaders.Font, "Font")
 	validateAssetLoader(loaders.Model, "Model")
 	validateAssetLoader(loaders.Audio, "Audio")
+	validateCubemapLoader(loaders.Cubemap)
 }
 
 // Mount opens a .vpak archive and registers it at the given priority.
@@ -168,6 +214,7 @@ func (a *Assets) ReleaseGroup(name string) {
 		panic("Assets.ReleaseGroup: unknown group: " + name)
 	}
 	a.textures.releaseGroup(name)
+	a.cubemaps.releaseGroup(name)
 	a.fonts.releaseGroup(name)
 	a.models.releaseGroup(name)
 	a.audio.releaseGroup(name)
@@ -206,6 +253,24 @@ func (a *Assets) Texture(path string) (TextureID, error) {
 func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
 	id := a.textures.getBytes(a.requireCurrentGroup(), key, data)?
 	return TextureID(id), nil
+}
+
+func (a *Assets) Cubemap(right, left, top, bottom, front, back string) (CubemapID, error) {
+	id := a.cubemaps.get(
+		a.mounts,
+		a.requireCurrentGroup(),
+		[6]string{right, left, top, bottom, front, back},
+	)?
+	return CubemapID(id), nil
+}
+
+func (a *Assets) CubemapBytes(key string, right, left, top, bottom, front, back []byte) (CubemapID, error) {
+	id := a.cubemaps.getBytes(
+		a.requireCurrentGroup(),
+		key,
+		[6][]byte{right, left, top, bottom, front, back},
+	)?
+	return CubemapID(id), nil
 }
 
 // Font loads a font by path. Mounted archives are searched first,
@@ -319,6 +384,86 @@ func (s *assetStore) releaseGroup(name string) {
 	delete(s.groups, name)
 }
 
+func (s *cubemapStore) get(mounts *vopack.MountSet, group string, paths [6]string) (int, error) {
+	key := cubemapKey(paths)
+	requireAssetKey(key)
+	if entry := s.entries[key]; entry != nil {
+		if entry.source != assetSourceFile {
+			panic("Assets.Cubemap: key loaded via bytes, not path: " + key)
+		}
+		s.attachOwner(group, key, entry)
+		return entry.id, nil
+	}
+	if mounts == nil {
+		id := s.loader.LoadFiles(paths)?
+		entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
+		s.entries[key] = entry
+		s.attachOwner(group, key, entry)
+		return id, nil
+	}
+	faces := [6][]byte{}
+	for i := 0; i < 6; i++ {
+		data, err := readAssetBytes(mounts, paths[i])
+		if err != nil {
+			return 0, err
+		}
+		faces[i] = data
+	}
+	id := s.loader.LoadBytes(faces)?
+	entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
+	s.entries[key] = entry
+	s.attachOwner(group, key, entry)
+	return id, nil
+}
+
+func (s *cubemapStore) getBytes(group, key string, faces [6][]byte) (int, error) {
+	requireAssetKey(key)
+	for i := 0; i < 6; i++ {
+		if len(faces[i]) == 0 {
+			panic("Assets.CubemapBytes: face data must not be empty")
+		}
+	}
+	if entry := s.entries[key]; entry != nil {
+		if entry.source != assetSourceBytes {
+			panic("Assets.Cubemap: key loaded via path, not bytes: " + key)
+		}
+		s.attachOwner(group, key, entry)
+		return entry.id, nil
+	}
+	id := s.loader.LoadBytes(faces)?
+	entry := &managedAsset{id: id, source: assetSourceBytes, owners: map[string]bool{}}
+	s.entries[key] = entry
+	s.attachOwner(group, key, entry)
+	return id, nil
+}
+
+func (s *cubemapStore) attachOwner(group, key string, entry *managedAsset) {
+	if entry.owners[group] {
+		return
+	}
+	entry.owners[group] = true
+	if s.groups[group] == nil {
+		s.groups[group] = map[string]bool{}
+	}
+	s.groups[group][key] = true
+}
+
+func (s *cubemapStore) releaseGroup(name string) {
+	keys := s.groups[name]
+	if keys == nil {
+		return
+	}
+	for key := range keys {
+		entry := s.entries[key]
+		delete(entry.owners, name)
+		if len(entry.owners) == 0 {
+			s.loader.Free(entry.id)
+			delete(s.entries, key)
+		}
+	}
+	delete(s.groups, name)
+}
+
 func (a *Assets) requireCurrentGroup() string {
 	group := a.CurrentGroup()
 	if group == "" {
@@ -331,4 +476,19 @@ func requireAssetKey(key string) {
 	if key == "" {
 		panic("Assets: key must not be empty")
 	}
+}
+
+func cubemapKey(paths [6]string) string {
+	for i := 0; i < 6; i++ {
+		requireAssetKey(paths[i])
+	}
+	return paths[0] + "|" + paths[1] + "|" + paths[2] + "|" + paths[3] + "|" + paths[4] + "|" + paths[5]
+}
+
+func readAssetBytes(mounts *vopack.MountSet, path string) ([]byte, error) {
+	requireAssetKey(path)
+	if mounts != nil && mounts.Has(path) {
+		return mounts.Read(path)
+	}
+	return os.ReadFile(path)
 }

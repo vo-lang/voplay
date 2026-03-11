@@ -58,6 +58,42 @@ func MeasureTextFont(font FontID, text string, size float64) (float64, float64) 
 // ModelID is an opaque handle to a loaded 3D model.
 type ModelID int
 
+// ModelBackend abstracts model resource operations so they can be
+// replaced in tests without per-function hook boilerplate.
+type ModelBackend interface {
+	Free(id int)
+	Bounds(id int) (AABB, bool)
+}
+
+type defaultModelBackend struct{}
+
+func (defaultModelBackend) Free(id int) {
+	freeModel(id)
+}
+
+func (defaultModelBackend) Bounds(id int) (AABB, bool) {
+	minX, minY, minZ, maxX, maxY, maxZ, ok := modelBounds(id)
+	if !ok {
+		return AABB{}, false
+	}
+	return AABB{
+		Min: Vec3{X: minX, Y: minY, Z: minZ},
+		Max: Vec3{X: maxX, Y: maxY, Z: maxZ},
+	}, true
+}
+
+var modelBackend ModelBackend = defaultModelBackend{}
+var modelBoundsCache = map[int]AABB{}
+
+// SetModelBackend replaces the active model backend and returns the previous one.
+// Setting a new backend clears the bounds cache.
+func SetModelBackend(b ModelBackend) ModelBackend {
+	prev := modelBackend
+	modelBackend = b
+	modelBoundsCache = map[int]AABB{}
+	return prev
+}
+
 // LoadModel loads a glTF/GLB model file and returns a ModelID.
 func LoadModel(path string) (ModelID, error) {
 	id := loadModel(path)?
@@ -70,9 +106,40 @@ func LoadModelBytes(data []byte) (ModelID, error) {
 	return ModelID(id), nil
 }
 
+func ModelAABB(model ModelID) (AABB, bool) {
+	if model == 0 {
+		return AABB{}, false
+	}
+	if bounds, ok := modelBoundsCache[int(model)]; ok {
+		return bounds, true
+	}
+	bounds, ok := modelBackend.Bounds(int(model))
+	if ok {
+		modelBoundsCache[int(model)] = bounds
+	}
+	return bounds, ok
+}
+
 // Free releases this model.
 func (id ModelID) Free() {
-	freeModel(int(id))
+	delete(modelBoundsCache, int(id))
+	modelBackend.Free(int(id))
+}
+
+type CubemapID int
+
+func LoadCubemap(right, left, top, bottom, front, back string) (CubemapID, error) {
+	id := loadCubemap(right, left, top, bottom, front, back)?
+	return CubemapID(id), nil
+}
+
+func LoadCubemapBytes(right, left, top, bottom, front, back []byte) (CubemapID, error) {
+	id := loadCubemapBytes(right, left, top, bottom, front, back)?
+	return CubemapID(id), nil
+}
+
+func (id CubemapID) Free() {
+	freeCubemap(int(id))
 }
 
 // --- Extern declarations for resources (implemented in Rust: vo-voplay crate) ---
@@ -89,3 +156,8 @@ func measureText(fontID int, text string, size float64) (float64, float64)
 func loadModel(path string) (int, error)
 func loadModelBytes(data []byte) (int, error)
 func freeModel(id int)
+func modelBounds(modelID int) (float64, float64, float64, float64, float64, float64, bool)
+
+func loadCubemap(right, left, top, bottom, front, back string) (int, error)
+func loadCubemapBytes(right, left, top, bottom, front, back []byte) (int, error)
+func freeCubemap(id int)

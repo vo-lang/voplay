@@ -4,6 +4,11 @@
 
 use std::sync::Mutex;
 
+#[cfg(feature = "wasm")]
+thread_local! {
+    static WASM_INPUT_INSTALLED: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
 /// Input event kinds (must match input.vo constants).
 const INPUT_KEY_DOWN: u8 = 0x01;
 const INPUT_KEY_UP: u8 = 0x02;
@@ -48,6 +53,97 @@ pub fn push_scroll_event(dx: f64, dy: f64) {
 pub fn drain_input() -> Vec<u8> {
     let mut buf = INPUT_BUFFER.lock().unwrap();
     std::mem::take(&mut *buf)
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_xy(canvas: &web_sys::HtmlCanvasElement, client_x: i32, client_y: i32) -> (f64, f64) {
+    let rect = canvas.get_bounding_client_rect();
+    (
+        client_x as f64 - rect.left(),
+        client_y as f64 - rect.top(),
+    )
+}
+
+#[cfg(feature = "wasm")]
+pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let already_installed = WASM_INPUT_INSTALLED.with(|installed| {
+        if installed.get() {
+            true
+        } else {
+            installed.set(true);
+            false
+        }
+    });
+    if already_installed {
+        return Ok(());
+    }
+
+    let window = web_sys::window().ok_or_else(|| "voplay: no global window".to_string())?;
+
+    let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+        let key = event.key();
+        if !key.is_empty() {
+            push_key_event(true, &key);
+        }
+    }) as Box<dyn FnMut(_)>);
+    window
+        .add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register keydown listener".to_string())?;
+    key_down.forget();
+
+    let key_up = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+        let key = event.key();
+        if !key.is_empty() {
+            push_key_event(false, &key);
+        }
+    }) as Box<dyn FnMut(_)>);
+    window
+        .add_event_listener_with_callback("keyup", key_up.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register keyup listener".to_string())?;
+    key_up.forget();
+
+    let pointer_canvas = canvas.clone();
+    let pointer_down = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
+        push_pointer_event(POINTER_DOWN, x, y, event.button() as u8);
+    }) as Box<dyn FnMut(_)>);
+    canvas
+        .add_event_listener_with_callback("pointerdown", pointer_down.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register pointerdown listener".to_string())?;
+    pointer_down.forget();
+
+    let pointer_canvas = canvas.clone();
+    let pointer_up = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
+        push_pointer_event(POINTER_UP, x, y, event.button() as u8);
+    }) as Box<dyn FnMut(_)>);
+    canvas
+        .add_event_listener_with_callback("pointerup", pointer_up.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register pointerup listener".to_string())?;
+    pointer_up.forget();
+
+    let pointer_canvas = canvas.clone();
+    let pointer_move = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
+        push_pointer_event(POINTER_MOVE, x, y, 0);
+    }) as Box<dyn FnMut(_)>);
+    canvas
+        .add_event_listener_with_callback("pointermove", pointer_move.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register pointermove listener".to_string())?;
+    pointer_move.forget();
+
+    let wheel = Closure::wrap(Box::new(move |event: web_sys::WheelEvent| {
+        push_scroll_event(event.delta_x(), event.delta_y());
+    }) as Box<dyn FnMut(_)>);
+    canvas
+        .add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register wheel listener".to_string())?;
+    wheel.forget();
+
+    Ok(())
 }
 
 /// Convenience constants for pointer events (re-exported for platform modules).

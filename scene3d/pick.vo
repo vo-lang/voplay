@@ -1,0 +1,138 @@
+package scene3d
+
+import "sort"
+import "github.com/vo-lang/voplay"
+
+type PickFilter func(*Entity) bool
+
+type PickResult struct {
+	Entity   *Entity
+	Distance float64
+	Point    voplay.Vec3
+	Bounds   voplay.AABB
+}
+
+type pickResultsByDistance []PickResult
+
+func (r pickResultsByDistance) Len() int {
+	return len(r)
+}
+
+func (r pickResultsByDistance) Less(i, j int) bool {
+	return r[i].Distance < r[j].Distance
+}
+
+func (r pickResultsByDistance) Swap(i, j int) {
+	r[i], r[j] = r[j], r[i]
+}
+
+func (e *Entity) WorldAABB() (voplay.AABB, bool) {
+	if e.Model == 0 {
+		return voplay.AABB{}, false
+	}
+	bounds, ok := voplay.ModelAABB(e.Model)
+	if !ok {
+		return voplay.AABB{}, false
+	}
+	return bounds.Transform(e.position, e.rotation, e.scale), true
+}
+
+func shouldPickEntity(e *Entity, filter PickFilter) bool {
+	if e == nil || !e.Active || !e.Visible || !e.Pickable || e.Model == 0 {
+		return false
+	}
+	if filter != nil && !filter(e) {
+		return false
+	}
+	return true
+}
+
+func (s *Scene) Pick(screenX, screenY, screenW, screenH float64) *PickResult {
+	return s.PickFiltered(screenX, screenY, screenW, screenH, nil)
+}
+
+func (s *Scene) PickFiltered(screenX, screenY, screenW, screenH float64, filter PickFilter) *PickResult {
+	origin, dir := s.Camera.ScreenToRay(screenX, screenY, screenW, screenH)
+	return s.PickRayFiltered(origin, dir, s.Camera.Far, filter)
+}
+
+func (s *Scene) PickRay(origin, dir voplay.Vec3, maxDist float64) *PickResult {
+	return s.PickRayFiltered(origin, dir, maxDist, nil)
+}
+
+func (s *Scene) PickRayFiltered(origin, dir voplay.Vec3, maxDist float64, filter PickFilter) *PickResult {
+	if dir.LengthSq() == 0 {
+		return nil
+	}
+	dir = dir.Normalize()
+	hasBest := false
+	best := PickResult{}
+	for _, e := range s.entities {
+		if !shouldPickEntity(e, filter) {
+			continue
+		}
+		bounds, ok := e.WorldAABB()
+		if !ok {
+			continue
+		}
+		hit, dist := voplay.RayHitAABB(origin, dir, bounds, maxDist)
+		if !hit {
+			continue
+		}
+		if !hasBest || dist < best.Distance {
+			hasBest = true
+			best = PickResult{
+				Entity:   e,
+				Distance: dist,
+				Point:    origin.Add(dir.Scale(dist)),
+				Bounds:   bounds,
+			}
+		}
+	}
+	if !hasBest {
+		return nil
+	}
+	return &best
+}
+
+func (s *Scene) PickAll(screenX, screenY, screenW, screenH float64) []PickResult {
+	return s.PickAllFiltered(screenX, screenY, screenW, screenH, nil)
+}
+
+func (s *Scene) PickAllFiltered(screenX, screenY, screenW, screenH float64, filter PickFilter) []PickResult {
+	origin, dir := s.Camera.ScreenToRay(screenX, screenY, screenW, screenH)
+	return s.PickAllRayFiltered(origin, dir, s.Camera.Far, filter)
+}
+
+func (s *Scene) PickAllRay(origin, dir voplay.Vec3, maxDist float64) []PickResult {
+	return s.PickAllRayFiltered(origin, dir, maxDist, nil)
+}
+
+func (s *Scene) PickAllRayFiltered(origin, dir voplay.Vec3, maxDist float64, filter PickFilter) []PickResult {
+	if dir.LengthSq() == 0 {
+		return nil
+	}
+	dir = dir.Normalize()
+	results := make([]PickResult, 0)
+	for _, e := range s.entities {
+		if !shouldPickEntity(e, filter) {
+			continue
+		}
+		bounds, ok := e.WorldAABB()
+		if !ok {
+			continue
+		}
+		hit, dist := voplay.RayHitAABB(origin, dir, bounds, maxDist)
+		if !hit {
+			continue
+		}
+		results = append(results, PickResult{
+			Entity:   e,
+			Distance: dist,
+			Point:    origin.Add(dir.Scale(dist)),
+			Bounds:   bounds,
+		})
+	}
+	sort.Stable(pickResultsByDistance(results))
+	return results
+}

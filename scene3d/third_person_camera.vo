@@ -1,0 +1,163 @@
+package scene3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+type ThirdPersonCamera struct {
+	Target           *Entity
+	PivotOffset      voplay.Vec3
+	Yaw              float64
+	Pitch            float64
+	MinPitch         float64
+	MaxPitch         float64
+	Distance         float64
+	MinDistance      float64
+	MaxDistance      float64
+	Smoothing        float64
+	CollisionEnabled bool
+	CollisionOffset  float64
+
+	currentPos    voplay.Vec3
+	currentTarget voplay.Vec3
+	initialized   bool
+	lastTarget    *Entity
+}
+
+func NewThirdPersonCamera(target *Entity) *ThirdPersonCamera {
+	return &ThirdPersonCamera{
+		Target:           target,
+		PivotOffset:      voplay.Vec3{Y: 1.6},
+		Pitch:            0.3,
+		MinPitch:         -1.3962634015954636,
+		MaxPitch:         1.3962634015954636,
+		Distance:         5.0,
+		MinDistance:      1.0,
+		MaxDistance:      20.0,
+		Smoothing:        10.0,
+		CollisionEnabled: true,
+		CollisionOffset:  0.2,
+	}
+}
+
+func (c *ThirdPersonCamera) HandleInput(dx, dy float64) {
+	c.Yaw += dx
+	c.Pitch -= dy
+	c.Pitch = thirdPersonClamp(c.Pitch, c.MinPitch, c.MaxPitch)
+}
+
+func (c *ThirdPersonCamera) HandleInputScaled(dx, dy, sensitivity float64) {
+	c.HandleInput(dx*sensitivity, dy*sensitivity)
+}
+
+func (c *ThirdPersonCamera) Zoom(delta float64) {
+	c.Distance = thirdPersonClamp(c.Distance+delta, c.MinDistance, c.MaxDistance)
+}
+
+func (c *ThirdPersonCamera) Update(scene *Scene, dt float64) {
+	if c.Target == nil || !c.Target.Active || c.Target.scene == nil {
+		return
+	}
+	c.Pitch = thirdPersonClamp(c.Pitch, c.MinPitch, c.MaxPitch)
+	c.Distance = thirdPersonClamp(c.Distance, c.MinDistance, c.MaxDistance)
+	pivot := c.Target.Position().Add(c.PivotOffset)
+	desiredPos := c.desiredPosition(pivot)
+	if c.CollisionEnabled && scene != nil {
+		desiredPos = c.resolveCollision(scene, pivot, desiredPos)
+	}
+	targetChanged := c.Target != c.lastTarget
+	c.currentTarget = pivot
+	if !c.initialized || targetChanged {
+		c.currentPos = desiredPos
+		c.initialized = true
+	} else if c.Smoothing <= 0 || dt <= 0 {
+		c.currentPos = desiredPos
+	} else {
+		t := 1.0 - math.Exp(-c.Smoothing*dt)
+		c.currentPos = c.currentPos.Lerp(desiredPos, t)
+	}
+	if c.CollisionEnabled && scene != nil {
+		c.currentPos = c.resolveCollision(scene, pivot, c.currentPos)
+	}
+	c.lastTarget = c.Target
+}
+
+func (c *ThirdPersonCamera) Apply(cam *Camera) {
+	cam.Position = c.currentPos
+	cam.Target = c.currentTarget
+}
+
+func (c *ThirdPersonCamera) UpdateCamera(cam *Camera, scene *Scene, dt float64) {
+	c.Update(scene, dt)
+	c.Apply(cam)
+}
+
+func (c *ThirdPersonCamera) desiredPosition(pivot voplay.Vec3) voplay.Vec3 {
+	orbitYaw := c.targetBackYaw() + c.Yaw
+	cosPitch := math.Cos(c.Pitch)
+	return pivot.Add(voplay.Vec3{
+		X: c.Distance * math.Sin(orbitYaw) * cosPitch,
+		Y: c.Distance * math.Sin(c.Pitch),
+		Z: c.Distance * math.Cos(orbitYaw) * cosPitch,
+	})
+}
+
+func (c *ThirdPersonCamera) targetBackYaw() float64 {
+	forward := c.Target.Rotation().RotateVec3(voplay.Vec3{Z: -1})
+	planarBack := voplay.Vec3{X: -forward.X, Z: -forward.Z}
+	if planarBack.LengthSq() == 0 {
+		return 0
+	}
+	planarBack = planarBack.Normalize()
+	return math.Atan2(planarBack.X, planarBack.Z)
+}
+
+func (c *ThirdPersonCamera) resolveCollision(scene *Scene, pivot, desiredPos voplay.Vec3) voplay.Vec3 {
+	dir := desiredPos.Sub(pivot)
+	dist := dir.Length()
+	if dist <= 0.000001 {
+		return desiredPos
+	}
+	dir = dir.Scale(1.0 / dist)
+	origin := pivot
+	remaining := dist
+	travelled := 0.0
+	var hit *RayCastHit
+	for remaining > 0.000001 {
+		hit = scene.RayCast(origin, dir, remaining)
+		if hit == nil {
+			return desiredPos
+		}
+		if hit.Entity != c.Target {
+			travelled += hit.Distance
+			break
+		}
+		step := hit.Distance + 0.05
+		if step <= 0.0 {
+			return desiredPos
+		}
+		travelled += step
+		remaining = dist - travelled
+		origin = pivot.Add(dir.Scale(travelled))
+	}
+	if hit == nil || remaining <= 0.000001 {
+		return desiredPos
+	}
+	pullDist := travelled - c.CollisionOffset
+	if pullDist < 0 {
+		pullDist = 0
+	}
+	if pullDist > dist {
+		pullDist = dist
+	}
+	return pivot.Add(dir.Scale(pullDist))
+}
+
+func thirdPersonClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

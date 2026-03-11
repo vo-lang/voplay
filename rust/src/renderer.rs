@@ -124,7 +124,7 @@ impl Renderer {
             &camera_bgl,
             tex_bgl,
         );
-        let pipeline3d = Pipeline3D::new(&device, &queue, surface_config.format, tex_bgl);
+        let pipeline3d = Pipeline3D::new(&device, &queue, surface_config.format);
         let pipeline_shadow = PipelineShadow::new(&device, 2048);
         let pipeline_skybox = PipelineSkybox::new(&device, surface_config.format, cubemap_bgl);
         let model_manager = ModelManager::new();
@@ -238,8 +238,12 @@ impl Renderer {
         if width == 0 || height == 0 {
             return;
         }
+        if self.surface_config.width == width && self.surface_config.height == height {
+            return;
+        }
         self.surface_config.width = width;
         self.surface_config.height = height;
+        eprintln!("voplay: renderer resize {}x{}", width, height);
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_view = Some(Self::create_depth_view(&self.device, width, height));
     }

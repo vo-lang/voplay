@@ -33,14 +33,14 @@ struct LightUniform {
 @group(3) @binding(1) var control_sampler: sampler;
 @group(3) @binding(2) var shadow_tex: texture_depth_2d;
 @group(3) @binding(3) var shadow_sampler: sampler_comparison;
-@group(4) @binding(0) var layer0_tex: texture_2d<f32>;
-@group(4) @binding(1) var layer0_sampler: sampler;
-@group(5) @binding(0) var layer1_tex: texture_2d<f32>;
-@group(5) @binding(1) var layer1_sampler: sampler;
-@group(6) @binding(0) var layer2_tex: texture_2d<f32>;
-@group(6) @binding(1) var layer2_sampler: sampler;
-@group(7) @binding(0) var layer3_tex: texture_2d<f32>;
-@group(7) @binding(1) var layer3_sampler: sampler;
+@group(3) @binding(4) var layer0_tex: texture_2d<f32>;
+@group(3) @binding(5) var layer0_sampler: sampler;
+@group(3) @binding(6) var layer1_tex: texture_2d<f32>;
+@group(3) @binding(7) var layer1_sampler: sampler;
+@group(3) @binding(8) var layer2_tex: texture_2d<f32>;
+@group(3) @binding(9) var layer2_sampler: sampler;
+@group(3) @binding(10) var layer3_tex: texture_2d<f32>;
+@group(3) @binding(11) var layer3_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,

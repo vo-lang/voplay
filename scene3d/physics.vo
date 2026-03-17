@@ -292,7 +292,8 @@ func (defaultPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
 }
 
 func (defaultPhysicsBackend) SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte) {
-	physicsSpawnTrimeshBody(worldID, bodyID, modelID, data)
+	meshData := voplay.ModelMeshDataBytes(voplay.ModelID(modelID))
+	physicsSpawnTrimeshBodyData(worldID, bodyID, data, meshData)
 }
 
 func (defaultPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc) {
@@ -338,6 +339,7 @@ func physicsInit(gravityX, gravityY, gravityZ float64) int
 func physicsDestroy(worldID int)
 func physicsSpawnBody(worldID int, bodyID int, data []byte)
 func physicsSpawnTrimeshBody(worldID int, bodyID int, modelID int, data []byte)
+func physicsSpawnTrimeshBodyData(worldID int, bodyID int, data []byte, meshData []byte)
 func physicsSpawnHeightfield(worldID, bodyID int, heightData []byte, rows, cols int, scaleX, scaleY, scaleZ, posX, posY, posZ float64, layer, mask int, friction, restitution float64)
 func physicsDestroyBody(worldID int, bodyID int)
 func physicsStep(worldID int, dt float64, cmds []byte) []byte

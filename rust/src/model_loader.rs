@@ -1574,7 +1574,7 @@ mod tests {
         assert_eq!(nodes[0].position, [1.0, 2.0, 3.0]);
         assert_eq!(nodes[0].scale, [2.0, 3.0, 4.0]);
         assert_eq!(nodes[1].name, "child");
-        assert_eq!(nodes[1].position, [4.5, 9.0, 10.5]);
+        assert_eq!(nodes[1].position, [9.0, 17.0, 27.0]);
         assert_eq!(nodes[1].scale, [1.0, 6.0, 6.0]);
         assert_eq!(nodes[1].rotation, [0.0, 0.0, 0.0, 1.0]);
     }

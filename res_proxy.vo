@@ -1,0 +1,777 @@
+// Resource proxy: protocol tags, request/response encoding, and proxy
+// AssetLoaders for the logic island in split-island mode.
+//
+// In split mode, resource externs (loadTexture, loadModel, etc.) live on the
+// render island. The logic island uses proxy loaders that encode requests,
+// send them to the render island via resPort, and block until the reply arrives.
+package voplay
+
+import "github.com/vo-lang/voplay/codec"
+import "github.com/vo-lang/vogui"
+
+// --- Resource command tags ---
+
+const (
+	resTagLoadTexture      byte = 1
+	resTagLoadTextureBytes byte = 2
+	resTagFreeTexture      byte = 3
+	resTagLoadFont         byte = 4
+	resTagLoadFontBytes    byte = 5
+	resTagFreeFont         byte = 6
+	resTagMeasureText      byte = 7
+	resTagLoadModel        byte = 8
+	resTagLoadModelBytes   byte = 9
+	resTagFreeModel        byte = 10
+	resTagModelBounds      byte = 11
+	resTagLoadCubemap      byte = 12
+	resTagLoadCubemapBytes byte = 13
+	resTagFreeCubemap      byte = 14
+	resTagCreatePlaneMesh  byte = 15
+	resTagCreateCubeMesh   byte = 16
+	resTagCreateSphereMesh byte = 17
+	resTagCreateCylinderMesh byte = 18
+	resTagCreateCapsuleMesh  byte = 19
+	resTagModelMeshData      byte = 20
+	resTagAnimationInit      byte = 21
+	resTagAnimationDestroy   byte = 22
+	resTagAnimationPlay      byte = 23
+	resTagAnimationStop      byte = 24
+	resTagAnimationCrossfade byte = 25
+	resTagAnimationSetSpeed  byte = 26
+	resTagAnimationRemoveTarget byte = 27
+	resTagAnimationTick      byte = 28
+	resTagAnimationProgress  byte = 29
+	resTagAnimationModelInfo byte = 30
+
+	resRespOK    byte = 0
+	resRespError byte = 1
+)
+
+// --- Request encoding (logic island side) ---
+
+func encodeResString(tag byte, s string) []byte {
+	w := codec.NewByteWriter(1 + 2 + len(s))
+	w.WriteByte(tag)
+	w.WriteString(s)
+	return w.Bytes()
+}
+
+func encodeResBytes(tag byte, data []byte) []byte {
+	n := len(data)
+	out := make([]byte, 0, 1+4+n)
+	out = append(out, tag)
+	out = append(out, byte(n), byte(n>>8), byte(n>>16), byte(n>>24))
+	out = append(out, data...)
+	return out
+}
+
+func encodeResU32(tag byte, id int) []byte {
+	w := codec.NewByteWriter(5)
+	w.WriteByte(tag)
+	w.WriteU32(id)
+	return w.Bytes()
+}
+
+func encodeResU32x2(tag byte, a, b int) []byte {
+	w := codec.NewByteWriter(9)
+	w.WriteByte(tag)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	return w.Bytes()
+}
+
+func encodeResU32x3(tag byte, a, b, c int) []byte {
+	w := codec.NewByteWriter(13)
+	w.WriteByte(tag)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	w.WriteU32(c)
+	return w.Bytes()
+}
+
+func encodeResU32x3F64(tag byte, a, b, c int, value float64) []byte {
+	w := codec.NewByteWriter(21)
+	w.WriteByte(tag)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	w.WriteU32(c)
+	w.WriteF64(value)
+	return w.Bytes()
+}
+
+func encodeResU32x2F64(tag byte, a, b int, value float64) []byte {
+	w := codec.NewByteWriter(17)
+	w.WriteByte(tag)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	w.WriteF64(value)
+	return w.Bytes()
+}
+
+func encodeResU32x3BoolF64(tag byte, a, b, c int, flag bool, value float64) []byte {
+	w := codec.NewByteWriter(22)
+	w.WriteByte(tag)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	w.WriteU32(c)
+	w.WriteBool(flag)
+	w.WriteF64(value)
+	return w.Bytes()
+}
+
+func encodeResTag(tag byte) []byte {
+	return []byte{tag}
+}
+
+func encodeResMeasureText(fontID int, text string, size float64) []byte {
+	w := codec.NewByteWriter(1 + 4 + 2 + len(text) + 8)
+	w.WriteByte(resTagMeasureText)
+	w.WriteU32(fontID)
+	w.WriteString(text)
+	w.WriteF64(size)
+	return w.Bytes()
+}
+
+func encodeResCubemap(paths [6]string) []byte {
+	total := 1
+	for i := 0; i < 6; i++ {
+		total += 2 + len(paths[i])
+	}
+	w := codec.NewByteWriter(total)
+	w.WriteByte(resTagLoadCubemap)
+	for i := 0; i < 6; i++ {
+		w.WriteString(paths[i])
+	}
+	return w.Bytes()
+}
+
+func encodeResCubemapBytes(faces [6][]byte) []byte {
+	total := 1
+	for i := 0; i < 6; i++ {
+		total += 4 + len(faces[i])
+	}
+	out := make([]byte, 0, total)
+	out = append(out, resTagLoadCubemapBytes)
+	for i := 0; i < 6; i++ {
+		n := len(faces[i])
+		out = append(out, byte(n), byte(n>>8), byte(n>>16), byte(n>>24))
+		out = append(out, faces[i]...)
+	}
+	return out
+}
+
+func encodeResPlaneMesh(width, depth float64, subX, subZ int) []byte {
+	w := codec.NewByteWriter(1 + 8 + 8 + 4 + 4)
+	w.WriteByte(resTagCreatePlaneMesh)
+	w.WriteF64(width)
+	w.WriteF64(depth)
+	w.WriteU32(subX)
+	w.WriteU32(subZ)
+	return w.Bytes()
+}
+
+func encodeResCapsuleMesh(segments int, halfHeight, radius float64) []byte {
+	w := codec.NewByteWriter(1 + 4 + 8 + 8)
+	w.WriteByte(resTagCreateCapsuleMesh)
+	w.WriteU32(segments)
+	w.WriteF64(halfHeight)
+	w.WriteF64(radius)
+	return w.Bytes()
+}
+
+func encodeResAnimationTick(worldID int, dt float64, entityModelMap []byte) []byte {
+	w := codec.NewByteWriter(1 + 4 + 8 + 4 + len(entityModelMap))
+	w.WriteByte(resTagAnimationTick)
+	w.WriteU32(worldID)
+	w.WriteF64(dt)
+	w.WriteU32(len(entityModelMap))
+	w.WriteRawBytes(entityModelMap)
+	return w.Bytes()
+}
+
+// --- Response encoding (render island side) ---
+
+func encodeResOKU32(id int) []byte {
+	w := codec.NewByteWriter(5)
+	w.WriteByte(resRespOK)
+	w.WriteU32(id)
+	return w.Bytes()
+}
+
+func encodeResOKUnit() []byte {
+	return []byte{resRespOK}
+}
+
+func encodeResOKBytes(data []byte) []byte {
+	n := len(data)
+	out := make([]byte, 0, 1+4+n)
+	out = append(out, resRespOK)
+	out = append(out, byte(n), byte(n>>8), byte(n>>16), byte(n>>24))
+	out = append(out, data...)
+	return out
+}
+
+func encodeResOKF64(value float64) []byte {
+	w := codec.NewByteWriter(1 + 8)
+	w.WriteByte(resRespOK)
+	w.WriteF64(value)
+	return w.Bytes()
+}
+
+func encodeResError(msg string) []byte {
+	w := codec.NewByteWriter(1 + 2 + len(msg))
+	w.WriteByte(resRespError)
+	w.WriteString(msg)
+	return w.Bytes()
+}
+
+func encodeResOKMeasureText(width, height float64) []byte {
+	w := codec.NewByteWriter(1 + 16)
+	w.WriteByte(resRespOK)
+	w.WriteF64(width)
+	w.WriteF64(height)
+	return w.Bytes()
+}
+
+func encodeResOKModelBounds(minX, minY, minZ, maxX, maxY, maxZ float64, ok bool) []byte {
+	w := codec.NewByteWriter(1 + 1 + 48)
+	w.WriteByte(resRespOK)
+	w.WriteBool(ok)
+	w.WriteF64(minX)
+	w.WriteF64(minY)
+	w.WriteF64(minZ)
+	w.WriteF64(maxX)
+	w.WriteF64(maxY)
+	w.WriteF64(maxZ)
+	return w.Bytes()
+}
+
+// --- Response decoding (logic island side) ---
+
+func decodeResU32(resp []byte) (int, error) {
+	if resp[0] == resRespError {
+		return 0, decodeResErrorMsg(resp)
+	}
+	r := codec.NewByteReader(resp[1:])
+	return r.ReadU32(), nil
+}
+
+func decodeResUnit(resp []byte) error {
+	if resp[0] == resRespError {
+		return decodeResErrorMsg(resp)
+	}
+	return nil
+}
+
+func decodeResBytes(resp []byte) []byte {
+	if resp[0] == resRespError {
+		panic("split-island: bytes resource failed: " + decodeResErrorMsg(resp).Error())
+	}
+	r := codec.NewByteReader(resp[1:])
+	n := r.ReadU32()
+	data := make([]byte, n)
+	copy(data, r.ReadBytes(n))
+	return data
+}
+
+func decodeResMeasureText(resp []byte) (float64, float64) {
+	if resp[0] == resRespError {
+		panic("split-island: measureText failed: " + string(resp[3:]))
+	}
+	r := codec.NewByteReader(resp[1:])
+	return r.ReadF64(), r.ReadF64()
+}
+
+func decodeResF64(resp []byte) float64 {
+	if resp[0] == resRespError {
+		panic("split-island: numeric resource failed: " + decodeResErrorMsg(resp).Error())
+	}
+	r := codec.NewByteReader(resp[1:])
+	return r.ReadF64()
+}
+
+func decodeResModelBounds(resp []byte) (float64, float64, float64, float64, float64, float64, bool) {
+	if resp[0] == resRespError {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	r := codec.NewByteReader(resp[1:])
+	ok := r.ReadByte() != 0
+	return r.ReadF64(), r.ReadF64(), r.ReadF64(), r.ReadF64(), r.ReadF64(), r.ReadF64(), ok
+}
+
+type resError struct {
+	msg string
+}
+
+func (e *resError) Error() string {
+	return e.msg
+}
+
+func decodeResErrorMsg(resp []byte) error {
+	r := codec.NewByteReader(resp[1:])
+	msgLen := r.ReadU16()
+	msg := string(r.ReadBytes(msgLen))
+	return &resError{msg: msg}
+}
+
+// --- Render island handlers (called by serviceResourceRequests) ---
+
+func handleLoadTexture(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	pathLen := r.ReadU16()
+	path := string(r.ReadBytes(pathLen))
+	id, err := loadTexture(path)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadTextureBytes(payload []byte) []byte {
+	data := decodeBytesPayload(payload)
+	id, err := loadTextureBytes(data)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleFreeTexture(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	freeTexture(id)
+	return encodeResOKUnit()
+}
+
+func handleLoadFont(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	pathLen := r.ReadU16()
+	path := string(r.ReadBytes(pathLen))
+	id, err := loadFont(path)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadFontBytes(payload []byte) []byte {
+	data := decodeBytesPayload(payload)
+	id, err := loadFontBytes(data)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleFreeFont(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	freeFont(id)
+	return encodeResOKUnit()
+}
+
+func handleMeasureText(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	fontID := r.ReadU32()
+	textLen := r.ReadU16()
+	text := string(r.ReadBytes(textLen))
+	size := r.ReadF64()
+	w, h := measureText(fontID, text, size)
+	return encodeResOKMeasureText(w, h)
+}
+
+func handleLoadModel(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	pathLen := r.ReadU16()
+	path := string(r.ReadBytes(pathLen))
+	id, err := loadModel(path)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadModelBytes(payload []byte) []byte {
+	data := decodeBytesPayload(payload)
+	id, err := loadModelBytes(data)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleFreeModel(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	freeModel(id)
+	return encodeResOKUnit()
+}
+
+func handleModelBounds(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	minX, minY, minZ, maxX, maxY, maxZ, ok := modelBounds(id)
+	return encodeResOKModelBounds(minX, minY, minZ, maxX, maxY, maxZ, ok)
+}
+
+func handleModelMeshData(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	return encodeResOKBytes(modelMeshDataBytes(id))
+}
+
+func handleCreatePlaneMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	width := r.ReadF64()
+	depth := r.ReadF64()
+	subX := r.ReadU32()
+	subZ := r.ReadU32()
+	return encodeResOKU32(createPlaneMesh(width, depth, subX, subZ))
+}
+
+func handleCreateCubeMesh(_ []byte) []byte {
+	return encodeResOKU32(createCubeMesh())
+}
+
+func handleCreateSphereMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKU32(createSphereMesh(r.ReadU32()))
+}
+
+func handleCreateCylinderMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKU32(createCylinderMesh(r.ReadU32()))
+}
+
+func handleCreateCapsuleMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	segments := r.ReadU32()
+	halfHeight := r.ReadF64()
+	radius := r.ReadF64()
+	return encodeResOKU32(createCapsuleMesh(segments, halfHeight, radius))
+}
+
+func handleAnimationInit(_ []byte) []byte {
+	return encodeResOKU32(AnimationRuntimeInit())
+}
+
+func handleAnimationDestroy(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimeDestroy(r.ReadU32())
+	return encodeResOKUnit()
+}
+
+func handleAnimationPlay(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimePlay(r.ReadU32(), r.ReadU32(), r.ReadU32(), r.ReadBool(), r.ReadF64())
+	return encodeResOKUnit()
+}
+
+func handleAnimationStop(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimeStop(r.ReadU32(), r.ReadU32())
+	return encodeResOKUnit()
+}
+
+func handleAnimationCrossfade(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimeCrossfade(r.ReadU32(), r.ReadU32(), r.ReadU32(), r.ReadF64())
+	return encodeResOKUnit()
+}
+
+func handleAnimationSetSpeed(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimeSetSpeed(r.ReadU32(), r.ReadU32(), r.ReadF64())
+	return encodeResOKUnit()
+}
+
+func handleAnimationRemoveTarget(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	AnimationRuntimeRemoveTarget(r.ReadU32(), r.ReadU32())
+	return encodeResOKUnit()
+}
+
+func handleAnimationTick(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	worldID := r.ReadU32()
+	dt := r.ReadF64()
+	data := r.ReadBytes(r.ReadU32())
+	AnimationRuntimeTick(worldID, dt, data)
+	return encodeResOKUnit()
+}
+
+func handleAnimationProgress(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKF64(AnimationRuntimeProgress(r.ReadU32(), r.ReadU32(), r.ReadU32()))
+}
+
+func handleAnimationModelInfo(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKBytes(AnimationRuntimeModelInfo(r.ReadU32()))
+}
+
+func handleLoadCubemap(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	paths := [6]string{}
+	for i := 0; i < 6; i++ {
+		pathLen := r.ReadU16()
+		paths[i] = string(r.ReadBytes(pathLen))
+	}
+	id, err := loadCubemap(paths[0], paths[1], paths[2], paths[3], paths[4], paths[5])
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadCubemapBytes(payload []byte) []byte {
+	faces := [6][]byte{}
+	pos := 0
+	for i := 0; i < 6; i++ {
+		n := int(payload[pos]) | int(payload[pos+1])<<8 | int(payload[pos+2])<<16 | int(payload[pos+3])<<24
+		pos += 4
+		faces[i] = make([]byte, n)
+		copy(faces[i], payload[pos:pos+n])
+		pos += n
+	}
+	id, err := loadCubemapBytes(faces[0], faces[1], faces[2], faces[3], faces[4], faces[5])
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleFreeCubemap(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	freeCubemap(id)
+	return encodeResOKUnit()
+}
+
+func decodeBytesPayload(payload []byte) []byte {
+	n := int(payload[0]) | int(payload[1])<<8 | int(payload[2])<<16 | int(payload[3])<<24
+	data := make([]byte, n)
+	copy(data, payload[4:4+n])
+	return data
+}
+
+// --- Proxy: logic island sends requests and blocks for reply ---
+
+// resProxyRoundTrip sends a request to the render island and blocks until
+// the response arrives. This is the core mechanism for resource proxy.
+func resProxyRoundTrip(reqPort, respPort port []byte, req []byte) []byte {
+	reqPort <- req
+	resp := <-respPort
+	return resp
+}
+
+// proxyAssetLoaders returns AssetLoaders that forward all resource operations
+// to the render island via the given resource ports.
+// reqPort: logic→render requests. respPort: render→logic responses.
+func proxyAssetLoaders(reqPort, respPort port []byte) AssetLoaders {
+	return AssetLoaders{
+		Texture: AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				req := encodeResString(resTagLoadTexture, path)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				req := encodeResBytes(resTagLoadTextureBytes, data)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			Free: func(id int) {
+				req := encodeResU32(resTagFreeTexture, id)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				_ = decodeResUnit(resp)
+			},
+		},
+		Font: AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				req := encodeResString(resTagLoadFont, path)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				req := encodeResBytes(resTagLoadFontBytes, data)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			Free: func(id int) {
+				req := encodeResU32(resTagFreeFont, id)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				_ = decodeResUnit(resp)
+			},
+		},
+		Model: AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				req := encodeResString(resTagLoadModel, path)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				req := encodeResBytes(resTagLoadModelBytes, data)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			Free: func(id int) {
+				req := encodeResU32(resTagFreeModel, id)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				_ = decodeResUnit(resp)
+			},
+		},
+		Audio: AssetLoader{
+			// Audio goes through vogui, not through the render island.
+			// In split mode, audio remains on the logic island.
+			LoadFile: func(path string) (int, error) { return audioLoadFile(path) },
+			LoadBytes: func(data []byte) (int, error) {
+				clip := vogui.LoadAudioBytes(data)?
+				return int(clip), nil
+			},
+			Free: func(id int) { vogui.AudioClipID(id).Free() },
+		},
+		Cubemap: CubemapLoader{
+			LoadFiles: func(paths [6]string) (int, error) {
+				req := encodeResCubemap(paths)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			LoadBytes: func(faces [6][]byte) (int, error) {
+				req := encodeResCubemapBytes(faces)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			Free: func(id int) {
+				req := encodeResU32(resTagFreeCubemap, id)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				_ = decodeResUnit(resp)
+			},
+		},
+	}
+}
+
+// proxyMeasureText sends a measureText request to the render island.
+func proxyMeasureText(reqPort, respPort port []byte, fontID int, text string, size float64) (float64, float64) {
+	req := encodeResMeasureText(fontID, text, size)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResMeasureText(resp)
+}
+
+// proxyModelBounds sends a modelBounds request to the render island.
+func proxyModelBounds(reqPort, respPort port []byte, id int) (float64, float64, float64, float64, float64, float64, bool) {
+	req := encodeResU32(resTagModelBounds, id)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResModelBounds(resp)
+}
+
+func proxyModelMeshDataBytes(reqPort, respPort port []byte, id int) []byte {
+	req := encodeResU32(resTagModelMeshData, id)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResBytes(resp)
+}
+
+func proxyAnimationInit(reqPort, respPort port []byte) int {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResTag(resTagAnimationInit))
+	worldID, err := decodeResU32(resp)
+	if err != nil {
+		panic("split-island: animationInit failed: " + err.Error())
+	}
+	return worldID
+}
+
+func proxyAnimationDestroy(reqPort, respPort port []byte, worldID int) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32(resTagAnimationDestroy, worldID))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationDestroy failed: " + err.Error())
+	}
+}
+
+func proxyAnimationPlay(reqPort, respPort port []byte, worldID, targetID, clip int, loop bool, speed float64) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x3BoolF64(resTagAnimationPlay, worldID, targetID, clip, loop, speed))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationPlay failed: " + err.Error())
+	}
+}
+
+func proxyAnimationStop(reqPort, respPort port []byte, worldID, targetID int) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x2(resTagAnimationStop, worldID, targetID))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationStop failed: " + err.Error())
+	}
+}
+
+func proxyAnimationCrossfade(reqPort, respPort port []byte, worldID, targetID, clip int, duration float64) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x3F64(resTagAnimationCrossfade, worldID, targetID, clip, duration))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationCrossfade failed: " + err.Error())
+	}
+}
+
+func proxyAnimationSetSpeed(reqPort, respPort port []byte, worldID, targetID int, speed float64) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x2F64(resTagAnimationSetSpeed, worldID, targetID, speed))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationSetSpeed failed: " + err.Error())
+	}
+}
+
+func proxyAnimationRemoveTarget(reqPort, respPort port []byte, worldID, targetID int) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x2(resTagAnimationRemoveTarget, worldID, targetID))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationRemoveTarget failed: " + err.Error())
+	}
+}
+
+func proxyAnimationTick(reqPort, respPort port []byte, worldID int, dt float64, entityModelMap []byte) {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResAnimationTick(worldID, dt, entityModelMap))
+	err := decodeResUnit(resp)
+	if err != nil {
+		panic("split-island: animationTick failed: " + err.Error())
+	}
+}
+
+func proxyAnimationProgress(reqPort, respPort port []byte, worldID, targetID, modelID int) float64 {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32x3(resTagAnimationProgress, worldID, targetID, modelID))
+	return decodeResF64(resp)
+}
+
+func proxyAnimationModelInfo(reqPort, respPort port []byte, modelID int) []byte {
+	resp := resProxyRoundTrip(reqPort, respPort, encodeResU32(resTagAnimationModelInfo, modelID))
+	return decodeResBytes(resp)
+}
+
+func proxyCreatePlaneMesh(reqPort, respPort port []byte, width, depth float64, subX, subZ int) (int, error) {
+	req := encodeResPlaneMesh(width, depth, subX, subZ)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateCubeMesh(reqPort, respPort port []byte) (int, error) {
+	req := encodeResTag(resTagCreateCubeMesh)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateSphereMesh(reqPort, respPort port []byte, segments int) (int, error) {
+	req := encodeResU32(resTagCreateSphereMesh, segments)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateCylinderMesh(reqPort, respPort port []byte, segments int) (int, error) {
+	req := encodeResU32(resTagCreateCylinderMesh, segments)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateCapsuleMesh(reqPort, respPort port []byte, segments int, halfHeight, radius float64) (int, error) {
+	req := encodeResCapsuleMesh(segments, halfHeight, radius)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}

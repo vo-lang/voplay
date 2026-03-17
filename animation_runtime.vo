@@ -1,0 +1,109 @@
+package voplay
+
+type AnimationRuntimeBackend interface {
+	Init() int
+	Destroy(worldID int)
+	Play(worldID, targetID, clip int, loop bool, speed float64)
+	Stop(worldID, targetID int)
+	Crossfade(worldID, targetID, clip int, duration float64)
+	SetSpeed(worldID, targetID int, speed float64)
+	RemoveTarget(worldID, targetID int)
+	Tick(worldID int, dt float64, entityModelMap []byte)
+	Progress(worldID, targetID, modelID int) float64
+	ModelInfo(modelID int) []byte
+}
+
+// directAnimationRuntimeBackend calls the native (Rust) animation externs directly.
+// It is the default backend for both the render island and direct-mode apps.
+// The logic island in split mode overrides this with proxyAnimationRuntimeBackendImpl.
+type directAnimationRuntimeBackend struct{}
+
+func (directAnimationRuntimeBackend) Init() int { return animationInit() }
+func (directAnimationRuntimeBackend) Destroy(worldID int) {
+	animationDestroy(worldID)
+}
+func (directAnimationRuntimeBackend) Play(worldID, targetID, clip int, loop bool, speed float64) {
+	animationPlay(worldID, targetID, clip, loop, speed)
+}
+func (directAnimationRuntimeBackend) Stop(worldID, targetID int) {
+	animationStop(worldID, targetID)
+}
+func (directAnimationRuntimeBackend) Crossfade(worldID, targetID, clip int, duration float64) {
+	animationCrossfade(worldID, targetID, clip, duration)
+}
+func (directAnimationRuntimeBackend) SetSpeed(worldID, targetID int, speed float64) {
+	animationSetSpeed(worldID, targetID, speed)
+}
+func (directAnimationRuntimeBackend) RemoveTarget(worldID, targetID int) {
+	animationRemoveTarget(worldID, targetID)
+}
+func (directAnimationRuntimeBackend) Tick(worldID int, dt float64, entityModelMap []byte) {
+	animationTick(worldID, dt, entityModelMap)
+}
+func (directAnimationRuntimeBackend) Progress(worldID, targetID, modelID int) float64 {
+	return animationProgress(worldID, targetID, modelID)
+}
+func (directAnimationRuntimeBackend) ModelInfo(modelID int) []byte {
+	return animationModelInfo(modelID)
+}
+
+var animationRuntimeBackend AnimationRuntimeBackend = directAnimationRuntimeBackend{}
+
+func SetAnimationRuntimeBackend(b AnimationRuntimeBackend) AnimationRuntimeBackend {
+	prev := animationRuntimeBackend
+	animationRuntimeBackend = b
+	return prev
+}
+
+func AnimationRuntimeInit() int {
+	return animationRuntimeBackend.Init()
+}
+
+func AnimationRuntimeDestroy(worldID int) {
+	animationRuntimeBackend.Destroy(worldID)
+}
+
+func AnimationRuntimePlay(worldID, targetID, clip int, loop bool, speed float64) {
+	animationRuntimeBackend.Play(worldID, targetID, clip, loop, speed)
+}
+
+func AnimationRuntimeStop(worldID, targetID int) {
+	animationRuntimeBackend.Stop(worldID, targetID)
+}
+
+func AnimationRuntimeCrossfade(worldID, targetID, clip int, duration float64) {
+	animationRuntimeBackend.Crossfade(worldID, targetID, clip, duration)
+}
+
+func AnimationRuntimeSetSpeed(worldID, targetID int, speed float64) {
+	animationRuntimeBackend.SetSpeed(worldID, targetID, speed)
+}
+
+func AnimationRuntimeRemoveTarget(worldID, targetID int) {
+	animationRuntimeBackend.RemoveTarget(worldID, targetID)
+}
+
+func AnimationRuntimeTick(worldID int, dt float64, entityModelMap []byte) {
+	animationRuntimeBackend.Tick(worldID, dt, entityModelMap)
+}
+
+func AnimationRuntimeProgress(worldID, targetID, modelID int) float64 {
+	return animationRuntimeBackend.Progress(worldID, targetID, modelID)
+}
+
+func AnimationRuntimeModelInfo(modelID int) []byte {
+	return animationRuntimeBackend.ModelInfo(modelID)
+}
+
+// --- Native extern declarations (implemented in Rust: vo-voplay crate, voplay package) ---
+
+func animationInit() int
+func animationDestroy(worldID int)
+func animationPlay(worldID, targetID, clipIndex int, loop bool, speed float64)
+func animationStop(worldID, targetID int)
+func animationCrossfade(worldID, targetID, toClipIndex int, duration float64)
+func animationSetSpeed(worldID, targetID int, speed float64)
+func animationRemoveTarget(worldID, targetID int)
+func animationTick(worldID int, dt float64, entityModelMap []byte)
+func animationProgress(worldID, targetID, modelID int) float64
+func animationModelInfo(modelID int) []byte

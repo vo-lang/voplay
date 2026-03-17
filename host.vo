@@ -1,16 +1,104 @@
-// Game loop host: runs via vogui platform (web or native Studio).
-// Frame order: poll input → advance → draw → submit.
+// Game loop host: logic island side of the split-island architecture.
+// The logic island drives vogui.Run for the tick loop.
+// Input arrives via inputPort from the render island.
+// Draw commands are sent via drawPort to the render island.
+// The render island owns initSurface/submitFrame/pollInput/isRendererReady.
 package voplay
 
-import "github.com/vo-lang/vogui"
+import (
+	"encoding/json"
+	"github.com/vo-lang/vogui"
+)
 
-func runGame(ctx *GameCtx, game *Game) {
+// splitPorts bundles all inter-island ports.
+type splitPorts struct {
+	draw    port []byte
+	input   port []byte
+	resReq  port []byte
+	resResp port []byte
+}
+
+type splitHostState struct {
+	Started bool
+	Starting bool
+}
+
+type splitWidgetEvent struct {
+	Type   string `json:"type"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+func useExternalIslandHost() bool {
+	return vogui.HasHostCapability("external_island_host")
+}
+
+func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts) {
+	if state.Started || state.Starting {
+		return
+	}
+	state.Starting = true
+	renderIsland := make(island)
+	go @(renderIsland) runRenderWorker("canvas", renderWorkerPorts{
+		draw:    ports.draw,
+		input:   ports.input,
+		resReq:  ports.resReq,
+		resResp: ports.resResp,
+	})
+	if useExternalIslandHost() {
+		go func() {
+			waitRenderIslandReady(state, ctx, game, ports)
+		}()
+		return
+	}
+	waitRenderIslandReady(state, ctx, game, ports)
+}
+
+func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts) {
+	_, ok := <-ports.input
+	if !ok {
+		state.Starting = false
+		return
+	}
+	state.Started = true
+	state.Starting = false
+	ctx.start(game.InitialState)
+	startGameLoopSplit(ctx, game, ports.draw, ports.input)
+}
+
+func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 	vogui.Run(vogui.App{
 		Init: func() any {
-			startGameLoop(ctx, game)
-			return nil
+			state := &splitHostState{}
+			if !useExternalIslandHost() {
+				startRenderIslandSplit(state, ctx, game, ports)
+			}
+			return state
 		},
 		View: func(state any) vogui.Node {
+			hostState := state.(*splitHostState)
+			if useExternalIslandHost() {
+				return vogui.ExternalWidget(
+					"voplay-render-island",
+					map[string]any{
+						"canvasId": "canvas",
+					},
+					vogui.OnWidget(func(s *splitHostState, payload string) {
+						var evt splitWidgetEvent
+						err := json.Unmarshal([]byte(payload), &evt)
+						if err != nil {
+							return
+						}
+						if evt.Width > 0 && evt.Height > 0 {
+							ctx.handleResize(evt.Width, evt.Height)
+						}
+						if evt.Type == "mount" {
+							startRenderIslandSplit(s, ctx, game, ports)
+						}
+					}),
+				).W("100%").H("100%").Display("block").Overflow("hidden")
+			}
+			_ = hostState
 			return vogui.Canvas(vogui.CanvasProps{
 				Fullscreen: true,
 				OnResize: vogui.OnResize(func(_ any, e vogui.ResizeEvent) {
@@ -21,11 +109,12 @@ func runGame(ctx *GameCtx, game *Game) {
 	})
 }
 
-func startGameLoop(ctx *GameCtx, game *Game) {
+func startGameLoopSplit(ctx *GameCtx, game *Game, drawPort, inputPort port []byte) {
 	loopID := 0
 	loopID = vogui.RunGameLoop(func(state any, dtMs float64) {
-		dt := dtMs / 1000.0 // vogui delivers ms, game API uses seconds
+		dt := dtMs / 1000.0
 		if ctx.closed {
+			close(drawPort) // signal render worker to exit
 			vogui.StopGameLoop(loopID)
 			if game.OnClose != nil {
 				game.OnClose(ctx)
@@ -33,29 +122,14 @@ func startGameLoop(ctx *GameCtx, game *Game) {
 			return
 		}
 
-		// Phase 1: Kick off async renderer init (once).
-		if !ctx.surfaceInitiated {
-			initSurface("canvas")?
-			ctx.surfaceInitiated = true
-		}
+		// 1. Drain input from render island (non-blocking).
+		applySplitInput(ctx, inputPort)
 
-		// Phase 2: Wait for renderer to be ready before game.Init.
-		// On WASM, renderer init is async — skip frames until ready.
-		if !ctx.gameInitialized {
-			if !isRendererReady() {
-				return
-			}
-			ctx.start(game.InitialState)
-		}
-
-		// 1. Poll input (one extern: returns packed key/pointer events)
-		inputBytes := pollInput()
-		ctx.Input.unpackEvents(inputBytes)
-
-		// 2. Game logic (user steps physics/animations as needed)
+		// 2. Game logic.
 		ctx.Advance(dt)
 		if ctx.closed {
 			ctx.Input.endFrame()
+			close(drawPort)
 			vogui.StopGameLoop(loopID)
 			if game.OnClose != nil {
 				game.OnClose(ctx)
@@ -63,16 +137,20 @@ func startGameLoop(ctx *GameCtx, game *Game) {
 			return
 		}
 
-		// 3. Render
+		// 3. Generate draw commands and send to render island.
 		ctx.Draw.reset()
 		ctx.States.Draw()
-		submitFrame(ctx.Draw.Bytes())?
+		cmds := ctx.Draw.Bytes()
+		if len(cmds) > 0 {
+			drawPort <- cmds
+		}
 
 		ctx.Input.endFrame()
 	})
 }
 
-// --- Extern declarations for the host layer (implemented in Rust: vo-voplay crate) ---
+// --- Extern declarations for the render island (implemented in Rust) ---
+// These are called by render_worker.vo on the render island, not by logic island code.
 
 // Surface
 func initSurface(canvasRef string) error

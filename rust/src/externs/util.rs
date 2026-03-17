@@ -5,19 +5,19 @@ use crate::renderer::Renderer;
 
 use super::with_renderer;
 
-pub(super) fn read_u16_le(data: &[u8], pos: &mut usize) -> u16 {
+pub(crate) fn read_u16_le(data: &[u8], pos: &mut usize) -> u16 {
     let value = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
     *pos += 2;
     value
 }
 
-pub(super) fn read_u32_le(data: &[u8], pos: &mut usize) -> u32 {
+pub(crate) fn read_u32_le(data: &[u8], pos: &mut usize) -> u32 {
     let value = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
     *pos += 4;
     value
 }
 
-pub(super) fn read_f64_le(data: &[u8], pos: &mut usize) -> f64 {
+pub(crate) fn read_f64_le(data: &[u8], pos: &mut usize) -> f64 {
     let value = f64::from_le_bytes([
         data[*pos],
         data[*pos + 1],
@@ -32,12 +32,12 @@ pub(super) fn read_f64_le(data: &[u8], pos: &mut usize) -> f64 {
     value
 }
 
-pub(super) fn ret_bytes(call: &mut ExternCallContext, slot: u16, data: &[u8]) {
+pub(crate) fn ret_bytes(call: &mut ExternCallContext, slot: u16, data: &[u8]) {
     let slice_ref = call.alloc_bytes(data);
     call.ret_ref(slot, slice_ref);
 }
 
-pub(super) fn write_u32_handle_result(
+pub(crate) fn write_u32_handle_result(
     call: &mut ExternCallContext,
     value_slot: u16,
     error_slot: u16,
@@ -55,7 +55,7 @@ pub(super) fn write_u32_handle_result(
     }
 }
 
-pub(super) fn write_bytes_result(
+pub(crate) fn write_bytes_result(
     call: &mut ExternCallContext,
     value_slot: u16,
     error_slot: u16,
@@ -73,7 +73,7 @@ pub(super) fn write_bytes_result(
     }
 }
 
-pub(super) fn write_unit_result(
+pub(crate) fn write_unit_result(
     call: &mut ExternCallContext,
     error_slot: u16,
     result: Result<(), String>,
@@ -84,14 +84,14 @@ pub(super) fn write_unit_result(
     }
 }
 
-pub(super) fn unwrap_or_panic<R>(result: Result<R, String>, context: &str) -> R {
+pub(crate) fn unwrap_or_panic<R>(result: Result<R, String>, context: &str) -> R {
     match result {
         Ok(value) => value,
         Err(msg) => panic!("{context}: {msg}"),
     }
 }
 
-pub(super) fn with_renderer_result<R>(
+pub(crate) fn with_renderer_result<R>(
     f: impl FnOnce(&mut Renderer) -> Result<R, String>,
 ) -> Result<R, String> {
     match with_renderer(f) {
@@ -100,6 +100,6 @@ pub(super) fn with_renderer_result<R>(
     }
 }
 
-pub(super) fn with_renderer_or_panic<R>(context: &str, f: impl FnOnce(&mut Renderer) -> R) -> R {
+pub(crate) fn with_renderer_or_panic<R>(context: &str, f: impl FnOnce(&mut Renderer) -> R) -> R {
     unwrap_or_panic(with_renderer(f), context)
 }

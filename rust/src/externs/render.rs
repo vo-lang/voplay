@@ -3,8 +3,23 @@
 use vo_ext::prelude::*;
 
 use super::util::{ret_bytes, with_renderer_result, write_u32_handle_result, write_unit_result};
-use super::{renderer_ready, submit_renderer_frame, with_renderer};
+use super::{renderer_ready, renderer_ready_result, submit_renderer_frame, with_renderer};
 use crate::input;
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = globalThis, js_name = __voVoplayDebugLog)]
+    fn vo_voplay_debug_log(message: &str);
+}
+
+#[cfg(feature = "wasm")]
+pub(crate) fn wasm_debug_log(message: &str) {
+    vo_voplay_debug_log(message);
+}
+
+#[cfg(not(feature = "wasm"))]
+pub(crate) fn wasm_debug_log(_message: &str) {}
 
 // --- initSurface ---
 
@@ -12,8 +27,8 @@ use crate::input;
 pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
     let canvas_ref = call.arg_str(0).to_string();
 
+    #[cfg(not(feature = "wasm"))]
     if renderer_ready() {
-        // Already initialized.
         write_unit_result(call, 0, Ok(()));
         return ExternResult::Ok;
     }
@@ -31,11 +46,18 @@ pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
 }
 
 #[cfg(feature = "wasm")]
+pub(crate) fn create_wasm_renderer_pub(canvas_id: &str) -> Result<(), String> {
+    create_wasm_renderer(canvas_id)
+}
+
+#[cfg(feature = "wasm")]
 fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     use crate::renderer::Renderer;
 
-    let should_start = crate::renderer_runtime::begin_renderer_init()?;
+    crate::input::reset_wasm_input_handlers();
+    let generation = crate::renderer_runtime::reset_renderer();
+    let should_start = crate::renderer_runtime::begin_renderer_init(generation)?;
     if !should_start {
         return Ok(());
     }
@@ -52,9 +74,15 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
 
         crate::input::install_wasm_input_handlers(&canvas)?;
 
-        let width = canvas.width();
-        let height = canvas.height();
-
+        // Use CSS layout size × devicePixelRatio for the pixel buffer.
+        // The HTML canvas default (300×150) is almost never correct.
+        let dpr = window.device_pixel_ratio();
+        let css_w = canvas.client_width().max(1) as f64;
+        let css_h = canvas.client_height().max(1) as f64;
+        let width = (css_w * dpr) as u32;
+        let height = (css_h * dpr) as u32;
+        canvas.set_width(width);
+        canvas.set_height(height);
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
             ..Default::default()
@@ -64,14 +92,17 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| format!("voplay: create_surface failed: {}", e))?;
 
+        let canvas_id_owned = canvas_id.to_string();
         wasm_bindgen_futures::spawn_local(async move {
             match Renderer::new(&instance, surface, width, height).await {
-                Ok(renderer) => {
-                    crate::renderer_runtime::set_renderer(renderer);
+                Ok(mut renderer) => {
+                    renderer.set_canvas_id(canvas_id_owned);
+                    crate::renderer_runtime::set_renderer_for_generation(generation, renderer);
                     log::info!("voplay: WASM renderer initialized ({}x{})", width, height);
                 }
                 Err(msg) => {
-                    crate::renderer_runtime::fail_renderer_init(msg.clone());
+                    crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
+                    wasm_debug_log(&format!("initSurface renderer failed generation={generation} msg={msg}"));
                     log::error!("voplay: WASM renderer init failed: {}", msg);
                 }
             }
@@ -81,7 +112,8 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
     })();
 
     if let Err(msg) = &result {
-        crate::renderer_runtime::fail_renderer_init(msg.clone());
+        crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
+        wasm_debug_log(&format!("initSurface failed before async generation={generation} msg={msg}"));
     }
 
     result
@@ -237,7 +269,8 @@ pub fn free_cubemap(call: &mut ExternCallContext) -> ExternResult {
 
 #[vo_fn("voplay", "isRendererReady")]
 pub fn is_renderer_ready(call: &mut ExternCallContext) -> ExternResult {
-    let ready = renderer_ready();
+    let ready = renderer_ready_result().unwrap_or_else(|msg| panic!("{}", msg));
     call.ret_bool(0, ready);
     ExternResult::Ok
 }
+

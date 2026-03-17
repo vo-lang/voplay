@@ -24,13 +24,14 @@ const DEFAULT_FONT_PATHS: [&str; 6] = [
     "C:/Windows/Fonts/arial.ttf",
 ];
 
-fn load_default_font() -> fontdue::Font {
-    if let Ok(font) = fontdue::Font::from_bytes(
+fn load_default_font() -> Result<fontdue::Font, String> {
+    let embedded_error = match fontdue::Font::from_bytes(
         DEFAULT_FONT_DATA,
         fontdue::FontSettings::default(),
     ) {
-        return font;
-    }
+        Ok(font) => return Ok(font),
+        Err(error) => error.to_string(),
+    };
 
     #[cfg(not(feature = "wasm"))]
     for path in DEFAULT_FONT_PATHS {
@@ -39,11 +40,22 @@ fn load_default_font() -> fontdue::Font {
             Err(_) => continue,
         };
         if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
-            return font;
+            return Ok(font);
         }
     }
 
-    panic!("voplay: failed to load default font from embedded asset or system font paths")
+    #[cfg(feature = "wasm")]
+    {
+        Err(format!("voplay: failed to load embedded default font: {}", embedded_error))
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    {
+        Err(format!(
+            "voplay: failed to load default font from embedded asset or system font paths; embedded font error: {}",
+            embedded_error
+        ))
+    }
 }
 
 pub type FontId = u32;
@@ -97,13 +109,13 @@ pub struct FontManager {
 
 impl FontManager {
     /// Create a new font manager and register the default embedded font.
-    pub fn new() -> Self {
-        let default_font = load_default_font();
+    pub fn new() -> Result<Self, String> {
+        let default_font = load_default_font()?;
 
         let mut fonts = HashMap::new();
         fonts.insert(0, default_font);
 
-        Self {
+        Ok(Self {
             fonts,
             next_font_id: 1,
             current_font: 0,
@@ -112,7 +124,7 @@ impl FontManager {
             atlas_texture_id: None,
             atlas_dirty: true,
             shelves: Vec::new(),
-        }
+        })
     }
 
     /// Load a font from raw TTF/OTF bytes. Returns font ID.

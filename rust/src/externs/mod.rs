@@ -9,19 +9,20 @@
 //!   resource — font and model load/free externs
 //!   util     — common decode and result helpers
 
-mod render;
-mod physics2d;
-mod physics3d;
-mod animation;
-mod audio;
-mod resource;
-mod util;
+pub(crate) mod render;
+pub(crate) mod physics2d;
+pub(crate) mod physics3d;
+pub(crate) mod animation;
+pub(crate) mod audio;
+pub(crate) mod resource;
+pub(crate) mod util;
 
 use vo_runtime::ffi::ExternRegistry;
 use vo_runtime::bytecode::ExternDef;
 
 /// Set the renderer from pre-initialized wgpu parts (used by host/studio integration).
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn set_renderer(renderer: crate::renderer::Renderer) {
     crate::renderer_runtime::set_renderer(renderer);
 }
@@ -34,6 +35,10 @@ pub(crate) fn with_renderer<R>(f: impl FnOnce(&mut crate::renderer::Renderer) ->
 /// Check if the renderer is ready.
 pub(crate) fn renderer_ready() -> bool {
     crate::renderer_runtime::renderer_ready()
+}
+
+pub(crate) fn renderer_ready_result() -> Result<bool, String> {
+    crate::renderer_runtime::renderer_ready_result()
 }
 
 /// Submit a frame to the active renderer runtime.
@@ -61,28 +66,29 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     resource::__EXT_voplay_loadModelBytes,
     resource::__EXT_voplay_freeModel,
     resource::__EXT_voplay_modelBounds,
+    resource::__EXT_voplay_modelMeshDataBytes,
     resource::__EXT_voplay_scene3d_loadLevel,
     resource::__EXT_voplay_scene3d_createTerrain,
     resource::__EXT_voplay_scene3d_createTerrainSplat,
     resource::__EXT_voplay_scene3d_createTerrainBytes,
     resource::__EXT_voplay_scene3d_createTerrainBytesSplat,
     resource::__EXT_voplay_scene3d_terrainHeightAt,
-    resource::__EXT_voplay_scene3d_createPlaneMesh,
-    resource::__EXT_voplay_scene3d_createCubeMesh,
-    resource::__EXT_voplay_scene3d_createSphereMesh,
-    resource::__EXT_voplay_scene3d_createCylinderMesh,
-    resource::__EXT_voplay_scene3d_createCapsuleMesh,
+    resource::__EXT_voplay_createPlaneMesh,
+    resource::__EXT_voplay_createCubeMesh,
+    resource::__EXT_voplay_createSphereMesh,
+    resource::__EXT_voplay_createCylinderMesh,
+    resource::__EXT_voplay_createCapsuleMesh,
     audio::__EXT_voplay_audioLoadFile,
-    animation::__EXT_voplay_scene3d_animationInit,
-    animation::__EXT_voplay_scene3d_animationDestroy,
-    animation::__EXT_voplay_scene3d_animationPlay,
-    animation::__EXT_voplay_scene3d_animationStop,
-    animation::__EXT_voplay_scene3d_animationCrossfade,
-    animation::__EXT_voplay_scene3d_animationSetSpeed,
-    animation::__EXT_voplay_scene3d_animationRemoveTarget,
-    animation::__EXT_voplay_scene3d_animationTick,
-    animation::__EXT_voplay_scene3d_animationProgress,
-    animation::__EXT_voplay_scene3d_animationModelInfo,
+    animation::__EXT_voplay_animationInit,
+    animation::__EXT_voplay_animationDestroy,
+    animation::__EXT_voplay_animationPlay,
+    animation::__EXT_voplay_animationStop,
+    animation::__EXT_voplay_animationCrossfade,
+    animation::__EXT_voplay_animationSetSpeed,
+    animation::__EXT_voplay_animationRemoveTarget,
+    animation::__EXT_voplay_animationTick,
+    animation::__EXT_voplay_animationProgress,
+    animation::__EXT_voplay_animationModelInfo,
     physics2d::__EXT_voplay_scene2d_physicsInit,
     physics2d::__EXT_voplay_scene2d_physicsDestroy,
     physics2d::__EXT_voplay_scene2d_physicsSpawnBody,
@@ -96,6 +102,7 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     physics3d::__EXT_voplay_scene3d_physicsDestroy,
     physics3d::__EXT_voplay_scene3d_physicsSpawnBody,
     physics3d::__EXT_voplay_scene3d_physicsSpawnTrimeshBody,
+    physics3d::__EXT_voplay_scene3d_physicsSpawnTrimeshBodyData,
     physics3d::__EXT_voplay_scene3d_physicsSpawnHeightfield,
     physics3d::__EXT_voplay_scene3d_physicsDestroyBody,
     physics3d::__EXT_voplay_scene3d_physicsStep,

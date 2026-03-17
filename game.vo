@@ -27,25 +27,9 @@ type GameCtx struct {
 	MaxCatchUpSteps  int // 0 = use default (8); sets a ceiling on fixed steps per frame
 
 	// Internal lifecycle state (managed by host, not for game code).
-	surfaceInitiated bool
 	gameInitialized  bool
 	closed           bool
 	accumulator      float64
-}
-
-func newGameCtx(game Game) *GameCtx {
-	ctx := &GameCtx{
-		Input:          NewInputState(),
-		Draw:           NewDrawCtx(),
-		Width:          game.Width,
-		Height:         game.Height,
-		FixedStep:      resolveFixedStep(game.FixedStep),
-		MaxCatchUpSteps: game.MaxCatchUpSteps,
-	}
-	ctx.Actions = NewActionMap(ctx.Input)
-	ctx.Assets = NewAssets()
-	ctx.States = NewStateStack(ctx)
-	return ctx
 }
 
 func resolveFixedStep(step float64) float64 {
@@ -126,11 +110,205 @@ func (g *GameCtx) Advance(dt float64) {
 	g.States.Update(frameDt)
 }
 
-// Run starts the game via the vogui platform (web or native Studio).
+// Run starts the game with split-island rendering.
+// The render island owns the GPU surface and submits frames.
+// The logic island runs game state, update, and draw command generation.
+// Communication happens via ports (draw commands, input events, resource proxy).
 func Run(game Game) {
 	if game.InitialState == nil {
 		panic("Run: InitialState must not be nil")
 	}
-	ctx := newGameCtx(game)
-	runGame(ctx, &game)
+	runSplitMode(game)
+}
+
+// runSplitMode runs the game with rendering on a separate island.
+// Logic island: game state, update, draw command generation.
+// Render island: GPU init, frame submission, input polling.
+func runSplitMode(game Game) {
+	// Create ports for inter-island communication.
+	ports := splitPorts{
+		draw:    make(port []byte, 1),   // logic→render: draw commands (cap 1 = frame sync)
+		input:   make(port []byte, 4),   // render→logic: input events
+		resReq:  make(port []byte, 8),   // logic→render: resource requests
+		resResp: make(port []byte, 8),   // render→logic: resource responses
+	}
+
+	// Build game context with proxy asset loaders that forward to render island.
+	ctx := newSplitGameCtx(game, ports.resReq, ports.resResp)
+
+	// Run the split game loop via vogui platform.
+	// Render worker is spawned inside Init (see host.vo) after canvas exists.
+	runGameSplit(ctx, &game, ports)
+}
+
+// newSplitGameCtx creates a GameCtx with proxy asset loaders for split-island mode.
+func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
+	ctx := &GameCtx{
+		Input:           NewInputState(),
+		Draw:            NewDrawCtx(),
+		Width:           game.Width,
+		Height:          game.Height,
+		FixedStep:       resolveFixedStep(game.FixedStep),
+		MaxCatchUpSteps: game.MaxCatchUpSteps,
+	}
+	ctx.Actions = NewActionMap(ctx.Input)
+	ctx.Assets = NewAssetsWithLoaders(proxyAssetLoaders(resReqPort, resRespPort))
+	ctx.States = NewStateStack(ctx)
+
+	// Override model backend to proxy bounds queries to render island.
+	SetModelBackend(&proxyModelBackendImpl{
+		reqPort:  resReqPort,
+		respPort: resRespPort,
+	})
+	SetPrimitiveMeshBackend(&proxyPrimitiveMeshBackendImpl{
+		reqPort:  resReqPort,
+		respPort: resRespPort,
+	})
+	SetModelMeshDataBackend(&proxyModelMeshDataBackendImpl{
+		reqPort:  resReqPort,
+		respPort: resRespPort,
+	})
+	SetAnimationRuntimeBackend(&proxyAnimationRuntimeBackendImpl{
+		reqPort:  resReqPort,
+		respPort: resRespPort,
+	})
+
+	return ctx
+}
+
+// proxyModelBackendImpl implements ModelBackend by forwarding to render island.
+type proxyModelBackendImpl struct {
+	reqPort  port []byte
+	respPort port []byte
+}
+
+func (b *proxyModelBackendImpl) Free(id int) {
+	req := encodeResU32(resTagFreeModel, id)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	_ = decodeResUnit(resp)
+}
+
+func (b *proxyModelBackendImpl) Bounds(id int) (AABB, bool) {
+	minX, minY, minZ, maxX, maxY, maxZ, ok := proxyModelBounds(b.reqPort, b.respPort, id)
+	if !ok {
+		return AABB{}, false
+	}
+	return AABB{
+		Min: Vec3{X: minX, Y: minY, Z: minZ},
+		Max: Vec3{X: maxX, Y: maxY, Z: maxZ},
+	}, true
+}
+
+type proxyPrimitiveMeshBackendImpl struct {
+	reqPort  port []byte
+	respPort port []byte
+}
+
+type proxyModelMeshDataBackendImpl struct {
+	reqPort  port []byte
+	respPort port []byte
+}
+
+type proxyAnimationRuntimeBackendImpl struct {
+	reqPort  port []byte
+	respPort port []byte
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Plane(width, depth float64, subX, subZ int) int {
+	id, err := proxyCreatePlaneMesh(b.reqPort, b.respPort, width, depth, subX, subZ)
+	if err != nil {
+		panic("split-island: createPlaneMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Cube() int {
+	id, err := proxyCreateCubeMesh(b.reqPort, b.respPort)
+	if err != nil {
+		panic("split-island: createCubeMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Sphere(segments int) int {
+	id, err := proxyCreateSphereMesh(b.reqPort, b.respPort, segments)
+	if err != nil {
+		panic("split-island: createSphereMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Cylinder(segments int) int {
+	id, err := proxyCreateCylinderMesh(b.reqPort, b.respPort, segments)
+	if err != nil {
+		panic("split-island: createCylinderMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Capsule(segments int, halfHeight, radius float64) int {
+	id, err := proxyCreateCapsuleMesh(b.reqPort, b.respPort, segments, halfHeight, radius)
+	if err != nil {
+		panic("split-island: createCapsuleMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyModelMeshDataBackendImpl) Bytes(id int) []byte {
+	return proxyModelMeshDataBytes(b.reqPort, b.respPort, id)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Init() int {
+	return proxyAnimationInit(b.reqPort, b.respPort)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Destroy(worldID int) {
+	proxyAnimationDestroy(b.reqPort, b.respPort, worldID)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Play(worldID, targetID, clip int, loop bool, speed float64) {
+	proxyAnimationPlay(b.reqPort, b.respPort, worldID, targetID, clip, loop, speed)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Stop(worldID, targetID int) {
+	proxyAnimationStop(b.reqPort, b.respPort, worldID, targetID)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Crossfade(worldID, targetID, clip int, duration float64) {
+	proxyAnimationCrossfade(b.reqPort, b.respPort, worldID, targetID, clip, duration)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) SetSpeed(worldID, targetID int, speed float64) {
+	proxyAnimationSetSpeed(b.reqPort, b.respPort, worldID, targetID, speed)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) RemoveTarget(worldID, targetID int) {
+	proxyAnimationRemoveTarget(b.reqPort, b.respPort, worldID, targetID)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Tick(worldID int, dt float64, entityModelMap []byte) {
+	proxyAnimationTick(b.reqPort, b.respPort, worldID, dt, entityModelMap)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) Progress(worldID, targetID, modelID int) float64 {
+	return proxyAnimationProgress(b.reqPort, b.respPort, worldID, targetID, modelID)
+}
+
+func (b *proxyAnimationRuntimeBackendImpl) ModelInfo(modelID int) []byte {
+	return proxyAnimationModelInfo(b.reqPort, b.respPort, modelID)
+}
+
+// applySplitInput drains input from the render island (non-blocking)
+// and feeds it into the game context's InputState.
+func applySplitInput(ctx *GameCtx, inputPort port []byte) {
+	for {
+		select {
+		case inputBytes := <-inputPort:
+			if len(inputBytes) > 0 {
+				ctx.Input.unpackEvents(inputBytes)
+			}
+		default:
+			return
+		}
+	}
 }

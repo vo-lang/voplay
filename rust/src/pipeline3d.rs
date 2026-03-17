@@ -83,10 +83,14 @@ pub struct Pipeline3D {
     // GPU buffers
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    model_bgl: wgpu::BindGroupLayout,
     model_buffer: wgpu::Buffer,
     model_bind_group: wgpu::BindGroup,
+    model_buffer_alignment: u32,
+    model_buffer_slot_count: u32,
     skinned_model_buffer: wgpu::Buffer,
     skinned_model_bind_group: wgpu::BindGroup,
+    skinned_model_buffer_slot_count: u32,
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     main_texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -130,7 +134,7 @@ impl Pipeline3D {
             }],
         });
 
-        // Group 1: Model transform
+        // Group 1: Model transform (dynamic offset for per-draw uniforms)
         let model_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("voplay_mesh_model_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -138,12 +142,13 @@ impl Pipeline3D {
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
             }],
         });
+        let model_buffer_alignment = device.limits().min_uniform_buffer_offset_alignment;
 
         // Group 2: Lights
         let light_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -484,35 +489,33 @@ impl Pipeline3D {
             }],
         });
 
+        let model_buffer_slot_count: u32 = 256;
+        let aligned_model_size = Self::align_up(std::mem::size_of::<ModelUniform>() as u32, model_buffer_alignment);
         let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_mesh_model_ub"),
-            size: std::mem::size_of::<ModelUniform>() as u64,
+            size: aligned_model_size as u64 * model_buffer_slot_count as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_mesh_model_bg"),
-            layout: &model_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: model_buffer.as_entire_binding(),
-            }],
-        });
+        let model_bind_group = Self::create_model_bind_group(
+            device, &model_bgl, &model_buffer,
+            std::mem::size_of::<ModelUniform>() as u64,
+            "voplay_mesh_model_bg",
+        );
 
+        let skinned_model_buffer_slot_count: u32 = 32;
+        let aligned_skinned_size = Self::align_up(std::mem::size_of::<SkinnedModelUniform>() as u32, model_buffer_alignment);
         let skinned_model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_mesh_skinned_model_ub"),
-            size: std::mem::size_of::<SkinnedModelUniform>() as u64,
+            size: aligned_skinned_size as u64 * skinned_model_buffer_slot_count as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let skinned_model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_mesh_skinned_model_bg"),
-            layout: &model_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: skinned_model_buffer.as_entire_binding(),
-            }],
-        });
+        let skinned_model_bind_group = Self::create_model_bind_group(
+            device, &model_bgl, &skinned_model_buffer,
+            std::mem::size_of::<SkinnedModelUniform>() as u64,
+            "voplay_mesh_skinned_model_bg",
+        );
 
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_mesh_light_ub"),
@@ -566,10 +569,14 @@ impl Pipeline3D {
             pipeline_skinned_untextured,
             camera_buffer,
             camera_bind_group,
+            model_bgl,
             model_buffer,
             model_bind_group,
+            model_buffer_alignment,
+            model_buffer_slot_count,
             skinned_model_buffer,
             skinned_model_bind_group,
+            skinned_model_buffer_slot_count,
             light_buffer,
             light_bind_group,
             main_texture_bind_group_layout,
@@ -577,6 +584,71 @@ impl Pipeline3D {
             white_texture_view: white_view,
             white_sampler,
         }
+    }
+
+    fn align_up(value: u32, alignment: u32) -> u32 {
+        (value + alignment - 1) & !(alignment - 1)
+    }
+
+    fn create_model_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffer: &wgpu::Buffer,
+        binding_size: u64,
+        label: &str,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(binding_size),
+                }),
+            }],
+        })
+    }
+
+    fn ensure_model_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+        if needed <= self.model_buffer_slot_count {
+            return;
+        }
+        let new_count = needed.next_power_of_two().max(256);
+        let aligned = Self::align_up(std::mem::size_of::<ModelUniform>() as u32, self.model_buffer_alignment);
+        self.model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voplay_mesh_model_ub"),
+            size: aligned as u64 * new_count as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.model_bind_group = Self::create_model_bind_group(
+            device, &self.model_bgl, &self.model_buffer,
+            std::mem::size_of::<ModelUniform>() as u64,
+            "voplay_mesh_model_bg",
+        );
+        self.model_buffer_slot_count = new_count;
+    }
+
+    fn ensure_skinned_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+        if needed <= self.skinned_model_buffer_slot_count {
+            return;
+        }
+        let new_count = needed.next_power_of_two().max(32);
+        let aligned = Self::align_up(std::mem::size_of::<SkinnedModelUniform>() as u32, self.model_buffer_alignment);
+        self.skinned_model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voplay_mesh_skinned_model_ub"),
+            size: aligned as u64 * new_count as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.skinned_model_bind_group = Self::create_model_bind_group(
+            device, &self.model_bgl, &self.skinned_model_buffer,
+            std::mem::size_of::<SkinnedModelUniform>() as u64,
+            "voplay_mesh_skinned_model_bg",
+        );
+        self.skinned_model_buffer_slot_count = new_count;
     }
 
     fn create_main_texture_bind_group(
@@ -641,8 +713,13 @@ impl Pipeline3D {
     }
 
     /// Draw a list of models within an active render pass.
+    ///
+    /// Uses dynamic uniform buffer offsets: all per-mesh uniforms are uploaded
+    /// to the model/skinned buffers at distinct aligned offsets before issuing
+    /// any draw calls, avoiding the queue.write_buffer overwrite problem where
+    /// only the last write would be visible to the GPU.
     pub fn draw_models<'a>(
-        &'a self,
+        &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'a>,
@@ -656,18 +733,38 @@ impl Pipeline3D {
             return;
         }
 
-        let mut main_texture_bind_groups: HashMap<u32, wgpu::BindGroup> = HashMap::new();
-        let mut terrain_texture_bind_groups: HashMap<[u32; 5], wgpu::BindGroup> = HashMap::new();
+        let aligned_model_stride = Self::align_up(
+            std::mem::size_of::<ModelUniform>() as u32,
+            self.model_buffer_alignment,
+        );
+        let aligned_skinned_stride = Self::align_up(
+            std::mem::size_of::<SkinnedModelUniform>() as u32,
+            self.model_buffer_alignment,
+        );
 
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(2, &self.light_bind_group, &[]);
-
+        // --- Phase 1: count mesh draws and upload all uniforms at aligned offsets ---
+        let mut static_slot: u32 = 0;
+        let mut skinned_slot: u32 = 0;
         for draw in draws {
             let gpu_model = match models.get(draw.model_id) {
                 Some(m) => m,
                 None => continue,
             };
+            for mesh in &gpu_model.meshes {
+                if mesh.skinned { skinned_slot += 1; } else { static_slot += 1; }
+            }
+        }
 
+        self.ensure_model_capacity(device, static_slot);
+        self.ensure_skinned_capacity(device, skinned_slot);
+
+        static_slot = 0;
+        skinned_slot = 0;
+        for draw in draws {
+            let gpu_model = match models.get(draw.model_id) {
+                Some(m) => m,
+                None => continue,
+            };
             for mesh in &gpu_model.meshes {
                 let base_color = [
                     mesh.material.base_color[0] * draw.tint[0],
@@ -675,7 +772,6 @@ impl Pipeline3D {
                     mesh.material.base_color[2] * draw.tint[2],
                     mesh.material.base_color[3] * draw.tint[3],
                 ];
-
                 if mesh.skinned {
                     let mut skinned_uniform = SkinnedModelUniform {
                         model: draw.model_uniform.model,
@@ -696,8 +792,41 @@ impl Pipeline3D {
                     for (index, matrix) in joint_palette.iter().enumerate() {
                         skinned_uniform.joints[index] = *matrix;
                     }
-                    queue.write_buffer(&self.skinned_model_buffer, 0, bytemuck::bytes_of(&skinned_uniform));
-                    pass.set_bind_group(1, &self.skinned_model_bind_group, &[]);
+                    let offset = skinned_slot as u64 * aligned_skinned_stride as u64;
+                    queue.write_buffer(&self.skinned_model_buffer, offset, bytemuck::bytes_of(&skinned_uniform));
+                    skinned_slot += 1;
+                } else {
+                    let mut model_uniform = draw.model_uniform;
+                    model_uniform.base_color = base_color;
+                    model_uniform.material_params = mesh.material.uv_scales;
+                    let offset = static_slot as u64 * aligned_model_stride as u64;
+                    queue.write_buffer(&self.model_buffer, offset, bytemuck::bytes_of(&model_uniform));
+                    static_slot += 1;
+                }
+            }
+        }
+
+        // --- Phase 2: issue draw calls with dynamic offsets ---
+        let mut main_texture_bind_groups: HashMap<u32, wgpu::BindGroup> = HashMap::new();
+        let mut terrain_texture_bind_groups: HashMap<[u32; 5], wgpu::BindGroup> = HashMap::new();
+
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(2, &self.light_bind_group, &[]);
+
+        static_slot = 0;
+        skinned_slot = 0;
+
+        for draw in draws {
+            let gpu_model = match models.get(draw.model_id) {
+                Some(m) => m,
+                None => continue,
+            };
+
+            for mesh in &gpu_model.meshes {
+                if mesh.skinned {
+                    let dyn_offset = skinned_slot * aligned_skinned_stride;
+                    pass.set_bind_group(1, &self.skinned_model_bind_group, &[dyn_offset]);
+                    skinned_slot += 1;
 
                     let use_textured_pipeline = mesh.material.texture_id.and_then(|tex_id| textures.get(tex_id)).is_some();
                     let (texture_key, texture_view, texture_sampler) = if let Some(tex_id) = mesh.material.texture_id {
@@ -719,11 +848,9 @@ impl Pipeline3D {
                     }
                     pass.set_bind_group(3, &*main_texture_bind_group, &[]);
                 } else {
-                    let mut model_uniform = draw.model_uniform;
-                    model_uniform.base_color = base_color;
-                    model_uniform.material_params = mesh.material.uv_scales;
-                    queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&model_uniform));
-                    pass.set_bind_group(1, &self.model_bind_group, &[]);
+                    let dyn_offset = static_slot * aligned_model_stride;
+                    pass.set_bind_group(1, &self.model_bind_group, &[dyn_offset]);
+                    static_slot += 1;
 
                     if let Some(control_id) = mesh.material.control_texture_id {
                         pass.set_pipeline(&self.pipeline_terrain_splat);

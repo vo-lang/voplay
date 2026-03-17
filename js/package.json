@@ -1,0 +1,24 @@
+{
+  "name": "@vo-lang/voplay-js",
+  "version": "0.1.0",
+  "description": "VoPlay render island bootstrap for WebView and Web Worker",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./voplay-render-island": "./dist/voplay-render-island.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {}
+}

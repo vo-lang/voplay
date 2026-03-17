@@ -1,0 +1,144 @@
+// Render worker: runs on the render island in split-island mode.
+// Receives draw commands via drawPort, submits to GPU, collects input,
+// sends input back via inputPort. Handles resource requests from logic island.
+package voplay
+
+import "time"
+
+// renderWorkerPorts holds the port endpoints for the render worker.
+type renderWorkerPorts struct {
+	draw    port []byte // recv draw commands from logic island
+	input   port []byte // send input events to logic island
+	resReq  port []byte // recv resource requests from logic island
+	resResp port []byte // send resource responses to logic island
+}
+
+// runRenderWorker is the render island's main loop.
+// Blocking loop driven by draw command port — no vogui dependency.
+// The logic island's frame production rate naturally paces this loop.
+func runRenderWorker(canvasRef string, ports renderWorkerPorts) {
+	// Phase 1: Init surface (may be async on WASM).
+	initSurface(canvasRef)?
+
+	// Spin until renderer is ready (WASM async init).
+	for !isRendererReady() {
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	go func() {
+		serviceResourceRequestsLoop(ports.resReq, ports.resResp)
+	}()
+
+	// Phase 2: Signal ready by sending an empty message on input port.
+	// The logic island waits for this before calling game.Init.
+	ports.input <- []byte{}
+
+	// Phase 3: Main render loop — blocking recv on draw commands.
+	for {
+		drawCmds, ok := <-ports.draw
+		if !ok {
+			return
+		}
+		if len(drawCmds) > 0 {
+			submitFrame(drawCmds)?
+		}
+		sendInputIfAny(ports.input)
+	}
+}
+
+func serviceResourceRequestsLoop(reqPort, respPort port []byte) {
+	for {
+		req, ok := <-reqPort
+		if !ok {
+			return
+		}
+		resp := handleResourceRequest(req)
+		respPort <- resp
+	}
+}
+
+// sendInputIfAny polls native input and sends it to the logic island
+// if there are any events. Uses non-blocking send to avoid stalling
+// the render loop if the logic island hasn't consumed previous input.
+func sendInputIfAny(inputPort port []byte) {
+	inputBytes := pollInput()
+	if len(inputBytes) == 0 {
+		return
+	}
+	// Direct send — port has capacity 4 so this only blocks if the logic
+	// island is severely behind, which provides natural back-pressure.
+	inputPort <- inputBytes
+}
+
+// handleResourceRequest dispatches a single resource request and returns the response.
+func handleResourceRequest(req []byte) []byte {
+	if len(req) == 0 {
+		return encodeResError("empty request")
+	}
+	tag := req[0]
+	payload := req[1:]
+	switch tag {
+	case resTagLoadTexture:
+		return handleLoadTexture(payload)
+	case resTagLoadTextureBytes:
+		return handleLoadTextureBytes(payload)
+	case resTagFreeTexture:
+		return handleFreeTexture(payload)
+	case resTagLoadFont:
+		return handleLoadFont(payload)
+	case resTagLoadFontBytes:
+		return handleLoadFontBytes(payload)
+	case resTagFreeFont:
+		return handleFreeFont(payload)
+	case resTagMeasureText:
+		return handleMeasureText(payload)
+	case resTagLoadModel:
+		return handleLoadModel(payload)
+	case resTagLoadModelBytes:
+		return handleLoadModelBytes(payload)
+	case resTagFreeModel:
+		return handleFreeModel(payload)
+	case resTagModelBounds:
+		return handleModelBounds(payload)
+	case resTagModelMeshData:
+		return handleModelMeshData(payload)
+	case resTagLoadCubemap:
+		return handleLoadCubemap(payload)
+	case resTagLoadCubemapBytes:
+		return handleLoadCubemapBytes(payload)
+	case resTagFreeCubemap:
+		return handleFreeCubemap(payload)
+	case resTagCreatePlaneMesh:
+		return handleCreatePlaneMesh(payload)
+	case resTagCreateCubeMesh:
+		return handleCreateCubeMesh(payload)
+	case resTagCreateSphereMesh:
+		return handleCreateSphereMesh(payload)
+	case resTagCreateCylinderMesh:
+		return handleCreateCylinderMesh(payload)
+	case resTagCreateCapsuleMesh:
+		return handleCreateCapsuleMesh(payload)
+	case resTagAnimationInit:
+		return handleAnimationInit(payload)
+	case resTagAnimationDestroy:
+		return handleAnimationDestroy(payload)
+	case resTagAnimationPlay:
+		return handleAnimationPlay(payload)
+	case resTagAnimationStop:
+		return handleAnimationStop(payload)
+	case resTagAnimationCrossfade:
+		return handleAnimationCrossfade(payload)
+	case resTagAnimationSetSpeed:
+		return handleAnimationSetSpeed(payload)
+	case resTagAnimationRemoveTarget:
+		return handleAnimationRemoveTarget(payload)
+	case resTagAnimationTick:
+		return handleAnimationTick(payload)
+	case resTagAnimationProgress:
+		return handleAnimationProgress(payload)
+	case resTagAnimationModelInfo:
+		return handleAnimationModelInfo(payload)
+	default:
+		return encodeResError("unknown resource tag")
+	}
+}

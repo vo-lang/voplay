@@ -24,8 +24,11 @@ pub struct PipelineShadow {
     pipeline_skinned: wgpu::RenderPipeline,
     light_vp_buffer: wgpu::Buffer,
     light_vp_bind_group: wgpu::BindGroup,
+    model_bgl: wgpu::BindGroupLayout,
     model_buffer: wgpu::Buffer,
     model_bind_group: wgpu::BindGroup,
+    model_buffer_alignment: u32,
+    model_buffer_slot_count: u32,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
     comparison_sampler: wgpu::Sampler,
@@ -60,12 +63,13 @@ impl PipelineShadow {
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
             }],
         });
+        let model_buffer_alignment = device.limits().min_uniform_buffer_offset_alignment;
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("voplay_shadow_layout"),
@@ -144,20 +148,20 @@ impl PipelineShadow {
             }],
         });
 
+        let model_buffer_slot_count: u32 = 256;
+        let aligned_shadow_size = Self::align_up(
+            std::mem::size_of::<ShadowModelUniform>() as u32, model_buffer_alignment,
+        );
         let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_shadow_model_ub"),
-            size: std::mem::size_of::<ShadowModelUniform>() as u64,
+            size: aligned_shadow_size as u64 * model_buffer_slot_count as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_shadow_model_bg"),
-            layout: &model_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: model_buffer.as_entire_binding(),
-            }],
-        });
+        let model_bind_group = Self::create_model_bind_group(
+            device, &model_bgl, &model_buffer,
+            std::mem::size_of::<ShadowModelUniform>() as u64,
+        );
 
         let (depth_texture, depth_view) = Self::create_depth_texture(device, size.max(1));
         let comparison_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -177,8 +181,11 @@ impl PipelineShadow {
             pipeline_skinned,
             light_vp_buffer,
             light_vp_bind_group,
+            model_bgl,
             model_buffer,
             model_bind_group,
+            model_buffer_alignment,
+            model_buffer_slot_count,
             depth_texture,
             depth_view,
             comparison_sampler,
@@ -228,8 +235,54 @@ impl PipelineShadow {
         &self.comparison_sampler
     }
 
+    fn align_up(value: u32, alignment: u32) -> u32 {
+        (value + alignment - 1) & !(alignment - 1)
+    }
+
+    fn create_model_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffer: &wgpu::Buffer,
+        binding_size: u64,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voplay_shadow_model_bg"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(binding_size),
+                }),
+            }],
+        })
+    }
+
+    fn ensure_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+        if needed <= self.model_buffer_slot_count {
+            return;
+        }
+        let new_count = needed.next_power_of_two().max(256);
+        let aligned = Self::align_up(
+            std::mem::size_of::<ShadowModelUniform>() as u32, self.model_buffer_alignment,
+        );
+        self.model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voplay_shadow_model_ub"),
+            size: aligned as u64 * new_count as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.model_bind_group = Self::create_model_bind_group(
+            device, &self.model_bgl, &self.model_buffer,
+            std::mem::size_of::<ShadowModelUniform>() as u64,
+        );
+        self.model_buffer_slot_count = new_count;
+    }
+
     pub fn render_shadow_pass(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         light_vp: &[[f32; 4]; 4],
@@ -240,6 +293,53 @@ impl PipelineShadow {
             return;
         }
 
+        let aligned_stride = Self::align_up(
+            std::mem::size_of::<ShadowModelUniform>() as u32, self.model_buffer_alignment,
+        );
+
+        // Phase 1: count and upload all uniforms at aligned offsets
+        let mut slot_count: u32 = 0;
+        for draw in draws {
+            let gpu_model = match models.get(draw.model_id) {
+                Some(m) => m,
+                None => continue,
+            };
+            slot_count += gpu_model.meshes.len() as u32;
+        }
+        self.ensure_capacity(device, slot_count);
+
+        let mut slot: u32 = 0;
+        for draw in draws {
+            let gpu_model = match models.get(draw.model_id) {
+                Some(m) => m,
+                None => continue,
+            };
+            for mesh in &gpu_model.meshes {
+                let mut uniform = ShadowModelUniform {
+                    model: draw.model_uniform.model,
+                    joint_count: [0, 0, 0, 0],
+                    joints: [[[0.0; 4]; 4]; MAX_JOINTS],
+                };
+                if mesh.skinned {
+                    let palette = if draw.animation_world_id != 0 && draw.animation_target_id != 0 {
+                        animation::get_palette(draw.animation_world_id, draw.animation_target_id)
+                    } else {
+                        None
+                    };
+                    let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
+                    assert!(joint_palette.len() <= MAX_JOINTS, "voplay: shadow joint palette exceeds MAX_JOINTS");
+                    uniform.joint_count[0] = joint_palette.len() as u32;
+                    for (index, matrix) in joint_palette.iter().enumerate() {
+                        uniform.joints[index] = *matrix;
+                    }
+                }
+                let offset = slot as u64 * aligned_stride as u64;
+                queue.write_buffer(&self.model_buffer, offset, bytemuck::bytes_of(&uniform));
+                slot += 1;
+            }
+        }
+
+        // Phase 2: issue draw calls with dynamic offsets
         let light_uniform = LightVPUniform { light_vp: *light_vp };
         queue.write_buffer(&self.light_vp_buffer, 0, bytemuck::bytes_of(&light_uniform));
 
@@ -260,6 +360,7 @@ impl PipelineShadow {
 
         pass.set_bind_group(0, &self.light_vp_bind_group, &[]);
 
+        slot = 0;
         for draw in draws {
             let gpu_model = match models.get(draw.model_id) {
                 Some(model) => model,
@@ -267,31 +368,16 @@ impl PipelineShadow {
             };
 
             for mesh in &gpu_model.meshes {
-                let mut uniform = ShadowModelUniform {
-                    model: draw.model_uniform.model,
-                    joint_count: [0, 0, 0, 0],
-                    joints: [[[0.0; 4]; 4]; MAX_JOINTS],
-                };
+                let dyn_offset = slot * aligned_stride;
+                pass.set_bind_group(1, &self.model_bind_group, &[dyn_offset]);
+                slot += 1;
 
                 if mesh.skinned {
-                    let palette = if draw.animation_world_id != 0 && draw.animation_target_id != 0 {
-                        animation::get_palette(draw.animation_world_id, draw.animation_target_id)
-                    } else {
-                        None
-                    };
-                    let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
-                    assert!(joint_palette.len() <= MAX_JOINTS, "voplay: shadow joint palette exceeds MAX_JOINTS");
-                    uniform.joint_count[0] = joint_palette.len() as u32;
-                    for (index, matrix) in joint_palette.iter().enumerate() {
-                        uniform.joints[index] = *matrix;
-                    }
                     pass.set_pipeline(&self.pipeline_skinned);
                 } else {
                     pass.set_pipeline(&self.pipeline_static);
                 }
 
-                queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&uniform));
-                pass.set_bind_group(1, &self.model_bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);

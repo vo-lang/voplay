@@ -16,14 +16,20 @@ use super::util::{
     write_bytes_result,
     write_u32_handle_result,
 };
+use super::render::wasm_debug_log;
 use super::with_renderer;
 
-static HEADLESS_FONT_MANAGER: OnceLock<Mutex<FontManager>> = OnceLock::new();
+static HEADLESS_FONT_MANAGER: OnceLock<Result<Mutex<FontManager>, String>> = OnceLock::new();
 
-fn with_headless_font_manager<R>(f: impl FnOnce(&mut FontManager) -> R) -> R {
-    let manager = HEADLESS_FONT_MANAGER.get_or_init(|| Mutex::new(FontManager::new()));
+pub(crate) fn with_headless_font_manager_pub<R>(f: impl FnOnce(&mut FontManager) -> R) -> Result<R, String> {
+    with_headless_font_manager(f)
+}
+
+fn with_headless_font_manager<R>(f: impl FnOnce(&mut FontManager) -> R) -> Result<R, String> {
+    let manager = HEADLESS_FONT_MANAGER.get_or_init(|| FontManager::new().map(Mutex::new));
+    let manager = manager.as_ref().map_err(|error| error.clone())?;
     let mut manager = manager.lock().unwrap();
-    f(&mut manager)
+    Ok(f(&mut manager))
 }
 
 // --- Font externs ---
@@ -33,7 +39,7 @@ pub fn load_font(call: &mut ExternCallContext) -> ExternResult {
     let path = call.arg_str(0).to_string();
     let result = match with_renderer(|r| r.load_font(&path)) {
         Ok(result) => result,
-        Err(_) => with_headless_font_manager(|fonts| fonts.load_file(&path)),
+        Err(_) => with_headless_font_manager(|fonts| fonts.load_file(&path)).and_then(|result| result),
     };
     write_u32_handle_result(call, 0, 1, result);
     ExternResult::Ok
@@ -44,7 +50,7 @@ pub fn load_font_bytes(call: &mut ExternCallContext) -> ExternResult {
     let data = call.arg_bytes(0).to_vec();
     let result = match with_renderer(|r| r.load_font_bytes(data.clone())) {
         Ok(result) => result,
-        Err(_) => with_headless_font_manager(|fonts| fonts.load_bytes(data)),
+        Err(_) => with_headless_font_manager(|fonts| fonts.load_bytes(data)).and_then(|result| result),
     };
     write_u32_handle_result(call, 0, 1, result);
     ExternResult::Ok
@@ -54,7 +60,7 @@ pub fn load_font_bytes(call: &mut ExternCallContext) -> ExternResult {
 pub fn free_font(call: &mut ExternCallContext) -> ExternResult {
     let id = call.arg_u64(0) as u32;
     if with_renderer(|r| r.free_font(id)).is_err() {
-        with_headless_font_manager(|fonts| fonts.free(id));
+        with_headless_font_manager(|fonts| fonts.free(id)).unwrap_or_else(|msg| panic!("{}", msg));
     }
     ExternResult::Ok
 }
@@ -66,7 +72,8 @@ pub fn measure_text(call: &mut ExternCallContext) -> ExternResult {
     let size = call.arg_f64(2) as f32;
     let (w, h) = match with_renderer(|r| r.measure_text(font_id, text, size)) {
         Ok(result) => result,
-        Err(_) => with_headless_font_manager(|fonts| fonts.measure_text(font_id, text, size)),
+        Err(_) => with_headless_font_manager(|fonts| fonts.measure_text(font_id, text, size))
+            .unwrap_or_else(|msg| panic!("{}", msg)),
     };
     call.ret_f64(0, w as f64);
     call.ret_f64(1, h as f64);
@@ -122,7 +129,45 @@ pub fn model_bounds(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-fn serialize_level_nodes(nodes: &[LevelNode]) -> Vec<u8> {
+pub(crate) fn encode_model_mesh_data_bytes(
+    positions: &[[f32; 3]],
+    indices: &[u32],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + positions.len() * 12 + indices.len() * 4);
+    out.extend_from_slice(&(positions.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+    for pos in positions {
+        out.extend_from_slice(&pos[0].to_le_bytes());
+        out.extend_from_slice(&pos[1].to_le_bytes());
+        out.extend_from_slice(&pos[2].to_le_bytes());
+    }
+    for index in indices {
+        out.extend_from_slice(&(*index).to_le_bytes());
+    }
+    out
+}
+
+#[vo_fn("voplay", "modelMeshDataBytes")]
+pub fn model_mesh_data_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let id = call.arg_u64(0) as u32;
+    wasm_debug_log(&format!("modelMeshDataBytes start model_id={}", id));
+    let mesh_data = with_renderer_or_panic("modelMeshDataBytes", |renderer| {
+        renderer.get_model_mesh_data(id)
+    });
+    let (positions, indices) = mesh_data
+        .unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
+    wasm_debug_log(&format!(
+        "modelMeshDataBytes loaded model_id={} positions={} indices={}",
+        id,
+        positions.len(),
+        indices.len()
+    ));
+    let data = encode_model_mesh_data_bytes(&positions, &indices);
+    ret_bytes(call, 0, &data);
+    ExternResult::Ok
+}
+
+pub(crate) fn serialize_level_nodes(nodes: &[LevelNode]) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&(nodes.len() as u32).to_le_bytes());
     for node in nodes {
@@ -183,6 +228,39 @@ fn terrain_heights_to_bytes(heights: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&height.to_le_bytes());
     }
     bytes
+}
+
+pub(crate) fn encode_terrain_result_bytes(result: Result<crate::terrain::TerrainData, String>) -> Vec<u8> {
+    // TAG constants from island_bindgen
+    const TAG_VALUE: u8 = 0xE2;
+    const TAG_BYTES: u8 = 0xE3;
+    const TAG_NIL_ERROR: u8 = 0xE0;
+    const TAG_ERROR_STR: u8 = 0xE1;
+    let mut out = Vec::new();
+    match result {
+        Ok(data) => {
+            out.push(TAG_VALUE); out.extend_from_slice(&(data.model_id as u64).to_le_bytes());
+            out.push(TAG_VALUE); out.extend_from_slice(&(data.rows as u64).to_le_bytes());
+            out.push(TAG_VALUE); out.extend_from_slice(&(data.cols as u64).to_le_bytes());
+            let height_bytes = terrain_heights_to_bytes(&data.heights);
+            out.push(TAG_BYTES);
+            out.extend_from_slice(&(height_bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(&height_bytes);
+            out.push(TAG_NIL_ERROR);
+        }
+        Err(msg) => {
+            out.push(TAG_VALUE); out.extend_from_slice(&0u64.to_le_bytes());
+            out.push(TAG_VALUE); out.extend_from_slice(&0u64.to_le_bytes());
+            out.push(TAG_VALUE); out.extend_from_slice(&0u64.to_le_bytes());
+            out.push(TAG_BYTES); out.extend_from_slice(&0u32.to_le_bytes());
+            let bytes = msg.as_bytes();
+            let len = bytes.len().min(65535) as u16;
+            out.push(TAG_ERROR_STR);
+            out.extend_from_slice(&len.to_le_bytes());
+            out.extend_from_slice(&bytes[..len as usize]);
+        }
+    }
+    out
 }
 
 fn write_terrain_result(
@@ -324,7 +402,7 @@ pub fn terrain_height_at(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-#[vo_fn("voplay/scene3d", "createPlaneMesh")]
+#[vo_fn("voplay", "createPlaneMesh")]
 pub fn create_plane_mesh(call: &mut ExternCallContext) -> ExternResult {
     let width = call.arg_f64(0) as f32;
     let depth = call.arg_f64(1) as f32;
@@ -335,14 +413,14 @@ pub fn create_plane_mesh(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-#[vo_fn("voplay/scene3d", "createCubeMesh")]
+#[vo_fn("voplay", "createCubeMesh")]
 pub fn create_cube_mesh(call: &mut ExternCallContext) -> ExternResult {
     let id = with_renderer_or_panic("createCubeMesh", |r| r.create_cube());
     call.ret_u64(0, id as u64);
     ExternResult::Ok
 }
 
-#[vo_fn("voplay/scene3d", "createSphereMesh")]
+#[vo_fn("voplay", "createSphereMesh")]
 pub fn create_sphere_mesh(call: &mut ExternCallContext) -> ExternResult {
     let segments = call.arg_u64(0) as u32;
     let id = with_renderer_or_panic("createSphereMesh", |r| r.create_sphere(segments));
@@ -350,7 +428,7 @@ pub fn create_sphere_mesh(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-#[vo_fn("voplay/scene3d", "createCylinderMesh")]
+#[vo_fn("voplay", "createCylinderMesh")]
 pub fn create_cylinder_mesh(call: &mut ExternCallContext) -> ExternResult {
     let segments = call.arg_u64(0) as u32;
     let id = with_renderer_or_panic("createCylinderMesh", |r| r.create_cylinder(segments));
@@ -358,7 +436,7 @@ pub fn create_cylinder_mesh(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-#[vo_fn("voplay/scene3d", "createCapsuleMesh")]
+#[vo_fn("voplay", "createCapsuleMesh")]
 pub fn create_capsule_mesh(call: &mut ExternCallContext) -> ExternResult {
     let segments = call.arg_u64(0) as u32;
     let half_height = call.arg_f64(1) as f32;

@@ -55,6 +55,7 @@ mod input;
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use renderer::Renderer;
 
+
 #[cfg(feature = "native")]
 pub use host_api::{
     vo_voplay_push_key_event,
@@ -67,6 +68,9 @@ pub use host_api::{
 
 #[cfg(feature = "native")]
 vo_ext::export_extensions!();
+
+#[cfg(feature = "wasm-island")]
+mod island_bindgen;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
 use vo_runtime::ffi::ExternRegistry;

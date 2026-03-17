@@ -137,10 +137,10 @@ pub const MAT4_IDENTITY: Mat4 = [
 
 pub fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut out = [[0.0f32; 4]; 4];
-    for i in 0..4 {
-        for j in 0..4 {
-            out[i][j] =
-                a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col][row] =
+                a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2] + a[3][row] * b[col][3];
         }
     }
     out

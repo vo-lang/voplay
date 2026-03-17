@@ -65,7 +65,23 @@ type ModelBackend interface {
 	Bounds(id int) (AABB, bool)
 }
 
+type PrimitiveMeshBackend interface {
+	Plane(width, depth float64, subX, subZ int) int
+	Cube() int
+	Sphere(segments int) int
+	Cylinder(segments int) int
+	Capsule(segments int, halfHeight, radius float64) int
+}
+
+type ModelMeshDataBackend interface {
+	Bytes(id int) []byte
+}
+
 type defaultModelBackend struct{}
+
+type defaultPrimitiveMeshBackend struct{}
+
+type defaultModelMeshDataBackend struct{}
 
 func (defaultModelBackend) Free(id int) {
 	freeModel(id)
@@ -82,8 +98,34 @@ func (defaultModelBackend) Bounds(id int) (AABB, bool) {
 	}, true
 }
 
+func (defaultPrimitiveMeshBackend) Plane(width, depth float64, subX, subZ int) int {
+	return createPlaneMesh(width, depth, subX, subZ)
+}
+
+func (defaultPrimitiveMeshBackend) Cube() int {
+	return createCubeMesh()
+}
+
+func (defaultPrimitiveMeshBackend) Sphere(segments int) int {
+	return createSphereMesh(segments)
+}
+
+func (defaultPrimitiveMeshBackend) Cylinder(segments int) int {
+	return createCylinderMesh(segments)
+}
+
+func (defaultPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius float64) int {
+	return createCapsuleMesh(segments, halfHeight, radius)
+}
+
+func (defaultModelMeshDataBackend) Bytes(id int) []byte {
+	return modelMeshDataBytes(id)
+}
+
 var modelBackend ModelBackend = defaultModelBackend{}
 var modelBoundsCache = map[int]AABB{}
+var primitiveMeshBackend PrimitiveMeshBackend = defaultPrimitiveMeshBackend{}
+var modelMeshDataBackend ModelMeshDataBackend = defaultModelMeshDataBackend{}
 
 // SetModelBackend replaces the active model backend and returns the previous one.
 // Setting a new backend clears the bounds cache.
@@ -92,6 +134,45 @@ func SetModelBackend(b ModelBackend) ModelBackend {
 	modelBackend = b
 	modelBoundsCache = map[int]AABB{}
 	return prev
+}
+
+func SetPrimitiveMeshBackend(b PrimitiveMeshBackend) PrimitiveMeshBackend {
+	prev := primitiveMeshBackend
+	primitiveMeshBackend = b
+	return prev
+}
+
+func SetModelMeshDataBackend(b ModelMeshDataBackend) ModelMeshDataBackend {
+	prev := modelMeshDataBackend
+	modelMeshDataBackend = b
+	return prev
+}
+
+func CreatePlaneMesh(width, depth float64, subX, subZ int) ModelID {
+	return ModelID(primitiveMeshBackend.Plane(width, depth, subX, subZ))
+}
+
+func CreateCubeMesh() ModelID {
+	return ModelID(primitiveMeshBackend.Cube())
+}
+
+func CreateSphereMesh(segments int) ModelID {
+	return ModelID(primitiveMeshBackend.Sphere(segments))
+}
+
+func CreateCylinderMesh(segments int) ModelID {
+	return ModelID(primitiveMeshBackend.Cylinder(segments))
+}
+
+func CreateCapsuleMesh(segments int, halfHeight, radius float64) ModelID {
+	return ModelID(primitiveMeshBackend.Capsule(segments, halfHeight, radius))
+}
+
+func ModelMeshDataBytes(model ModelID) []byte {
+	if model == 0 {
+		panic("ModelMeshDataBytes: model must not be 0")
+	}
+	return modelMeshDataBackend.Bytes(int(model))
 }
 
 // LoadModel loads a glTF/GLB model file and returns a ModelID.
@@ -157,6 +238,12 @@ func loadModel(path string) (int, error)
 func loadModelBytes(data []byte) (int, error)
 func freeModel(id int)
 func modelBounds(modelID int) (float64, float64, float64, float64, float64, float64, bool)
+func modelMeshDataBytes(modelID int) []byte
+func createPlaneMesh(width, depth float64, subX, subZ int) int
+func createCubeMesh() int
+func createSphereMesh(segments int) int
+func createCylinderMesh(segments int) int
+func createCapsuleMesh(segments int, halfHeight, radius float64) int
 
 func loadCubemap(right, left, top, bottom, front, back string) (int, error)
 func loadCubemapBytes(right, left, top, bottom, front, back []byte) (int, error)

@@ -24,6 +24,8 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     depth_view: Option<wgpu::TextureView>,
+    // Canvas element id (WASM only) for auto-resize on layout changes.
+    canvas_id: Option<String>,
     // Camera (shared by all 2D pipelines, dynamic offset)
     camera_bgl: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
@@ -100,7 +102,8 @@ impl Renderer {
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
-    ) -> Self {
+        canvas_id: Option<String>,
+    ) -> Result<Self, String> {
         let depth_view = Self::create_depth_view(&device, surface_config.width, surface_config.height);
         let w = surface_config.width as f32;
         let h = surface_config.height as f32;
@@ -128,16 +131,16 @@ impl Renderer {
         let pipeline_shadow = PipelineShadow::new(&device, 2048);
         let pipeline_skybox = PipelineSkybox::new(&device, surface_config.format, cubemap_bgl);
         let model_manager = ModelManager::new();
-        let mut font_manager = FontManager::new();
+        let mut font_manager = FontManager::new()?;
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
         let draw_list = DrawList2D::new(w, h);
-
-        Self {
+        Ok(Self {
             device,
             queue,
             surface,
             surface_config,
             depth_view: Some(depth_view),
+            canvas_id,
             camera_bgl,
             camera_buffer,
             camera_bind_group,
@@ -152,7 +155,7 @@ impl Renderer {
             model_manager,
             texture_manager,
             font_manager,
-        }
+        })
     }
 
     /// Create a new renderer from an existing wgpu instance + surface.
@@ -202,7 +205,7 @@ impl Renderer {
         };
         surface.configure(&device, &surface_config);
 
-        Ok(Self::build(device, queue, surface, surface_config))
+        Self::build(device, queue, surface, surface_config, None)
     }
 
     /// Create renderer with pre-existing device + queue + surface (for wasm-integrated path).
@@ -211,8 +214,13 @@ impl Renderer {
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
-    ) -> Self {
-        Self::build(device, queue, surface, surface_config)
+    ) -> Result<Self, String> {
+        Self::build(device, queue, surface, surface_config, None)
+    }
+
+    /// Set the canvas element id for automatic resize detection (WASM only).
+    pub fn set_canvas_id(&mut self, id: String) {
+        self.canvas_id = Some(id);
     }
 
     fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -445,8 +453,48 @@ impl Renderer {
         ]
     }
 
+    /// Check if the canvas CSS size has changed and reconfigure the surface.
+    /// Standard WebGPU practice: the backing buffer must match the CSS layout size.
+    /// Also detects DOM reparenting (canvas backing buffer mismatch) and forces
+    /// a reconfigure even if the target size hasn't changed, because moving a
+    /// canvas in the DOM can invalidate the WebGPU surface.
+    #[cfg(feature = "wasm")]
+    fn auto_resize_from_canvas(&mut self) {
+        use wasm_bindgen::JsCast;
+        let canvas_id = match self.canvas_id {
+            Some(ref id) => id.clone(),
+            None => return,
+        };
+        let Some(window) = web_sys::window() else { return };
+        let Some(document) = window.document() else { return };
+        let Some(el) = document.get_element_by_id(&canvas_id) else { return };
+        let Ok(canvas) = el.dyn_into::<web_sys::HtmlCanvasElement>() else { return };
+        let dpr = window.device_pixel_ratio();
+        let css_w = canvas.client_width().max(1) as f64;
+        let css_h = canvas.client_height().max(1) as f64;
+        let w = (css_w * dpr) as u32;
+        let h = (css_h * dpr) as u32;
+        // Detect backing buffer mismatch (happens after DOM reparent or external resize).
+        let backing_w = canvas.width();
+        let backing_h = canvas.height();
+        let size_changed = w != self.surface_config.width || h != self.surface_config.height;
+        let backing_dirty = backing_w != w || backing_h != h;
+        if size_changed || backing_dirty {
+            eprintln!(
+                "voplay: auto_resize_from_canvas {}x{} (was {}x{}, backing {}x{})",
+                w, h, self.surface_config.width, self.surface_config.height, backing_w, backing_h
+            );
+            canvas.set_width(w);
+            canvas.set_height(h);
+            self.resize(w, h);
+        }
+    }
+
     /// Execute a frame's draw command stream.
     pub fn submit_frame(&mut self, data: &[u8]) -> Result<(), String> {
+        #[cfg(feature = "wasm")]
+        self.auto_resize_from_canvas();
+
         let output = self
             .surface
             .get_current_texture()
@@ -488,8 +536,10 @@ impl Renderer {
         let aspect = w / h;
 
         // Decode command stream into the unified draw list
+        let mut cmd_count = 0u32;
         let mut reader = StreamReader::new(data);
         while let Some(cmd) = reader.next_command() {
+            cmd_count += 1;
             match cmd {
                 DrawCommand::Clear { r, g, b, a } => {
                     clear_color = wgpu::Color {
@@ -694,6 +744,7 @@ impl Renderer {
                             .ok_or_else(|| "voplay: failed to invert camera view projection for shadow mapping".to_string())?;
                         let shadow_vp = math3d::compute_shadow_vp(&inv_view_proj, shadow_dir);
                         self.pipeline_shadow.render_shadow_pass(
+                            &self.device,
                             &mut encoder,
                             &self.queue,
                             &shadow_vp,
@@ -754,6 +805,8 @@ impl Renderer {
             if !model_draws.is_empty() {
                 if let Some(ref cam3d) = camera3d_uniform {
                     self.pipeline3d.set_camera_and_lights(&self.queue, cam3d, &light_uniform);
+                    let shadow_view = self.pipeline_shadow.shadow_texture_view();
+                    let shadow_sampler = self.pipeline_shadow.comparison_sampler();
                     self.pipeline3d.draw_models(
                         &self.device,
                         &self.queue,
@@ -761,8 +814,8 @@ impl Renderer {
                         &model_draws,
                         &self.model_manager,
                         &self.texture_manager,
-                        self.pipeline_shadow.shadow_texture_view(),
-                        self.pipeline_shadow.comparison_sampler(),
+                        shadow_view,
+                        shadow_sampler,
                     );
                 }
             }

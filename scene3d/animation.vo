@@ -33,39 +33,39 @@ type AnimationBackend interface {
 
 type defaultAnimationBackend struct{}
 
-func (defaultAnimationBackend) Init() int                { return animationInit() }
-func (defaultAnimationBackend) Destroy(worldID int)      { animationDestroy(worldID) }
+func (defaultAnimationBackend) Init() int                { return voplay.AnimationRuntimeInit() }
+func (defaultAnimationBackend) Destroy(worldID int)      { voplay.AnimationRuntimeDestroy(worldID) }
 
 func (defaultAnimationBackend) Play(worldID, targetID int, clip AnimationClipID, loop bool, speed float64) {
-	animationPlay(worldID, targetID, int(clip), loop, speed)
+	voplay.AnimationRuntimePlay(worldID, targetID, int(clip), loop, speed)
 }
 
 func (defaultAnimationBackend) Stop(worldID, targetID int) {
-	animationStop(worldID, targetID)
+	voplay.AnimationRuntimeStop(worldID, targetID)
 }
 
 func (defaultAnimationBackend) Crossfade(worldID, targetID int, clip AnimationClipID, duration float64) {
-	animationCrossfade(worldID, targetID, int(clip), duration)
+	voplay.AnimationRuntimeCrossfade(worldID, targetID, int(clip), duration)
 }
 
 func (defaultAnimationBackend) SetSpeed(worldID, targetID int, speed float64) {
-	animationSetSpeed(worldID, targetID, speed)
+	voplay.AnimationRuntimeSetSpeed(worldID, targetID, speed)
 }
 
 func (defaultAnimationBackend) RemoveTarget(worldID, targetID int) {
-	animationRemoveTarget(worldID, targetID)
+	voplay.AnimationRuntimeRemoveTarget(worldID, targetID)
 }
 
 func (defaultAnimationBackend) Tick(worldID int, dt float64, entityModelMap []byte) {
-	animationTick(worldID, dt, entityModelMap)
+	voplay.AnimationRuntimeTick(worldID, dt, entityModelMap)
 }
 
 func (defaultAnimationBackend) Progress(worldID, targetID int, model voplay.ModelID) float64 {
-	return animationProgress(worldID, targetID, int(model))
+	return voplay.AnimationRuntimeProgress(worldID, targetID, int(model))
 }
 
 func (defaultAnimationBackend) ModelInfo(model voplay.ModelID) AnimationModelInfo {
-	return decodeAnimationModelInfo(animationModelInfo(int(model)))
+	return decodeAnimationModelInfo(voplay.AnimationRuntimeModelInfo(int(model)))
 }
 
 var animBackend AnimationBackend = defaultAnimationBackend{}
@@ -234,13 +234,3 @@ func (s *Scene) TickAnimations(dt float64) {
 	animBackend.Tick(s.animationWorldID, dt, s.serializeAnimatedEntityModelMap())
 }
 
-func animationInit() int
-func animationDestroy(worldID int)
-func animationPlay(worldID, targetID, clipIndex int, loop bool, speed float64)
-func animationStop(worldID, targetID int)
-func animationCrossfade(worldID, targetID, toClipIndex int, duration float64)
-func animationSetSpeed(worldID, targetID int, speed float64)
-func animationRemoveTarget(worldID, targetID int)
-func animationTick(worldID int, dt float64, entityModelMap []byte)
-func animationProgress(worldID, targetID, modelID int) float64
-func animationModelInfo(modelID int) []byte

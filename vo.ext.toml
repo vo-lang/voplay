@@ -1,3 +1,8 @@
 [extension]
 name = "voplay"
 path = "rust/target/{profile}/libvo_voplay"
+
+[studio]
+entry = "Run"
+capabilities = ["render_surface", "game_loop", "input_events", "island_transport"]
+renderer = "js/dist/voplay-render-island.js"

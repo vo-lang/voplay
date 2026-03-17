@@ -28,7 +28,7 @@ pub fn physics_destroy(call: &mut ExternCallContext) -> ExternResult {
 ///         x(f64), y(f64), rotation(f64),
 ///         collider_args(3x f64), density(f64), friction(f64), restitution(f64),
 ///         linear_damping(f64)
-fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
+pub(crate) fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
     // 3 flag bytes + 2 u16 fields + 10 f64 fields = 87 bytes minimum
     assert!(data.len() >= 87, "voplay: physics2d body desc too short: {} bytes (expected 87)", data.len());
     let mut pos = 0;

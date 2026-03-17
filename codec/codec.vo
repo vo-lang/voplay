@@ -53,6 +53,10 @@ func (w *ByteWriter) WriteBool(v bool) {
 	}
 }
 
+func (w *ByteWriter) WriteRawBytes(data []byte) {
+	w.buf = append(w.buf, data...)
+}
+
 func (w *ByteWriter) WriteString(s string) {
 	w.WriteU16(len(s))
 	w.buf = append(w.buf, s...)
@@ -74,6 +78,10 @@ func (r *ByteReader) ReadByte() byte {
 	v := r.data[r.pos]
 	r.pos++
 	return v
+}
+
+func (r *ByteReader) ReadBool() bool {
+	return r.ReadByte() != 0
 }
 
 func (r *ByteReader) ReadU16() int {

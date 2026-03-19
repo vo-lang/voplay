@@ -572,7 +572,7 @@ pub fn audio_load_file(input: &[u8]) -> Vec<u8> {
     let path = in_str(input, &mut pos).to_string();
     let result = crate::file_io::read_bytes(&path)
         .map_err(|e| format!("audio load error: {e}"))
-        .and_then(|data| vogui::audio::with_global_audio_result(|engine| engine.load_bytes(data)));
+        .and_then(|data| vo_vogui::audio::with_global_audio_result(|engine| engine.load_bytes(data)));
     let mut out = Vec::new();
     out_u32_handle_result(&mut out, result);
     out

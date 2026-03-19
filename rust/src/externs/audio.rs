@@ -8,7 +8,7 @@ use vo_ext::prelude::*;
 
 use super::util::write_u32_handle_result;
 use crate::file_io;
-use vogui::audio;
+use vo_vogui::audio;
 
 #[vo_fn("voplay", "audioLoadFile")]
 pub fn audio_load_file(call: &mut ExternCallContext) -> ExternResult {

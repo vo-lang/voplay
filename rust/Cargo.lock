@@ -2787,7 +2787,6 @@ dependencies = [
  "quote",
  "syn",
  "vo-common",
- "vo-module",
  "vo-syntax",
 ]
 
@@ -2795,11 +2794,10 @@ dependencies = [
 name = "vo-module"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
- "dirs",
  "flate2",
  "js-sys",
  "serde",
+ "serde_json",
  "sha2",
  "tar",
  "toml",
@@ -2849,6 +2847,7 @@ dependencies = [
  "vo-common",
  "vo-common-core",
  "vo-ffi-macro",
+ "vo-module",
  "vo-runtime",
  "wasm-bindgen",
  "web-sys",

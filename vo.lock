@@ -1,0 +1,20 @@
+version = 1
+created_by = "vo mod sync"
+
+[root]
+module = "github.com/vo-lang/voplay"
+vo = "0.1"
+
+[[resolved]]
+path = "github.com/vo-lang/vogui"
+version = "v0.1.1"
+commit = "1ff253d91764f9bb2eec95e6e56d277342dc5412"
+release_manifest = "sha256:c3964c95bfc57b47d1cc12aeab4697711962133cb2789239145cb72ac61a5cfe"
+source = "sha256:0b3e6dd97978c2f95605e1d5689b4474dc4d99d37080a546f1320db620c518ac"
+
+[[resolved]]
+path = "github.com/vo-lang/vopack"
+version = "v0.1.0"
+commit = "acb539cda8309969ff83601aa64cd55b6662b933"
+release_manifest = "sha256:5b324e9da1e4564c534ebbb66fe97a73ea0a9fa8c0ddd047a0d4b7a0ef4a47ab"
+source = "sha256:94f6f94c1b5e0bc5785ddedc7b24b736a92d60f7181e949e4f08b55f29389967"

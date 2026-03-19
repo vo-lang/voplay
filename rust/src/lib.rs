@@ -88,5 +88,5 @@ pub fn register_externs(registry: &mut ExternRegistry, externs: &[ExternDef]) {
 pub fn ensure_linked() {
     let _ = std::hint::black_box(register_externs as fn(&mut ExternRegistry, &[ExternDef]));
     #[cfg(feature = "native")]
-    vogui::ensure_linked();
+    vo_vogui::ensure_linked();
 }

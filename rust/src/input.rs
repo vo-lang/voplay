@@ -10,9 +10,9 @@ use std::cell::RefCell;
 use wasm_bindgen::JsCast;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::closure::Closure;
+
 #[cfg(feature = "wasm")]
 struct WasmInputHandlers {
-    window: web_sys::Window,
     canvas: web_sys::HtmlCanvasElement,
     key_down: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
     key_up: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
@@ -94,7 +94,9 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
 
     reset_wasm_input_handlers();
 
-    let window = web_sys::window().ok_or_else(|| "voplay: no global window".to_string())?;
+    canvas
+        .set_attribute("tabindex", "0")
+        .map_err(|_| "voplay: failed to make canvas focusable".to_string())?;
 
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
         let key = event.key();
@@ -102,7 +104,7 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
             push_key_event(true, &key);
         }
     }) as Box<dyn FnMut(_)>);
-    window
+    canvas
         .add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register keydown listener".to_string())?;
 
@@ -112,14 +114,15 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
             push_key_event(false, &key);
         }
     }) as Box<dyn FnMut(_)>);
-    window
+    canvas
         .add_event_listener_with_callback("keyup", key_up.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register keyup listener".to_string())?;
 
     let pointer_canvas = canvas.clone();
     let pointer_down = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let _ = pointer_canvas.focus();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(POINTER_DOWN, x, y, event.button() as u8);
+        push_pointer_event(INPUT_POINTER_DOWN, x, y, event.button() as u8);
     }) as Box<dyn FnMut(_)>);
     canvas
         .add_event_listener_with_callback("pointerdown", pointer_down.as_ref().unchecked_ref())
@@ -128,7 +131,7 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
     let pointer_canvas = canvas.clone();
     let pointer_up = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(POINTER_UP, x, y, event.button() as u8);
+        push_pointer_event(INPUT_POINTER_UP, x, y, event.button() as u8);
     }) as Box<dyn FnMut(_)>);
     canvas
         .add_event_listener_with_callback("pointerup", pointer_up.as_ref().unchecked_ref())
@@ -137,7 +140,7 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
     let pointer_canvas = canvas.clone();
     let pointer_move = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(POINTER_MOVE, x, y, 0);
+        push_pointer_event(INPUT_POINTER_MOVE, x, y, 0);
     }) as Box<dyn FnMut(_)>);
     canvas
         .add_event_listener_with_callback("pointermove", pointer_move.as_ref().unchecked_ref())
@@ -149,10 +152,9 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
     canvas
         .add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register wheel listener".to_string())?;
-
+    
     WASM_INPUT_HANDLERS.with(|handlers| {
         *handlers.borrow_mut() = Some(WasmInputHandlers {
-            window,
             canvas: canvas.clone(),
             key_down,
             key_up,
@@ -173,11 +175,11 @@ pub fn reset_wasm_input_handlers() {
             return;
         };
 
-        let _ = handlers.window.remove_event_listener_with_callback(
+        let _ = handlers.canvas.remove_event_listener_with_callback(
             "keydown",
             handlers.key_down.as_ref().unchecked_ref(),
         );
-        let _ = handlers.window.remove_event_listener_with_callback(
+        let _ = handlers.canvas.remove_event_listener_with_callback(
             "keyup",
             handlers.key_up.as_ref().unchecked_ref(),
         );

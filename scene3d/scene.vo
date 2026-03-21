@@ -26,6 +26,7 @@ const (
 	PickDefault  = 0
 	PickEnabled  = 1
 	PickDisabled = 2
+	physics3DBodyStateBytes = 4 + 10*8
 )
 
 type FogConfig struct {
@@ -672,7 +673,8 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
 	}
-	state := physBackend.Step(s.worldID, dt, s.physCmds.Bytes())
+	cmdBytes := s.physCmds.Bytes()
+	state := physBackend.Step(s.worldID, dt, cmdBytes)
 	s.physCmds.Reset()
 
 	// Decode state: count(u32), then per body:
@@ -684,7 +686,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	count := r.ReadU32()
 
 	for i := 0; i < count; i++ {
-		if r.Remaining() < 92 { // 4 + 11*8
+		if r.Remaining() < physics3DBodyStateBytes {
 			break
 		}
 		bodyID := r.ReadU32()

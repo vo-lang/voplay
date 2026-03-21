@@ -34,15 +34,22 @@ export interface RenderIslandConfig {
   onError?: (message: string) => void;
 }
 
+type HostHandle = {
+  kind: "timeout" | "raf";
+  id: number;
+};
+
+const DISPLAY_PULSE_DELAY_MS = 0xFFFFFFFF;
+
 type VoplayDebugGlobal = typeof globalThis & {
-  __voVoplayDebugLog?: (message: string) => void;
+  voDisposeExtModule?: (key: string) => void;
 };
 
 // RenderIsland: manages the render island VM lifecycle.
 export class RenderIsland {
   private config: RenderIslandConfig;
   private vm: VoVm | null = null;
-  private hostTimers = new Map<string, number>();
+  private hostTimers = new Map<string, HostHandle>();
   private stopped = false;
   private recentConsoleErrors: string[] = [];
   private originalConsoleError: ((...args: unknown[]) => void) | null = null;
@@ -52,8 +59,6 @@ export class RenderIsland {
   }
 
   async init(voWeb: VoWebModule): Promise<void> {
-    const globalScope = globalThis as VoplayDebugGlobal;
-    globalScope.__voVoplayDebugLog = (message: string) => this.debug(`voplay wasm ${message}`);
     this.installConsoleErrorCapture();
     await voWeb.initVFS();
     let jsGlueUrl = '';
@@ -92,10 +97,16 @@ export class RenderIsland {
 
   stop(): void {
     this.stopped = true;
-    for (const id of this.hostTimers.values()) {
-      clearTimeout(id);
+    for (const handle of this.hostTimers.values()) {
+      if (handle.kind === "raf") {
+        cancelAnimationFrame(handle.id);
+      } else {
+        clearTimeout(handle.id);
+      }
     }
     this.hostTimers.clear();
+    const globalScope = globalThis as VoplayDebugGlobal;
+    globalScope.voDisposeExtModule?.("github.com/vo-lang/voplay");
     this.config.channel.close();
     this.vm = null;
   }
@@ -113,7 +124,7 @@ export class RenderIsland {
     const events = this.vm.takePendingHostEvents();
     for (const ev of events) {
       if (this.hostTimers.has(ev.token)) continue;
-      const id = window.setTimeout(() => {
+      const wake = () => {
         try {
           this.hostTimers.delete(ev.token);
           if (this.stopped || !this.vm) return;
@@ -124,8 +135,14 @@ export class RenderIsland {
         } catch (error) {
           this.fail(`wakeHostEvent token=${ev.token}`, error);
         }
-      }, ev.delayMs);
-      this.hostTimers.set(ev.token, id);
+      };
+      if (ev.delayMs === DISPLAY_PULSE_DELAY_MS) {
+        const id = window.requestAnimationFrame(() => wake());
+        this.hostTimers.set(ev.token, { kind: "raf", id });
+      } else {
+        const id = window.setTimeout(() => wake(), ev.delayMs);
+        this.hostTimers.set(ev.token, { kind: "timeout", id });
+      }
     }
   }
 

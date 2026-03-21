@@ -30,6 +30,22 @@ type GameCtx struct {
 	gameInitialized  bool
 	closed           bool
 	accumulator      float64
+	overlay          *DebugOverlay
+}
+
+// ShowDebugOverlay enables the engine performance HUD (FPS, frame time, logic time).
+func (g *GameCtx) ShowDebugOverlay() {
+	g.overlay.enabled = true
+}
+
+// HideDebugOverlay disables the engine performance HUD.
+func (g *GameCtx) HideDebugOverlay() {
+	g.overlay.enabled = false
+}
+
+// ToggleDebugOverlay toggles the engine performance HUD.
+func (g *GameCtx) ToggleDebugOverlay() {
+	g.overlay.enabled = !g.overlay.enabled
 }
 
 func resolveFixedStep(step float64) float64 {
@@ -127,10 +143,10 @@ func Run(game Game) {
 func runSplitMode(game Game) {
 	// Create ports for inter-island communication.
 	ports := splitPorts{
-		draw:    make(port []byte, 1),   // logic→render: draw commands (cap 1 = frame sync)
-		input:   make(port []byte, 4),   // render→logic: input events
-		resReq:  make(port []byte, 8),   // logic→render: resource requests
-		resResp: make(port []byte, 8),   // render→logic: resource responses
+		frameReq:   make(port []byte, 1), // render→logic: frame requests (input snapshots)
+		frameReply: make(port []byte, 1), // logic→render: draw command replies
+		resReq:     make(port []byte, 8), // logic→render: resource requests
+		resResp:    make(port []byte, 8), // render→logic: resource responses
 	}
 
 	// Build game context with proxy asset loaders that forward to render island.
@@ -150,6 +166,7 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 		Height:          game.Height,
 		FixedStep:       resolveFixedStep(game.FixedStep),
 		MaxCatchUpSteps: game.MaxCatchUpSteps,
+		overlay:         newDebugOverlay(),
 	}
 	ctx.Actions = NewActionMap(ctx.Input)
 	ctx.Assets = NewAssetsWithLoaders(proxyAssetLoaders(resReqPort, resRespPort))
@@ -298,17 +315,3 @@ func (b *proxyAnimationRuntimeBackendImpl) ModelInfo(modelID int) []byte {
 	return proxyAnimationModelInfo(b.reqPort, b.respPort, modelID)
 }
 
-// applySplitInput drains input from the render island (non-blocking)
-// and feeds it into the game context's InputState.
-func applySplitInput(ctx *GameCtx, inputPort port []byte) {
-	for {
-		select {
-		case inputBytes := <-inputPort:
-			if len(inputBytes) > 0 {
-				ctx.Input.unpackEvents(inputBytes)
-			}
-		default:
-			return
-		}
-	}
-}

@@ -1,0 +1,64 @@
+package main
+
+import "math"
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/scene3d"
+
+func assert(cond bool, msg string) {
+	if !cond {
+		panic("FAIL: " + msg)
+	}
+}
+
+func assertFloatNear(got, want, tol float64, label string) {
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	assert(diff <= tol, label)
+}
+
+func assertVec3Near(got, want voplay.Vec3, tol float64, label string) {
+	assertFloatNear(got.X, want.X, tol, label+": x")
+	assertFloatNear(got.Y, want.Y, tol, label+": y")
+	assertFloatNear(got.Z, want.Z, tol, label+": z")
+}
+
+func testThirdPersonCameraRotationSemantics() {
+	s := scene3d.New()
+	target := s.Spawn(scene3d.EntityDesc{
+		Position: voplay.Vec3{X: 1, Y: 2, Z: 3},
+	})
+	camCtl := scene3d.NewThirdPersonCamera(target)
+	camCtl.PivotOffset = voplay.Vec3{Y: 1}
+	camCtl.Distance = 4
+	camCtl.MinDistance = 2
+	camCtl.MaxDistance = 6
+	camCtl.Smoothing = 0
+	camCtl.CollisionEnabled = false
+	camCtl.Yaw = 0
+	camCtl.Pitch = 0
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	pivot := voplay.Vec3{X: 1, Y: 3, Z: 3}
+	assertVec3Near(s.Camera.Target, pivot, 0.000001, "third person initial target")
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person initial position")
+
+	target.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, math.Pi/2))
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person ignores target rotation by default")
+
+	camCtl.AlignToTargetYaw = true
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 5, Y: 3, Z: 3}, 0.000001, "third person optional target yaw alignment")
+
+	camCtl.AlignToTargetYaw = false
+	target.SetRotation(voplay.QuatIdentity())
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person returns to free orbit")
+
+	s.Close()
+}
+
+func main() {
+	testThirdPersonCameraRotationSemantics()
+}

@@ -1,5 +1,6 @@
 // Render island bootstrap: load wasm VM, wire transport, start render loop.
 // Per design doc: JS is bootstrap only; render loop runs inside Vo VM.
+const DISPLAY_PULSE_DELAY_MS = 0xFFFFFFFF;
 // RenderIsland: manages the render island VM lifecycle.
 export class RenderIsland {
     constructor(config) {
@@ -53,10 +54,18 @@ export class RenderIsland {
     }
     stop() {
         this.stopped = true;
-        for (const id of this.hostTimers.values()) {
-            clearTimeout(id);
+        for (const handle of this.hostTimers.values()) {
+            if (handle.kind === "raf") {
+                cancelAnimationFrame(handle.id);
+            }
+            else {
+                clearTimeout(handle.id);
+            }
         }
         this.hostTimers.clear();
+        const globalScope = globalThis;
+        globalScope.voDisposeExtModule?.("github.com/vo-lang/voplay");
+        globalScope.__voVoplayDebugLog = undefined;
         this.config.channel.close();
         this.vm = null;
     }
@@ -75,7 +84,7 @@ export class RenderIsland {
         for (const ev of events) {
             if (this.hostTimers.has(ev.token))
                 continue;
-            const id = window.setTimeout(() => {
+            const wake = () => {
                 try {
                     this.hostTimers.delete(ev.token);
                     if (this.stopped || !this.vm)
@@ -88,8 +97,15 @@ export class RenderIsland {
                 catch (error) {
                     this.fail(`wakeHostEvent token=${ev.token}`, error);
                 }
-            }, ev.delayMs);
-            this.hostTimers.set(ev.token, id);
+            };
+            if (ev.delayMs === DISPLAY_PULSE_DELAY_MS) {
+                const id = window.requestAnimationFrame(() => wake());
+                this.hostTimers.set(ev.token, { kind: "raf", id });
+            }
+            else {
+                const id = window.setTimeout(() => wake(), ev.delayMs);
+                this.hostTimers.set(ev.token, { kind: "timeout", id });
+            }
         }
     }
     fail(context, error) {

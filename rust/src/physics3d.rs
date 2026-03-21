@@ -12,6 +12,8 @@ use rapier3d::na::{UnitQuaternion, Quaternion};
 use crate::math3d::{Vec3, Quat};
 use crate::physics_registry::{WorldRegistry, PhysBodyType, with_world_in};
 
+const BODY_STATE_BYTES_3D: usize = 4 + 10 * 8;
+
 /// Global registry of 3D physics worlds, keyed by world handle.
 static REGISTRY_3D: Mutex<Option<WorldRegistry<PhysicsWorld3D>>> = Mutex::new(None);
 
@@ -460,8 +462,8 @@ impl PhysicsWorld3D {
             })
             .count();
 
-        // 4 (count) + count * (4 + 11*8) = 4 + count * 92
-        let mut buf = Vec::with_capacity(4 + count * 92);
+        // 4 (count) + count * (4 + 10*8)
+        let mut buf = Vec::with_capacity(4 + count * BODY_STATE_BYTES_3D);
         buf.extend_from_slice(&(count as u32).to_le_bytes());
 
         for (body_id, handle) in &self.handle_map {
@@ -757,6 +759,54 @@ mod tests {
         let pos_offset = 4 + 4; // count + body_id
         let px = f64::from_le_bytes(state[pos_offset..pos_offset + 8].try_into().unwrap()) as f32;
         assert_near(px, 10.0, 0.1);
+    }
+
+    #[test]
+    fn serialize_state_uses_84_byte_body_records() {
+        let mut world = PhysicsWorld3D::new(0.0, 0.0, 0.0);
+        let desc = BodyDesc3D {
+            body_id: 42,
+            body_type: PhysBodyType::Kinematic,
+            pos: Vec3::new(1.0, 2.0, 3.0),
+            rot: Quat::IDENTITY,
+            collider_kind: ColliderKind3D::Box3D,
+            collider_args: [0.5, 0.5, 0.5],
+            collider_offset: Vec3::ZERO,
+            layer: 1,
+            mask: 0xFFFF,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            linear_damping: 0.0,
+            fixed_rotation: false,
+        };
+        world.spawn_body(&desc);
+        world.step(1.0 / 60.0);
+
+        let state = world.serialize_state();
+        assert_eq!(state.len(), 4 + BODY_STATE_BYTES_3D);
+
+        let count = u32::from_le_bytes(state[0..4].try_into().unwrap());
+        assert_eq!(count, 1);
+
+        let body_id = u32::from_le_bytes(state[4..8].try_into().unwrap());
+        assert_eq!(body_id, 42);
+
+        let x = f64::from_le_bytes(state[8..16].try_into().unwrap()) as f32;
+        let y = f64::from_le_bytes(state[16..24].try_into().unwrap()) as f32;
+        let z = f64::from_le_bytes(state[24..32].try_into().unwrap()) as f32;
+        let qw = f64::from_le_bytes(state[56..64].try_into().unwrap()) as f32;
+        let vx = f64::from_le_bytes(state[64..72].try_into().unwrap()) as f32;
+        let vy = f64::from_le_bytes(state[72..80].try_into().unwrap()) as f32;
+        let vz = f64::from_le_bytes(state[80..88].try_into().unwrap()) as f32;
+
+        assert_near(x, 1.0, 0.0001);
+        assert_near(y, 2.0, 0.0001);
+        assert_near(z, 3.0, 0.0001);
+        assert_near(qw, 1.0, 0.0001);
+        assert_near(vx, 0.0, 0.0001);
+        assert_near(vy, 0.0, 0.0001);
+        assert_near(vz, 0.0, 0.0001);
     }
 
     #[test]

@@ -580,6 +580,19 @@ func testActionMap() {
 	ctx.Input.PointerUp(20, 30, 0)
 	assert(actions.IsReleased("fire"), "pointer binding released")
 
+	ctx.Input.EndFrame()
+	ctx.Input.KeyDown("A")
+	assert(actions.IsDown("left"), "uppercase letter key normalizes to bound lowercase key")
+	ctx.Input.KeyUp("A")
+	assert(actions.IsReleased("left"), "uppercase letter key release normalizes")
+
+	actions.Rebind("left", voplay.KeyBinding("KeyA"))
+	ctx.Input.EndFrame()
+	ctx.Input.KeyDown("a")
+	assert(actions.IsDown("left"), "host Key-prefixed binding normalizes to single-letter event")
+	ctx.Input.KeyUp("a")
+	assert(actions.IsReleased("left"), "normalized Key-prefixed binding releases correctly")
+
 	actions.Rebind("left", voplay.KeyBinding("j"))
 	ctx.Input.EndFrame()
 	ctx.Input.KeyDown("j")
@@ -1088,6 +1101,16 @@ func testScene3DThirdPersonCamera() {
 	pivot := voplay.Vec3{X: 1, Y: 3, Z: 3}
 	assertVec3Near(s.Camera.Target, pivot, 0.000001, "third person initial target")
 	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person initial position")
+	target.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, math.Pi/2))
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person ignores target rotation by default")
+	camCtl.AlignToTargetYaw = true
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 5, Y: 3, Z: 3}, 0.000001, "third person optional target yaw alignment")
+	camCtl.AlignToTargetYaw = false
+	target.SetRotation(voplay.QuatIdentity())
+	camCtl.UpdateCamera(&s.Camera, s, 1.0/60.0)
+	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person returning to free orbit")
 
 	camCtl.HandleInput(0, -10)
 	assertFloatNear(camCtl.Pitch, camCtl.MaxPitch, 0.000001, "third person pitch clamp max")

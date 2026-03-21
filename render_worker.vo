@@ -1,21 +1,23 @@
 // Render worker: runs on the render island in split-island mode.
-// Receives draw commands via drawPort, submits to GPU, collects input,
-// sends input back via inputPort. Handles resource requests from logic island.
+// Owns the GPU surface and frame clock. Drives the game loop by sending
+// frame requests to the logic island and submitting the returned draw commands.
 package voplay
 
 import "time"
 
 // renderWorkerPorts holds the port endpoints for the render worker.
 type renderWorkerPorts struct {
-	draw    port []byte // recv draw commands from logic island
-	input   port []byte // send input events to logic island
-	resReq  port []byte // recv resource requests from logic island
-	resResp port []byte // send resource responses to logic island
+	frameReq   port []byte // send frame requests (input snapshots) to logic island
+	frameReply port []byte // recv draw command replies from logic island
+	resReq     port []byte // recv resource requests from logic island
+	resResp    port []byte // send resource responses to logic island
 }
 
 // runRenderWorker is the render island's main loop.
-// Blocking loop driven by draw command port — no vogui dependency.
-// The logic island's frame production rate naturally paces this loop.
+// The render island owns the frame clock: each iteration samples input,
+// sends a frame request to the logic island, waits for the draw reply,
+// and submits to the GPU. On native, AutoVsync present naturally paces
+// the loop to the display refresh rate.
 func runRenderWorker(canvasRef string, ports renderWorkerPorts) {
 	// Phase 1: Init surface (may be async on WASM).
 	initSurface(canvasRef)?
@@ -29,20 +31,35 @@ func runRenderWorker(canvasRef string, ports renderWorkerPorts) {
 		serviceResourceRequestsLoop(ports.resReq, ports.resResp)
 	}()
 
-	// Phase 2: Signal ready by sending an empty message on input port.
-	// The logic island waits for this before calling game.Init.
-	ports.input <- []byte{}
+	// Phase 2: Signal ready by sending an empty frame request.
+	// The logic island waits for this before initializing the game.
+	ports.frameReq <- []byte{}
 
-	// Phase 3: Main render loop — blocking recv on draw commands.
+	// Phase 3: Main render loop — render island drives the frame clock.
+	// Each iteration: sample input → request → wait reply → submit → present.
+	// Present with AutoVsync blocks until the next display refresh,
+	// making the GPU vsync the natural frame pacer.
 	for {
-		drawCmds, ok := <-ports.draw
+		// On wasm, suspend until the next display pulse (requestAnimationFrame).
+		// On native this is a no-op and present pacing still comes from submitFrame.
+		waitDisplayPulse()
+
+		// Sample latest input from the host (keyboard, pointer, scroll).
+		inputBytes := pollInput()
+
+		// Send frame request carrying the input snapshot.
+		ports.frameReq <- inputBytes
+
+		// Block until logic island replies with draw commands.
+		drawCmds, ok := <-ports.frameReply
 		if !ok {
 			return
 		}
+
+		// Submit draw commands to GPU and present.
 		if len(drawCmds) > 0 {
 			submitFrame(drawCmds)?
 		}
-		sendInputIfAny(ports.input)
 	}
 }
 
@@ -57,18 +74,6 @@ func serviceResourceRequestsLoop(reqPort, respPort port []byte) {
 	}
 }
 
-// sendInputIfAny polls native input and sends it to the logic island
-// if there are any events. Uses non-blocking send to avoid stalling
-// the render loop if the logic island hasn't consumed previous input.
-func sendInputIfAny(inputPort port []byte) {
-	inputBytes := pollInput()
-	if len(inputBytes) == 0 {
-		return
-	}
-	// Direct send — port has capacity 4 so this only blocks if the logic
-	// island is severely behind, which provides natural back-pressure.
-	inputPort <- inputBytes
-}
 
 // handleResourceRequest dispatches a single resource request and returns the response.
 func handleResourceRequest(req []byte) []byte {

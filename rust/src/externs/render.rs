@@ -1,5 +1,7 @@
 //! Surface init, frame submit, input poll, renderer query, and texture externs.
 
+#[cfg(feature = "wasm")]
+use core::sync::atomic::{AtomicU64, Ordering};
 use vo_ext::prelude::*;
 
 use super::util::{ret_bytes, with_renderer_result, write_u32_handle_result, write_unit_result};
@@ -7,19 +9,15 @@ use super::{renderer_ready, renderer_ready_result, submit_renderer_frame, with_r
 use crate::input;
 
 #[cfg(feature = "wasm")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = globalThis, js_name = __voVoplayDebugLog)]
-    fn vo_voplay_debug_log(message: &str);
-}
+static DISPLAY_PULSE_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "wasm")]
-pub(crate) fn wasm_debug_log(message: &str) {
-    vo_voplay_debug_log(message);
-}
+pub(crate) const DISPLAY_PULSE_DELAY_MS: u32 = u32::MAX;
 
-#[cfg(not(feature = "wasm"))]
-pub(crate) fn wasm_debug_log(_message: &str) {}
+#[cfg(feature = "wasm")]
+fn next_display_pulse_token() -> u64 {
+    DISPLAY_PULSE_TOKEN.fetch_add(1, Ordering::Relaxed)
+}
 
 // --- initSurface ---
 
@@ -102,7 +100,6 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
                 }
                 Err(msg) => {
                     crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
-                    wasm_debug_log(&format!("initSurface renderer failed generation={generation} msg={msg}"));
                     log::error!("voplay: WASM renderer init failed: {}", msg);
                 }
             }
@@ -113,7 +110,6 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
 
     if let Err(msg) = &result {
         crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
-        wasm_debug_log(&format!("initSurface failed before async generation={generation} msg={msg}"));
     }
 
     result
@@ -190,6 +186,23 @@ pub fn poll_input(call: &mut ExternCallContext) -> ExternResult {
     let events = input::drain_input();
     ret_bytes(call, 0, &events);
     ExternResult::Ok
+}
+
+#[vo_fn("voplay", "waitDisplayPulse")]
+pub fn wait_display_pulse(_call: &mut ExternCallContext) -> ExternResult {
+    #[cfg(feature = "wasm")]
+    {
+        let token = next_display_pulse_token();
+        return ExternResult::HostEventWait {
+            token,
+            delay_ms: DISPLAY_PULSE_DELAY_MS,
+        };
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    {
+        ExternResult::Ok
+    }
 }
 
 // --- Texture externs ---

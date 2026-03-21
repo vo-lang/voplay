@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use vo_ext::prelude::*;
 
-use super::render::wasm_debug_log;
 use super::util::{read_u32_le, ret_bytes, with_renderer_or_panic};
 
 fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
@@ -99,22 +98,10 @@ pub fn animation_tick(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let dt = call.arg_f64(1) as f32;
     let entity_model_bytes = call.arg_bytes(2);
-    wasm_debug_log(&format!(
-        "animationTick start world_id={} dt={} entity_model_bytes={}",
-        world_id,
-        dt,
-        entity_model_bytes.len()
-    ));
     let entity_models = decode_entity_models(entity_model_bytes);
-    wasm_debug_log(&format!(
-        "animationTick decoded world_id={} targets={}",
-        world_id,
-        entity_models.len()
-    ));
     with_renderer_or_panic("animationTick", |renderer| {
         renderer.tick_animations(world_id, dt, &entity_models)
     });
-    wasm_debug_log(&format!("animationTick done world_id={}", world_id));
     ExternResult::Ok
 }
 
@@ -133,7 +120,6 @@ pub fn animation_progress(call: &mut ExternCallContext) -> ExternResult {
 #[vo_fn("voplay", "animationModelInfo")]
 pub fn animation_model_info(call: &mut ExternCallContext) -> ExternResult {
     let model_id = call.arg_u64(0) as u32;
-    wasm_debug_log(&format!("animationModelInfo start model_id={}", model_id));
     let info = with_renderer_or_panic("animationModelInfo", |renderer| {
         renderer.get_model_animation_info(model_id)
     })
@@ -142,13 +128,6 @@ pub fn animation_model_info(call: &mut ExternCallContext) -> ExternResult {
         joint_count: 0,
         clips: vec![],
     });
-    wasm_debug_log(&format!(
-        "animationModelInfo loaded model_id={} clips={} joints={} has_skeleton={}",
-        model_id,
-        info.clips.len(),
-        info.joint_count,
-        info.has_skeleton
-    ));
     let data = serialize_model_animation_info(info);
     ret_bytes(call, 0, &data);
     ExternResult::Ok

@@ -16,7 +16,6 @@ use super::util::{
     write_bytes_result,
     write_u32_handle_result,
 };
-use super::render::wasm_debug_log;
 use super::with_renderer;
 
 static HEADLESS_FONT_MANAGER: OnceLock<Result<Mutex<FontManager>, String>> = OnceLock::new();
@@ -150,18 +149,11 @@ pub(crate) fn encode_model_mesh_data_bytes(
 #[vo_fn("voplay", "modelMeshDataBytes")]
 pub fn model_mesh_data_bytes(call: &mut ExternCallContext) -> ExternResult {
     let id = call.arg_u64(0) as u32;
-    wasm_debug_log(&format!("modelMeshDataBytes start model_id={}", id));
     let mesh_data = with_renderer_or_panic("modelMeshDataBytes", |renderer| {
         renderer.get_model_mesh_data(id)
     });
     let (positions, indices) = mesh_data
         .unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
-    wasm_debug_log(&format!(
-        "modelMeshDataBytes loaded model_id={} positions={} indices={}",
-        id,
-        positions.len(),
-        indices.len()
-    ));
     let data = encode_model_mesh_data_bytes(&positions, &indices);
     ret_bytes(call, 0, &data);
     ExternResult::Ok

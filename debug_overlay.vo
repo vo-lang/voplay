@@ -1,0 +1,105 @@
+// Debug overlay: engine-level performance HUD for voplay games.
+// Tracks frame metrics (FPS, frame time, logic time) and renders
+// a translucent overlay on top of game content using DrawCtx primitives.
+//
+// Usage from game code:
+//   g.ShowDebugOverlay()   // enable
+//   g.HideDebugOverlay()   // disable
+//   g.ToggleDebugOverlay() // toggle
+package voplay
+
+import "strconv"
+
+// DebugOverlay tracks per-frame performance metrics and renders a HUD.
+type DebugOverlay struct {
+	enabled bool
+
+	// Rolling window for FPS smoothing.
+	frameTimes [60]float64
+	frameIdx   int
+	frameCount int
+
+	// Latest computed metrics.
+	fps       float64
+	frameMs   float64 // total frame-to-frame time (ms)
+	logicMs   float64 // logic processing time (ms): input + advance + draw
+
+	// Display strings (updated every N frames to avoid flicker).
+	dispFPS      string
+	dispFrameMs  string
+	dispLogicMs  string
+	dispCounter  int
+}
+
+func newDebugOverlay() *DebugOverlay {
+	return &DebugOverlay{
+		dispFPS:     "-- fps",
+		dispFrameMs: "-- ms",
+		dispLogicMs: "-- ms",
+	}
+}
+
+// recordFrame updates metrics after a frame completes.
+// dt is the frame-to-frame interval in seconds.
+// logicNs is the logic processing time in nanoseconds.
+func (o *DebugOverlay) recordFrame(dt float64, logicNs int64) {
+	o.frameMs = dt * 1000.0
+	o.logicMs = float64(logicNs) / 1e6
+
+	// Rolling window.
+	o.frameTimes[o.frameIdx] = dt
+	o.frameIdx = (o.frameIdx + 1) % len(o.frameTimes)
+	if o.frameCount < len(o.frameTimes) {
+		o.frameCount++
+	}
+
+	// Average FPS over window.
+	sum := 0.0
+	for i := 0; i < o.frameCount; i++ {
+		sum += o.frameTimes[i]
+	}
+	if sum > 0 {
+		o.fps = float64(o.frameCount) / sum
+	}
+
+	// Throttle display string updates to every 10 frames.
+	o.dispCounter++
+	if o.dispCounter >= 10 {
+		o.dispCounter = 0
+		o.dispFPS = strconv.FormatFloat(o.fps, 'f', 1, 64) + " fps"
+		o.dispFrameMs = strconv.FormatFloat(o.frameMs, 'f', 2, 64) + " ms"
+		o.dispLogicMs = strconv.FormatFloat(o.logicMs, 'f', 2, 64) + " ms"
+	}
+}
+
+// draw renders the overlay onto the DrawCtx.
+// Called after game Draw, before the frame reply is sent.
+func (o *DebugOverlay) draw(d *DrawCtx) {
+	if !o.enabled {
+		return
+	}
+
+	// Switch to screen-space coordinates, highest z-layer.
+	d.ResetCamera()
+	d.SetLayer(65535)
+
+	// Background panel.
+	panelX := 4.0
+	panelY := 4.0
+	panelW := 160.0
+	panelH := 58.0
+	d.DrawRect(panelX, panelY, panelW, panelH, Color{R: 0, G: 0, B: 0, A: 0.65})
+
+	// Text layout.
+	textX := panelX + 6.0
+	fontSize := 14.0
+	lineH := 17.0
+	textColor := Color{R: 0.0, G: 1.0, B: 0.0, A: 1.0}
+
+	y := panelY + 4.0
+	d.DrawText(o.dispFPS, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText("frame: "+o.dispFrameMs, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText("logic: "+o.dispLogicMs, textX, y, fontSize, textColor)
+}

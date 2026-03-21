@@ -22,6 +22,7 @@ use wasm_bindgen::prelude::*;
 
 // ── Output tag constants ──────────────────────────────────────────────────────
 
+const TAG_DISPLAY_PULSE: u8 = 0x03;
 const TAG_NIL_ERROR: u8 = 0xE0;
 const TAG_ERROR_STR: u8 = 0xE1;
 const TAG_VALUE:     u8 = 0xE2;
@@ -138,6 +139,12 @@ pub fn vo_init() -> js_sys::Promise {
     js_sys::Promise::resolve(&JsValue::UNDEFINED)
 }
 
+#[wasm_bindgen(js_name = "__voDispose")]
+pub fn vo_dispose() {
+    crate::input::reset_wasm_input_handlers();
+    let _ = crate::renderer_runtime::reset_renderer();
+}
+
 // ── Render externs ────────────────────────────────────────────────────────────
 
 /// initSurface(canvasRef string) → error
@@ -178,6 +185,12 @@ pub fn poll_input(_input: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out_bytes(&mut out, &events);
     out
+}
+
+/// waitDisplayPulse()
+#[wasm_bindgen(js_name = "waitDisplayPulse")]
+pub fn wait_display_pulse(_input: &[u8]) -> Vec<u8> {
+    vec![TAG_DISPLAY_PULSE]
 }
 
 /// loadTexture(path string) → (uint32, error)

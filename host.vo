@@ -1,21 +1,21 @@
 // Game loop host: logic island side of the split-island architecture.
-// The logic island drives vogui.Run for the tick loop.
-// Input arrives via inputPort from the render island.
-// Draw commands are sent via drawPort to the render island.
-// The render island owns initSurface/submitFrame/pollInput/isRendererReady.
+// The render island drives the frame clock. The logic island responds to
+// frame requests: applying input, advancing game state, and returning
+// draw commands.
 package voplay
 
 import (
 	"encoding/json"
+	"time"
 	"github.com/vo-lang/vogui"
 )
 
 // splitPorts bundles all inter-island ports.
 type splitPorts struct {
-	draw    port []byte
-	input   port []byte
-	resReq  port []byte
-	resResp port []byte
+	frameReq   port []byte
+	frameReply port []byte
+	resReq     port []byte
+	resResp    port []byte
 }
 
 type splitHostState struct {
@@ -40,10 +40,10 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 	state.Starting = true
 	renderIsland := make(island)
 	go @(renderIsland) runRenderWorker("canvas", renderWorkerPorts{
-		draw:    ports.draw,
-		input:   ports.input,
-		resReq:  ports.resReq,
-		resResp: ports.resResp,
+		frameReq:   ports.frameReq,
+		frameReply: ports.frameReply,
+		resReq:     ports.resReq,
+		resResp:    ports.resResp,
 	})
 	if useExternalIslandHost() {
 		go func() {
@@ -55,7 +55,7 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 }
 
 func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts) {
-	_, ok := <-ports.input
+	_, ok := <-ports.frameReq
 	if !ok {
 		state.Starting = false
 		return
@@ -63,7 +63,7 @@ func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, port
 	state.Started = true
 	state.Starting = false
 	ctx.start(game.InitialState)
-	startGameLoopSplit(ctx, game, ports.draw, ports.input)
+	go runFrameDrivenGameLoop(ctx, game, ports.frameReq, ports.frameReply)
 }
 
 func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
@@ -109,44 +109,80 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 	})
 }
 
-func startGameLoopSplit(ctx *GameCtx, game *Game, drawPort, inputPort port []byte) {
-	loopID := 0
-	loopID = vogui.RunGameLoop(func(state any, dtMs float64) {
-		dt := dtMs / 1000.0
-		if ctx.closed {
-			close(drawPort) // signal render worker to exit
-			vogui.StopGameLoop(loopID)
+// runFrameDrivenGameLoop runs the game logic in lockstep with the render
+// island's frame clock. Each iteration: receive a frame request carrying
+// the latest input snapshot, advance game state, generate draw commands,
+// and reply. No tick provider, no select, no backlog.
+func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPort port []byte) {
+	lastTime := time.Now()
+	firstFrame := true
+
+	for {
+		// Block until render island sends next frame request.
+		inputBytes, ok := <-frameReqPort
+		if !ok {
+			// Render island closed (surface lost or shutdown).
+			ctx.closed = true
 			if game.OnClose != nil {
 				game.OnClose(ctx)
 			}
 			return
 		}
 
-		// 1. Drain input from render island (non-blocking).
-		applySplitInput(ctx, inputPort)
+		// Compute dt from logic island clock.
+		now := time.Now()
+		dt := 0.0
+		if !firstFrame {
+			dt = float64(now.Sub(lastTime).Nanoseconds()) / 1e9
+		}
+		firstFrame = false
+		lastTime = now
 
-		// 2. Game logic.
+		// Check if game has been closed (e.g. by a previous frame's callback).
+		if ctx.closed {
+			close(frameReplyPort)
+			if game.OnClose != nil {
+				game.OnClose(ctx)
+			}
+			return
+		}
+
+		// --- Begin logic processing (timed for overlay) ---
+		logicStart := time.Now()
+
+		// Apply input from render island.
+		if len(inputBytes) > 0 {
+			ctx.Input.unpackEvents(inputBytes)
+		}
+
+		// Advance game logic with fixed-step simulation.
 		ctx.Advance(dt)
+
 		if ctx.closed {
 			ctx.Input.endFrame()
-			close(drawPort)
-			vogui.StopGameLoop(loopID)
+			close(frameReplyPort)
 			if game.OnClose != nil {
 				game.OnClose(ctx)
 			}
 			return
 		}
 
-		// 3. Generate draw commands and send to render island.
+		// Generate draw commands.
 		ctx.Draw.reset()
 		ctx.States.Draw()
+
+		// --- End logic processing ---
+		logicNs := time.Now().Sub(logicStart).Nanoseconds()
+
+		// Record metrics and draw debug overlay (if enabled).
+		ctx.overlay.recordFrame(dt, logicNs)
+		ctx.overlay.draw(ctx.Draw)
+
 		cmds := ctx.Draw.Bytes()
-		if len(cmds) > 0 {
-			drawPort <- cmds
-		}
+		frameReplyPort <- cmds
 
 		ctx.Input.endFrame()
-	})
+	}
 }
 
 // --- Extern declarations for the render island (implemented in Rust) ---
@@ -155,9 +191,10 @@ func startGameLoopSplit(ctx *GameCtx, game *Game, drawPort, inputPort port []byt
 // Surface
 func initSurface(canvasRef string) error
 func submitFrame(cmds []byte) error
-
+func waitDisplayPulse()
+ 
 // Input
 func pollInput() []byte
-
+ 
 // Runtime query
 func isRendererReady() bool

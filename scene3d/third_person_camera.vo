@@ -16,6 +16,7 @@ type ThirdPersonCamera struct {
 	Smoothing        float64
 	CollisionEnabled bool
 	CollisionOffset  float64
+	AlignToTargetYaw bool
 
 	currentPos    voplay.Vec3
 	currentTarget voplay.Vec3
@@ -36,6 +37,7 @@ func NewThirdPersonCamera(target *Entity) *ThirdPersonCamera {
 		Smoothing:        10.0,
 		CollisionEnabled: true,
 		CollisionOffset:  0.2,
+		AlignToTargetYaw: false,
 	}
 }
 
@@ -92,7 +94,10 @@ func (c *ThirdPersonCamera) UpdateCamera(cam *Camera, scene *Scene, dt float64) 
 }
 
 func (c *ThirdPersonCamera) desiredPosition(pivot voplay.Vec3) voplay.Vec3 {
-	orbitYaw := c.targetBackYaw() + c.Yaw
+	orbitYaw := c.Yaw
+	if c.AlignToTargetYaw {
+		orbitYaw += c.targetBackYaw()
+	}
 	cosPitch := math.Cos(c.Pitch)
 	return pivot.Add(voplay.Vec3{
 		X: c.Distance * math.Sin(orbitYaw) * cosPitch,

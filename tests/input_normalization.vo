@@ -1,0 +1,44 @@
+package main
+
+import "github.com/vo-lang/voplay"
+
+func assert(cond bool, msg string) {
+	if !cond {
+		panic("FAIL: " + msg)
+	}
+}
+
+func main() {
+	input := voplay.NewInputState()
+	actions := voplay.NewActionMap(input)
+	actions.Bind("left", voplay.KeyBinding("a"))
+	actions.Bind("right", voplay.KeyBinding("d"))
+	actions.Bind("up", voplay.KeyBinding("w"))
+	actions.Bind("down", voplay.KeyBinding("s"))
+
+	input.KeyDown("A")
+	assert(actions.IsDown("left"), "uppercase A should match bound lowercase a")
+	input.KeyUp("A")
+	assert(actions.IsReleased("left"), "uppercase A release should match bound lowercase a")
+	input.EndFrame()
+
+	input.KeyDown("W")
+	assert(actions.IsDown("up"), "uppercase W should match bound lowercase w")
+	input.KeyUp("W")
+	assert(actions.IsReleased("up"), "uppercase W release should match bound lowercase w")
+	input.EndFrame()
+
+	actions.Rebind("left", voplay.KeyBinding("KeyA"))
+	actions.Rebind("up", voplay.KeyBinding("KeyW"))
+	input.KeyDown("a")
+	assert(actions.IsDown("left"), "single-letter a should match KeyA binding")
+	input.KeyUp("a")
+	assert(actions.IsReleased("left"), "single-letter a release should match KeyA binding")
+	input.EndFrame()
+
+	input.KeyDown("w")
+	assert(actions.IsDown("up"), "single-letter w should match KeyW binding")
+	assert(actions.Axis("down", "up") == 1, "normalized W should drive positive axis")
+	input.KeyUp("w")
+	assert(actions.IsReleased("up"), "single-letter w release should match KeyW binding")
+}

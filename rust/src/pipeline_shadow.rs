@@ -31,7 +31,6 @@ pub struct PipelineShadow {
     model_buffer_slot_count: u32,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    comparison_sampler: wgpu::Sampler,
     size: u32,
 }
 
@@ -164,17 +163,6 @@ impl PipelineShadow {
         );
 
         let (depth_texture, depth_view) = Self::create_depth_texture(device, size.max(1));
-        let comparison_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("voplay_shadow_compare_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            ..Default::default()
-        });
 
         Self {
             pipeline_static,
@@ -188,7 +176,6 @@ impl PipelineShadow {
             model_buffer_slot_count,
             depth_texture,
             depth_view,
-            comparison_sampler,
             size: size.max(1),
         }
     }
@@ -229,10 +216,6 @@ impl PipelineShadow {
 
     pub fn shadow_texture_view(&self) -> &wgpu::TextureView {
         &self.depth_view
-    }
-
-    pub fn comparison_sampler(&self) -> &wgpu::Sampler {
-        &self.comparison_sampler
     }
 
     fn align_up(value: u32, alignment: u32) -> u32 {

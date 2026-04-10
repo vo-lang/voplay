@@ -7,13 +7,18 @@ use std::sync::Mutex;
 #[cfg(feature = "wasm")]
 use std::cell::RefCell;
 #[cfg(feature = "wasm")]
+use std::sync::atomic::{AtomicU32, Ordering};
+#[cfg(feature = "wasm")]
 use wasm_bindgen::JsCast;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::closure::Closure;
+#[cfg(feature = "wasm")]
+use wasm_bindgen::prelude::wasm_bindgen;
 
 #[cfg(feature = "wasm")]
 struct WasmInputHandlers {
     canvas: web_sys::HtmlCanvasElement,
+    document: web_sys::Document,
     key_down: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
     key_up: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
     pointer_down: Closure<dyn FnMut(web_sys::PointerEvent)>,
@@ -25,6 +30,18 @@ struct WasmInputHandlers {
 #[cfg(feature = "wasm")]
 thread_local! {
     static WASM_INPUT_HANDLERS: RefCell<Option<WasmInputHandlers>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "wasm")]
+static KEY_EVENT_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "wasm")]
+static DRAIN_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str);
 }
 
 /// Input event kinds (must match input.vo constants).
@@ -70,7 +87,15 @@ pub fn push_scroll_event(dx: f64, dy: f64) {
 /// Drain the input buffer, returning all buffered events.
 pub fn drain_input() -> Vec<u8> {
     let mut buf = INPUT_BUFFER.lock().unwrap();
-    std::mem::take(&mut *buf)
+    let events = std::mem::take(&mut *buf);
+    #[cfg(feature = "wasm")]
+    if !events.is_empty() {
+        let seen = DRAIN_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+        if seen < 16 {
+            console_warn(&format!("[voplay input] drain_input bytes={}", events.len()));
+        }
+    }
+    events
 }
 
 #[cfg(feature = "wasm")]
@@ -80,6 +105,69 @@ fn pointer_xy(canvas: &web_sys::HtmlCanvasElement, client_x: i32, client_y: i32)
         client_x as f64 - rect.left(),
         client_y as f64 - rect.top(),
     )
+}
+
+#[cfg(feature = "wasm")]
+fn describe_element(element: &web_sys::Element) -> String {
+    let id = element.get_attribute("id").unwrap_or_default();
+    if id.is_empty() {
+        element.tag_name()
+    } else {
+        format!("{}#{}", element.tag_name(), id)
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn describe_active_element(document: &web_sys::Document) -> String {
+    document
+        .active_element()
+        .map(|element| describe_element(&element))
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+#[cfg(feature = "wasm")]
+fn describe_key_event_target(event: &web_sys::KeyboardEvent) -> String {
+    event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        .map(|element| describe_element(&element))
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+#[cfg(feature = "wasm")]
+fn key_event_targets_text_input(event: &web_sys::KeyboardEvent) -> bool {
+    let Some(target) = event.target() else {
+        return false;
+    };
+    let Ok(element) = target.dyn_into::<web_sys::Element>() else {
+        return false;
+    };
+    let tag = element.tag_name();
+    tag.eq_ignore_ascii_case("INPUT")
+        || tag.eq_ignore_ascii_case("TEXTAREA")
+        || tag.eq_ignore_ascii_case("SELECT")
+        || element
+            .get_attribute("contenteditable")
+            .is_some_and(|value| value.is_empty() || !value.eq_ignore_ascii_case("false"))
+}
+
+#[cfg(feature = "wasm")]
+fn canvas_has_keyboard_focus(
+    document: &web_sys::Document,
+    canvas: &web_sys::HtmlCanvasElement,
+    event: &web_sys::KeyboardEvent,
+) -> bool {
+    let canvas_node: &web_sys::Node = canvas.unchecked_ref();
+    if document
+        .active_element()
+        .is_some_and(|active| active.is_same_node(Some(canvas_node)))
+    {
+        return true;
+    }
+    event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        .is_some_and(|target| target.is_same_node(Some(canvas_node)))
 }
 
 #[cfg(feature = "wasm")]
@@ -98,29 +186,100 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
         .set_attribute("tabindex", "0")
         .map_err(|_| "voplay: failed to make canvas focusable".to_string())?;
 
+    let window = web_sys::window()
+        .ok_or_else(|| "voplay: no global window for input handlers".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "voplay: no document for input handlers".to_string())?;
+    console_warn(&format!(
+        "[voplay input] install canvas={} active={}",
+        canvas.get_attribute("id").unwrap_or_else(|| "<no-id>".to_string()),
+        describe_active_element(&document),
+    ));
+
+    let key_canvas = canvas.clone();
+    let key_document = document.clone();
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
         let key = event.key();
+        if key_event_targets_text_input(&event) {
+            let seen = KEY_EVENT_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if seen < 24 {
+                console_warn(&format!(
+                    "[voplay input] keydown ignored=text-input key={} active={} target={}",
+                    key,
+                    describe_active_element(&key_document),
+                    describe_key_event_target(&event),
+                ));
+            }
+            return;
+        }
+        if !canvas_has_keyboard_focus(&key_document, &key_canvas, &event) {
+            let seen = KEY_EVENT_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if seen < 24 {
+                console_warn(&format!(
+                    "[voplay input] keydown ignored=no-focus key={} active={} target={}",
+                    key,
+                    describe_active_element(&key_document),
+                    describe_key_event_target(&event),
+                ));
+            }
+            return;
+        }
+        if matches!(key.as_str(), "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | " " | "PageUp" | "PageDown") {
+            event.prevent_default();
+        }
         if !key.is_empty() {
+            let seen = KEY_EVENT_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if seen < 24 {
+                console_warn(&format!(
+                    "[voplay input] keydown accepted key={} active={} target={}",
+                    key,
+                    describe_active_element(&key_document),
+                    describe_key_event_target(&event),
+                ));
+            }
             push_key_event(true, &key);
         }
     }) as Box<dyn FnMut(_)>);
-    canvas
-        .add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())
+    document
+        .add_event_listener_with_callback_and_bool("keydown", key_down.as_ref().unchecked_ref(), true)
         .map_err(|_| "voplay: failed to register keydown listener".to_string())?;
 
+    let key_canvas = canvas.clone();
+    let key_document = document.clone();
     let key_up = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
         let key = event.key();
+        if key_event_targets_text_input(&event) {
+            return;
+        }
+        if !canvas_has_keyboard_focus(&key_document, &key_canvas, &event) {
+            return;
+        }
         if !key.is_empty() {
+            let seen = KEY_EVENT_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if seen < 24 {
+                console_warn(&format!(
+                    "[voplay input] keyup accepted key={} active={} target={}",
+                    key,
+                    describe_active_element(&key_document),
+                    describe_key_event_target(&event),
+                ));
+            }
             push_key_event(false, &key);
         }
     }) as Box<dyn FnMut(_)>);
-    canvas
-        .add_event_listener_with_callback("keyup", key_up.as_ref().unchecked_ref())
+    document
+        .add_event_listener_with_callback_and_bool("keyup", key_up.as_ref().unchecked_ref(), true)
         .map_err(|_| "voplay: failed to register keyup listener".to_string())?;
 
     let pointer_canvas = canvas.clone();
+    let pointer_document = document.clone();
     let pointer_down = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
         let _ = pointer_canvas.focus();
+        console_warn(&format!(
+            "[voplay input] pointerdown focus active={}",
+            describe_active_element(&pointer_document),
+        ));
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
         push_pointer_event(INPUT_POINTER_DOWN, x, y, event.button() as u8);
     }) as Box<dyn FnMut(_)>);
@@ -152,10 +311,16 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
     canvas
         .add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register wheel listener".to_string())?;
+    let _ = canvas.focus();
+    console_warn(&format!(
+        "[voplay input] post-focus active={}",
+        describe_active_element(&document),
+    ));
     
     WASM_INPUT_HANDLERS.with(|handlers| {
         *handlers.borrow_mut() = Some(WasmInputHandlers {
             canvas: canvas.clone(),
+            document,
             key_down,
             key_up,
             pointer_down,
@@ -175,13 +340,15 @@ pub fn reset_wasm_input_handlers() {
             return;
         };
 
-        let _ = handlers.canvas.remove_event_listener_with_callback(
+        let _ = handlers.document.remove_event_listener_with_callback_and_bool(
             "keydown",
             handlers.key_down.as_ref().unchecked_ref(),
+            true,
         );
-        let _ = handlers.canvas.remove_event_listener_with_callback(
+        let _ = handlers.document.remove_event_listener_with_callback_and_bool(
             "keyup",
             handlers.key_up.as_ref().unchecked_ref(),
+            true,
         );
         let _ = handlers.canvas.remove_event_listener_with_callback(
             "pointerdown",

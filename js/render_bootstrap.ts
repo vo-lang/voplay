@@ -60,7 +60,10 @@ export class RenderIsland {
 
   async init(voWeb: VoWebModule): Promise<void> {
     this.installConsoleErrorCapture();
+    this.debug(`render island init.begin canvasId=${this.config.canvasId}`);
+    this.debug(`render island init_vfs.begin canvasId=${this.config.canvasId}`);
     await voWeb.initVFS();
+    this.debug(`render island init_vfs.ready canvasId=${this.config.canvasId}`);
     let jsGlueUrl = '';
     let blobUrlToRevoke = '';
     if (this.config.voplayWasmJsGlue && this.config.voplayWasmJsGlue.length > 0) {
@@ -70,12 +73,18 @@ export class RenderIsland {
       jsGlueUrl = blobUrlToRevoke;
     }
     try {
+      this.debug(`render island preload_ext.begin canvasId=${this.config.canvasId} bindgen=${jsGlueUrl ? 'yes' : 'no'}`);
       await voWeb.preloadExtModule("github.com/vo-lang/voplay", this.config.voplayWasm, jsGlueUrl);
+      this.debug(`render island preload_ext.ready canvasId=${this.config.canvasId}`);
     } finally {
       if (blobUrlToRevoke) URL.revokeObjectURL(blobUrlToRevoke);
     }
+    this.debug(`render island vm_create.begin canvasId=${this.config.canvasId}`);
     this.vm = voWeb.VoVm.withExterns(this.config.bytecode);
+    this.debug(`render island vm_create.ready canvasId=${this.config.canvasId}`);
+    this.debug(`render island run_init.begin canvasId=${this.config.canvasId}`);
     this.vm.runInit();
+    this.debug(`render island run_init.ready canvasId=${this.config.canvasId}`);
   }
 
   start(): void {
@@ -93,6 +102,9 @@ export class RenderIsland {
         this.fail(`runScheduled inbound_bytes=${frame.byteLength}`, error);
       }
     });
+
+    this.flush();
+    this.scheduleHostEvents();
   }
 
   stop(): void {
@@ -105,6 +117,10 @@ export class RenderIsland {
       }
     }
     this.hostTimers.clear();
+    if (this.originalConsoleError) {
+      console.error = this.originalConsoleError;
+      this.originalConsoleError = null;
+    }
     const globalScope = globalThis as VoplayDebugGlobal;
     globalScope.voDisposeExtModule?.("github.com/vo-lang/voplay");
     this.config.channel.close();

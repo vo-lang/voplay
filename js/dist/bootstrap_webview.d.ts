@@ -7,5 +7,5 @@ export interface WebViewBootstrapConfig {
     voplayWasmJsGlue?: Uint8Array | null;
 }
 export declare function bootstrapWebView(config: WebViewBootstrapConfig, voWeb: VoWebModule, channel: IslandChannel, debugLog?: (message: string) => void, onError?: (message: string) => void): Promise<RenderIsland>;
-export declare function stopWebView(): void;
+export declare function stopWebView(island?: RenderIsland): void;
 export declare function installInputHandlers(canvasId: string): () => void;

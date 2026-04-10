@@ -36,7 +36,6 @@ struct LightUniform {
 @group(3) @binding(0) var albedo_tex: texture_2d<f32>;
 @group(3) @binding(1) var albedo_sampler: sampler;
 @group(3) @binding(2) var shadow_tex: texture_depth_2d;
-@group(3) @binding(3) var shadow_sampler: sampler_comparison;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -92,13 +91,16 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
         return 1.0;
     }
 
-    let texel = light_uni.shadow_params.z;
+    let shadow_size = vec2<i32>(textureDimensions(shadow_tex));
+    let base_texel = vec2<i32>(uv * vec2<f32>(shadow_size));
+    let max_texel = shadow_size - vec2<i32>(1, 1);
     let compare_depth = shadow_ndc.z - light_uni.shadow_params.y;
     var visibility = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            visibility += textureSampleCompare(shadow_tex, shadow_sampler, uv + offset, compare_depth);
+            let texel = clamp(base_texel + vec2<i32>(x, y), vec2<i32>(0, 0), max_texel);
+            let sampled_depth = textureLoad(shadow_tex, texel, 0);
+            visibility += select(0.0, 1.0, compare_depth <= sampled_depth);
         }
     }
     return visibility / 9.0;

@@ -27,19 +27,20 @@ type splitWidgetEvent struct {
 	Type   string `json:"type"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+	CanvasId string `json:"canvasId"`
 }
 
 func useExternalIslandHost() bool {
 	return vogui.HasHostCapability("external_island_host")
 }
 
-func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts) {
+func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts, canvasId string) {
 	if state.Started || state.Starting {
 		return
 	}
 	state.Starting = true
 	renderIsland := make(island)
-	go @(renderIsland) runRenderWorker("canvas", renderWorkerPorts{
+	go @(renderIsland) runRenderWorker(canvasId, renderWorkerPorts{
 		frameReq:   ports.frameReq,
 		frameReply: ports.frameReply,
 		resReq:     ports.resReq,
@@ -71,7 +72,7 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 		Init: func() any {
 			state := &splitHostState{}
 			if !useExternalIslandHost() {
-				startRenderIslandSplit(state, ctx, game, ports)
+				startRenderIslandSplit(state, ctx, game, ports, "canvas")
 			}
 			return state
 		},
@@ -80,9 +81,7 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 			if useExternalIslandHost() {
 				return vogui.ExternalWidget(
 					"voplay-render-island",
-					map[string]any{
-						"canvasId": "canvas",
-					},
+					map[string]any{},
 					vogui.OnWidget(func(s *splitHostState, payload string) {
 						var evt splitWidgetEvent
 						err := json.Unmarshal([]byte(payload), &evt)
@@ -93,7 +92,7 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 							ctx.handleResize(evt.Width, evt.Height)
 						}
 						if evt.Type == "mount" {
-							startRenderIslandSplit(s, ctx, game, ports)
+							startRenderIslandSplit(s, ctx, game, ports, evt.CanvasId)
 						}
 					}),
 				).W("100%").H("100%").Display("block").Overflow("hidden")

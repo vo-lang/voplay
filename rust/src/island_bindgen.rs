@@ -20,6 +20,18 @@
 
 use wasm_bindgen::prelude::*;
 
+#[cfg(feature = "wasm")]
+use std::sync::atomic::{AtomicU32, Ordering};
+
+#[cfg(feature = "wasm")]
+static POLL_INPUT_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str);
+}
+
 // ── Output tag constants ──────────────────────────────────────────────────────
 
 const TAG_DISPLAY_PULSE: u8 = 0x03;
@@ -182,6 +194,10 @@ pub fn submit_frame(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "pollInput")]
 pub fn poll_input(_input: &[u8]) -> Vec<u8> {
     let events = crate::input::drain_input();
+    let seen = POLL_INPUT_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if seen < 24 || !events.is_empty() {
+        console_warn(&format!("[voplay island] pollInput bytes={}", events.len()));
+    }
     let mut out = Vec::new();
     out_bytes(&mut out, &events);
     out

@@ -2,7 +2,7 @@
 // Provides canvas from DOM and a host-provided transport.
 
 import type { IslandChannel } from "./island_channel";
-import { RenderIsland, type VoWebModule, type RenderIslandConfig } from "./render_bootstrap";
+import { RenderIsland, type VoWebModule } from "./render_bootstrap";
 
 export interface WebViewBootstrapConfig {
   canvasId: string;
@@ -12,7 +12,7 @@ export interface WebViewBootstrapConfig {
   voplayWasmJsGlue?: Uint8Array | null;
 }
 
-let currentIsland: RenderIsland | null = null;
+const activeIslands = new Set<RenderIsland>();
 
 export async function bootstrapWebView(
   config: WebViewBootstrapConfig,
@@ -21,9 +21,6 @@ export async function bootstrapWebView(
   debugLog?: (message: string) => void,
   onError?: (message: string) => void,
 ): Promise<RenderIsland> {
-  // Stop any existing island
-  currentIsland?.stop();
-
   // Create and start render island
   const island = new RenderIsland({
     bytecode: config.bytecode,
@@ -38,13 +35,20 @@ export async function bootstrapWebView(
   await island.init(voWeb);
   island.start();
 
-  currentIsland = island;
+  activeIslands.add(island);
   return island;
 }
 
-export function stopWebView(): void {
-  currentIsland?.stop();
-  currentIsland = null;
+export function stopWebView(island?: RenderIsland): void {
+  if (island) {
+    island.stop();
+    activeIslands.delete(island);
+    return;
+  }
+  for (const activeIsland of activeIslands) {
+    activeIsland.stop();
+  }
+  activeIslands.clear();
 }
 
 export function installInputHandlers(canvasId: string): () => void {

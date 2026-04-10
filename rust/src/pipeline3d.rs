@@ -194,12 +194,6 @@ impl Pipeline3D {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
             ],
         });
         let terrain_texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -234,60 +228,54 @@ impl Pipeline3D {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 10,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -296,7 +284,7 @@ impl Pipeline3D {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 11,
+                    binding: 10,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -657,7 +645,6 @@ impl Pipeline3D {
         texture_view: &wgpu::TextureView,
         texture_sampler: &wgpu::Sampler,
         shadow_view: &wgpu::TextureView,
-        shadow_sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voplay_mesh_main_texture_bg"),
@@ -666,7 +653,6 @@ impl Pipeline3D {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(texture_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(texture_sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
             ],
         })
     }
@@ -677,7 +663,6 @@ impl Pipeline3D {
         control_view: &wgpu::TextureView,
         control_sampler: &wgpu::Sampler,
         shadow_view: &wgpu::TextureView,
-        shadow_sampler: &wgpu::Sampler,
         layer_views: [&wgpu::TextureView; 4],
         layer_sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
@@ -688,15 +673,14 @@ impl Pipeline3D {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(control_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(control_sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(layer_views[0]) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(layer_sampler) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(layer_views[1]) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(layer_sampler) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(layer_views[2]) },
-                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(layer_sampler) },
-                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(layer_views[3]) },
-                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::Sampler(layer_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(layer_views[0]) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(layer_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(layer_views[1]) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(layer_sampler) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(layer_views[2]) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(layer_sampler) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(layer_views[3]) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(layer_sampler) },
             ],
         })
     }
@@ -727,7 +711,6 @@ impl Pipeline3D {
         models: &'a ModelManager,
         textures: &'a TextureManager,
         shadow_view: &'a wgpu::TextureView,
-        shadow_sampler: &'a wgpu::Sampler,
     ) {
         if draws.is_empty() {
             return;
@@ -839,7 +822,7 @@ impl Pipeline3D {
                         (0, &self.white_texture_view, &self.white_sampler)
                     };
                     let main_texture_bind_group = main_texture_bind_groups.entry(texture_key).or_insert_with(|| {
-                        self.create_main_texture_bind_group(device, texture_view, texture_sampler, shadow_view, shadow_sampler)
+                        self.create_main_texture_bind_group(device, texture_view, texture_sampler, shadow_view)
                     });
                     if use_textured_pipeline {
                         pass.set_pipeline(&self.pipeline_skinned_textured);
@@ -882,7 +865,6 @@ impl Pipeline3D {
                                 texture_view,
                                 texture_sampler,
                                 shadow_view,
-                                shadow_sampler,
                                 layer_texture_views,
                                 textures.sampler(),
                             )
@@ -891,20 +873,20 @@ impl Pipeline3D {
                     } else if let Some(tex_id) = mesh.material.texture_id {
                         if let Some(gpu_tex) = textures.get(tex_id) {
                             let main_texture_bind_group = main_texture_bind_groups.entry(tex_id).or_insert_with(|| {
-                                self.create_main_texture_bind_group(device, &gpu_tex.view, textures.sampler(), shadow_view, shadow_sampler)
+                                self.create_main_texture_bind_group(device, &gpu_tex.view, textures.sampler(), shadow_view)
                             });
                             pass.set_pipeline(&self.pipeline_textured);
                             pass.set_bind_group(3, &*main_texture_bind_group, &[]);
                         } else {
                             let main_texture_bind_group = main_texture_bind_groups.entry(0).or_insert_with(|| {
-                                self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view, shadow_sampler)
+                                self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view)
                             });
                             pass.set_pipeline(&self.pipeline_untextured);
                             pass.set_bind_group(3, &*main_texture_bind_group, &[]);
                         }
                     } else {
                         let main_texture_bind_group = main_texture_bind_groups.entry(0).or_insert_with(|| {
-                            self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view, shadow_sampler)
+                            self.create_main_texture_bind_group(device, &self.white_texture_view, &self.white_sampler, shadow_view)
                         });
                         pass.set_pipeline(&self.pipeline_untextured);
                         pass.set_bind_group(3, &*main_texture_bind_group, &[]);

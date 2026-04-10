@@ -806,7 +806,6 @@ impl Renderer {
                 if let Some(ref cam3d) = camera3d_uniform {
                     self.pipeline3d.set_camera_and_lights(&self.queue, cam3d, &light_uniform);
                     let shadow_view = self.pipeline_shadow.shadow_texture_view();
-                    let shadow_sampler = self.pipeline_shadow.comparison_sampler();
                     self.pipeline3d.draw_models(
                         &self.device,
                         &self.queue,
@@ -815,7 +814,6 @@ impl Renderer {
                         &self.model_manager,
                         &self.texture_manager,
                         shadow_view,
-                        shadow_sampler,
                     );
                 }
             }

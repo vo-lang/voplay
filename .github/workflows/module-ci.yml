@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
@@ -33,7 +34,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./volang/.github/actions/setup-rust
 
       - name: Verify release state
         working-directory: volang
@@ -53,7 +54,7 @@ jobs:
           fi
 
   release_assets:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -66,23 +67,41 @@ jobs:
           repository: vo-lang/volang
           path: volang
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./volang/.github/actions/setup-rust
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked --version 0.13.1
 
       - name: Determine release version
         id: version
         run: |
-          version="${{ github.event.release.tag_name || inputs.version }}"
+          version="${{ github.event.release.tag_name }}"
+          ref_type="${{ github.ref_type }}"
+          ref_name="${{ github.ref_name }}"
           if [ -z "$version" ]; then
-            echo "::error::version is required for workflow_dispatch"
+            version="${{ inputs.version }}"
+          fi
+          if [ -z "$version" ] && [ "$ref_type" = "tag" ]; then
+            version="$ref_name"
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::version is required for workflow_dispatch or tag push"
             exit 1
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build pkg-island release assets
+        working-directory: module/rust
+        run: |
+          wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
 
       - name: Stage release assets
         working-directory: volang
         run: |
           cargo run -p vo --release -- release stage ../module \
             --version "${{ steps.version.outputs.value }}" \
+            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../module/rust/pkg-island/voplay_island_bg.wasm \
+            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js ../module/rust/pkg-island/voplay_island.js \
             --out-dir ../module/release-dist
 
       - uses: actions/upload-artifact@v4

@@ -63,45 +63,31 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shape = i32(in.shape_type + 0.5);
 
-    // Shape 0: filled rectangle (with optional corner radius)
-    if shape == 0 {
-        if in.corner_radius > 0.0 {
-            let half = in.size_px * 0.5;
-            let r = min(in.corner_radius, min(half.x, half.y));
-            let p = abs(in.uv * in.size_px - half);
-            let q = p - half + vec2<f32>(r, r);
-            let d = length(max(q, vec2<f32>(0.0))) - r;
-            let aa = fwidth(d);
-            let alpha = 1.0 - smoothstep(-aa, aa, d);
-            return vec4<f32>(in.color.rgb, in.color.a * alpha);
-        }
-        return in.color;
-    }
+    let half = in.size_px * 0.5;
+    let r = min(in.corner_radius, min(half.x, half.y));
+    let rect_p = abs(in.uv * in.size_px - half);
+    let rect_q = rect_p - half + vec2<f32>(r, r);
+    let rect_d = length(max(rect_q, vec2<f32>(0.0))) - r;
+    let rect_aa = fwidth(rect_d);
+    let rounded_rect_alpha = 1.0 - smoothstep(-rect_aa, rect_aa, rect_d);
+    let rect_alpha = select(1.0, rounded_rect_alpha, in.corner_radius > 0.0);
 
-    // Shape 1: filled circle (SDF)
-    if shape == 1 {
-        let center = vec2<f32>(0.5, 0.5);
-        let dist = length(in.uv - center);
-        let aa = fwidth(dist);
-        let alpha = 1.0 - smoothstep(0.5 - aa, 0.5, dist);
-        return vec4<f32>(in.color.rgb, in.color.a * alpha);
-    }
+    let circle_center = vec2<f32>(0.5, 0.5);
+    let circle_dist = length(in.uv - circle_center);
+    let circle_aa = fwidth(circle_dist);
+    let circle_alpha = 1.0 - smoothstep(0.5 - circle_aa, 0.5, circle_dist);
 
-    // Shape 2: line (oriented rect with round caps)
-    if shape == 2 {
-        // UV.x goes along the line direction, UV.y goes across thickness.
-        // Round caps: SDF capsule along x axis.
-        let half_len = in.size_px.x * 0.5;
-        let half_thick = in.size_px.y * 0.5;
-        let p = in.uv * in.size_px - vec2<f32>(half_len, half_thick);
-        // Capsule SDF: clamp x to [-half_len, half_len], distance from clamped point
-        let qx = abs(p.x) - half_len + half_thick;
-        let q = vec2<f32>(max(qx, 0.0), p.y);
-        let d = length(q) - half_thick;
-        let aa = fwidth(d);
-        let alpha = 1.0 - smoothstep(-aa, aa, d);
-        return vec4<f32>(in.color.rgb, in.color.a * alpha);
-    }
+    let half_len = in.size_px.x * 0.5;
+    let half_thick = in.size_px.y * 0.5;
+    let line_p = in.uv * in.size_px - vec2<f32>(half_len, half_thick);
+    let line_qx = abs(line_p.x) - half_len + half_thick;
+    let line_q = vec2<f32>(max(line_qx, 0.0), line_p.y);
+    let line_d = length(line_q) - half_thick;
+    let line_aa = fwidth(line_d);
+    let line_alpha = 1.0 - smoothstep(-line_aa, line_aa, line_d);
 
-    return in.color;
+    var alpha = rect_alpha;
+    alpha = select(alpha, circle_alpha, shape == 1);
+    alpha = select(alpha, line_alpha, shape == 2);
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }

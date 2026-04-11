@@ -1381,6 +1381,9 @@ func testScene3DLevelSpawnValidation() {
 	mb := &testFreeModelBackend{freed: freed}
 	mb.prev = voplay.SetModelBackend(mb)
 	defer voplay.SetModelBackend(mb.prev)
+	pb := &testScene3DPhysicsBackend{}
+	prevPhys := scene3d.SetPhysicsBackend(pb)
+	defer scene3d.SetPhysicsBackend(prevPhys)
 
 	s := scene3d.New()
 	duplicateNodes := []scene3d.LevelNodeInfo{
@@ -1413,6 +1416,9 @@ func testScene3DLevelSpawnKeepsInputNodes() {
 	mb := &testFreeModelBackend{freed: freed}
 	mb.prev = voplay.SetModelBackend(mb)
 	defer voplay.SetModelBackend(mb.prev)
+	pb := &testScene3DPhysicsBackend{}
+	prevPhys := scene3d.SetPhysicsBackend(pb)
+	defer scene3d.SetPhysicsBackend(prevPhys)
 
 	s := scene3d.New()
 	nodes := []scene3d.LevelNodeInfo{

@@ -42,7 +42,15 @@ jobs:
       - name: Test module
         run: |
           if [ -d tests ]; then
-            vo test tests
+            shopt -s nullglob
+            subdirs=(tests/*/)
+            if [ ${#subdirs[@]} -gt 0 ]; then
+              for dir in "${subdirs[@]}"; do
+                vo test "$dir"
+              done
+            else
+              vo test tests
+            fi
           else
             echo "no tests directory"
           fi

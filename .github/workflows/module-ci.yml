@@ -43,10 +43,10 @@ jobs:
         run: |
           if [ -d tests ]; then
             shopt -s nullglob
-            subdirs=(tests/*/)
-            if [ ${#subdirs[@]} -gt 0 ]; then
-              for dir in "${subdirs[@]}"; do
-                vo test "$dir"
+            files=(tests/*.vo)
+            if [ ${#files[@]} -gt 0 ]; then
+              for f in "${files[@]}"; do
+                vo test "$f"
               done
             else
               vo test tests

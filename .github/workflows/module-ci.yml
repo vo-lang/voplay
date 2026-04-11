@@ -25,33 +25,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: module
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
-      - uses: actions/checkout@v4
-        with:
-          repository: vo-lang/volang
-          path: volang
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: ./volang/.github/actions/setup-rust
+      - name: Install vo
+        run: brew install vo-lang/vo/vo
 
       - name: Verify release state
-        working-directory: volang
-        run: cargo run -p vo --release -- release verify ../module
+        run: vo release verify .
 
       - name: Check module
-        working-directory: volang
-        run: ./d.py --release check ../module
+        run: vo check .
 
       - name: Test module
-        working-directory: volang
         run: |
-          if [ -d ../module/tests ]; then
-            ./d.py test both --release ../module/tests
+          if [ -d tests ]; then
+            vo test tests
           else
             echo "no tests directory"
           fi
@@ -65,7 +53,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: module
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - uses: actions/checkout@v4
@@ -78,45 +65,22 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked --version 0.13.1
 
-      - name: Determine release version
-        id: version
-        run: |
-          version="${{ github.event.release.tag_name }}"
-          ref_type="${{ github.ref_type }}"
-          ref_name="${{ github.ref_name }}"
-          if [ -z "$version" ]; then
-            version="${{ inputs.version }}"
-          fi
-          if [ -z "$version" ] && [ "$ref_type" = "tag" ]; then
-            version="$ref_name"
-          fi
-          if [ -z "$version" ]; then
-            echo "::error::version is required for workflow_dispatch or tag push"
-            exit 1
-          fi
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-
       - name: Build pkg-island release assets
-        working-directory: module/rust
+        working-directory: rust
         run: |
           wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
 
       - name: Stage release assets
         working-directory: volang
         run: |
-          cargo run -p vo --release -- release stage ../module \
-            --version "${{ steps.version.outputs.value }}" \
-            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../module/rust/pkg-island/voplay_island_bg.wasm \
-            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js ../module/rust/pkg-island/voplay_island.js \
-            --out-dir ../module/release-dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-assets
-          path: module/release-dist/
+          cargo run -p vo --release -- release stage .. \
+            --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
+            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../rust/pkg-island/voplay_island_bg.wasm \
+            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js ../rust/pkg-island/voplay_island.js \
+            --out-dir ../release-dist
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.value }}
-          files: module/release-dist/*
+          tag_name: ${{ inputs.version || github.event.release.tag_name || github.ref_name }}
+          files: release-dist/*

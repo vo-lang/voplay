@@ -2919,7 +2919,7 @@ dependencies = [
 [[package]]
 name = "vogui"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/vogui#843e228ce4c99d8f61a94ad8c400a1ed33073364"
+source = "git+https://github.com/vo-lang/vogui#2d704caa285667c2c8fffb404bbbed30895e85b0"
 dependencies = [
  "linkme",
  "log",

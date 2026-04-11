@@ -18,8 +18,8 @@ deps = []
 path = "github.com/vo-lang/vogui"
 version = "v0.1.2"
 vo = "^0.1.0"
-commit = "843e228ce4c99d8f61a94ad8c400a1ed33073364"
-release_manifest = "sha256:57fe2aea13ebc2831502b5f99c923a6d8d5ecc2dd119aeb081a403e10ff6b30e"
+commit = "2d704caa285667c2c8fffb404bbbed30895e85b0"
+release_manifest = "sha256:0648c69b3b1b009b318383fbf189d5a8204210ff8876b44e2b29827eb52f2e66"
 source = "sha256:80d928aa846d73cdd795af7b56c60420c92d8a355bb269e39b1d51137a054b26"
 deps = []
 

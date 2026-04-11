@@ -9,16 +9,16 @@ vo = "^0.1.0"
 path = "github.com/vo-lang/vopack"
 version = "v0.1.0"
 vo = "^0.1.0"
-commit = "acb539cda8309969ff83601aa64cd55b6662b933"
-release_manifest = "sha256:5b324e9da1e4564c534ebbb66fe97a73ea0a9fa8c0ddd047a0d4b7a0ef4a47ab"
-source = "sha256:94f6f94c1b5e0bc5785ddedc7b24b736a92d60f7181e949e4f08b55f29389967"
+commit = "9b9ed084848c9621aacc5948b384e704ffdc6406"
+release_manifest = "sha256:f8d4c62e0435f92334bd2e480ba28bf6549c6556dbbd1ae7f262c52752210d9b"
+source = "sha256:66332c9bcae3d0c060d86de987a717bc3e5d86bcbf8439e0bea18cba339d0f72"
 deps = []
 
 [[resolved]]
 path = "github.com/vo-lang/vogui"
 version = "v0.1.1"
 vo = "^0.1.0"
-commit = "1ff253d91764f9bb2eec95e6e56d277342dc5412"
-release_manifest = "sha256:c3964c95bfc57b47d1cc12aeab4697711962133cb2789239145cb72ac61a5cfe"
-source = "sha256:0b3e6dd97978c2f95605e1d5689b4474dc4d99d37080a546f1320db620c518ac"
+commit = "ecb139e4221505e01ea79dadbec19765ac5fa6d3"
+release_manifest = "sha256:e9eb57306a351cf735493e495fb20181c8e48d8beebd7267a3971015937fd3de"
+source = "sha256:f425eeaa178a5132674910432f73c040a92a15015044fbc54b0e43afd5b3f71b"
 deps = []

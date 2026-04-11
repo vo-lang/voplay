@@ -2751,6 +2751,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vo-common"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "codespan-reporting",
  "rustc-hash 1.1.0",
@@ -2765,6 +2766,7 @@ dependencies = [
 [[package]]
 name = "vo-common-core"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "hashbrown 0.15.5",
  "num_enum",
@@ -2774,6 +2776,7 @@ dependencies = [
 [[package]]
 name = "vo-ext"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "linkme",
  "vo-ffi-macro",
@@ -2783,6 +2786,7 @@ dependencies = [
 [[package]]
 name = "vo-ffi-macro"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2795,6 +2799,7 @@ dependencies = [
 [[package]]
 name = "vo-module"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "flate2",
  "js-sys",
@@ -2813,6 +2818,7 @@ dependencies = [
 [[package]]
 name = "vo-runtime"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "dirs",
  "hashbrown 0.15.5",
@@ -2830,6 +2836,7 @@ dependencies = [
 [[package]]
 name = "vo-stdlib"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2857,6 +2864,7 @@ dependencies = [
 [[package]]
 name = "vo-syntax"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "logos",
  "num-bigint",
@@ -2869,6 +2877,7 @@ dependencies = [
 [[package]]
 name = "vo-vm"
 version = "0.1.1"
+source = "git+https://github.com/vo-lang/volang#045c34322c588d9f577257a861e971a43408d04f"
 dependencies = [
  "fastrand",
  "hashbrown 0.15.5",
@@ -2910,6 +2919,7 @@ dependencies = [
 [[package]]
 name = "vogui"
 version = "0.1.0"
+source = "git+https://github.com/vo-lang/vogui#70c396c2f691de86b6f1f289ae143b327f3a6255"
 dependencies = [
  "linkme",
  "log",
@@ -3691,7 +3701,3 @@ checksum = "410e9ecef634c709e3831c2cfdb8d9c32164fae1c67496d5b68fff728eec37fe"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "vo-engine"
-version = "0.1.1"

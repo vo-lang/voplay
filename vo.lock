@@ -16,9 +16,23 @@ deps = []
 
 [[resolved]]
 path = "github.com/vo-lang/vogui"
-version = "v0.1.1"
+version = "v0.1.2"
 vo = "^0.1.0"
-commit = "ecb139e4221505e01ea79dadbec19765ac5fa6d3"
-release_manifest = "sha256:e9eb57306a351cf735493e495fb20181c8e48d8beebd7267a3971015937fd3de"
-source = "sha256:f425eeaa178a5132674910432f73c040a92a15015044fbc54b0e43afd5b3f71b"
+commit = "843e228ce4c99d8f61a94ad8c400a1ed33073364"
+release_manifest = "sha256:57fe2aea13ebc2831502b5f99c923a6d8d5ecc2dd119aeb081a403e10ff6b30e"
+source = "sha256:80d928aa846d73cdd795af7b56c60420c92d8a355bb269e39b1d51137a054b26"
 deps = []
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "x86_64-unknown-linux-gnu"
+name = "libvo_vogui.so"
+size = 1942312
+digest = "sha256:5097d1a3c0f6c3cf09f192026f64899d1f153b9d6b149f343407cd78cf33c2aa"
+
+[[resolved.artifact]]
+kind = "extension-wasm"
+target = "wasm32-unknown-unknown"
+name = "vogui.wasm"
+size = 26408
+digest = "sha256:a0d47f6756dc04643fa42fe4ed1187d0671e49b1f1ea41b40fe497fdcfa64520"

@@ -51,17 +51,3 @@ console_error_panic_hook = { version = "0.1", optional = true }
 
 [workspace]
 
-# Redirect git deps to local sibling repos for development
-[patch."https://github.com/vo-lang/vogui"]
-vogui = { path = "../../vogui/rust/ext" }
-
-[patch."https://github.com/vo-lang/volang"]
-vo-common    = { path = "../../volang/lang/crates/vo-common" }
-vo-engine    = { path = "../../volang/lang/crates/vo-engine" }
-vo-ext       = { path = "../../volang/lang/crates/vo-ext" }
-vo-ffi-macro = { path = "../../volang/lang/crates/vo-ffi-macro" }
-vo-module    = { path = "../../volang/lang/crates/vo-module" }
-vo-runtime   = { path = "../../volang/lang/crates/vo-runtime" }
-vo-stdlib    = { path = "../../volang/lang/crates/vo-stdlib" }
-vo-syntax    = { path = "../../volang/lang/crates/vo-syntax" }
-vo-vm        = { path = "../../volang/lang/crates/vo-vm" }

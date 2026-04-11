@@ -27,6 +27,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
+      - name: Install system deps
+        run: sudo apt-get install -y libasound2-dev
+
       - name: Install vo
         run: curl -fsSL "https://github.com/vo-lang/volang/releases/latest/download/vo-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin vo
 

@@ -143,6 +143,11 @@ fn create_native_renderer(canvas_ref: &str) -> Result<(), String> {
                     canvas_ref,
                 ));
             }
+            #[cfg(not(target_vendor = "apple"))]
+            return Err(format!(
+                "voplay: CoreAnimationLayer surface is only supported on Apple platforms"
+            ));
+            #[cfg(target_vendor = "apple")]
             unsafe {
                 instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(desc.native_handle))
             }

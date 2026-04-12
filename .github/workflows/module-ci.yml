@@ -73,6 +73,18 @@ jobs:
 
       - uses: ./volang/.github/actions/setup-rust
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS dependencies
+        working-directory: js
+        run: npm ci
+
+      - name: Build Studio JS assets
+        working-directory: js
+        run: npm run build
+
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked --version 0.13.1
 

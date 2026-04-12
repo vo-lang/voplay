@@ -1,6 +1,9 @@
 [extension]
 name = "voplay"
 path = "rust/target/{profile}/libvo_voplay"
+include = [
+  "js/dist/voplay-render-island.js",
+]
 
 [extension.wasm]
 type = "bindgen"

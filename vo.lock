@@ -6,15 +6,6 @@ module = "github.com/vo-lang/voplay"
 vo = "^0.1.0"
 
 [[resolved]]
-path = "github.com/vo-lang/vopack"
-version = "v0.1.0"
-vo = "^0.1.0"
-commit = "9b9ed084848c9621aacc5948b384e704ffdc6406"
-release_manifest = "sha256:f8d4c62e0435f92334bd2e480ba28bf6549c6556dbbd1ae7f262c52752210d9b"
-source = "sha256:66332c9bcae3d0c060d86de987a717bc3e5d86bcbf8439e0bea18cba339d0f72"
-deps = []
-
-[[resolved]]
 path = "github.com/vo-lang/vogui"
 version = "v0.1.2"
 vo = "^0.1.0"
@@ -36,3 +27,12 @@ target = "wasm32-unknown-unknown"
 name = "vogui.wasm"
 size = 26408
 digest = "sha256:a0d47f6756dc04643fa42fe4ed1187d0671e49b1f1ea41b40fe497fdcfa64520"
+
+[[resolved]]
+path = "github.com/vo-lang/vopack"
+version = "v0.1.0"
+vo = "^0.1.0"
+commit = "9b9ed084848c9621aacc5948b384e704ffdc6406"
+release_manifest = "sha256:f8d4c62e0435f92334bd2e480ba28bf6549c6556dbbd1ae7f262c52752210d9b"
+source = "sha256:66332c9bcae3d0c060d86de987a717bc3e5d86bcbf8439e0bea18cba339d0f72"
+deps = []

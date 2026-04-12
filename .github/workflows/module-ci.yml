@@ -86,8 +86,8 @@ jobs:
         run: |
           cargo run -p vo --release -- release stage .. \
             --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
-            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../rust/pkg-island/voplay_island_bg.wasm \
             --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js ../rust/pkg-island/voplay_island.js \
+            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../rust/pkg-island/voplay_island_bg.wasm \
             --out-dir ../release-dist
 
       - name: Upload release assets

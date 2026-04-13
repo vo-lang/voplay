@@ -77,6 +77,9 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install vo
+        run: curl -fsSL "https://github.com/vo-lang/volang/releases/latest/download/vo-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin vo
+
       - name: Install JS dependencies
         working-directory: js
         run: npm ci
@@ -94,13 +97,12 @@ jobs:
           wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
 
       - name: Stage release assets
-        working-directory: volang
         run: |
-          cargo run -p vo --release -- release stage .. \
+          vo release stage . \
             --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
-            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js ../rust/pkg-island/voplay_island.js \
-            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm ../rust/pkg-island/voplay_island_bg.wasm \
-            --out-dir ../release-dist
+            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js rust/pkg-island/voplay_island.js \
+            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm rust/pkg-island/voplay_island_bg.wasm \
+            --out-dir release-dist
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

@@ -1,9 +1,19 @@
 [extension]
 name = "voplay"
-path = "rust/target/{profile}/libvo_voplay"
 include = [
   "js/dist",
 ]
+
+[extension.native]
+path = "rust/target/{profile}/libvo_voplay"
+
+[[extension.native.targets]]
+target = "aarch64-apple-darwin"
+library = "libvo_voplay.dylib"
+
+[[extension.native.targets]]
+target = "x86_64-unknown-linux-gnu"
+library = "libvo_voplay.so"
 
 [extension.wasm]
 type = "bindgen"

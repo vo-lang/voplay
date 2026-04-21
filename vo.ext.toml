@@ -19,8 +19,12 @@ library = "libvo_voplay.so"
 type = "bindgen"
 wasm = "voplay_island_bg.wasm"
 js_glue = "voplay_island.js"
+local_wasm = "rust/pkg-island/voplay_island_bg.wasm"
+local_js_glue = "rust/pkg-island/voplay_island.js"
 
-[studio]
+[extension.web]
 entry = "Run"
 capabilities = ["widget", "island_transport", "vo_web", "vfs"]
+
+[extension.web.js]
 renderer = "js/dist/voplay-render-island.js"

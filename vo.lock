@@ -7,26 +7,40 @@ vo = "^0.1.0"
 
 [[resolved]]
 path = "github.com/vo-lang/vogui"
-version = "v0.1.4"
+version = "v0.1.6"
 vo = "^0.1.0"
-commit = "8540905ca476366693f7f03549e6cb278e90ceaf"
-release_manifest = "sha256:99d5abe72fd24f0cb6c5f8a78947f7de8115db1f87af4457931b23f74542c48d"
-source = "sha256:d3e4064cc14e687ad58ec5d2c3e4311a5cc9551b01568c8ca8c6b12ecd87f3b1"
+commit = "106c8108ee27f176325e1a2ec89195c479a4bc43"
+release_manifest = "sha256:7d01c2016f1df6daee103afc27b3574a462fbfbe54c938290ec74d06ad73c47c"
+source = "sha256:f16b5f5cec00445437c97f4e6a5d8886e2ae2cd17eb204425aa3f44b6aad8973"
 deps = []
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "aarch64-apple-darwin"
+name = "libvo_vogui.dylib"
+size = 1590352
+digest = "sha256:92e984a9c9eb18cc06f6b901d5d8883db6e7501e484189be852d578ec09d81f3"
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "x86_64-pc-windows-msvc"
+name = "vo_vogui.dll"
+size = 1379328
+digest = "sha256:7414c04ad44227aa585cefdbc39dc31289bb368f0694e20169a272eba149b880"
 
 [[resolved.artifact]]
 kind = "extension-native"
 target = "x86_64-unknown-linux-gnu"
 name = "libvo_vogui.so"
-size = 1942944
-digest = "sha256:63f187895d30ab25b31c38fd5f365945f77e242eb050b4538ca3039b63bfbbc8"
+size = 1948528
+digest = "sha256:3e25d90baa605606929b1d8006249f95954687fdf32b3be4df0ed84512dd2d92"
 
 [[resolved.artifact]]
 kind = "extension-wasm"
 target = "wasm32-unknown-unknown"
 name = "vogui.wasm"
-size = 26408
-digest = "sha256:a0d47f6756dc04643fa42fe4ed1187d0671e49b1f1ea41b40fe497fdcfa64520"
+size = 26031
+digest = "sha256:a781b54e882b219c318d0ea651577a64b1defbae5f9fe5e78ecf1deb7234b8a1"
 
 [[resolved]]
 path = "github.com/vo-lang/vopack"

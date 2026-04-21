@@ -11,6 +11,10 @@ on:
         description: "Release tag (e.g. v0.1.0)"
         required: false
         type: string
+      source_ref:
+        description: "Git ref to build from (defaults to the triggering ref)"
+        required: false
+        type: string
   release:
     types: [published]
 
@@ -18,7 +22,7 @@ permissions:
   contents: write
 
 env:
-  VO_VERSION: v0.1.3
+  VOLANG_REF: 1d32a90e61f1ffbca8e3a15cbd2d28028594d2fa
 
 jobs:
   validate:
@@ -28,13 +32,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Install system deps
         run: sudo apt-get install -y libasound2-dev
 
-      - name: Install vo
-        run: curl -fsSL "https://github.com/vo-lang/volang/releases/download/${VO_VERSION}/vo-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin vo
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Checkout volang toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: vo-lang/volang
+          ref: ${{ env.VOLANG_REF }}
+          path: volang
+
+      - name: Build vo
+        run: cargo build --manifest-path volang/cmd/vo/Cargo.toml --release
+
+      - name: Expose vo on PATH
+        run: echo "$GITHUB_WORKSPACE/volang/target/release" >> "$GITHUB_PATH"
 
       - name: Verify release state
         run: vo release verify .
@@ -45,15 +62,7 @@ jobs:
       - name: Test module
         run: |
           if [ -d tests ]; then
-            shopt -s nullglob
-            files=(tests/*.vo)
-            if [ ${#files[@]} -gt 0 ]; then
-              for f in "${files[@]}"; do
-                vo test "$f"
-              done
-            else
-              vo test tests
-            fi
+            vo test tests
           else
             echo "no tests directory"
           fi
@@ -67,11 +76,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - uses: actions/checkout@v4
         with:
           repository: vo-lang/volang
+          ref: ${{ env.VOLANG_REF }}
           path: volang
 
       - uses: ./volang/.github/actions/setup-rust
@@ -80,8 +90,11 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install vo
-        run: curl -fsSL "https://github.com/vo-lang/volang/releases/download/${VO_VERSION}/vo-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin vo
+      - name: Build vo
+        run: cargo build --manifest-path volang/cmd/vo/Cargo.toml --release
+
+      - name: Expose vo on PATH
+        run: echo "$GITHUB_WORKSPACE/volang/target/release" >> "$GITHUB_PATH"
 
       - name: Install JS dependencies
         working-directory: js

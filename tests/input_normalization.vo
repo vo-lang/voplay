@@ -2,13 +2,7 @@ package main
 
 import "github.com/vo-lang/voplay"
 
-func assert(cond bool, msg string) {
-	if !cond {
-		panic("FAIL: " + msg)
-	}
-}
-
-func main() {
+func testInputNormalization() {
 	input := voplay.NewInputState()
 	actions := voplay.NewActionMap(input)
 	actions.Bind("left", voplay.KeyBinding("a"))

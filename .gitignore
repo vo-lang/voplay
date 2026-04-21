@@ -2,3 +2,4 @@
 /rust/.cargo/
 *.wasm
 js/node_modules/
+**/.vo-cache/

@@ -1,9 +1,6 @@
 version = 1
 
 [[use]]
-path = "."
-
-[[use]]
 path = "../vopack"
 
 [[use]]

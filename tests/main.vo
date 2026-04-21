@@ -1845,5 +1845,7 @@ func main() {
 	testScene3DEntityHasSkeleton()
 	testScene3DPickZeroDirection()
 	testScene2DPhysicsBackend()
+	testInputNormalization()
+	testThirdPersonCameraRotationSemantics()
 	println("ALL TESTS PASSED")
 }

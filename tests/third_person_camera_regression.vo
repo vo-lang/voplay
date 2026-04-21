@@ -4,26 +4,6 @@ import "math"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/scene3d"
 
-func assert(cond bool, msg string) {
-	if !cond {
-		panic("FAIL: " + msg)
-	}
-}
-
-func assertFloatNear(got, want, tol float64, label string) {
-	diff := got - want
-	if diff < 0 {
-		diff = -diff
-	}
-	assert(diff <= tol, label)
-}
-
-func assertVec3Near(got, want voplay.Vec3, tol float64, label string) {
-	assertFloatNear(got.X, want.X, tol, label+": x")
-	assertFloatNear(got.Y, want.Y, tol, label+": y")
-	assertFloatNear(got.Z, want.Z, tol, label+": z")
-}
-
 func testThirdPersonCameraRotationSemantics() {
 	s := scene3d.New()
 	target := s.Spawn(scene3d.EntityDesc{
@@ -57,8 +37,4 @@ func testThirdPersonCameraRotationSemantics() {
 	assertVec3Near(s.Camera.Position, voplay.Vec3{X: 1, Y: 3, Z: 7}, 0.000001, "third person returns to free orbit")
 
 	s.Close()
-}
-
-func main() {
-	testThirdPersonCameraRotationSemantics()
 }

@@ -8,7 +8,7 @@ import type { RenderIsland, VoWebModule } from "./render_bootstrap";
 
 // ── RendererModule contract (mirrors studio/src/lib/gui/render_island.ts) ─────
 
-interface StudioGuiHost {
+interface RendererHost {
   moduleBytes: Uint8Array;
   log(message: string): void;
   reportError(message: string): void;
@@ -217,7 +217,7 @@ class RenderIslandWidgetInstance {
   }
 }
 
-export async function init(host: StudioGuiHost): Promise<void> {
+export async function init(host: RendererHost): Promise<void> {
   const widget = requireCapability(host.getCapability("widget"), "widget");
   const islandTransport = requireCapability(host.getCapability("island_transport"), "island_transport");
   const voWeb = requireCapability(host.getCapability("vo_web"), "vo_web");

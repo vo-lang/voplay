@@ -1,6 +1,6 @@
 import type { IslandChannel } from "./island_channel";
 import type { VoWebModule } from "./render_bootstrap";
-interface StudioGuiHost {
+interface RendererHost {
     moduleBytes: Uint8Array;
     log(message: string): void;
     reportError(message: string): void;
@@ -27,7 +27,7 @@ interface VoWebCapability {
 interface VfsCapability {
     getBytes(path: string): Uint8Array | null;
 }
-export declare function init(host: StudioGuiHost): Promise<void>;
+export declare function init(host: RendererHost): Promise<void>;
 export declare function render(_container: HTMLElement, _bytes: Uint8Array): void;
 export declare function stop(): void;
 declare const _default: {

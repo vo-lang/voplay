@@ -7,11 +7,11 @@ vo = "^0.1.0"
 
 [[resolved]]
 path = "github.com/vo-lang/vogui"
-version = "v0.1.6"
+version = "v0.1.7"
 vo = "^0.1.0"
-commit = "106c8108ee27f176325e1a2ec89195c479a4bc43"
-release_manifest = "sha256:7d01c2016f1df6daee103afc27b3574a462fbfbe54c938290ec74d06ad73c47c"
-source = "sha256:f16b5f5cec00445437c97f4e6a5d8886e2ae2cd17eb204425aa3f44b6aad8973"
+commit = "6f04c6ed015ce07950f768ab86a4411516fb01f2"
+release_manifest = "sha256:e55c2cfed3a8eb91ff039dc46fefb5ce35b6c1038ab17504fe99e8b6d28c54e6"
+source = "sha256:9f52e062da3b7074d2a3a1a81a2bf8ff6e5fc3898aa0123e48459c764401df54"
 deps = []
 
 [[resolved.artifact]]
@@ -26,7 +26,7 @@ kind = "extension-native"
 target = "x86_64-pc-windows-msvc"
 name = "vo_vogui.dll"
 size = 1379328
-digest = "sha256:7414c04ad44227aa585cefdbc39dc31289bb368f0694e20169a272eba149b880"
+digest = "sha256:690595addeb859d8a855beb41f0fe0aa178f34e2e62f680e8a97e6565873f797"
 
 [[resolved.artifact]]
 kind = "extension-native"

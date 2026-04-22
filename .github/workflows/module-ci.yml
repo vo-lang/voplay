@@ -67,9 +67,51 @@ jobs:
             echo "no tests directory"
           fi
 
-  release_assets:
+  build_native_release_artifacts:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            library: libvo_voplay.dylib
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            library: libvo_voplay.so
+    env:
+      VOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libasound2-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build native extension
+        run: cargo build --manifest-path rust/Cargo.toml --lib --release --target ${{ matrix.target }}
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-${{ matrix.target }}
+          path: rust/target/${{ matrix.target }}/release/${{ matrix.library }}
+
+  release_assets:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    needs:
+      - validate
+      - build_native_release_artifacts
     runs-on: ubuntu-latest
     env:
       VOWORK: off
@@ -112,10 +154,18 @@ jobs:
         run: |
           wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
 
+      - name: Download staged release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/release-artifacts
+          merge-multiple: true
+
       - name: Stage release assets
         run: |
           vo release stage . \
             --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
+            --artifact extension-native aarch64-apple-darwin libvo_voplay.dylib "$RUNNER_TEMP/release-artifacts/libvo_voplay.dylib" \
+            --artifact extension-native x86_64-unknown-linux-gnu libvo_voplay.so "$RUNNER_TEMP/release-artifacts/libvo_voplay.so" \
             --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js rust/pkg-island/voplay_island.js \
             --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm rust/pkg-island/voplay_island_bg.wasm \
             --out-dir release-dist

@@ -38,7 +38,7 @@ vo-ffi-macro = { git = "https://github.com/vo-lang/volang", rev = "89d93f4283940
 vo-runtime   = { git = "https://github.com/vo-lang/volang", rev = "89d93f42839409aab0a9f781c1f78aff62176a6a", default-features = false, optional = true }
 
 linkme       = { version = "0.3", optional = true }
-vogui        = { git = "https://github.com/vo-lang/vogui", rev = "e63c92fc4074636777f922ab0a20ae70ddaa4b4d", default-features = false, optional = true }
+vogui        = { git = "https://github.com/vo-lang/vogui", rev = "e80b37be37050d96d2b55dbef5ce3b81091c3b5f", default-features = false, optional = true }
 
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }

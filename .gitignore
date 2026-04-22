@@ -1,5 +1,7 @@
 /rust/target/
 /rust/.cargo/
 *.wasm
+!web-artifacts/
+!web-artifacts/*.wasm
 js/node_modules/
 **/.vo-cache/

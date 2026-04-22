@@ -22,7 +22,7 @@ permissions:
   contents: write
 
 env:
-  VOLANG_REF: 6069a0cc066062649460d3c409ee227f8b8cb1f6
+  VOLANG_REF: 89d93f42839409aab0a9f781c1f78aff62176a6a
 
 jobs:
   validate:
@@ -166,8 +166,8 @@ jobs:
             --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
             --artifact extension-native aarch64-apple-darwin libvo_voplay.dylib "$RUNNER_TEMP/release-artifacts/libvo_voplay.dylib" \
             --artifact extension-native x86_64-unknown-linux-gnu libvo_voplay.so "$RUNNER_TEMP/release-artifacts/libvo_voplay.so" \
-            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js rust/pkg-island/voplay_island.js \
-            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm rust/pkg-island/voplay_island_bg.wasm \
+            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js web-artifacts/voplay_island.js \
+            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm web-artifacts/voplay_island_bg.wasm \
             --out-dir release-dist
 
       - name: Upload release assets

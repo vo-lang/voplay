@@ -19,8 +19,8 @@ library = "libvo_voplay.so"
 type = "bindgen"
 wasm = "voplay_island_bg.wasm"
 js_glue = "voplay_island.js"
-local_wasm = "rust/pkg-island/voplay_island_bg.wasm"
-local_js_glue = "rust/pkg-island/voplay_island.js"
+local_wasm = "web-artifacts/voplay_island_bg.wasm"
+local_js_glue = "web-artifacts/voplay_island.js"
 
 [extension.web]
 entry = "Run"

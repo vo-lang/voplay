@@ -1,0 +1,620 @@
+{
+  "artifacts": [
+    {
+      "digest": "sha256:330ad83bb2847aa1632e4b847b239be9919b8941687bf2bc13f80e7500a46b3e",
+      "kind": "extension-wasm",
+      "name": "voplay_island_bg.wasm",
+      "path": "web-artifacts/voplay_island_bg.wasm",
+      "size": 3158764,
+      "target": "wasm32-unknown-unknown"
+    },
+    {
+      "digest": "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d",
+      "kind": "extension-js-glue",
+      "name": "voplay_island.js",
+      "path": "web-artifacts/voplay_island.js",
+      "size": 94795,
+      "target": "wasm32-unknown-unknown"
+    }
+  ],
+  "commit": "6782f69efdd677244184f9168c567fc76a692a3d",
+  "extension": {
+    "include": [
+      "js/dist"
+    ],
+    "name": "voplay",
+    "wasm": {
+      "js_glue": "voplay_island.js",
+      "kind": "Bindgen",
+      "local_js_glue": "web-artifacts/voplay_island.js",
+      "local_wasm": "web-artifacts/voplay_island_bg.wasm",
+      "wasm": "voplay_island_bg.wasm"
+    },
+    "web": {
+      "capabilities": [
+        "widget",
+        "island_transport",
+        "vo_web",
+        "vfs"
+      ],
+      "entry": "Run",
+      "js_modules": {
+        "renderer": "js/dist/voplay-render-island.js"
+      }
+    }
+  },
+  "module": "github.com/vo-lang/voplay",
+  "module_root": ".",
+  "require": [
+    {
+      "constraint": "v0.1.11",
+      "module": "github.com/vo-lang/vogui"
+    },
+    {
+      "constraint": "v0.1.0",
+      "module": "github.com/vo-lang/vopack"
+    }
+  ],
+  "schema_version": 1,
+  "source": [
+    {
+      "digest": "sha256:07faa8890896a514cd122806782286066e5886478edfcc616dc1dfa689217ede",
+      "path": ".gitignore",
+      "size": 104
+    },
+    {
+      "digest": "sha256:bdbababeab51b6a195cfe23baf0887664a9ca85869de6ee17d10ba1a914cf43c",
+      "path": "animation_runtime.vo",
+      "size": 4078
+    },
+    {
+      "digest": "sha256:92dd20b8cacb2a9b838e54f64014fc3c8ab5026a0696769d10383aba6f33528f",
+      "path": "assets.vo",
+      "size": 14052
+    },
+    {
+      "digest": "sha256:0e8355629db717768858db2e02836b6ecb7532787bfd7b4c1b107196a3c07131",
+      "path": "audio.vo",
+      "size": 5304
+    },
+    {
+      "digest": "sha256:5f7498c1497c21ca859e1b75e8b0eae129f5919eb160d9f61ddacfd4c22203d3",
+      "path": "codec/codec.vo",
+      "size": 2828
+    },
+    {
+      "digest": "sha256:a1df134770434fff5f0a5fbc4dcb2110f523ef1b35299bf5debd567162f0fe7a",
+      "path": "collision.vo",
+      "size": 525
+    },
+    {
+      "digest": "sha256:d75ef953cb4f0190c219ec9f3e2d78dd45b7b91a90839d74133e0459b1562e8c",
+      "path": "color.vo",
+      "size": 1599
+    },
+    {
+      "digest": "sha256:35bf6335e7f95548ba4cecc4500aa90c75644745bb4934683d7feb3d22c357d2",
+      "path": "debug_overlay.vo",
+      "size": 2786
+    },
+    {
+      "digest": "sha256:eba89df448e1b79cc7a8738374ad9d5309d0a3747da220f2e55eddda942539d0",
+      "path": "draw.vo",
+      "size": 10873
+    },
+    {
+      "digest": "sha256:46bc858d7b39bc05280aa47506ac962e7c2ef51cf210d9057e4a208163507a4e",
+      "path": "game.vo",
+      "size": 9118
+    },
+    {
+      "digest": "sha256:20c1db139da8bab300dbc11e455d0aae4ca7f914d7c6092278b83bdea51dd53d",
+      "path": "host.vo",
+      "size": 5036
+    },
+    {
+      "digest": "sha256:a6fefca03d034fdc8ff6f58546c286d827ea4ce839a1b0f2f629359cf14d1d0f",
+      "path": "input.vo",
+      "size": 9528
+    },
+    {
+      "digest": "sha256:db46fb2787d07295e3b90a3b85869a888b8f5e11f64cf3707afb17f5e18fd88c",
+      "path": "js/bootstrap_webview.ts",
+      "size": 1689
+    },
+    {
+      "digest": "sha256:2f6219f7c75367fad0e352ebab64593a86941a7200c391d2528b6adb60f6893c",
+      "path": "js/dist/bootstrap_webview.d.ts",
+      "size": 644
+    },
+    {
+      "digest": "sha256:a3637d328a2588dc4c2337b0e321fbf794dc8c58fafa9ddd96f88162d69a97af",
+      "path": "js/dist/bootstrap_webview.js",
+      "size": 1229
+    },
+    {
+      "digest": "sha256:a45fe962f20025d45636e6e222391b06de566f5a0fb6e03ae9e8ba6fb19a3457",
+      "path": "js/dist/index.d.ts",
+      "size": 448
+    },
+    {
+      "digest": "sha256:6c350c123f3a4c99935ecc8ac2585825311710a8740b87f5570c3d2ab29ee200",
+      "path": "js/dist/index.js",
+      "size": 437
+    },
+    {
+      "digest": "sha256:343a140c1e6cd4a567bffe4518a632e15526d5575044d9a36819c2150ea97a19",
+      "path": "js/dist/island_channel.d.ts",
+      "size": 922
+    },
+    {
+      "digest": "sha256:de4ba99fb187b7bec44e5af0b68dbc0b6b224a6c1c2039988a7daafcbeaead96",
+      "path": "js/dist/island_channel.js",
+      "size": 2328
+    },
+    {
+      "digest": "sha256:e7ae4e6021eae913949714141970c870739bf4694e95ce31f43d7a2376471a71",
+      "path": "js/dist/render_bootstrap.d.ts",
+      "size": 1443
+    },
+    {
+      "digest": "sha256:8707cded46376954f7597a3e217d568cf4a0d5374a17050c90c8c7ff0287d5cc",
+      "path": "js/dist/render_bootstrap.js",
+      "size": 7082
+    },
+    {
+      "digest": "sha256:ce03e8c1b38c648aed68422311b323ccb2918fec77ebeb37fa08ab3563a17766",
+      "path": "js/dist/voplay-render-island.d.ts",
+      "size": 1340
+    },
+    {
+      "digest": "sha256:c6327172be0d8627defc1399911301cacb30b7cd8a5130966304827822da369d",
+      "path": "js/dist/voplay-render-island.js",
+      "size": 7884
+    },
+    {
+      "digest": "sha256:43bb1b94f5aae9ed1a835d7c7b5808c590bdd64c7dc583c20444dd4fcbaca4bd",
+      "path": "js/index.ts",
+      "size": 516
+    },
+    {
+      "digest": "sha256:7666812cb6e1c41715ecf3cbfc677e2aaef37a56c547c3fdd658c00968deae56",
+      "path": "js/island_channel.ts",
+      "size": 2834
+    },
+    {
+      "digest": "sha256:ab776d37b34a2315f0694bbfea5f2b185c95dc060dc372f0d33c39f008816a40",
+      "path": "js/package-lock.json",
+      "size": 1209
+    },
+    {
+      "digest": "sha256:29201563e0d34eb9377e466afbcd0183f99d6f04d97466464dd0287c55d60a39",
+      "path": "js/package.json",
+      "size": 550
+    },
+    {
+      "digest": "sha256:22f1e063ef10f6085c6e4590e68b56b65c134567efab7a5321dea81851a115b4",
+      "path": "js/render_bootstrap.ts",
+      "size": 7746
+    },
+    {
+      "digest": "sha256:60d0c1614427a5087f2ed901b38fcdc9a863de029f62c2787b1cfa8ff5a51bd6",
+      "path": "js/tsconfig.json",
+      "size": 376
+    },
+    {
+      "digest": "sha256:1f5205aaee6c093a08a1022b825607b4e394fd5cf395ed88e815659b6ada6e4f",
+      "path": "js/voplay-render-island.ts",
+      "size": 9212
+    },
+    {
+      "digest": "sha256:d846b0911dcded6934164319b7d9387cb7335dd64d7af3e4f88494ae800b7948",
+      "path": "math.vo",
+      "size": 7551
+    },
+    {
+      "digest": "sha256:446642cc7ec90044c1288be7aa7f215d65706261d4d4f7f71e42146b94122259",
+      "path": "render_worker.vo",
+      "size": 4801
+    },
+    {
+      "digest": "sha256:965e5e8bc9b422e1c28fb6fda93ff723e92184c4e16ee635fa99729e52e39fa6",
+      "path": "res_proxy.vo",
+      "size": 22344
+    },
+    {
+      "digest": "sha256:d52111f390c9212914a52b77d75b4d33b5e8cab5c48ef20e0b6c8a69d4d5885c",
+      "path": "resources.vo",
+      "size": 7090
+    },
+    {
+      "digest": "sha256:99fd734711442b7e7b45b1204e60c2de3d19c5cd09d7e3dd55f1942b63f5d35e",
+      "path": "rust/Cargo.lock",
+      "size": 94282
+    },
+    {
+      "digest": "sha256:3afbebfc8fccc236c9837454466d02f553c664f0d7c5aed2033ec5f7384b004f",
+      "path": "rust/Cargo.toml",
+      "size": 2386
+    },
+    {
+      "digest": "sha256:684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+      "path": "rust/pkg-island/.gitignore",
+      "size": 1
+    },
+    {
+      "digest": "sha256:0d66b0a8da7cf9c36dd423be1f35e4a6f121f91065068cbe96f2f1446bc090bc",
+      "path": "rust/pkg-island/package.json",
+      "size": 364
+    },
+    {
+      "digest": "sha256:563e0ce8e44fb2710da8ee74f27ddf2af64d7e15947fb742ac22ce2ce386c528",
+      "path": "rust/pkg-island/voplay_island.d.ts",
+      "size": 15564
+    },
+    {
+      "digest": "sha256:9ae17c107f4e368bfaf1d8c59a7989f772903437ab602bdeee17bcb1f23c8217",
+      "path": "rust/pkg-island/voplay_island.js",
+      "size": 94795
+    },
+    {
+      "digest": "sha256:3105009cf18878d34e09b77855d8cfe46cf81f669bb0c0081c904bfec7aa04f0",
+      "path": "rust/pkg-island/voplay_island_bg.wasm.d.ts",
+      "size": 6060
+    },
+    {
+      "digest": "sha256:69d93046588e0409392b70ec289d9883d0f6a403a48bf36c21eade423c25617f",
+      "path": "rust/src/animation.rs",
+      "size": 19682
+    },
+    {
+      "digest": "sha256:9f5be7ba2f79c542cc8af0687ed2d2c8b0c858a9a24e175ba9c4fddba1788d36",
+      "path": "rust/src/draw_list.rs",
+      "size": 10088
+    },
+    {
+      "digest": "sha256:94e2ea30dff7c89cf5d3a4045db35e61e4b54791cc746eb9fc5352de8b8c3573",
+      "path": "rust/src/externs/animation.rs",
+      "size": 5052
+    },
+    {
+      "digest": "sha256:7fd73ac0fd15d7ab403d213eceb731749641ead9e3cab65f5e550b3ec0668a2b",
+      "path": "rust/src/externs/audio.rs",
+      "size": 734
+    },
+    {
+      "digest": "sha256:998d7c109b879e008c19c2be166df1c559065caa707b3eb9f96e8184bcf02937",
+      "path": "rust/src/externs/mod.rs",
+      "size": 5212
+    },
+    {
+      "digest": "sha256:b42dcb04c836a23539e78d0fe89d6cf4e7a1f80e500123e07cc2164396ca1dcb",
+      "path": "rust/src/externs/physics2d.rs",
+      "size": 6741
+    },
+    {
+      "digest": "sha256:0d1678c79e9c9dc5a970078ed910787d2850dea197b77c5268b2f1815f552a11",
+      "path": "rust/src/externs/physics3d.rs",
+      "size": 13750
+    },
+    {
+      "digest": "sha256:1e33a1bfd3a6d8d4efd275b1e188c82d410f8abaed7c73f885003991e5502796",
+      "path": "rust/src/externs/render.rs",
+      "size": 9858
+    },
+    {
+      "digest": "sha256:2dcd6a3426844c024ee2ef211e3a54e5b2bf1791f434af732e8dea5de3a17048",
+      "path": "rust/src/externs/resource.rs",
+      "size": 16571
+    },
+    {
+      "digest": "sha256:9e8ca206be5b51c6f27a41e0a136e031b6827bf16559d31f729e5358cf80bd38",
+      "path": "rust/src/externs/util.rs",
+      "size": 2680
+    },
+    {
+      "digest": "sha256:cc83d6aa18c61afc76abd908fd490c21fa45933df470627d586f0061c6114140",
+      "path": "rust/src/file_io.rs",
+      "size": 1695
+    },
+    {
+      "digest": "sha256:41652a5a7ca2d548df06059a7d46113cc7833729e8b876c7659b5777b4e0cf60",
+      "path": "rust/src/font_manager.rs",
+      "size": 12023
+    },
+    {
+      "digest": "sha256:f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+      "path": "rust/src/fonts/default.ttf",
+      "size": 319508
+    },
+    {
+      "digest": "sha256:4cfe2a5ee91f0018f79abc03b4c5f364fa051b650c11dd54381c2a198e7ee5ad",
+      "path": "rust/src/host_api.rs",
+      "size": 3294
+    },
+    {
+      "digest": "sha256:2f8d41c9ebd7a8f69be7ee6145e631a7fa178cc2455850537938b0e7b515c315",
+      "path": "rust/src/input.rs",
+      "size": 13758
+    },
+    {
+      "digest": "sha256:5bb4c05317ab218c3ed7a2bd910c4d74aaf90ecf76357918a12cf7a627e5de22",
+      "path": "rust/src/island_bindgen.rs",
+      "size": 44609
+    },
+    {
+      "digest": "sha256:cf4e45115063862475fc9af3e9c7753a57094a747d4f5a9f736f629a53dfaf9d",
+      "path": "rust/src/lib.rs",
+      "size": 2845
+    },
+    {
+      "digest": "sha256:e2d55d47a62a78ea4e89ac90ca261b10ecda75bbd61f32fd74bd3c31432778b9",
+      "path": "rust/src/math3d.rs",
+      "size": 16760
+    },
+    {
+      "digest": "sha256:2398a6105f70a016805737b7423f9490328d73a949977a860464fb18cef7cccc",
+      "path": "rust/src/model_loader.rs",
+      "size": 61331
+    },
+    {
+      "digest": "sha256:fc290579ce21249e69f21e394609abce7c3d7642408d9a113b0ac7cdcecda4a3",
+      "path": "rust/src/physics.rs",
+      "size": 14258
+    },
+    {
+      "digest": "sha256:a4e8759d559e6c1205d63d30731851698eb91ce8baa45269a28d1f92dd412a7e",
+      "path": "rust/src/physics3d.rs",
+      "size": 29329
+    },
+    {
+      "digest": "sha256:0ad20ae33a6d8913e03a32e4ed6f6893d53bdd11a65038d9beaf1c28d4de7355",
+      "path": "rust/src/physics_registry.rs",
+      "size": 2583
+    },
+    {
+      "digest": "sha256:896342401dd367dbeae84414103f9f03d9ef4d14b8e44e8521ecd038e12a67c5",
+      "path": "rust/src/pipeline2d.rs",
+      "size": 9804
+    },
+    {
+      "digest": "sha256:b8e343f3fb4d89321aec0b7d3bc5cae4cea69639d04c6748acf016b65b70ad69",
+      "path": "rust/src/pipeline3d.rs",
+      "size": 40192
+    },
+    {
+      "digest": "sha256:94295e083daf8680c0c6277867fd85d04b1948c53f14038a8bc661f5861c2c34",
+      "path": "rust/src/pipeline_shadow.rs",
+      "size": 13815
+    },
+    {
+      "digest": "sha256:dfc798607638641d51d73ce73a93ea81e768c626ea1dc003db73362ac9d98916",
+      "path": "rust/src/pipeline_skybox.rs",
+      "size": 4528
+    },
+    {
+      "digest": "sha256:56b89fd6677eab814769f9f6794a569e05b3d44f584dbdfa0bee6bf1360f4cfe",
+      "path": "rust/src/pipeline_sprite.rs",
+      "size": 6855
+    },
+    {
+      "digest": "sha256:8fb0dce4c3e7dfd5fb3f38b681742ba677ccff23c27af1c7f521f7cb7ea1a7a2",
+      "path": "rust/src/primitives.rs",
+      "size": 9682
+    },
+    {
+      "digest": "sha256:8c8af1677597fb363ddf319be437d20dfae9a2e6ada89442223f1fe83e5da4b9",
+      "path": "rust/src/renderer.rs",
+      "size": 36181
+    },
+    {
+      "digest": "sha256:9fa64bdf16a1ea174e69f735abfa65a8a4170be3a3b8ac4f1af18135f2a7f098",
+      "path": "rust/src/renderer_runtime.rs",
+      "size": 4416
+    },
+    {
+      "digest": "sha256:9adb5eecca92a4d3b6345910776f827705e0c3d6b43b91bcddfa39ad9bc85ca1",
+      "path": "rust/src/shaders/mesh.wgsl",
+      "size": 5627
+    },
+    {
+      "digest": "sha256:6989c9135439d098307fbe22075e4708670791e2ead28b67944ab8e17386e982",
+      "path": "rust/src/shaders/mesh_skinned.wgsl",
+      "size": 5908
+    },
+    {
+      "digest": "sha256:19155879e26a5ea0519ad6bd519fc0e5d0718000ed5a83c83a14ca552231c5e5",
+      "path": "rust/src/shaders/mesh_terrain.wgsl",
+      "size": 6219
+    },
+    {
+      "digest": "sha256:cde844e06a30b1eac9c8b43c2c77fcef4575ec1ab71dff965e67d891536c5a02",
+      "path": "rust/src/shaders/shadow.wgsl",
+      "size": 1345
+    },
+    {
+      "digest": "sha256:5cfe6e94cf4c943484e7991da785dcd577be211fd8a2eef30cc1a7e9d5c47dea",
+      "path": "rust/src/shaders/shape2d.wgsl",
+      "size": 3277
+    },
+    {
+      "digest": "sha256:3f261f4c7fc53a13afa3426adeef41fdf84ea74c3ceca29eabce80da5cc69a20",
+      "path": "rust/src/shaders/skybox.wgsl",
+      "size": 928
+    },
+    {
+      "digest": "sha256:2ad540853f06d781d88cc077dcebcb064b372872e214229a192c126c30813c3a",
+      "path": "rust/src/shaders/sprite.wgsl",
+      "size": 2398
+    },
+    {
+      "digest": "sha256:1af4431951d9ed19f18682a3bf5834711df8c7769d108cc4f3011d9b7848561b",
+      "path": "rust/src/stream.rs",
+      "size": 13418
+    },
+    {
+      "digest": "sha256:b776ca6383ad009eb2fb9846f21bbe714e38d7157746fab0d284d5dc003c8ebc",
+      "path": "rust/src/terrain.rs",
+      "size": 7431
+    },
+    {
+      "digest": "sha256:2f664994b6fd8a42f68d6f53b51e377e8a8c7367e6649be28aaf5a73845bdb50",
+      "path": "rust/src/texture.rs",
+      "size": 13930
+    },
+    {
+      "digest": "sha256:15a034bf683ac089b81a51b6ed3afb52f2eb41a63d270e1e5de662d121f4fd3d",
+      "path": "scene2d/anim_controller.vo",
+      "size": 5088
+    },
+    {
+      "digest": "sha256:f17783a0687e78f6b2fe6a540f862fe2c56af92d6c54d9bbc5b3837a8cd33d7e",
+      "path": "scene2d/camera.vo",
+      "size": 3826
+    },
+    {
+      "digest": "sha256:5f4d258d596e974ecf7ff438efb1d0ff754a294ef087b9a327cf59473ff67335",
+      "path": "scene2d/debug.vo",
+      "size": 6020
+    },
+    {
+      "digest": "sha256:d20972a9202103e297c5c598124666e884c9243ad73e313f61608c1eb85fcbc7",
+      "path": "scene2d/draw.vo",
+      "size": 3668
+    },
+    {
+      "digest": "sha256:dd52dcdbc2f0b34b145c0a3bb7d1bb44531c1222954a87c0a2504bfbb2115cc7",
+      "path": "scene2d/entity.vo",
+      "size": 8247
+    },
+    {
+      "digest": "sha256:ad8347ead5b5adda513815eaf2981a238eabcedd621c7614ed9fa65c04568a6e",
+      "path": "scene2d/physics.vo",
+      "size": 6508
+    },
+    {
+      "digest": "sha256:b8887afb9a5a70952ab962a91bd88170258e96ffa4e6e49d5ac7ca78cbbb2eb6",
+      "path": "scene2d/scene.vo",
+      "size": 8272
+    },
+    {
+      "digest": "sha256:5e5cd68744e5684899e3e94089993ef11bc7981b1cbca1bc57937e8d08f988e0",
+      "path": "scene2d/spatial.vo",
+      "size": 5814
+    },
+    {
+      "digest": "sha256:f1dcc645c8d1014f9ae37f002e9a162c11940add222af528fe3139b8ebb125f6",
+      "path": "scene2d/sprite.vo",
+      "size": 2575
+    },
+    {
+      "digest": "sha256:98f2b67bea25fd5d9ee3e8afc1ec1a49e3f7e55f61650aad00498e2b6ee0b7fe",
+      "path": "scene2d/tilemap.vo",
+      "size": 4205
+    },
+    {
+      "digest": "sha256:36f5983877e353fec10584abb23f415b1eed180ac36893ebd501f9aa16765ccd",
+      "path": "scene3d/animation.vo",
+      "size": 7322
+    },
+    {
+      "digest": "sha256:c94d81eb6d3aa05d7790183db341a8a24a50691f57a7d60b34418f4c139b0814",
+      "path": "scene3d/camera.vo",
+      "size": 1935
+    },
+    {
+      "digest": "sha256:ba4e0f5b61533b0b6318ea1728e3913891abba3212c5ac84be459e10917dc23d",
+      "path": "scene3d/draw.vo",
+      "size": 1478
+    },
+    {
+      "digest": "sha256:622c0d6e57d17d10af02cbfca49943624b37169dbf27946caba501130278fad9",
+      "path": "scene3d/level.vo",
+      "size": 10131
+    },
+    {
+      "digest": "sha256:d1438769e5516b6e442a96685c334a94ddebab711a08085999c1a343f43d74d9",
+      "path": "scene3d/particles.vo",
+      "size": 6648
+    },
+    {
+      "digest": "sha256:c7bc1673f7c2210b2a9d383b97b838d5919e2f28afdb076de18de2363280cdbf",
+      "path": "scene3d/physics.vo",
+      "size": 10790
+    },
+    {
+      "digest": "sha256:38a12d46328711047ecd6135714cab30438b74be34c607a547b75592586173df",
+      "path": "scene3d/pick.vo",
+      "size": 3363
+    },
+    {
+      "digest": "sha256:a28110e3551da281123cb7f10063f7159c49ba0416e0b12d0d2b7c12956807c2",
+      "path": "scene3d/primitives.vo",
+      "size": 580
+    },
+    {
+      "digest": "sha256:863c279e2071fcf68dce3579884448335542898c8d62b92297671cc01ea950b6",
+      "path": "scene3d/scene.vo",
+      "size": 19661
+    },
+    {
+      "digest": "sha256:12e1ee928b9fd3c9993c7c206727245f71928c34964a726f3f8a06c9a7ffbcc5",
+      "path": "scene3d/terrain.vo",
+      "size": 8691
+    },
+    {
+      "digest": "sha256:b8493f4ef059a681a66111a6836e3e439c6c28ef7ef9fe48ad3ae470c44799b0",
+      "path": "scene3d/third_person_camera.vo",
+      "size": 4244
+    },
+    {
+      "digest": "sha256:4d58018c447e231076a473f8634ea89661675f74b94a4aa6c871fda16f4a0cab",
+      "path": "scheduler.vo",
+      "size": 4109
+    },
+    {
+      "digest": "sha256:178a636b18ee3210fda94f1016ae5c1a2d68aaa026a3c13682988ed3b9f50d57",
+      "path": "state.vo",
+      "size": 4346
+    },
+    {
+      "digest": "sha256:7352b2b6b08515c1f620be628f05c6367d38f24979a8e2d781b06c3592523792",
+      "path": "tests/input_normalization.vo",
+      "size": 1393
+    },
+    {
+      "digest": "sha256:ae9c626de0d97409b232eba15bebfb535e2992b506a5d1c7f9b2725d9f180292",
+      "path": "tests/main.vo",
+      "size": 66380
+    },
+    {
+      "digest": "sha256:3db52b428a274e8ba1f54c322b77daa07e33e6d282b12d8c61d25c22ea8e4ab4",
+      "path": "tests/third_person_camera_regression.vo",
+      "size": 1481
+    },
+    {
+      "digest": "sha256:bbbfc6169d62686808fa7d57cd25188454b93b6dcd84b2837f9e0a1d84e7006a",
+      "path": "tween.vo",
+      "size": 7060
+    },
+    {
+      "digest": "sha256:58f05abf00f73cdcd126e5dd3309decda58fdc59436ec47c74bf9b8ce1186236",
+      "path": "vo.lock",
+      "size": 1551
+    },
+    {
+      "digest": "sha256:a523816c325db882b3c67950b93dc52970d38ea162dc3094191951973797324a",
+      "path": "vo.mod",
+      "size": 788
+    },
+    {
+      "digest": "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d",
+      "path": "web-artifacts/voplay_island.js",
+      "size": 94795
+    }
+  ],
+  "source_digest": "sha256:987558872d98b7d439fd211a4c40e9aeead559a2ff5b14c5670936a1bb98fcf2",
+  "version": "v0.1.18",
+  "vo": "^0.1.0",
+  "web": null
+}

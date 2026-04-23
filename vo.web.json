@@ -1,19 +1,35 @@
 {
   "artifacts": [
     {
-      "digest": "sha256:330ad83bb2847aa1632e4b847b239be9919b8941687bf2bc13f80e7500a46b3e",
-      "kind": "extension-wasm",
-      "name": "voplay_island_bg.wasm",
-      "path": "web-artifacts/voplay_island_bg.wasm",
-      "size": 3158764,
-      "target": "wasm32-unknown-unknown"
-    },
-    {
       "digest": "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d",
       "kind": "extension-js-glue",
       "name": "voplay_island.js",
       "path": "web-artifacts/voplay_island.js",
       "size": 94795,
+      "target": "wasm32-unknown-unknown"
+    },
+    {
+      "digest": "sha256:8cede378bc422b9ce74e6ad8cf16ef4af3a3de592586dd10e8a1811efa2ef4b3",
+      "kind": "extension-native",
+      "name": "libvo_voplay.dylib",
+      "path": "libvo_voplay.dylib",
+      "size": 9691216,
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "digest": "sha256:4c4288d7c773943ac406d066cb92869e0ecd06fdeb341fd69fe6c32480e679ee",
+      "kind": "extension-native",
+      "name": "libvo_voplay.so",
+      "path": "libvo_voplay.so",
+      "size": 13243192,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "digest": "sha256:330ad83bb2847aa1632e4b847b239be9919b8941687bf2bc13f80e7500a46b3e",
+      "kind": "extension-wasm",
+      "name": "voplay_island_bg.wasm",
+      "path": "web-artifacts/voplay_island_bg.wasm",
+      "size": 3158764,
       "target": "wasm32-unknown-unknown"
     }
   ],

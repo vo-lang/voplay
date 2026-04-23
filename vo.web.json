@@ -238,31 +238,6 @@
       "size": 2386
     },
     {
-      "digest": "sha256:684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
-      "path": "rust/pkg-island/.gitignore",
-      "size": 1
-    },
-    {
-      "digest": "sha256:0d66b0a8da7cf9c36dd423be1f35e4a6f121f91065068cbe96f2f1446bc090bc",
-      "path": "rust/pkg-island/package.json",
-      "size": 364
-    },
-    {
-      "digest": "sha256:563e0ce8e44fb2710da8ee74f27ddf2af64d7e15947fb742ac22ce2ce386c528",
-      "path": "rust/pkg-island/voplay_island.d.ts",
-      "size": 15564
-    },
-    {
-      "digest": "sha256:9ae17c107f4e368bfaf1d8c59a7989f772903437ab602bdeee17bcb1f23c8217",
-      "path": "rust/pkg-island/voplay_island.js",
-      "size": 94795
-    },
-    {
-      "digest": "sha256:3105009cf18878d34e09b77855d8cfe46cf81f669bb0c0081c904bfec7aa04f0",
-      "path": "rust/pkg-island/voplay_island_bg.wasm.d.ts",
-      "size": 6060
-    },
-    {
       "digest": "sha256:69d93046588e0409392b70ec289d9883d0f6a403a48bf36c21eade423c25617f",
       "path": "rust/src/animation.rs",
       "size": 19682
@@ -613,7 +588,7 @@
       "size": 94795
     }
   ],
-  "source_digest": "sha256:987558872d98b7d439fd211a4c40e9aeead559a2ff5b14c5670936a1bb98fcf2",
+  "source_digest": "sha256:91c196ea44ced87e9600eb508c166ba7f920b74710145903d3aea194bc2deea0",
   "version": "v0.1.18",
   "vo": "^0.1.0",
   "web": null

@@ -28,6 +28,7 @@ type DebugOverlay struct {
 	dispFPS      string
 	dispFrameMs  string
 	dispLogicMs  string
+	dispLogicFPS string
 	dispCounter  int
 }
 
@@ -36,6 +37,7 @@ func newDebugOverlay() *DebugOverlay {
 		dispFPS:     "-- fps",
 		dispFrameMs: "-- ms",
 		dispLogicMs: "-- ms",
+		dispLogicFPS: "-- hz",
 	}
 }
 
@@ -69,6 +71,10 @@ func (o *DebugOverlay) recordFrame(dt float64, logicNs int64) {
 		o.dispFPS = strconv.FormatFloat(o.fps, 'f', 1, 64) + " fps"
 		o.dispFrameMs = strconv.FormatFloat(o.frameMs, 'f', 2, 64) + " ms"
 		o.dispLogicMs = strconv.FormatFloat(o.logicMs, 'f', 2, 64) + " ms"
+		if o.logicMs > 0 {
+			logicFPS := 1000.0 / o.logicMs
+			o.dispLogicFPS = strconv.FormatFloat(logicFPS, 'f', 0, 64) + " hz"
+		}
 	}
 }
 
@@ -84,22 +90,24 @@ func (o *DebugOverlay) draw(d *DrawCtx) {
 	d.SetLayer(65535)
 
 	// Background panel.
-	panelX := 4.0
-	panelY := 4.0
-	panelW := 160.0
-	panelH := 58.0
+	panelX := 12.0
+	panelY := 14.0
+	panelW := 210.0
+	panelH := 92.0
 	d.DrawRect(panelX, panelY, panelW, panelH, Color{R: 0, G: 0, B: 0, A: 0.65})
 
 	// Text layout.
-	textX := panelX + 6.0
+	textX := panelX + 10.0
 	fontSize := 14.0
-	lineH := 17.0
+	lineH := 18.0
 	textColor := Color{R: 0.0, G: 1.0, B: 0.0, A: 1.0}
 
-	y := panelY + 4.0
-	d.DrawText(o.dispFPS, textX, y, fontSize, textColor)
+	y := panelY + 16.0
+	d.DrawText("present: "+o.dispFPS, textX, y, fontSize, textColor)
 	y += lineH
 	d.DrawText("frame: "+o.dispFrameMs, textX, y, fontSize, textColor)
 	y += lineH
 	d.DrawText("logic: "+o.dispLogicMs, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText("logic headroom: "+o.dispLogicFPS, textX, y, fontSize, textColor)
 }

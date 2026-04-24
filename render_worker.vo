@@ -18,9 +18,9 @@ type renderWorkerPorts struct {
 // sends a frame request to the logic island, waits for the draw reply,
 // and submits to the GPU. On native, AutoVsync present naturally paces
 // the loop to the display refresh rate.
-func runRenderWorker(canvasRef string, ports renderWorkerPorts) {
+func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWorkerPorts) {
 	// Phase 1: Init surface (may be async on WASM).
-	initSurface(canvasRef)?
+	initSurface(canvasRef, config.UncappedFrameRate)?
 
 	// Spin until renderer is ready (WASM async init).
 	for !isRendererReady() {
@@ -40,9 +40,11 @@ func runRenderWorker(canvasRef string, ports renderWorkerPorts) {
 	// Present with AutoVsync blocks until the next display refresh,
 	// making the GPU vsync the natural frame pacer.
 	for {
-		// On wasm, suspend until the next display pulse (requestAnimationFrame).
-		// On native this is a no-op and present pacing still comes from submitFrame.
-		waitDisplayPulse()
+		// On wasm, normal games follow requestAnimationFrame. Performance debug
+		// runs can opt out to measure the engine's real CPU/GPU submission headroom.
+		if !config.UncappedFrameRate {
+			waitDisplayPulse()
+		}
 
 		// Sample latest input from the host (keyboard, pointer, scroll).
 		inputBytes := pollInput()

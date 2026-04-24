@@ -24,6 +24,7 @@ fn next_display_pulse_token() -> u64 {
 #[vo_fn("voplay", "initSurface")]
 pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
     let canvas_ref = call.arg_str(0).to_string();
+    let no_vsync = call.arg_bool(1);
 
     #[cfg(not(feature = "wasm"))]
     if renderer_ready() {
@@ -33,25 +34,25 @@ pub fn init_surface(call: &mut ExternCallContext) -> ExternResult {
 
     #[cfg(feature = "wasm")]
     {
-        write_unit_result(call, 0, create_wasm_renderer(&canvas_ref));
+        write_unit_result(call, 0, create_wasm_renderer(&canvas_ref, no_vsync));
     }
     #[cfg(not(feature = "wasm"))]
     {
-        write_unit_result(call, 0, create_native_renderer(&canvas_ref));
+        write_unit_result(call, 0, create_native_renderer(&canvas_ref, no_vsync));
     }
 
     ExternResult::Ok
 }
 
 #[cfg(feature = "wasm")]
-pub(crate) fn create_wasm_renderer_pub(canvas_id: &str) -> Result<(), String> {
-    create_wasm_renderer(canvas_id)
+pub(crate) fn create_wasm_renderer_pub(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
+    create_wasm_renderer(canvas_id, no_vsync)
 }
 
 #[cfg(feature = "wasm")]
-fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
-    use wasm_bindgen::JsCast;
+fn create_wasm_renderer(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
     use crate::renderer::Renderer;
+    use wasm_bindgen::JsCast;
 
     crate::input::reset_wasm_input_handlers();
     let generation = crate::renderer_runtime::reset_renderer();
@@ -61,11 +62,12 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
     }
 
     let result: Result<(), String> = (|| {
-        let window = web_sys::window()
-            .ok_or_else(|| "voplay: no global window".to_string())?;
-        let document = window.document()
+        let window = web_sys::window().ok_or_else(|| "voplay: no global window".to_string())?;
+        let document = window
+            .document()
             .ok_or_else(|| "voplay: no document".to_string())?;
-        let canvas = document.get_element_by_id(canvas_id)
+        let canvas = document
+            .get_element_by_id(canvas_id)
             .ok_or_else(|| format!("voplay: canvas element '{}' not found", canvas_id))?
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .map_err(|_| format!("voplay: element '{}' is not a canvas", canvas_id))?;
@@ -92,7 +94,7 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
 
         let canvas_id_owned = canvas_id.to_string();
         wasm_bindgen_futures::spawn_local(async move {
-            match Renderer::new(&instance, surface, width, height).await {
+            match Renderer::new(&instance, surface, width, height, no_vsync).await {
                 Ok(mut renderer) => {
                     renderer.set_canvas_id(canvas_id_owned);
                     crate::renderer_runtime::set_renderer_for_generation(generation, renderer);
@@ -116,17 +118,23 @@ fn create_wasm_renderer(canvas_id: &str) -> Result<(), String> {
 }
 
 #[cfg(not(feature = "wasm"))]
-fn create_native_renderer(canvas_ref: &str) -> Result<(), String> {
-    use std::ptr::NonNull;
-    use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
+fn create_native_renderer(canvas_ref: &str, no_vsync: bool) -> Result<(), String> {
     use crate::renderer::Renderer;
+    use raw_window_handle::{
+        AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
+    use std::ptr::NonNull;
 
     let desc = crate::host_api::request_surface(canvas_ref)?;
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let surface = match desc.kind {
         crate::host_api::SURFACE_KIND_APPKIT => {
-            let ns_view = NonNull::new(desc.native_handle)
-                .ok_or_else(|| format!("voplay: native host returned null AppKit view for '{}'", canvas_ref))?;
+            let ns_view = NonNull::new(desc.native_handle).ok_or_else(|| {
+                format!(
+                    "voplay: native host returned null AppKit view for '{}'",
+                    canvas_ref
+                )
+            })?;
             let raw_window_handle = RawWindowHandle::AppKit(AppKitWindowHandle::new(ns_view));
             let raw_display_handle = RawDisplayHandle::AppKit(AppKitDisplayHandle::new());
             unsafe {
@@ -149,14 +157,15 @@ fn create_native_renderer(canvas_ref: &str) -> Result<(), String> {
             ));
             #[cfg(target_vendor = "apple")]
             unsafe {
-                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(desc.native_handle))
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
+                    desc.native_handle,
+                ))
             }
         }
         kind => {
             return Err(format!(
                 "voplay: unsupported native surface kind {} for '{}'",
-                kind,
-                canvas_ref,
+                kind, canvas_ref,
             ));
         }
     }
@@ -167,6 +176,7 @@ fn create_native_renderer(canvas_ref: &str) -> Result<(), String> {
         surface,
         desc.width.max(1),
         desc.height.max(1),
+        no_vsync,
     ))?;
     crate::renderer_runtime::set_renderer(renderer);
     Ok(())
@@ -222,7 +232,12 @@ pub fn load_texture(call: &mut ExternCallContext) -> ExternResult {
 #[vo_fn("voplay", "loadTextureBytes")]
 pub fn load_texture_bytes(call: &mut ExternCallContext) -> ExternResult {
     let data = call.arg_bytes(0).to_vec();
-    write_u32_handle_result(call, 0, 1, with_renderer_result(|r| r.load_texture_bytes(&data)));
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_texture_bytes(&data)),
+    );
     ExternResult::Ok
 }
 
@@ -291,4 +306,3 @@ pub fn is_renderer_ready(call: &mut ExternCallContext) -> ExternResult {
     call.ret_bool(0, ready);
     ExternResult::Ok
 }
-

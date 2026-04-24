@@ -30,6 +30,10 @@ type splitWidgetEvent struct {
 	CanvasId string `json:"canvasId"`
 }
 
+type renderWorkerConfig struct {
+	UncappedFrameRate bool
+}
+
 func useRenderIslandHost() bool {
 	return vogui.HasHostCapability("render_island_host")
 }
@@ -40,7 +44,9 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 	}
 	state.Starting = true
 	renderIsland := make(island)
-	go @(renderIsland) runRenderWorker(canvasId, renderWorkerPorts{
+	go @(renderIsland) runRenderWorker(canvasId, renderWorkerConfig{
+		UncappedFrameRate: game.UncappedFrameRate,
+	}, renderWorkerPorts{
 		frameReq:   ports.frameReq,
 		frameReply: ports.frameReply,
 		resReq:     ports.resReq,
@@ -188,7 +194,7 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 // These are called by render_worker.vo on the render island, not by logic island code.
 
 // Surface
-func initSurface(canvasRef string) error
+func initSurface(canvasRef string, uncappedFrameRate bool) error
 func submitFrame(cmds []byte) error
 func waitDisplayPulse()
  

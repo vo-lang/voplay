@@ -8,6 +8,7 @@ type Game struct {
 	Title           string
 	FixedStep       float64
 	MaxCatchUpSteps int
+	UncappedFrameRate bool
 	InitialState    State
 	OnClose         func(g *GameCtx) // optional; called when the game loop exits
 }
@@ -314,4 +315,3 @@ func (b *proxyAnimationRuntimeBackendImpl) Progress(worldID, targetID, modelID i
 func (b *proxyAnimationRuntimeBackendImpl) ModelInfo(modelID int) []byte {
 	return proxyAnimationModelInfo(b.reqPort, b.respPort, modelID)
 }
-

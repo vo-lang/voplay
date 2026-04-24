@@ -37,8 +37,8 @@ extern "C" {
 const TAG_DISPLAY_PULSE: u8 = 0x03;
 const TAG_NIL_ERROR: u8 = 0xE0;
 const TAG_ERROR_STR: u8 = 0xE1;
-const TAG_VALUE:     u8 = 0xE2;
-const TAG_BYTES:     u8 = 0xE3;
+const TAG_VALUE: u8 = 0xE2;
+const TAG_BYTES: u8 = 0xE3;
 
 // ── Output encoding helpers ───────────────────────────────────────────────────
 
@@ -84,8 +84,14 @@ fn out_bytes(out: &mut Vec<u8>, data: &[u8]) {
 #[inline]
 fn out_u32_handle_result(out: &mut Vec<u8>, result: Result<u32, String>) {
     match result {
-        Ok(id) => { out_value_u64(out, id as u64); out_nil_error(out); }
-        Err(e) => { out_value_u64(out, 0); out_error(out, &e); }
+        Ok(id) => {
+            out_value_u64(out, id as u64);
+            out_nil_error(out);
+        }
+        Err(e) => {
+            out_value_u64(out, 0);
+            out_error(out, &e);
+        }
     }
 }
 
@@ -102,8 +108,14 @@ fn out_unit_result(out: &mut Vec<u8>, result: Result<(), String>) {
 #[inline]
 fn out_bytes_result(out: &mut Vec<u8>, result: Result<Vec<u8>, String>) {
     match result {
-        Ok(data) => { out_bytes(out, &data); out_nil_error(out); }
-        Err(e)   => { out_bytes(out, &[]); out_error(out, &e); }
+        Ok(data) => {
+            out_bytes(out, &data);
+            out_nil_error(out);
+        }
+        Err(e) => {
+            out_bytes(out, &[]);
+            out_error(out, &e);
+        }
     }
 }
 
@@ -111,7 +123,7 @@ fn out_bytes_result(out: &mut Vec<u8>, result: Result<Vec<u8>, String>) {
 
 #[inline]
 fn in_value(input: &[u8], pos: &mut usize) -> u64 {
-    let v = u64::from_le_bytes(input[*pos..*pos+8].try_into().unwrap());
+    let v = u64::from_le_bytes(input[*pos..*pos + 8].try_into().unwrap());
     *pos += 8;
     v
 }
@@ -128,9 +140,9 @@ fn in_bool(input: &[u8], pos: &mut usize) -> bool {
 
 #[inline]
 fn in_bytes<'a>(input: &'a [u8], pos: &mut usize) -> &'a [u8] {
-    let len = u32::from_le_bytes(input[*pos..*pos+4].try_into().unwrap()) as usize;
+    let len = u32::from_le_bytes(input[*pos..*pos + 4].try_into().unwrap()) as usize;
     *pos += 4;
-    let data = &input[*pos..*pos+len];
+    let data = &input[*pos..*pos + len];
     *pos += len;
     data
 }
@@ -159,12 +171,13 @@ pub fn vo_dispose() {
 
 // ── Render externs ────────────────────────────────────────────────────────────
 
-/// initSurface(canvasRef string) → error
+/// initSurface(canvasRef string, noVsync bool) → error
 #[wasm_bindgen(js_name = "initSurface")]
 pub fn init_surface(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let canvas_id = in_str(input, &mut pos).to_string();
-    let result = crate::externs::render::create_wasm_renderer_pub(&canvas_id);
+    let no_vsync = in_bool(input, &mut pos);
+    let result = crate::externs::render::create_wasm_renderer_pub(&canvas_id, no_vsync);
     let mut out = Vec::new();
     out_unit_result(&mut out, result);
     out
@@ -244,12 +257,12 @@ pub fn free_texture(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "loadCubemap")]
 pub fn load_cubemap(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let right  = in_str(input, &mut pos).to_string();
-    let left   = in_str(input, &mut pos).to_string();
-    let top    = in_str(input, &mut pos).to_string();
+    let right = in_str(input, &mut pos).to_string();
+    let left = in_str(input, &mut pos).to_string();
+    let top = in_str(input, &mut pos).to_string();
     let bottom = in_str(input, &mut pos).to_string();
-    let front  = in_str(input, &mut pos).to_string();
-    let back   = in_str(input, &mut pos).to_string();
+    let front = in_str(input, &mut pos).to_string();
+    let back = in_str(input, &mut pos).to_string();
     let result = crate::externs::util::with_renderer_result(|r| {
         r.load_cubemap([&right, &left, &top, &bottom, &front, &back])
     });
@@ -262,16 +275,20 @@ pub fn load_cubemap(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "loadCubemapBytes")]
 pub fn load_cubemap_bytes(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let right  = in_bytes(input, &mut pos).to_vec();
-    let left   = in_bytes(input, &mut pos).to_vec();
-    let top    = in_bytes(input, &mut pos).to_vec();
+    let right = in_bytes(input, &mut pos).to_vec();
+    let left = in_bytes(input, &mut pos).to_vec();
+    let top = in_bytes(input, &mut pos).to_vec();
     let bottom = in_bytes(input, &mut pos).to_vec();
-    let front  = in_bytes(input, &mut pos).to_vec();
-    let back   = in_bytes(input, &mut pos).to_vec();
+    let front = in_bytes(input, &mut pos).to_vec();
+    let back = in_bytes(input, &mut pos).to_vec();
     let result = crate::externs::util::with_renderer_result(|r| {
         r.load_cubemap_bytes([
-            right.as_slice(), left.as_slice(), top.as_slice(),
-            bottom.as_slice(), front.as_slice(), back.as_slice(),
+            right.as_slice(),
+            left.as_slice(),
+            top.as_slice(),
+            bottom.as_slice(),
+            front.as_slice(),
+            back.as_slice(),
         ])
     });
     let mut out = Vec::new();
@@ -345,8 +362,10 @@ pub fn measure_text(input: &[u8]) -> Vec<u8> {
     let size = in_f64(input, &mut pos) as f32;
     let (w, h) = match crate::externs::with_renderer(|r| r.measure_text(font_id, &text, size)) {
         Ok(result) => result,
-        Err(_) => res::with_headless_font_manager_pub(|fonts| fonts.measure_text(font_id, &text, size))
-            .unwrap_or_else(|msg| panic!("{}", msg)),
+        Err(_) => {
+            res::with_headless_font_manager_pub(|fonts| fonts.measure_text(font_id, &text, size))
+                .unwrap_or_else(|msg| panic!("{}", msg))
+        }
     };
     let mut out = Vec::new();
     out_value_f64(&mut out, w as f64);
@@ -402,7 +421,9 @@ pub fn model_bounds(input: &[u8]) -> Vec<u8> {
             out_value_bool(&mut out, true);
         }
         _ => {
-            for _ in 0..6 { out_value_f64(&mut out, 0.0); }
+            for _ in 0..6 {
+                out_value_f64(&mut out, 0.0);
+            }
             out_value_bool(&mut out, false);
         }
     }
@@ -414,11 +435,12 @@ pub fn model_bounds(input: &[u8]) -> Vec<u8> {
 pub fn model_mesh_data_bytes(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let id = in_value(input, &mut pos) as u32;
-    let mesh_data = crate::externs::util::with_renderer_or_panic("modelMeshDataBytes", |renderer| {
-        renderer.get_model_mesh_data(id)
-    });
-    let (positions, indices) = mesh_data
-        .unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
+    let mesh_data =
+        crate::externs::util::with_renderer_or_panic("modelMeshDataBytes", |renderer| {
+            renderer.get_model_mesh_data(id)
+        });
+    let (positions, indices) =
+        mesh_data.unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
     let data = crate::externs::resource::encode_model_mesh_data_bytes(&positions, &indices);
     let mut out = Vec::new();
     out_bytes(&mut out, &data);
@@ -443,17 +465,22 @@ pub fn scene3d_load_level(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "scene3d_createTerrain")]
 pub fn scene3d_create_terrain(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let path       = in_str(input, &mut pos).to_string();
-    let scale_x    = in_f64(input, &mut pos) as f32;
-    let scale_y    = in_f64(input, &mut pos) as f32;
-    let scale_z    = in_f64(input, &mut pos) as f32;
-    let uv_scale   = in_f64(input, &mut pos) as f32;
-    let texture_id = match in_value(input, &mut pos) as u32 { 0 => None, id => Some(id) };
+    let path = in_str(input, &mut pos).to_string();
+    let scale_x = in_f64(input, &mut pos) as f32;
+    let scale_y = in_f64(input, &mut pos) as f32;
+    let scale_z = in_f64(input, &mut pos) as f32;
+    let uv_scale = in_f64(input, &mut pos) as f32;
+    let texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
     let result = crate::file_io::read_bytes(&path)
         .map_err(|e| format!("terrain: read {}: {}", path, e))
-        .and_then(|data| crate::externs::util::with_renderer_result(|r| {
-            r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
-        }));
+        .and_then(|data| {
+            crate::externs::util::with_renderer_result(|r| {
+                r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
+            })
+        });
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
@@ -461,7 +488,7 @@ pub fn scene3d_create_terrain(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "scene3d_createTerrainSplat")]
 pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let path    = in_str(input, &mut pos).to_string();
+    let path = in_str(input, &mut pos).to_string();
     let scale_x = in_f64(input, &mut pos) as f32;
     let scale_y = in_f64(input, &mut pos) as f32;
     let scale_z = in_f64(input, &mut pos) as f32;
@@ -469,9 +496,19 @@ pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
         decode_terrain_splat_input(input, &mut pos);
     let result = crate::file_io::read_bytes(&path)
         .map_err(|e| format!("terrain: read {}: {}", path, e))
-        .and_then(|data| crate::externs::util::with_renderer_result(|r| {
-            r.create_terrain_splat(&data, scale_x, scale_y, scale_z, control_texture_id, layer_texture_ids, uv_scales)
-        }));
+        .and_then(|data| {
+            crate::externs::util::with_renderer_result(|r| {
+                r.create_terrain_splat(
+                    &data,
+                    scale_x,
+                    scale_y,
+                    scale_z,
+                    control_texture_id,
+                    layer_texture_ids,
+                    uv_scales,
+                )
+            })
+        });
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
@@ -479,12 +516,15 @@ pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "scene3d_createTerrainBytes")]
 pub fn scene3d_create_terrain_bytes(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let data       = in_bytes(input, &mut pos).to_vec();
-    let scale_x    = in_f64(input, &mut pos) as f32;
-    let scale_y    = in_f64(input, &mut pos) as f32;
-    let scale_z    = in_f64(input, &mut pos) as f32;
-    let uv_scale   = in_f64(input, &mut pos) as f32;
-    let texture_id = match in_value(input, &mut pos) as u32 { 0 => None, id => Some(id) };
+    let data = in_bytes(input, &mut pos).to_vec();
+    let scale_x = in_f64(input, &mut pos) as f32;
+    let scale_y = in_f64(input, &mut pos) as f32;
+    let scale_z = in_f64(input, &mut pos) as f32;
+    let uv_scale = in_f64(input, &mut pos) as f32;
+    let texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
     let result = crate::externs::util::with_renderer_result(|r| {
         r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
     });
@@ -495,14 +535,22 @@ pub fn scene3d_create_terrain_bytes(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "scene3d_createTerrainBytesSplat")]
 pub fn scene3d_create_terrain_bytes_splat(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let data    = in_bytes(input, &mut pos).to_vec();
+    let data = in_bytes(input, &mut pos).to_vec();
     let scale_x = in_f64(input, &mut pos) as f32;
     let scale_y = in_f64(input, &mut pos) as f32;
     let scale_z = in_f64(input, &mut pos) as f32;
     let (control_texture_id, layer_texture_ids, uv_scales) =
         decode_terrain_splat_input(input, &mut pos);
     let result = crate::externs::util::with_renderer_result(|r| {
-        r.create_terrain_splat(&data, scale_x, scale_y, scale_z, control_texture_id, layer_texture_ids, uv_scales)
+        r.create_terrain_splat(
+            &data,
+            scale_x,
+            scale_y,
+            scale_z,
+            control_texture_id,
+            layer_texture_ids,
+            uv_scales,
+        )
     });
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
@@ -523,13 +571,19 @@ fn decode_terrain_splat_input(input: &[u8], pos: &mut usize) -> (u32, [u32; 4], 
 pub fn scene3d_terrain_height_at(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
     let x = in_f64(input, &mut pos) as f32;
     let z = in_f64(input, &mut pos) as f32;
     let mut out = Vec::new();
     match crate::terrain::height_at(world_id, body_id, x, z) {
-        Some(h) => { out_value_f64(&mut out, h as f64); out_value_bool(&mut out, true); }
-        None    => { out_value_f64(&mut out, 0.0);     out_value_bool(&mut out, false); }
+        Some(h) => {
+            out_value_f64(&mut out, h as f64);
+            out_value_bool(&mut out, true);
+        }
+        None => {
+            out_value_f64(&mut out, 0.0);
+            out_value_bool(&mut out, false);
+        }
     }
     out
 }
@@ -542,7 +596,9 @@ pub fn scene3d_create_plane_mesh(input: &[u8]) -> Vec<u8> {
     let depth = in_f64(input, &mut pos) as f32;
     let sub_x = in_value(input, &mut pos) as u32;
     let sub_z = in_value(input, &mut pos) as u32;
-    let id = crate::externs::util::with_renderer_or_panic("createPlaneMesh", |r| r.create_plane(width, depth, sub_x, sub_z));
+    let id = crate::externs::util::with_renderer_or_panic("createPlaneMesh", |r| {
+        r.create_plane(width, depth, sub_x, sub_z)
+    });
     let mut out = Vec::new();
     out_value_u64(&mut out, id as u64);
     out
@@ -562,7 +618,9 @@ pub fn scene3d_create_cube_mesh(_input: &[u8]) -> Vec<u8> {
 pub fn scene3d_create_sphere_mesh(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let segments = in_value(input, &mut pos) as u32;
-    let id = crate::externs::util::with_renderer_or_panic("createSphereMesh", |r| r.create_sphere(segments));
+    let id = crate::externs::util::with_renderer_or_panic("createSphereMesh", |r| {
+        r.create_sphere(segments)
+    });
     let mut out = Vec::new();
     out_value_u64(&mut out, id as u64);
     out
@@ -573,7 +631,9 @@ pub fn scene3d_create_sphere_mesh(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_create_cylinder_mesh(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let segments = in_value(input, &mut pos) as u32;
-    let id = crate::externs::util::with_renderer_or_panic("createCylinderMesh", |r| r.create_cylinder(segments));
+    let id = crate::externs::util::with_renderer_or_panic("createCylinderMesh", |r| {
+        r.create_cylinder(segments)
+    });
     let mut out = Vec::new();
     out_value_u64(&mut out, id as u64);
     out
@@ -583,10 +643,12 @@ pub fn scene3d_create_cylinder_mesh(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "createCapsuleMesh")]
 pub fn scene3d_create_capsule_mesh(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let segments    = in_value(input, &mut pos) as u32;
+    let segments = in_value(input, &mut pos) as u32;
     let half_height = in_f64(input, &mut pos) as f32;
-    let radius      = in_f64(input, &mut pos) as f32;
-    let id = crate::externs::util::with_renderer_or_panic("createCapsuleMesh", |r| r.create_capsule(segments, half_height, radius));
+    let radius = in_f64(input, &mut pos) as f32;
+    let id = crate::externs::util::with_renderer_or_panic("createCapsuleMesh", |r| {
+        r.create_capsule(segments, half_height, radius)
+    });
     let mut out = Vec::new();
     out_value_u64(&mut out, id as u64);
     out
@@ -601,7 +663,9 @@ pub fn audio_load_file(input: &[u8]) -> Vec<u8> {
     let path = in_str(input, &mut pos).to_string();
     let result = crate::file_io::read_bytes(&path)
         .map_err(|e| format!("audio load error: {e}"))
-        .and_then(|data| vo_vogui::audio::with_global_audio_result(|engine| engine.load_bytes(data)));
+        .and_then(|data| {
+            vo_vogui::audio::with_global_audio_result(|engine| engine.load_bytes(data))
+        });
     let mut out = Vec::new();
     out_u32_handle_result(&mut out, result);
     out
@@ -631,11 +695,11 @@ pub fn scene3d_animation_destroy(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "animationPlay")]
 pub fn scene3d_animation_play(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id   = in_value(input, &mut pos) as u32;
-    let target_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
+    let target_id = in_value(input, &mut pos) as u32;
     let clip_index = in_value(input, &mut pos) as usize;
-    let looping    = in_bool(input, &mut pos);
-    let speed      = in_f64(input, &mut pos) as f32;
+    let looping = in_bool(input, &mut pos);
+    let speed = in_f64(input, &mut pos) as f32;
     crate::animation::with_world(world_id, |w| w.play(target_id, clip_index, looping, speed));
     Vec::new()
 }
@@ -644,7 +708,7 @@ pub fn scene3d_animation_play(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "animationStop")]
 pub fn scene3d_animation_stop(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
     let target_id = in_value(input, &mut pos) as u32;
     crate::animation::with_world(world_id, |w| w.stop(target_id));
     Vec::new()
@@ -654,10 +718,10 @@ pub fn scene3d_animation_stop(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "animationCrossfade")]
 pub fn scene3d_animation_crossfade(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id   = in_value(input, &mut pos) as u32;
-    let target_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
+    let target_id = in_value(input, &mut pos) as u32;
     let clip_index = in_value(input, &mut pos) as usize;
-    let duration   = in_f64(input, &mut pos) as f32;
+    let duration = in_f64(input, &mut pos) as f32;
     crate::animation::with_world(world_id, |w| w.crossfade(target_id, clip_index, duration));
     Vec::new()
 }
@@ -666,9 +730,9 @@ pub fn scene3d_animation_crossfade(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "animationSetSpeed")]
 pub fn scene3d_animation_set_speed(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
     let target_id = in_value(input, &mut pos) as u32;
-    let speed     = in_f64(input, &mut pos) as f32;
+    let speed = in_f64(input, &mut pos) as f32;
     crate::animation::with_world(world_id, |w| w.set_speed(target_id, speed));
     Vec::new()
 }
@@ -677,7 +741,7 @@ pub fn scene3d_animation_set_speed(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "animationRemoveTarget")]
 pub fn scene3d_animation_remove_target(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
     let target_id = in_value(input, &mut pos) as u32;
     crate::animation::with_world(world_id, |w| w.remove(target_id));
     Vec::new()
@@ -688,8 +752,8 @@ pub fn scene3d_animation_remove_target(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_animation_tick(input: &[u8]) -> Vec<u8> {
     use std::collections::HashMap;
     let mut pos = 0usize;
-    let world_id     = in_value(input, &mut pos) as u32;
-    let dt           = in_f64(input, &mut pos) as f32;
+    let world_id = in_value(input, &mut pos) as u32;
+    let dt = in_f64(input, &mut pos) as f32;
     let entity_bytes = in_bytes(input, &mut pos);
     let entity_models = decode_entity_models(entity_bytes);
     crate::externs::util::with_renderer_or_panic("animationTick", |renderer| {
@@ -699,16 +763,22 @@ pub fn scene3d_animation_tick(input: &[u8]) -> Vec<u8> {
 }
 
 fn decode_entity_models(data: &[u8]) -> std::collections::HashMap<u32, u32> {
-    assert!(data.len() >= 4, "voplay: animation entity-model map too short");
+    assert!(
+        data.len() >= 4,
+        "voplay: animation entity-model map too short"
+    );
     let mut pos = 0usize;
-    let count = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
-    assert!(data.len() == 4 + count * 8, "voplay: animation entity-model map size mismatch");
+    assert!(
+        data.len() == 4 + count * 8,
+        "voplay: animation entity-model map size mismatch"
+    );
     let mut map = std::collections::HashMap::with_capacity(count);
     for _ in 0..count {
-        let target_id = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap());
+        let target_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
         pos += 4;
-        let model_id = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap());
+        let model_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
         pos += 4;
         map.insert(target_id, model_id);
     }
@@ -719,9 +789,9 @@ fn decode_entity_models(data: &[u8]) -> std::collections::HashMap<u32, u32> {
 #[wasm_bindgen(js_name = "animationProgress")]
 pub fn scene3d_animation_progress(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id  = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
     let target_id = in_value(input, &mut pos) as u32;
-    let model_id  = in_value(input, &mut pos) as u32;
+    let model_id = in_value(input, &mut pos) as u32;
     let progress = crate::externs::util::with_renderer_or_panic("animationProgress", |r| {
         r.animation_progress(world_id, target_id, model_id)
     });
@@ -777,8 +847,8 @@ pub fn scene2d_physics_destroy(input: &[u8]) -> Vec<u8> {
 pub fn scene2d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
-    let data     = in_bytes(input, &mut pos);
+    let body_id = in_value(input, &mut pos) as u32;
+    let data = in_bytes(input, &mut pos);
     let desc = crate::externs::physics2d::decode_body_desc(body_id, data);
     crate::physics::with_world(world_id, |world| world.spawn_body(&desc));
     Vec::new()
@@ -789,7 +859,7 @@ pub fn scene2d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
 pub fn scene2d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
     crate::physics::with_world(world_id, |world| world.destroy_body(body_id));
     Vec::new()
 }
@@ -799,8 +869,8 @@ pub fn scene2d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
 pub fn scene2d_physics_step(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let dt       = in_f64(input, &mut pos) as f32;
-    let cmds     = in_bytes(input, &mut pos).to_vec();
+    let dt = in_f64(input, &mut pos) as f32;
+    let cmds = in_bytes(input, &mut pos).to_vec();
     let state = crate::physics::with_world(world_id, |world| {
         world.apply_commands(&cmds);
         world.step(dt);
@@ -844,12 +914,13 @@ pub fn scene2d_physics_contacts(input: &[u8]) -> Vec<u8> {
 pub fn scene2d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let ox       = in_f64(input, &mut pos) as f32;
-    let oy       = in_f64(input, &mut pos) as f32;
-    let dx       = in_f64(input, &mut pos) as f32;
-    let dy       = in_f64(input, &mut pos) as f32;
+    let ox = in_f64(input, &mut pos) as f32;
+    let oy = in_f64(input, &mut pos) as f32;
+    let dx = in_f64(input, &mut pos) as f32;
+    let dy = in_f64(input, &mut pos) as f32;
     let max_dist = in_f64(input, &mut pos) as f32;
-    let result   = crate::physics::with_world(world_id, |world| world.ray_cast(ox, oy, dx, dy, max_dist));
+    let result =
+        crate::physics::with_world(world_id, |world| world.ray_cast(ox, oy, dx, dy, max_dist));
     let buf = match result {
         Some((body_id, hx, hy, nx, ny, toi)) => {
             let mut b = Vec::with_capacity(45);
@@ -878,10 +949,14 @@ pub fn scene2d_physics_query_rect(input: &[u8]) -> Vec<u8> {
     let min_y = in_f64(input, &mut pos) as f32;
     let max_x = in_f64(input, &mut pos) as f32;
     let max_y = in_f64(input, &mut pos) as f32;
-    let ids = crate::physics::with_world(world_id, |world| world.query_rect(min_x, min_y, max_x, max_y));
+    let ids = crate::physics::with_world(world_id, |world| {
+        world.query_rect(min_x, min_y, max_x, max_y)
+    });
     let mut buf = Vec::with_capacity(4 + ids.len() * 4);
     buf.extend_from_slice(&(ids.len() as u32).to_le_bytes());
-    for id in &ids { buf.extend_from_slice(&id.to_le_bytes()); }
+    for id in &ids {
+        buf.extend_from_slice(&id.to_le_bytes());
+    }
     let mut out = Vec::new();
     out_bytes(&mut out, &buf);
     out
@@ -917,8 +992,8 @@ pub fn scene3d_physics_destroy(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
-    let data     = in_bytes(input, &mut pos);
+    let body_id = in_value(input, &mut pos) as u32;
+    let data = in_bytes(input, &mut pos);
     let desc = crate::externs::physics3d::decode_body3d_desc(body_id, data);
     crate::physics3d::with_world(world_id, |world| world.spawn_body(&desc));
     Vec::new()
@@ -929,13 +1004,18 @@ pub fn scene3d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_physics_spawn_trimesh_body(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
     let model_id = in_value(input, &mut pos) as u32;
-    let data     = in_bytes(input, &mut pos);
+    let data = in_bytes(input, &mut pos);
     let desc = crate::externs::physics3d::decode_trimesh_desc(body_id, data);
-    let mesh_data = crate::externs::util::with_renderer_or_panic("physicsSpawnTrimeshBody", |r| r.get_model_mesh_data(model_id));
-    let (positions, indices) = mesh_data.unwrap_or_else(|| panic!("physicsSpawnTrimeshBody: model not found: {}", model_id));
-    crate::physics3d::with_world(world_id, |world| world.spawn_trimesh_body(&desc, &positions, &indices));
+    let mesh_data = crate::externs::util::with_renderer_or_panic("physicsSpawnTrimeshBody", |r| {
+        r.get_model_mesh_data(model_id)
+    });
+    let (positions, indices) = mesh_data
+        .unwrap_or_else(|| panic!("physicsSpawnTrimeshBody: model not found: {}", model_id));
+    crate::physics3d::with_world(world_id, |world| {
+        world.spawn_trimesh_body(&desc, &positions, &indices)
+    });
     Vec::new()
 }
 
@@ -943,11 +1023,13 @@ pub fn scene3d_physics_spawn_trimesh_body(input: &[u8]) -> Vec<u8> {
 #[wasm_bindgen(js_name = "scene3d_physicsSpawnTrimeshBodyData")]
 pub fn scene3d_physics_spawn_trimesh_body_data(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
-    let world_id  = in_value(input, &mut pos) as u32;
-    let body_id   = in_value(input, &mut pos) as u32;
-    let data      = in_bytes(input, &mut pos);
+    let world_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
+    let data = in_bytes(input, &mut pos);
     let mesh_data = in_bytes(input, &mut pos);
-    crate::externs::physics3d::spawn_trimesh_body_from_mesh_data(world_id, body_id, data, mesh_data);
+    crate::externs::physics3d::spawn_trimesh_body_from_mesh_data(
+        world_id, body_id, data, mesh_data,
+    );
     Vec::new()
 }
 
@@ -956,33 +1038,57 @@ pub fn scene3d_physics_spawn_trimesh_body_data(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_physics_spawn_heightfield(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
     let mut pos = 0usize;
-    let world_id     = in_value(input, &mut pos) as u32;
-    let body_id      = in_value(input, &mut pos) as u32;
+    let world_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
     let height_bytes = in_bytes(input, &mut pos);
-    let rows         = in_value(input, &mut pos) as u32;
-    let cols         = in_value(input, &mut pos) as u32;
-    let scale_x      = in_f64(input, &mut pos) as f32;
-    let scale_y      = in_f64(input, &mut pos) as f32;
-    let scale_z      = in_f64(input, &mut pos) as f32;
-    let px           = in_f64(input, &mut pos) as f32;
-    let py           = in_f64(input, &mut pos) as f32;
-    let pz           = in_f64(input, &mut pos) as f32;
-    let layer        = in_value(input, &mut pos) as u16;
-    let mask         = in_value(input, &mut pos) as u16;
-    let friction     = in_f64(input, &mut pos) as f32;
-    let restitution  = in_f64(input, &mut pos) as f32;
+    let rows = in_value(input, &mut pos) as u32;
+    let cols = in_value(input, &mut pos) as u32;
+    let scale_x = in_f64(input, &mut pos) as f32;
+    let scale_y = in_f64(input, &mut pos) as f32;
+    let scale_z = in_f64(input, &mut pos) as f32;
+    let px = in_f64(input, &mut pos) as f32;
+    let py = in_f64(input, &mut pos) as f32;
+    let pz = in_f64(input, &mut pos) as f32;
+    let layer = in_value(input, &mut pos) as u16;
+    let mask = in_value(input, &mut pos) as u16;
+    let friction = in_f64(input, &mut pos) as f32;
+    let restitution = in_f64(input, &mut pos) as f32;
 
-    let height_data: Vec<f32> = height_bytes.chunks_exact(4)
+    let height_data: Vec<f32> = height_bytes
+        .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let origin = Vec3::new(px, py, pz);
-    let desc = crate::physics3d::HeightfieldDesc3D { body_id, pos: origin, layer, mask, friction, restitution, rows, cols, scale_x, scale_y, scale_z };
-    crate::physics3d::with_world(world_id, |world| world.spawn_heightfield_body(&desc, &height_data));
+    let desc = crate::physics3d::HeightfieldDesc3D {
+        body_id,
+        pos: origin,
+        layer,
+        mask,
+        friction,
+        restitution,
+        rows,
+        cols,
+        scale_x,
+        scale_y,
+        scale_z,
+    };
+    crate::physics3d::with_world(world_id, |world| {
+        world.spawn_heightfield_body(&desc, &height_data)
+    });
     crate::terrain::store_terrain(
         world_id,
         body_id,
         origin,
-        crate::terrain::TerrainData { model_id: 0, heights: height_data, rows, cols, scale_x, scale_y, scale_z, origin },
+        crate::terrain::TerrainData {
+            model_id: 0,
+            heights: height_data,
+            rows,
+            cols,
+            scale_x,
+            scale_y,
+            scale_z,
+            origin,
+        },
     );
     Vec::new()
 }
@@ -992,7 +1098,7 @@ pub fn scene3d_physics_spawn_heightfield(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let body_id  = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
     crate::terrain::remove_terrain(world_id, body_id);
     crate::physics3d::with_world(world_id, |world| world.destroy_body(body_id));
     Vec::new()
@@ -1003,8 +1109,8 @@ pub fn scene3d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
 pub fn scene3d_physics_step(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let dt       = in_f64(input, &mut pos) as f32;
-    let cmds     = in_bytes(input, &mut pos).to_vec();
+    let dt = in_f64(input, &mut pos) as f32;
+    let cmds = in_bytes(input, &mut pos).to_vec();
     let state = crate::physics3d::with_world(world_id, |world| {
         world.apply_commands(&cmds);
         world.step(dt);
@@ -1050,16 +1156,17 @@ pub fn scene3d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
-    let ox       = in_f64(input, &mut pos) as f32;
-    let oy       = in_f64(input, &mut pos) as f32;
-    let oz       = in_f64(input, &mut pos) as f32;
-    let dx       = in_f64(input, &mut pos) as f32;
-    let dy       = in_f64(input, &mut pos) as f32;
-    let dz       = in_f64(input, &mut pos) as f32;
+    let ox = in_f64(input, &mut pos) as f32;
+    let oy = in_f64(input, &mut pos) as f32;
+    let oz = in_f64(input, &mut pos) as f32;
+    let dx = in_f64(input, &mut pos) as f32;
+    let dy = in_f64(input, &mut pos) as f32;
+    let dz = in_f64(input, &mut pos) as f32;
     let max_dist = in_f64(input, &mut pos) as f32;
     let origin = Vec3::new(ox, oy, oz);
-    let dir    = Vec3::new(dx, dy, dz);
-    let result = crate::physics3d::with_world(world_id, |world| world.ray_cast(origin, dir, max_dist));
+    let dir = Vec3::new(dx, dy, dz);
+    let result =
+        crate::physics3d::with_world(world_id, |world| world.ray_cast(origin, dir, max_dist));
     let buf = match result {
         Some(hit) => {
             let mut b = Vec::with_capacity(61);
@@ -1098,7 +1205,9 @@ pub fn scene3d_physics_query_aabb(input: &[u8]) -> Vec<u8> {
     let ids = crate::physics3d::with_world(world_id, |world| world.query_aabb(min, max));
     let mut buf = Vec::with_capacity(4 + ids.len() * 4);
     buf.extend_from_slice(&(ids.len() as u32).to_le_bytes());
-    for id in &ids { buf.extend_from_slice(&id.to_le_bytes()); }
+    for id in &ids {
+        buf.extend_from_slice(&id.to_le_bytes());
+    }
     let mut out = Vec::new();
     out_bytes(&mut out, &buf);
     out

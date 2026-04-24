@@ -1,18 +1,20 @@
 //! wgpu-based renderer for voplay.
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
-use crate::draw_list::{DrawList2D, DrawCallKind};
+use crate::draw_list::{DrawCallKind, DrawList2D};
 use crate::font_manager::FontManager;
 use crate::math3d::{self, Vec3};
 use crate::model_loader::{LevelNode, MeshMaterial, ModelId, ModelManager};
-use crate::pipeline2d::{Pipeline2D, CameraUniform};
-use crate::pipeline3d::{Pipeline3D, Camera3DUniform, ModelUniform, LightUniform, LightData, ModelDraw};
+use crate::pipeline2d::{CameraUniform, Pipeline2D};
+use crate::pipeline3d::{
+    Camera3DUniform, LightData, LightUniform, ModelDraw, ModelUniform, Pipeline3D,
+};
 use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
 use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
+use crate::stream::{DrawCommand, StreamReader};
 use crate::terrain::TerrainData;
 use crate::texture::{TextureId, TextureManager};
-use crate::stream::{DrawCommand, StreamReader};
 
 /// Maximum number of camera states per frame before buffer regrow.
 const INITIAL_CAMERA_SLOTS: usize = 16;
@@ -60,7 +62,7 @@ impl Renderer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
                     min_binding_size: wgpu::BufferSize::new(
-                        std::mem::size_of::<CameraUniform>() as u64,
+                        std::mem::size_of::<CameraUniform>() as u64
                     ),
                 },
                 count: None,
@@ -104,7 +106,8 @@ impl Renderer {
         surface_config: wgpu::SurfaceConfiguration,
         canvas_id: Option<String>,
     ) -> Result<Self, String> {
-        let depth_view = Self::create_depth_view(&device, surface_config.width, surface_config.height);
+        let depth_view =
+            Self::create_depth_view(&device, surface_config.width, surface_config.height);
         let w = surface_config.width as f32;
         let h = surface_config.height as f32;
 
@@ -120,13 +123,8 @@ impl Renderer {
         let pipeline2d = Pipeline2D::new(&device, &queue, surface_config.format, &camera_bgl);
         let tex_bgl = texture_manager.bind_group_layout();
         let cubemap_bgl = texture_manager.cubemap_bind_group_layout();
-        let pipeline_sprite = PipelineSprite::new(
-            &device,
-            &queue,
-            surface_config.format,
-            &camera_bgl,
-            tex_bgl,
-        );
+        let pipeline_sprite =
+            PipelineSprite::new(&device, &queue, surface_config.format, &camera_bgl, tex_bgl);
         let pipeline3d = Pipeline3D::new(&device, &queue, surface_config.format);
         let pipeline_shadow = PipelineShadow::new(&device, 2048);
         let pipeline_skybox = PipelineSkybox::new(&device, surface_config.format, cubemap_bgl);
@@ -164,6 +162,7 @@ impl Renderer {
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
+        no_vsync: bool,
     ) -> Result<Self, String> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -175,13 +174,16 @@ impl Renderer {
             .ok_or_else(|| "voplay: no suitable GPU adapter found".to_string())?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("voplay"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
-                memory_hints: wgpu::MemoryHints::default(),
-            }, None)
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("voplay"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                        .using_resolution(adapter.limits()),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
             .await
             .map_err(|e| format!("voplay: request_device failed: {}", e))?;
 
@@ -198,7 +200,11 @@ impl Renderer {
             format,
             width: width.max(1),
             height: height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: if no_vsync {
+                wgpu::PresentMode::AutoNoVsync
+            } else {
+                wgpu::PresentMode::AutoVsync
+            },
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
@@ -260,20 +266,33 @@ impl Renderer {
 
     /// Load a model from a file path. Returns ModelId.
     pub fn load_model(&mut self, path: &str) -> Result<ModelId, String> {
-        self.model_manager.load_file(&self.device, &self.queue, &mut self.texture_manager, path)
+        self.model_manager
+            .load_file(&self.device, &self.queue, &mut self.texture_manager, path)
     }
 
     /// Load a model from raw glTF/GLB bytes. Returns ModelId.
     pub fn load_model_bytes(&mut self, data: &[u8]) -> Result<ModelId, String> {
-        self.model_manager.load_bytes(&self.device, &self.queue, &mut self.texture_manager, data, None)
+        self.model_manager.load_bytes(
+            &self.device,
+            &self.queue,
+            &mut self.texture_manager,
+            data,
+            None,
+        )
     }
 
     pub fn load_level(&mut self, path: &str) -> Result<Vec<LevelNode>, String> {
-        self.model_manager.load_level_file(&self.device, &self.queue, &mut self.texture_manager, path)
+        self.model_manager.load_level_file(
+            &self.device,
+            &self.queue,
+            &mut self.texture_manager,
+            path,
+        )
     }
 
     pub fn create_plane(&mut self, width: f32, depth: f32, sub_x: u32, sub_z: u32) -> ModelId {
-        self.model_manager.create_plane(&self.device, &self.queue, width, depth, sub_x, sub_z)
+        self.model_manager
+            .create_plane(&self.device, &self.queue, width, depth, sub_x, sub_z)
     }
 
     pub fn create_cube(&mut self) -> ModelId {
@@ -281,15 +300,18 @@ impl Renderer {
     }
 
     pub fn create_sphere(&mut self, segments: u32) -> ModelId {
-        self.model_manager.create_sphere(&self.device, &self.queue, segments)
+        self.model_manager
+            .create_sphere(&self.device, &self.queue, segments)
     }
 
     pub fn create_cylinder(&mut self, segments: u32) -> ModelId {
-        self.model_manager.create_cylinder(&self.device, &self.queue, segments)
+        self.model_manager
+            .create_cylinder(&self.device, &self.queue, segments)
     }
 
     pub fn create_capsule(&mut self, segments: u32, half_height: f32, radius: f32) -> ModelId {
-        self.model_manager.create_capsule(&self.device, &self.queue, segments, half_height, radius)
+        self.model_manager
+            .create_capsule(&self.device, &self.queue, segments, half_height, radius)
     }
 
     pub fn create_terrain(
@@ -357,16 +379,28 @@ impl Renderer {
         Some((model.cpu_positions.clone(), model.cpu_indices.clone()))
     }
 
-    pub fn get_model_animation_info(&self, model_id: ModelId) -> Option<crate::animation::ModelAnimationInfo> {
+    pub fn get_model_animation_info(
+        &self,
+        model_id: ModelId,
+    ) -> Option<crate::animation::ModelAnimationInfo> {
         self.model_manager.animation_info(model_id)
     }
 
-    pub fn tick_animations(&mut self, world_id: u32, dt: f32, entity_models: &std::collections::HashMap<u32, ModelId>) {
-        crate::animation::with_world(world_id, |world| world.tick(dt, &self.model_manager, entity_models));
+    pub fn tick_animations(
+        &mut self,
+        world_id: u32,
+        dt: f32,
+        entity_models: &std::collections::HashMap<u32, ModelId>,
+    ) {
+        crate::animation::with_world(world_id, |world| {
+            world.tick(dt, &self.model_manager, entity_models)
+        });
     }
 
     pub fn animation_progress(&self, world_id: u32, target_id: u32, model_id: ModelId) -> f32 {
-        crate::animation::with_world(world_id, |world| world.progress(target_id, &self.model_manager, model_id))
+        crate::animation::with_world(world_id, |world| {
+            world.progress(target_id, &self.model_manager, model_id)
+        })
     }
 
     // --- Font management ---
@@ -377,7 +411,10 @@ impl Renderer {
     }
 
     /// Load a font from raw TTF/OTF bytes. Returns FontId.
-    pub fn load_font_bytes(&mut self, data: Vec<u8>) -> Result<crate::font_manager::FontId, String> {
+    pub fn load_font_bytes(
+        &mut self,
+        data: Vec<u8>,
+    ) -> Result<crate::font_manager::FontId, String> {
         self.font_manager.load_bytes(data)
     }
 
@@ -387,7 +424,12 @@ impl Renderer {
     }
 
     /// Measure text dimensions (width, height) using the specified font.
-    pub fn measure_text(&self, font_id: crate::font_manager::FontId, text: &str, size: f32) -> (f32, f32) {
+    pub fn measure_text(
+        &self,
+        font_id: crate::font_manager::FontId,
+        text: &str,
+        size: f32,
+    ) -> (f32, f32) {
         self.font_manager.measure_text(font_id, text, size)
     }
 
@@ -395,20 +437,24 @@ impl Renderer {
 
     /// Load a texture from a file path. Returns TextureId.
     pub fn load_texture(&mut self, path: &str) -> Result<TextureId, String> {
-        self.texture_manager.load_file(&self.device, &self.queue, path)
+        self.texture_manager
+            .load_file(&self.device, &self.queue, path)
     }
 
     /// Load a texture from encoded image bytes (PNG, JPEG, etc.).
     pub fn load_texture_bytes(&mut self, data: &[u8]) -> Result<TextureId, String> {
-        self.texture_manager.load_image_bytes(&self.device, &self.queue, data)
+        self.texture_manager
+            .load_image_bytes(&self.device, &self.queue, data)
     }
 
     pub fn load_cubemap(&mut self, paths: [&str; 6]) -> Result<u32, String> {
-        self.texture_manager.load_cubemap_files(&self.device, &self.queue, paths)
+        self.texture_manager
+            .load_cubemap_files(&self.device, &self.queue, paths)
     }
 
     pub fn load_cubemap_bytes(&mut self, faces: [&[u8]; 6]) -> Result<u32, String> {
-        self.texture_manager.load_cubemap_image_bytes(&self.device, &self.queue, faces)
+        self.texture_manager
+            .load_cubemap_image_bytes(&self.device, &self.queue, faces)
     }
 
     /// Free a texture by ID.
@@ -465,10 +511,18 @@ impl Renderer {
             Some(ref id) => id.clone(),
             None => return,
         };
-        let Some(window) = web_sys::window() else { return };
-        let Some(document) = window.document() else { return };
-        let Some(el) = document.get_element_by_id(&canvas_id) else { return };
-        let Ok(canvas) = el.dyn_into::<web_sys::HtmlCanvasElement>() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Some(el) = document.get_element_by_id(&canvas_id) else {
+            return;
+        };
+        let Ok(canvas) = el.dyn_into::<web_sys::HtmlCanvasElement>() else {
+            return;
+        };
         let dpr = window.device_pixel_ratio();
         let css_w = canvas.client_width().max(1) as f64;
         let css_h = canvas.client_height().max(1) as f64;
@@ -513,7 +567,12 @@ impl Renderer {
         let h = self.surface_config.height as f32;
 
         // Reset draw list for this frame
-        let mut clear_color = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        let mut clear_color = wgpu::Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
         self.draw_list.clear();
         self.draw_list.set_screen_space(w, h);
 
@@ -526,7 +585,10 @@ impl Renderer {
         let mut light_uniform = LightUniform {
             ambient: [0.1, 0.1, 0.1, 1.0],
             count: [0, 0, 0, 0],
-            lights: [LightData { position_or_dir: [0.0; 4], color_intensity: [0.0; 4] }; 8],
+            lights: [LightData {
+                position_or_dir: [0.0; 4],
+                color_intensity: [0.0; 4],
+            }; 8],
             fog_color: [0.0, 0.0, 0.0, 1.0],
             fog_params: [0.0, 0.0, 0.0, 0.0],
             shadow_vp: math3d::MAT4_IDENTITY,
@@ -543,10 +605,18 @@ impl Renderer {
             match cmd {
                 DrawCommand::Clear { r, g, b, a } => {
                     clear_color = wgpu::Color {
-                        r: r as f64, g: g as f64, b: b as f64, a: a as f64,
+                        r: r as f64,
+                        g: g as f64,
+                        b: b as f64,
+                        a: a as f64,
                     };
                 }
-                DrawCommand::SetCamera2D { x, y, zoom, rotation } => {
+                DrawCommand::SetCamera2D {
+                    x,
+                    y,
+                    zoom,
+                    rotation,
+                } => {
                     self.draw_list.set_camera_2d(w, h, x, y, zoom, rotation);
                 }
                 DrawCommand::ResetCamera => {
@@ -555,29 +625,78 @@ impl Renderer {
                 DrawCommand::SetLayer { z } => {
                     self.draw_list.set_layer(z);
                 }
-                DrawCommand::DrawRect { x, y, w, h, r, g, b, a } => {
+                DrawCommand::DrawRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    r,
+                    g,
+                    b,
+                    a,
+                } => {
                     self.draw_list.push_rect(x, y, w, h, [r, g, b, a]);
                 }
-                DrawCommand::DrawCircle { cx, cy, radius, r, g, b, a } => {
+                DrawCommand::DrawCircle {
+                    cx,
+                    cy,
+                    radius,
+                    r,
+                    g,
+                    b,
+                    a,
+                } => {
                     self.draw_list.push_circle(cx, cy, radius, [r, g, b, a]);
                 }
-                DrawCommand::DrawLine { x1, y1, x2, y2, thickness, r, g, b, a } => {
-                    self.draw_list.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
+                DrawCommand::DrawLine {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    thickness,
+                    r,
+                    g,
+                    b,
+                    a,
+                } => {
+                    self.draw_list
+                        .push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
                 DrawCommand::SetFont { font_id } => {
                     self.font_manager.set_current(font_id);
                 }
-                DrawCommand::DrawText { x, y, size, r, g, b, a, text } => {
+                DrawCommand::DrawText {
+                    x,
+                    y,
+                    size,
+                    r,
+                    g,
+                    b,
+                    a,
+                    text,
+                } => {
                     let draws = self.font_manager.layout_text(&text, x, y, size, r, g, b, a);
                     for draw in draws {
                         self.draw_list.push_sprite(draw.texture_id, draw.instance);
                     }
                 }
                 DrawCommand::DrawSprite {
-                    tex_id, src_x, src_y, src_w, src_h,
-                    dst_x, dst_y, dst_w, dst_h,
-                    flip_x, flip_y, rotation,
-                    r, g, b, a,
+                    tex_id,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    dst_x,
+                    dst_y,
+                    dst_w,
+                    dst_h,
+                    flip_x,
+                    flip_y,
+                    rotation,
+                    r,
+                    g,
+                    b,
+                    a,
                 } => {
                     let (u0, v0, u1, v1) = if let Some(tex) = self.texture_manager.get(tex_id) {
                         if src_w == 0.0 && src_h == 0.0 {
@@ -586,25 +705,40 @@ impl Renderer {
                         } else {
                             let tw = tex.width as f32;
                             let th = tex.height as f32;
-                            (src_x / tw, src_y / th, (src_x + src_w) / tw, (src_y + src_h) / th)
+                            (
+                                src_x / tw,
+                                src_y / th,
+                                (src_x + src_w) / tw,
+                                (src_y + src_h) / th,
+                            )
                         }
                     } else {
                         (0.0, 0.0, 1.0, 1.0)
                     };
-                    self.draw_list.push_sprite(tex_id, SpriteInstance {
-                        dst_rect: [dst_x, dst_y, dst_w, dst_h],
-                        src_rect: [u0, v0, u1, v1],
-                        color: [r, g, b, a],
-                        params: [
-                            rotation,
-                            if flip_x { 1.0 } else { 0.0 },
-                            if flip_y { 1.0 } else { 0.0 },
-                            0.0,
-                        ],
-                    });
+                    self.draw_list.push_sprite(
+                        tex_id,
+                        SpriteInstance {
+                            dst_rect: [dst_x, dst_y, dst_w, dst_h],
+                            src_rect: [u0, v0, u1, v1],
+                            color: [r, g, b, a],
+                            params: [
+                                rotation,
+                                if flip_x { 1.0 } else { 0.0 },
+                                if flip_y { 1.0 } else { 0.0 },
+                                0.0,
+                            ],
+                        },
+                    );
                 }
                 // --- 3D commands ---
-                DrawCommand::SetCamera3D { eye, target, up, fov, near, far } => {
+                DrawCommand::SetCamera3D {
+                    eye,
+                    target,
+                    up,
+                    fov,
+                    near,
+                    far,
+                } => {
                     camera3d_state = Some((eye, target, up, fov, near, far));
                     let v = math3d::look_at_rh(eye, target, up);
                     let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
@@ -615,7 +749,12 @@ impl Renderer {
                         _pad: 0.0,
                     });
                 }
-                DrawCommand::SetLights3D { ambient_r, ambient_g, ambient_b, lights } => {
+                DrawCommand::SetLights3D {
+                    ambient_r,
+                    ambient_g,
+                    ambient_b,
+                    lights,
+                } => {
                     light_uniform.ambient = [ambient_r, ambient_g, ambient_b, 1.0];
                     let count = lights.len().min(8);
                     light_uniform.count[0] = count as u32;
@@ -631,19 +770,36 @@ impl Renderer {
                         };
                     }
                 }
-                DrawCommand::SetFog3D { mode, color, start, end, density } => {
+                DrawCommand::SetFog3D {
+                    mode,
+                    color,
+                    start,
+                    end,
+                    density,
+                } => {
                     light_uniform.count[1] = mode as u32;
                     light_uniform.fog_color = [color.x, color.y, color.z, 1.0];
                     light_uniform.fog_params = [start, end, density, 0.0];
                 }
-                DrawCommand::SetShadow3D { enabled, resolution } => {
+                DrawCommand::SetShadow3D {
+                    enabled,
+                    resolution,
+                } => {
                     shadow_enabled = enabled;
                     shadow_resolution = resolution.max(1);
                 }
                 DrawCommand::DrawSkybox { cubemap_id } => {
                     skybox_cubemap_id = Some(cubemap_id);
                 }
-                DrawCommand::DrawModel { model_id, pos, rot, scale, tint, animation_world_id, animation_target_id } => {
+                DrawCommand::DrawModel {
+                    model_id,
+                    pos,
+                    rot,
+                    scale,
+                    tint,
+                    animation_world_id,
+                    animation_target_id,
+                } => {
                     let model_mat = math3d::model_matrix(pos, rot, scale);
                     let normal_mat = math3d::transpose_upper3x3(&model_mat);
                     model_draws.push(ModelDraw {
@@ -660,12 +816,22 @@ impl Renderer {
                     });
                 }
                 DrawCommand::DrawBillboard {
-                    tex_id, src_x, src_y, src_w, src_h,
-                    world_pos, w: bw, h: bh, tint,
+                    tex_id,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    world_pos,
+                    w: bw,
+                    h: bh,
+                    tint,
                 } => {
                     // Project 3D world position to screen coordinates using the current 3D camera
                     if let Some(ref cam) = camera3d_uniform {
-                        let clip = math3d::mat4_mul_vec4(&cam.view_proj, [world_pos.x, world_pos.y, world_pos.z, 1.0]);
+                        let clip = math3d::mat4_mul_vec4(
+                            &cam.view_proj,
+                            [world_pos.x, world_pos.y, world_pos.z, 1.0],
+                        );
                         if clip[3] > 0.0 {
                             let ndc_x = clip[0] / clip[3];
                             let ndc_y = clip[1] / clip[3];
@@ -673,25 +839,35 @@ impl Renderer {
                             let screen_x = (ndc_x + 1.0) * 0.5 * w - bw * 0.5;
                             let screen_y = (1.0 - ndc_y) * 0.5 * h - bh * 0.5;
 
-                            let (u0, v0, u1, v1) = if let Some(tex) = self.texture_manager.get(tex_id) {
-                                if src_w == 0.0 && src_h == 0.0 {
-                                    (0.0, 0.0, 1.0, 1.0)
+                            let (u0, v0, u1, v1) =
+                                if let Some(tex) = self.texture_manager.get(tex_id) {
+                                    if src_w == 0.0 && src_h == 0.0 {
+                                        (0.0, 0.0, 1.0, 1.0)
+                                    } else {
+                                        let tw = tex.width as f32;
+                                        let th = tex.height as f32;
+                                        (
+                                            src_x / tw,
+                                            src_y / th,
+                                            (src_x + src_w) / tw,
+                                            (src_y + src_h) / th,
+                                        )
+                                    }
                                 } else {
-                                    let tw = tex.width as f32;
-                                    let th = tex.height as f32;
-                                    (src_x / tw, src_y / th, (src_x + src_w) / tw, (src_y + src_h) / th)
-                                }
-                            } else {
-                                (0.0, 0.0, 1.0, 1.0)
-                            };
-                            let color = Self::fog_billboard_color(tint, world_pos, cam, &light_uniform);
+                                    (0.0, 0.0, 1.0, 1.0)
+                                };
+                            let color =
+                                Self::fog_billboard_color(tint, world_pos, cam, &light_uniform);
 
-                            self.draw_list.push_sprite(tex_id, SpriteInstance {
-                                dst_rect: [screen_x, screen_y, bw, bh],
-                                src_rect: [u0, v0, u1, v1],
-                                color,
-                                params: [0.0, 0.0, 0.0, 0.0],
-                            });
+                            self.draw_list.push_sprite(
+                                tex_id,
+                                SpriteInstance {
+                                    dst_rect: [screen_x, screen_y, bw, bh],
+                                    src_rect: [u0, v0, u1, v1],
+                                    color,
+                                    params: [0.0, 0.0, 0.0, 0.0],
+                                },
+                            );
                         }
                     }
                 }
@@ -699,7 +875,8 @@ impl Renderer {
         }
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
-        self.font_manager.ensure_atlas(&mut self.texture_manager, &self.device, &self.queue);
+        self.font_manager
+            .ensure_atlas(&mut self.texture_manager, &self.device, &self.queue);
         self.font_manager.reset_current();
 
         // Resolve draw list: sort by (layer, order), produce draw calls
@@ -710,21 +887,23 @@ impl Renderer {
         let cam_count = frame.cameras.len();
         if cam_count > self.camera_slot_capacity {
             let new_cap = cam_count.next_power_of_two();
-            let (buf, bg) = Self::create_camera_buffer_and_bg(
-                &self.device, &self.camera_bgl, new_cap, align,
-            );
+            let (buf, bg) =
+                Self::create_camera_buffer_and_bg(&self.device, &self.camera_bgl, new_cap, align);
             self.camera_buffer = buf;
             self.camera_bind_group = bg;
             self.camera_slot_capacity = new_cap;
         }
         for (i, cam) in frame.cameras.iter().enumerate() {
             let offset = i as u64 * align as u64;
-            self.queue.write_buffer(&self.camera_buffer, offset, bytemuck::bytes_of(cam));
+            self.queue
+                .write_buffer(&self.camera_buffer, offset, bytemuck::bytes_of(cam));
         }
 
         // Upload sorted 2D instance data
-        self.pipeline2d.upload_instances(&self.device, &self.queue, &frame.shapes);
-        self.pipeline_sprite.upload_instances(&self.device, &self.queue, &frame.sprites);
+        self.pipeline2d
+            .upload_instances(&self.device, &self.queue, &frame.shapes);
+        self.pipeline_sprite
+            .upload_instances(&self.device, &self.queue, &frame.sprites);
 
         let mut shadow_active = false;
         if shadow_enabled && !model_draws.is_empty() {
@@ -740,8 +919,12 @@ impl Renderer {
                         if self.pipeline_shadow.size() != shadow_resolution {
                             self.pipeline_shadow.resize(&self.device, shadow_resolution);
                         }
-                        let inv_view_proj = math3d::mat4_inverse(&cam3d.view_proj)
-                            .ok_or_else(|| "voplay: failed to invert camera view projection for shadow mapping".to_string())?;
+                        let inv_view_proj = math3d::mat4_inverse(&cam3d.view_proj).ok_or_else(
+                            || {
+                                "voplay: failed to invert camera view projection for shadow mapping"
+                                    .to_string()
+                            },
+                        )?;
                         let shadow_vp = math3d::compute_shadow_vp(&inv_view_proj, shadow_dir);
                         self.pipeline_shadow.render_shadow_pass(
                             &self.device,
@@ -752,7 +935,8 @@ impl Renderer {
                             &self.model_manager,
                         );
                         light_uniform.shadow_vp = shadow_vp;
-                        light_uniform.shadow_params = [1.0, 0.002, 1.0 / shadow_resolution as f32, 0.0];
+                        light_uniform.shadow_params =
+                            [1.0, 0.002, 1.0 / shadow_resolution as f32, 0.0];
                         light_uniform.count[2] = 0;
                         shadow_active = true;
                     }
@@ -790,7 +974,9 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) = (skybox_cubemap_id, camera3d_state) {
+            if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
+                (skybox_cubemap_id, camera3d_state)
+            {
                 if let Some(cubemap) = self.texture_manager.get_cubemap(cubemap_id) {
                     let view_rot = math3d::view_rotation_only(eye, target, up);
                     let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
@@ -804,7 +990,8 @@ impl Renderer {
             // Draw 3D models first (depth tested)
             if !model_draws.is_empty() {
                 if let Some(ref cam3d) = camera3d_uniform {
-                    self.pipeline3d.set_camera_and_lights(&self.queue, cam3d, &light_uniform);
+                    self.pipeline3d
+                        .set_camera_and_lights(&self.queue, cam3d, &light_uniform);
                     let shadow_view = self.pipeline_shadow.shadow_texture_view();
                     self.pipeline3d.draw_models(
                         &self.device,
@@ -831,7 +1018,11 @@ impl Renderer {
                             *count,
                         );
                     }
-                    DrawCallKind::Sprites { texture_id, start, count } => {
+                    DrawCallKind::Sprites {
+                        texture_id,
+                        start,
+                        count,
+                    } => {
                         if let Some(tex) = self.texture_manager.get(*texture_id) {
                             self.pipeline_sprite.draw_range(
                                 &mut render_pass,

@@ -61,7 +61,10 @@ pub fn request_surface(canvas_ref: &str) -> Result<NativeSurfaceDesc, String> {
     };
     let ok = unsafe { (api.init_surface)(canvas_ref.as_ptr(), canvas_ref.len(), &mut desc) };
     if !ok {
-        return Err(format!("voplay: native host surface init failed for '{}'", canvas_ref));
+        return Err(format!(
+            "voplay: native host surface init failed for '{}'",
+            canvas_ref
+        ));
     }
     Ok(desc)
 }

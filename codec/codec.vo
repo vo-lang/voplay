@@ -110,7 +110,7 @@ func (r *ByteReader) ReadF64() float64 {
 	bits := uint64(d[0]) | uint64(d[1])<<8 | uint64(d[2])<<16 | uint64(d[3])<<24 |
 		uint64(d[4])<<32 | uint64(d[5])<<40 | uint64(d[6])<<48 | uint64(d[7])<<56
 	r.pos += 8
-	return math.Float64frombits(int(bits))
+	return math.Float64frombits(bits)
 }
 
 func (r *ByteReader) ReadF32() float64 {

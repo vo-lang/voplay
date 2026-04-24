@@ -29,6 +29,14 @@ const (
 	physics3DBodyStateBytes = 4 + 10*8
 )
 
+var nextRenderSceneID = 1
+
+func allocateRenderSceneID() int {
+	id := nextRenderSceneID
+	nextRenderSceneID++
+	return id
+}
+
 type FogConfig struct {
 	Mode    int
 	Color   voplay.Color
@@ -60,6 +68,10 @@ type Scene struct {
 	physCmds     codec.ByteWriter
 	bodyMap      map[int]*Entity
 	animationInfoCache map[int]AnimationModelInfo
+	renderSceneID int
+	renderSceneCreated bool
+	renderSceneCleared bool
+	renderDestroyedIDs []int
 }
 
 // New creates a new 3D scene with default camera and gravity.
@@ -84,6 +96,7 @@ func New() *Scene {
 		physCmds:     codec.NewByteWriter(256),
 		bodyMap:      make(map[int]*Entity),
 		animationInfoCache: make(map[int]AnimationModelInfo),
+		renderSceneID: allocateRenderSceneID(),
 	}
 }
 
@@ -125,6 +138,15 @@ type Entity struct {
 	hasSkeleton     bool
 	hasSkeletonInit bool
 	scene    *Scene
+	renderObjectCreated bool
+	renderLastModel voplay.ModelID
+	renderLastPosition voplay.Vec3
+	renderLastRotation voplay.Quat
+	renderLastScale voplay.Vec3
+	renderLastTint voplay.Color
+	renderLastVisible bool
+	renderLastAnimationWorldID int
+	renderLastAnimationTargetID int
 }
 
 // Position returns the entity's world position.
@@ -382,6 +404,10 @@ func (s *Scene) releaseEntityState(e *Entity, removeEmitters bool, removeAnimati
 	if removeAnimationTarget && e.animationTargetID != 0 && s.animationWorldID != 0 {
 		animBackend.RemoveTarget(s.animationWorldID, e.animationTargetID)
 	}
+	if e.renderObjectCreated {
+		s.renderDestroyedIDs = append(s.renderDestroyedIDs, e.id)
+		e.renderObjectCreated = false
+	}
 	e.animationTargetID = 0
 	s.releaseOwnedModel(e)
 	e.scene = nil
@@ -496,6 +522,10 @@ func (s *Scene) Clear() {
 	s.Emitters = nil
 	s.nextAnimationTargetID = 1
 	s.physCmds.Reset()
+	if s.renderSceneCreated {
+		s.renderSceneCleared = true
+		s.renderDestroyedIDs = nil
+	}
 }
 
 // EntityCount returns the number of entities in the scene.

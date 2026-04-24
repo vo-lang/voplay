@@ -3,8 +3,6 @@
 // frame requests to the logic island and submitting the returned draw commands.
 package voplay
 
-import "time"
-
 // renderWorkerPorts holds the port endpoints for the render worker.
 type renderWorkerPorts struct {
 	frameReq   port []byte // send frame requests (input snapshots) to logic island
@@ -22,9 +20,9 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	// Phase 1: Init surface (may be async on WASM).
 	initSurface(canvasRef, config.UncappedFrameRate)?
 
-	// Spin until renderer is ready (WASM async init).
+	// Wait for renderer async init without hammering the browser main thread.
 	for !isRendererReady() {
-		time.Sleep(1 * time.Millisecond)
+		waitDisplayPulse()
 	}
 
 	go func() {

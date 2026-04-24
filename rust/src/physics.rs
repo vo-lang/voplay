@@ -8,7 +8,7 @@ use rapier2d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::physics_registry::{WorldRegistry, PhysBodyType, with_world_in};
+use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 /// Global registry of 2D physics worlds, keyed by world handle.
 static REGISTRY: Mutex<Option<WorldRegistry<PhysicsWorld2D>>> = Mutex::new(None);
@@ -129,18 +129,14 @@ impl PhysicsWorld2D {
                 }
                 rb
             }
-            PhysBodyType::Static => {
-                RigidBodyBuilder::fixed()
-                    .translation(vector![desc.x, desc.y])
-                    .rotation(desc.rotation)
-                    .build()
-            }
-            PhysBodyType::Kinematic => {
-                RigidBodyBuilder::kinematic_position_based()
-                    .translation(vector![desc.x, desc.y])
-                    .rotation(desc.rotation)
-                    .build()
-            }
+            PhysBodyType::Static => RigidBodyBuilder::fixed()
+                .translation(vector![desc.x, desc.y])
+                .rotation(desc.rotation)
+                .build(),
+            PhysBodyType::Kinematic => RigidBodyBuilder::kinematic_position_based()
+                .translation(vector![desc.x, desc.y])
+                .rotation(desc.rotation)
+                .build(),
         };
 
         let rb_handle = self.rigid_body_set.insert(rb);
@@ -160,14 +156,12 @@ impl PhysicsWorld2D {
                     .restitution(desc.restitution)
                     .build()
             }
-            ColliderKind::Circle => {
-                ColliderBuilder::ball(desc.collider_args[0])
-                    .collision_groups(groups)
-                    .density(desc.density)
-                    .friction(desc.friction)
-                    .restitution(desc.restitution)
-                    .build()
-            }
+            ColliderKind::Circle => ColliderBuilder::ball(desc.collider_args[0])
+                .collision_groups(groups)
+                .density(desc.density)
+                .friction(desc.friction)
+                .restitution(desc.restitution)
+                .build(),
             ColliderKind::Capsule => {
                 ColliderBuilder::capsule_y(desc.collider_args[0], desc.collider_args[1])
                     .collision_groups(groups)
@@ -178,7 +172,8 @@ impl PhysicsWorld2D {
             }
         };
 
-        self.collider_set.insert_with_parent(collider, rb_handle, &mut self.rigid_body_set);
+        self.collider_set
+            .insert_with_parent(collider, rb_handle, &mut self.rigid_body_set);
         self.handle_map.insert(desc.body_id, rb_handle);
         self.reverse_map.insert(rb_handle, desc.body_id);
     }
@@ -210,8 +205,11 @@ impl PhysicsWorld2D {
             let cmd = data[pos];
             pos += 1;
 
-            if pos + 4 > data.len() { break; }
-            let body_id = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+            if pos + 4 > data.len() {
+                break;
+            }
+            let body_id =
+                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
             pos += 4;
 
             let handle = match self.handle_map.get(&body_id) {
@@ -222,15 +220,29 @@ impl PhysicsWorld2D {
                 }
             };
 
-            if pos + 16 > data.len() { break; }
+            if pos + 16 > data.len() {
+                break;
+            }
             let v1 = f64::from_le_bytes([
-                data[pos], data[pos+1], data[pos+2], data[pos+3],
-                data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                data[pos],
+                data[pos + 1],
+                data[pos + 2],
+                data[pos + 3],
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
             ]) as f32;
             pos += 8;
             let v2 = f64::from_le_bytes([
-                data[pos], data[pos+1], data[pos+2], data[pos+3],
-                data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                data[pos],
+                data[pos + 1],
+                data[pos + 2],
+                data[pos + 3],
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
             ]) as f32;
             pos += 8;
 
@@ -321,7 +333,14 @@ impl PhysicsWorld2D {
 
     /// Ray cast into the 2D physics world.
     /// Returns the first hit: (body_id, hit_x, hit_y, normal_x, normal_y, toi).
-    pub fn ray_cast(&self, ox: f32, oy: f32, dx: f32, dy: f32, max_dist: f32) -> Option<(u32, f32, f32, f32, f32, f32)> {
+    pub fn ray_cast(
+        &self,
+        ox: f32,
+        oy: f32,
+        dx: f32,
+        dy: f32,
+        max_dist: f32,
+    ) -> Option<(u32, f32, f32, f32, f32, f32)> {
         let ray = Ray::new(point![ox, oy], vector![dx, dy]);
         let filter = QueryFilter::default();
 
@@ -360,17 +379,18 @@ impl PhysicsWorld2D {
         };
 
         let mut result = Vec::new();
-        self.query_pipeline.colliders_with_aabb_intersecting_aabb(&aabb, |col_handle| {
-            let rb_handle = self.collider_set.get(*col_handle).and_then(|c| c.parent());
-            if let Some(h) = rb_handle {
-                if let Some(&body_id) = self.reverse_map.get(&h) {
-                    if !result.contains(&body_id) {
-                        result.push(body_id);
+        self.query_pipeline
+            .colliders_with_aabb_intersecting_aabb(&aabb, |col_handle| {
+                let rb_handle = self.collider_set.get(*col_handle).and_then(|c| c.parent());
+                if let Some(h) = rb_handle {
+                    if let Some(&body_id) = self.reverse_map.get(&h) {
+                        if !result.contains(&body_id) {
+                            result.push(body_id);
+                        }
                     }
                 }
-            }
-            true // continue iterating
-        });
+                true // continue iterating
+            });
         result
     }
 
@@ -382,13 +402,18 @@ impl PhysicsWorld2D {
             if !pair.has_any_active_contact {
                 continue;
             }
-            let rb1 = self.collider_set.get(pair.collider1).and_then(|c| c.parent());
-            let rb2 = self.collider_set.get(pair.collider2).and_then(|c| c.parent());
+            let rb1 = self
+                .collider_set
+                .get(pair.collider1)
+                .and_then(|c| c.parent());
+            let rb2 = self
+                .collider_set
+                .get(pair.collider2)
+                .and_then(|c| c.parent());
             if let (Some(h1), Some(h2)) = (rb1, rb2) {
-                if let (Some(&id1), Some(&id2)) = (
-                    self.reverse_map.get(&h1),
-                    self.reverse_map.get(&h2),
-                ) {
+                if let (Some(&id1), Some(&id2)) =
+                    (self.reverse_map.get(&h1), self.reverse_map.get(&h2))
+                {
                     contacts.push((id1, id2));
                 }
             }

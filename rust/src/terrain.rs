@@ -35,24 +35,46 @@ fn sample_height(heights: &[f32], rows: u32, cols: u32, row: u32, col: u32) -> f
     heights[height_index(cols, row, col)]
 }
 
-fn height_gradient_x(heights: &[f32], rows: u32, cols: u32, row: u32, col: u32, cell_x: f32) -> f32 {
+fn height_gradient_x(
+    heights: &[f32],
+    rows: u32,
+    cols: u32,
+    row: u32,
+    col: u32,
+    cell_x: f32,
+) -> f32 {
     if col == 0 {
-        (sample_height(heights, rows, cols, row, 1) - sample_height(heights, rows, cols, row, 0)) / cell_x
+        (sample_height(heights, rows, cols, row, 1) - sample_height(heights, rows, cols, row, 0))
+            / cell_x
     } else if col + 1 == cols {
-        (sample_height(heights, rows, cols, row, col) - sample_height(heights, rows, cols, row, col - 1)) / cell_x
+        (sample_height(heights, rows, cols, row, col)
+            - sample_height(heights, rows, cols, row, col - 1))
+            / cell_x
     } else {
-        (sample_height(heights, rows, cols, row, col + 1) - sample_height(heights, rows, cols, row, col - 1))
+        (sample_height(heights, rows, cols, row, col + 1)
+            - sample_height(heights, rows, cols, row, col - 1))
             / (2.0 * cell_x)
     }
 }
 
-fn height_gradient_z(heights: &[f32], rows: u32, cols: u32, row: u32, col: u32, cell_z: f32) -> f32 {
+fn height_gradient_z(
+    heights: &[f32],
+    rows: u32,
+    cols: u32,
+    row: u32,
+    col: u32,
+    cell_z: f32,
+) -> f32 {
     if row == 0 {
-        (sample_height(heights, rows, cols, 1, col) - sample_height(heights, rows, cols, 0, col)) / cell_z
+        (sample_height(heights, rows, cols, 1, col) - sample_height(heights, rows, cols, 0, col))
+            / cell_z
     } else if row + 1 == rows {
-        (sample_height(heights, rows, cols, row, col) - sample_height(heights, rows, cols, row - 1, col)) / cell_z
+        (sample_height(heights, rows, cols, row, col)
+            - sample_height(heights, rows, cols, row - 1, col))
+            / cell_z
     } else {
-        (sample_height(heights, rows, cols, row + 1, col) - sample_height(heights, rows, cols, row - 1, col))
+        (sample_height(heights, rows, cols, row + 1, col)
+            - sample_height(heights, rows, cols, row - 1, col))
             / (2.0 * cell_z)
     }
 }
@@ -76,10 +98,16 @@ pub fn generate_terrain(
     let gray = img.to_luma8();
     let (cols, rows) = gray.dimensions();
     if rows < 2 || cols < 2 {
-        return Err(format!("terrain heightmap must be at least 2x2, got {}x{}", cols, rows));
+        return Err(format!(
+            "terrain heightmap must be at least 2x2, got {}x{}",
+            cols, rows
+        ));
     }
 
-    let heights: Vec<f32> = gray.pixels().map(|pixel| pixel.0[0] as f32 / 255.0).collect();
+    let heights: Vec<f32> = gray
+        .pixels()
+        .map(|pixel| pixel.0[0] as f32 / 255.0)
+        .collect();
     let cell_x = scale_x / (cols - 1) as f32;
     let cell_z = scale_z / (rows - 1) as f32;
 
@@ -114,13 +142,8 @@ pub fn generate_terrain(
         }
     }
 
-    let model_id = model_manager.create_raw_with_material(
-        device,
-        queue,
-        &vertices,
-        &indices,
-        material,
-    );
+    let model_id =
+        model_manager.create_raw_with_material(device, queue, &vertices, &indices, material);
 
     Ok(TerrainData {
         model_id,
@@ -210,7 +233,10 @@ mod tests {
         let corner = height_at(9, 7, 12.0, 1.0).expect("corner sample must exist");
         assert_near(corner, 3.0 + 2.0, 0.0001);
 
-        assert!(height_at(9, 7, 12.1, 1.0).is_none(), "outside x bounds must fail");
+        assert!(
+            height_at(9, 7, 12.1, 1.0).is_none(),
+            "outside x bounds must fail"
+        );
         remove_terrain(9, 7);
     }
 }

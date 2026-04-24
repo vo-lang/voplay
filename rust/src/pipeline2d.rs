@@ -4,9 +4,12 @@
 use bytemuck::{Pod, Zeroable};
 
 // Shape type constants (matched in WGSL shader).
-#[allow(dead_code)] const SHAPE_RECT: f32 = 0.0;
-#[allow(dead_code)] const SHAPE_CIRCLE: f32 = 1.0;
-#[allow(dead_code)] const SHAPE_LINE: f32 = 2.0;
+#[allow(dead_code)]
+const SHAPE_RECT: f32 = 0.0;
+#[allow(dead_code)]
+const SHAPE_CIRCLE: f32 = 1.0;
+#[allow(dead_code)]
+const SHAPE_LINE: f32 = 2.0;
 
 /// Vertex for the unit quad.
 #[repr(C)]
@@ -29,12 +32,24 @@ impl QuadVertex {
 
 /// Unit quad vertices: two triangles forming a [0,0]→[1,1] quad.
 pub const QUAD_VERTICES: [QuadVertex; 6] = [
-    QuadVertex { position: [0.0, 0.0] },
-    QuadVertex { position: [1.0, 0.0] },
-    QuadVertex { position: [0.0, 1.0] },
-    QuadVertex { position: [1.0, 0.0] },
-    QuadVertex { position: [1.0, 1.0] },
-    QuadVertex { position: [0.0, 1.0] },
+    QuadVertex {
+        position: [0.0, 0.0],
+    },
+    QuadVertex {
+        position: [1.0, 0.0],
+    },
+    QuadVertex {
+        position: [0.0, 1.0],
+    },
+    QuadVertex {
+        position: [1.0, 0.0],
+    },
+    QuadVertex {
+        position: [1.0, 1.0],
+    },
+    QuadVertex {
+        position: [0.0, 1.0],
+    },
 ];
 
 /// Per-instance data for a 2D shape.
@@ -133,7 +148,6 @@ impl CameraUniform {
         }
     }
 }
-
 
 /// The full 2D pipeline state.
 pub struct Pipeline2D {

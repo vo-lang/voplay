@@ -9,9 +9,7 @@ func SetLights(d *voplay.DrawCtx, ambient voplay.Color, lights []Light) {
 	d.SetLights3D(ambient, lights)
 }
 
-// Draw renders the entire 3D scene: camera, lights, then all visible entities.
-// Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
-func (s *Scene) Draw(d *voplay.DrawCtx) {
+func (s *Scene) writeFrame3DState(d *voplay.DrawCtx) {
 	c := &s.Camera
 	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
 	d.SetShadow3D(s.ShadowsEnabled, s.ShadowResolution)
@@ -22,23 +20,90 @@ func (s *Scene) Draw(d *voplay.DrawCtx) {
 	if s.Fog.Mode != voplay.FogNone {
 		d.SetFog3D(s.Fog.Mode, s.Fog.Color, s.Fog.Start, s.Fog.End, s.Fog.Density)
 	}
-	for _, n := range s.VisibleEntities() {
-		if n.Model == 0 {
+}
+
+func (e *Entity) renderObjectNeedsUpsert(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) bool {
+	return !e.renderObjectCreated ||
+		e.renderLastModel != model ||
+		e.renderLastPosition != e.position ||
+		e.renderLastRotation != e.rotation ||
+		e.renderLastScale != e.scale ||
+		e.renderLastTint != e.Tint ||
+		e.renderLastVisible != visible ||
+		e.renderLastAnimationWorldID != animationWorldID ||
+		e.renderLastAnimationTargetID != animationTargetID
+}
+
+func (e *Entity) rememberRenderedObject(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) {
+	e.renderObjectCreated = true
+	e.renderLastModel = model
+	e.renderLastPosition = e.position
+	e.renderLastRotation = e.rotation
+	e.renderLastScale = e.scale
+	e.renderLastTint = e.Tint
+	e.renderLastVisible = visible
+	e.renderLastAnimationWorldID = animationWorldID
+	e.renderLastAnimationTargetID = animationTargetID
+}
+
+func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
+	if !s.renderSceneCreated {
+		s.renderSceneCreated = true
+	}
+	if s.renderSceneCleared {
+		d.ClearScene3D(s.renderSceneID)
+		s.renderSceneCleared = false
+	}
+	for _, id := range s.renderDestroyedIDs {
+		d.DestroyScene3DObject(s.renderSceneID, id)
+	}
+	s.renderDestroyedIDs = s.renderDestroyedIDs[:0]
+
+	for _, n := range s.entities {
+		if !n.Active {
 			continue
 		}
-		n.ensureHasSkeleton()
-		if n.hasSkeleton {
-			animationWorldID := 0
-			animationTargetID := 0
-			if s.animationWorldID != 0 && n.animationTargetID != 0 {
-				animationWorldID = s.animationWorldID
-				animationTargetID = n.animationTargetID
+		if n.Model == 0 {
+			if n.renderObjectCreated {
+				d.DestroyScene3DObject(s.renderSceneID, n.id)
+				n.renderObjectCreated = false
 			}
-			d.DrawSkinnedModel(n.Model, n.position, n.rotation, n.scale, n.Tint, animationWorldID, animationTargetID)
-		} else {
-			d.DrawModel(n.Model, n.position, n.rotation, n.scale, n.Tint)
+			continue
 		}
+
+		n.ensureHasSkeleton()
+		animationWorldID := 0
+		animationTargetID := 0
+		if n.hasSkeleton && s.animationWorldID != 0 && n.animationTargetID != 0 {
+			animationWorldID = s.animationWorldID
+			animationTargetID = n.animationTargetID
+		}
+		visible := n.Visible
+		if !n.renderObjectNeedsUpsert(n.Model, visible, animationWorldID, animationTargetID) {
+			continue
+		}
+		d.UpsertScene3DObject(
+			s.renderSceneID,
+			n.id,
+			n.Model,
+			n.position,
+			n.rotation,
+			n.scale,
+			n.Tint,
+			visible,
+			animationWorldID,
+			animationTargetID,
+		)
+		n.rememberRenderedObject(n.Model, visible, animationWorldID, animationTargetID)
 	}
+}
+
+// Draw renders the entire 3D scene: camera, lights, then all visible entities.
+// Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
+func (s *Scene) Draw(d *voplay.DrawCtx) {
+	s.writeFrame3DState(d)
+	s.flushRenderScene(d)
+	d.DrawScene3D(s.renderSceneID)
 	for _, emitter := range s.Emitters {
 		emitter.Draw(d)
 	}

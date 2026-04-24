@@ -4,10 +4,10 @@
 //! Supports arbitrary Unicode including CJK via on-demand glyph rasterization
 //! into a shelf-packed texture atlas.
 
-use std::collections::HashMap;
 use crate::file_io;
 use crate::pipeline_sprite::{SpriteDraw, SpriteInstance};
 use crate::texture::{TextureId, TextureManager};
+use std::collections::HashMap;
 
 /// Atlas dimensions. 2048x2048 RGBA = 16 MB, fits ~4000 glyphs at 32px.
 const ATLAS_SIZE: u32 = 2048;
@@ -25,13 +25,11 @@ const DEFAULT_FONT_PATHS: [&str; 6] = [
 ];
 
 fn load_default_font() -> Result<fontdue::Font, String> {
-    let embedded_error = match fontdue::Font::from_bytes(
-        DEFAULT_FONT_DATA,
-        fontdue::FontSettings::default(),
-    ) {
-        Ok(font) => return Ok(font),
-        Err(error) => error.to_string(),
-    };
+    let embedded_error =
+        match fontdue::Font::from_bytes(DEFAULT_FONT_DATA, fontdue::FontSettings::default()) {
+            Ok(font) => return Ok(font),
+            Err(error) => error.to_string(),
+        };
 
     #[cfg(not(feature = "wasm"))]
     for path in DEFAULT_FONT_PATHS {
@@ -46,7 +44,10 @@ fn load_default_font() -> Result<fontdue::Font, String> {
 
     #[cfg(feature = "wasm")]
     {
-        Err(format!("voplay: failed to load embedded default font: {}", embedded_error))
+        Err(format!(
+            "voplay: failed to load embedded default font: {}",
+            embedded_error
+        ))
     }
 
     #[cfg(not(feature = "wasm"))]
@@ -129,11 +130,8 @@ impl FontManager {
 
     /// Load a font from raw TTF/OTF bytes. Returns font ID.
     pub fn load_bytes(&mut self, data: Vec<u8>) -> Result<FontId, String> {
-        let font = fontdue::Font::from_bytes(
-            data,
-            fontdue::FontSettings::default(),
-        )
-        .map_err(|e| format!("font parse error: {}", e))?;
+        let font = fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
+            .map_err(|e| format!("font parse error: {}", e))?;
 
         let id = self.next_font_id;
         self.next_font_id += 1;
@@ -143,8 +141,7 @@ impl FontManager {
 
     /// Load a font from a file path. Returns font ID.
     pub fn load_file(&mut self, path: &str) -> Result<FontId, String> {
-        let data = file_io::read_bytes(path)
-            .map_err(|e| format!("read font '{}': {}", path, e))?;
+        let data = file_io::read_bytes(path).map_err(|e| format!("read font '{}': {}", path, e))?;
         self.load_bytes(data)
     }
 
@@ -177,7 +174,11 @@ impl FontManager {
             None => {
                 // First time: create atlas texture
                 let id = texture_manager.load_rgba(
-                    device, queue, ATLAS_SIZE, ATLAS_SIZE, &self.atlas_data,
+                    device,
+                    queue,
+                    ATLAS_SIZE,
+                    ATLAS_SIZE,
+                    &self.atlas_data,
                 );
                 self.atlas_texture_id = Some(id);
                 self.atlas_dirty = false;
@@ -215,7 +216,11 @@ impl FontManager {
         let mut cx = x;
 
         for ch in text.chars() {
-            let key = GlyphKey { font_id, ch, size_px };
+            let key = GlyphKey {
+                font_id,
+                ch,
+                size_px,
+            };
 
             // Ensure glyph is cached
             if !self.cache.contains_key(&key) {
@@ -267,12 +272,20 @@ impl FontManager {
 
         if metrics.width == 0 || metrics.height == 0 {
             // Whitespace or zero-size glyph — cache with zero dimensions
-            self.cache.insert(key.clone(), CachedGlyph {
-                u0: 0.0, v0: 0.0, u1: 0.0, v1: 0.0,
-                width: 0.0, height: 0.0,
-                x_offset: 0.0, y_offset: 0.0,
-                advance: metrics.advance_width,
-            });
+            self.cache.insert(
+                key.clone(),
+                CachedGlyph {
+                    u0: 0.0,
+                    v0: 0.0,
+                    u1: 0.0,
+                    v1: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    x_offset: 0.0,
+                    y_offset: 0.0,
+                    advance: metrics.advance_width,
+                },
+            );
             return;
         }
 
@@ -295,7 +308,7 @@ impl FontManager {
                 let ax = px + gx;
                 let ay = py + gy;
                 let idx = ((ay * ATLAS_SIZE + ax) * 4) as usize;
-                self.atlas_data[idx] = 255;     // R
+                self.atlas_data[idx] = 255; // R
                 self.atlas_data[idx + 1] = 255; // G
                 self.atlas_data[idx + 2] = 255; // B
                 self.atlas_data[idx + 3] = alpha;
@@ -306,17 +319,20 @@ impl FontManager {
         let inv_w = 1.0 / ATLAS_SIZE as f32;
         let inv_h = 1.0 / ATLAS_SIZE as f32;
 
-        self.cache.insert(key.clone(), CachedGlyph {
-            u0: px as f32 * inv_w,
-            v0: py as f32 * inv_h,
-            u1: (px + gw) as f32 * inv_w,
-            v1: (py + gh) as f32 * inv_h,
-            width: gw as f32,
-            height: gh as f32,
-            x_offset: metrics.xmin as f32,
-            y_offset: -(metrics.height as f32 + metrics.ymin as f32),
-            advance: metrics.advance_width,
-        });
+        self.cache.insert(
+            key.clone(),
+            CachedGlyph {
+                u0: px as f32 * inv_w,
+                v0: py as f32 * inv_h,
+                u1: (px + gw) as f32 * inv_w,
+                v1: (py + gh) as f32 * inv_h,
+                width: gw as f32,
+                height: gh as f32,
+                x_offset: metrics.xmin as f32,
+                y_offset: -(metrics.height as f32 + metrics.ymin as f32),
+                advance: metrics.advance_width,
+            },
+        );
     }
 
     /// Measure text dimensions (width, height) using fontdue metrics.

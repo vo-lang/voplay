@@ -30,10 +30,10 @@ fn read_bytes_wasm(path: &Path) -> Result<Vec<u8>, String> {
         .call1(window.as_ref(), &JsValue::from_str(&path_str))
         .map_err(|e| format!("window._vfsReadFile threw: {:?}", e))?;
 
-    let data = js_sys::Reflect::get_u32(&result, 0)
-        .map_err(|_| "invalid VFS read result".to_string())?;
-    let err = js_sys::Reflect::get_u32(&result, 1)
-        .map_err(|_| "invalid VFS read result".to_string())?;
+    let data =
+        js_sys::Reflect::get_u32(&result, 0).map_err(|_| "invalid VFS read result".to_string())?;
+    let err =
+        js_sys::Reflect::get_u32(&result, 1).map_err(|_| "invalid VFS read result".to_string())?;
 
     if !err.is_null() && !err.is_undefined() {
         return Err(err

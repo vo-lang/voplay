@@ -51,7 +51,11 @@ pub enum DrawCallKind {
     /// Draw shapes[start..start+count] from the sorted shape buffer.
     Shapes { start: u32, count: u32 },
     /// Draw sprites[start..start+count] with the given texture.
-    Sprites { texture_id: TextureId, start: u32, count: u32 },
+    Sprites {
+        texture_id: TextureId,
+        start: u32,
+        count: u32,
+    },
 }
 
 /// Resolved frame data ready for GPU upload and rendering.
@@ -146,8 +150,12 @@ impl DrawList2D {
 
     pub fn push_line(
         &mut self,
-        x1: f32, y1: f32, x2: f32, y2: f32,
-        thickness: f32, color: [f32; 4],
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        thickness: f32,
+        color: [f32; 4],
     ) {
         let dx = x2 - x1;
         let dy = y2 - y1;
@@ -170,7 +178,10 @@ impl DrawList2D {
 
     pub fn push_sprite(&mut self, texture_id: TextureId, instance: SpriteInstance) {
         let idx = self.sprite_entries.len() as u32;
-        self.sprite_entries.push(SpriteEntry { texture_id, instance });
+        self.sprite_entries.push(SpriteEntry {
+            texture_id,
+            instance,
+        });
         self.push_item(ItemKind::Sprite, idx);
     }
 
@@ -195,9 +206,8 @@ impl DrawList2D {
     pub fn resolve(&mut self) -> Frame2D {
         // Stable sort by (layer, order). Since order is monotonically
         // increasing, items within the same layer keep submission order.
-        self.items.sort_by(|a, b| {
-            a.layer.cmp(&b.layer).then(a.order.cmp(&b.order))
-        });
+        self.items
+            .sort_by(|a, b| a.layer.cmp(&b.layer).then(a.order.cmp(&b.order)));
 
         let mut sorted_shapes: Vec<ShapeInstance> = Vec::with_capacity(self.shapes.len());
         let mut sorted_sprites: Vec<SpriteInstance> = Vec::with_capacity(self.sprite_entries.len());
@@ -237,15 +247,18 @@ impl DrawList2D {
                         && self.items[i].camera_idx == cam
                         && self.sprite_entries[self.items[i].data_idx as usize].texture_id == tex
                     {
-                        sorted_sprites.push(
-                            self.sprite_entries[self.items[i].data_idx as usize].instance,
-                        );
+                        sorted_sprites
+                            .push(self.sprite_entries[self.items[i].data_idx as usize].instance);
                         i += 1;
                     }
                     let count = sorted_sprites.len() as u32 - start;
                     draw_calls.push(DrawCall2D {
                         camera_idx: cam,
-                        kind: DrawCallKind::Sprites { texture_id: tex, start, count },
+                        kind: DrawCallKind::Sprites {
+                            texture_id: tex,
+                            start,
+                            count,
+                        },
                     });
                 }
             }

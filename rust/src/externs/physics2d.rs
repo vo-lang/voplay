@@ -1,9 +1,9 @@
 //! Physics 2D externs (voplay/scene2d sub-package).
 
-use vo_ext::prelude::*;
+use super::util::{read_f64_le, read_u16_le, ret_bytes};
 use crate::physics::{BodyDesc, ColliderKind};
 use crate::physics_registry::PhysBodyType;
-use super::util::{read_f64_le, read_u16_le, ret_bytes};
+use vo_ext::prelude::*;
 
 // --- Physics 2D world management ---
 
@@ -30,7 +30,11 @@ pub fn physics_destroy(call: &mut ExternCallContext) -> ExternResult {
 ///         linear_damping(f64)
 pub(crate) fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
     // 3 flag bytes + 2 u16 fields + 10 f64 fields = 87 bytes minimum
-    assert!(data.len() >= 87, "voplay: physics2d body desc too short: {} bytes (expected 87)", data.len());
+    assert!(
+        data.len() >= 87,
+        "voplay: physics2d body desc too short: {} bytes (expected 87)",
+        data.len()
+    );
     let mut pos = 0;
     let body_type = PhysBodyType::from_u8(data[pos]);
     pos += 1;
@@ -59,7 +63,9 @@ pub(crate) fn decode_body_desc(body_id: u32, data: &[u8]) -> BodyDesc {
     BodyDesc {
         body_id,
         body_type,
-        x, y, rotation,
+        x,
+        y,
+        rotation,
         collider_kind,
         collider_args: [ca0, ca1, ca2],
         layer,
@@ -142,7 +148,8 @@ pub fn physics_ray_cast(call: &mut ExternCallContext) -> ExternResult {
     let dy = call.arg_f64(4) as f32;
     let max_dist = call.arg_f64(5) as f32;
 
-    let result = crate::physics::with_world(world_id, |world| world.ray_cast(ox, oy, dx, dy, max_dist));
+    let result =
+        crate::physics::with_world(world_id, |world| world.ray_cast(ox, oy, dx, dy, max_dist));
     match result {
         Some((body_id, hx, hy, nx, ny, toi)) => {
             // Serialize: found(u8=1), body_id(u32), hx(f64), hy(f64), nx(f64), ny(f64), dist(f64)
@@ -172,7 +179,9 @@ pub fn physics_query_rect(call: &mut ExternCallContext) -> ExternResult {
     let max_x = call.arg_f64(3) as f32;
     let max_y = call.arg_f64(4) as f32;
 
-    let ids = crate::physics::with_world(world_id, |world| world.query_rect(min_x, min_y, max_x, max_y));
+    let ids = crate::physics::with_world(world_id, |world| {
+        world.query_rect(min_x, min_y, max_x, max_y)
+    });
     // Serialize: count(u32), then body_id(u32) per hit
     let mut buf = Vec::with_capacity(4 + ids.len() * 4);
     buf.extend_from_slice(&(ids.len() as u32).to_le_bytes());

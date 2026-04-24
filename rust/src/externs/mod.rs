@@ -9,16 +9,16 @@
 //!   resource — font and model load/free externs
 //!   util     — common decode and result helpers
 
-pub(crate) mod render;
-pub(crate) mod physics2d;
-pub(crate) mod physics3d;
 pub(crate) mod animation;
 pub(crate) mod audio;
+pub(crate) mod physics2d;
+pub(crate) mod physics3d;
+pub(crate) mod render;
 pub(crate) mod resource;
 pub(crate) mod util;
 
-use vo_runtime::ffi::ExternRegistry;
 use vo_runtime::bytecode::ExternDef;
+use vo_runtime::ffi::ExternRegistry;
 
 /// Set the renderer from pre-initialized wgpu parts (used by host/studio integration).
 #[allow(dead_code)]
@@ -28,7 +28,9 @@ pub fn set_renderer(renderer: crate::renderer::Renderer) {
 }
 
 /// Access the renderer, dispatching to hosted runtime state or native APP.
-pub(crate) fn with_renderer<R>(f: impl FnOnce(&mut crate::renderer::Renderer) -> R) -> Result<R, String> {
+pub(crate) fn with_renderer<R>(
+    f: impl FnOnce(&mut crate::renderer::Renderer) -> R,
+) -> Result<R, String> {
     crate::renderer_runtime::with_renderer(f)
 }
 
@@ -121,7 +123,10 @@ pub fn vo_ext_register(registry: &mut ExternRegistry, externs: &[ExternDef]) {
     #[cfg(target_arch = "wasm32")]
     {
         fn find_id(externs: &[ExternDef], name: &str) -> Option<u32> {
-            externs.iter().position(|d| d.name == name).map(|i| i as u32)
+            externs
+                .iter()
+                .position(|d| d.name == name)
+                .map(|i| i as u32)
         }
 
         for entry in VO_EXT_ENTRIES {

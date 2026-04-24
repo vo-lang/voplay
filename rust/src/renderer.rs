@@ -12,6 +12,7 @@ use crate::pipeline3d::{
 use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
 use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
+use crate::render_world::{RenderObjectUpdate, RenderWorld};
 use crate::stream::{DrawCommand, StreamReader};
 use crate::terrain::TerrainData;
 use crate::texture::{TextureId, TextureManager};
@@ -48,6 +49,7 @@ pub struct Renderer {
     texture_manager: TextureManager,
     // Font manager for text rendering (TTF/OTF, dynamic glyph atlas)
     font_manager: FontManager,
+    render_world: RenderWorld,
 }
 
 impl Renderer {
@@ -153,6 +155,7 @@ impl Renderer {
             model_manager,
             texture_manager,
             font_manager,
+            render_world: RenderWorld::new(),
         })
     }
 
@@ -595,13 +598,12 @@ impl Renderer {
             shadow_params: [0.0, 0.002, 1.0 / 2048.0, 0.0],
         };
         let mut model_draws: Vec<ModelDraw> = Vec::new();
+        let mut retained_scene_draws: Vec<u32> = Vec::new();
         let aspect = w / h;
 
         // Decode command stream into the unified draw list
-        let mut cmd_count = 0u32;
         let mut reader = StreamReader::new(data);
         while let Some(cmd) = reader.next_command() {
-            cmd_count += 1;
             match cmd {
                 DrawCommand::Clear { r, g, b, a } => {
                     clear_color = wgpu::Color {
@@ -815,6 +817,43 @@ impl Renderer {
                         animation_target_id,
                     });
                 }
+                DrawCommand::Scene3DUpsertObject {
+                    scene_id,
+                    object_id,
+                    model_id,
+                    pos,
+                    rot,
+                    scale,
+                    tint,
+                    visible,
+                    animation_world_id,
+                    animation_target_id,
+                } => {
+                    self.render_world.upsert_object(RenderObjectUpdate {
+                        scene_id,
+                        object_id,
+                        model_id,
+                        pos,
+                        rot,
+                        scale,
+                        tint,
+                        visible,
+                        animation_world_id,
+                        animation_target_id,
+                    });
+                }
+                DrawCommand::Scene3DDestroyObject {
+                    scene_id,
+                    object_id,
+                } => {
+                    self.render_world.destroy_object(scene_id, object_id);
+                }
+                DrawCommand::Scene3DClear { scene_id } => {
+                    self.render_world.clear_scene(scene_id);
+                }
+                DrawCommand::Scene3DDraw { scene_id } => {
+                    retained_scene_draws.push(scene_id);
+                }
                 DrawCommand::DrawBillboard {
                     tex_id,
                     src_x,
@@ -873,6 +912,10 @@ impl Renderer {
                 }
             }
         }
+        for scene_id in retained_scene_draws {
+            self.render_world
+                .collect_scene_draws(scene_id, &mut model_draws);
+        }
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
         self.font_manager
@@ -919,12 +962,11 @@ impl Renderer {
                         if self.pipeline_shadow.size() != shadow_resolution {
                             self.pipeline_shadow.resize(&self.device, shadow_resolution);
                         }
-                        let inv_view_proj = math3d::mat4_inverse(&cam3d.view_proj).ok_or_else(
-                            || {
+                        let inv_view_proj =
+                            math3d::mat4_inverse(&cam3d.view_proj).ok_or_else(|| {
                                 "voplay: failed to invert camera view projection for shadow mapping"
                                     .to_string()
-                            },
-                        )?;
+                            })?;
                         let shadow_vp = math3d::compute_shadow_vp(&inv_view_proj, shadow_dir);
                         self.pipeline_shadow.render_shadow_pass(
                             &self.device,

@@ -4,9 +4,9 @@
 //! Images are decoded via the `image` crate and uploaded as wgpu textures
 //! with associated bind groups for sampling in the sprite pipeline.
 
+use crate::file_io;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use crate::file_io;
 
 /// Opaque handle to a GPU texture. Matches Vo's TextureID (int).
 pub type TextureId = u32;
@@ -92,27 +92,28 @@ impl TextureManager {
             ],
         });
 
-        let cubemap_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("voplay_cubemap_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::Cube,
-                        multisampled: false,
+        let cubemap_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("voplay_cubemap_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::Cube,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
 
         Self {
             textures: HashMap::new(),
@@ -152,7 +153,11 @@ impl TextureManager {
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("voplay_texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -174,7 +179,11 @@ impl TextureManager {
                 bytes_per_row: Some(4 * width),
                 rows_per_image: Some(height),
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -194,13 +203,16 @@ impl TextureManager {
             ],
         });
 
-        self.textures.insert(id, GpuTexture {
-            texture,
-            view,
-            bind_group,
-            width,
-            height,
-        });
+        self.textures.insert(
+            id,
+            GpuTexture {
+                texture,
+                view,
+                bind_group,
+                width,
+                height,
+            },
+        );
 
         id
     }
@@ -212,8 +224,7 @@ impl TextureManager {
         queue: &wgpu::Queue,
         data: &[u8],
     ) -> Result<TextureId, String> {
-        let img = image::load_from_memory(data)
-            .map_err(|e| format!("image decode: {}", e))?;
+        let img = image::load_from_memory(data).map_err(|e| format!("image decode: {}", e))?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         Ok(self.load_rgba(device, queue, w, h, &rgba))
@@ -259,7 +270,11 @@ impl TextureManager {
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: 0, y: 0, z: i as u32 },
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: i as u32,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 face_rgba,
@@ -296,12 +311,15 @@ impl TextureManager {
             ],
         });
 
-        self.cubemaps.insert(id, GpuCubemap {
-            texture,
-            view,
-            bind_group,
-            face_size,
-        });
+        self.cubemaps.insert(
+            id,
+            GpuCubemap {
+                texture,
+                view,
+                bind_group,
+                face_size,
+            },
+        );
 
         id
     }
@@ -326,7 +344,10 @@ impl TextureManager {
             if face_size == 0 {
                 face_size = w;
             } else if w != face_size {
-                return Err(format!("cubemap face size mismatch: expected {}, got {}", face_size, w));
+                return Err(format!(
+                    "cubemap face size mismatch: expected {}, got {}",
+                    face_size, w
+                ));
             }
             decoded.push(rgba.into_raw());
         }

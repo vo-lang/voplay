@@ -1,5 +1,5 @@
-use bytemuck::{Pod, Zeroable};
 use crate::texture::GpuCubemap;
+use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]

@@ -28,6 +28,10 @@ const (
 	opSetFog3D      = 0x24
 	opDrawSkybox    = 0x25
 	opSetShadow3D   = 0x27
+	opScene3DUpsertObject  = 0x30
+	opScene3DDestroyObject = 0x31
+	opScene3DClear         = 0x32
+	opScene3DDraw          = 0x33
 )
 
 // DrawCtx buffers binary draw commands for the current frame.
@@ -381,6 +385,46 @@ func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint
 	d.w.WriteF32(tint.A)
 	d.w.WriteU32(animationWorldID)
 	d.w.WriteU32(animationTargetID)
+}
+
+func (d *DrawCtx) UpsertScene3DObject(sceneID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, visible bool, animationWorldID, animationTargetID int) {
+	d.w.WriteByte(opScene3DUpsertObject)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(objectID)
+	d.w.WriteU32(int(model))
+	d.w.WriteF32(pos.X)
+	d.w.WriteF32(pos.Y)
+	d.w.WriteF32(pos.Z)
+	d.w.WriteF32(rot.X)
+	d.w.WriteF32(rot.Y)
+	d.w.WriteF32(rot.Z)
+	d.w.WriteF32(rot.W)
+	d.w.WriteF32(scale.X)
+	d.w.WriteF32(scale.Y)
+	d.w.WriteF32(scale.Z)
+	d.w.WriteF32(tint.R)
+	d.w.WriteF32(tint.G)
+	d.w.WriteF32(tint.B)
+	d.w.WriteF32(tint.A)
+	d.w.WriteBool(visible)
+	d.w.WriteU32(animationWorldID)
+	d.w.WriteU32(animationTargetID)
+}
+
+func (d *DrawCtx) DestroyScene3DObject(sceneID, objectID int) {
+	d.w.WriteByte(opScene3DDestroyObject)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(objectID)
+}
+
+func (d *DrawCtx) ClearScene3D(sceneID int) {
+	d.w.WriteByte(opScene3DClear)
+	d.w.WriteU32(sceneID)
+}
+
+func (d *DrawCtx) DrawScene3D(sceneID int) {
+	d.w.WriteByte(opScene3DDraw)
+	d.w.WriteU32(sceneID)
 }
 
 // DrawBillboard draws a camera-facing sprite at a 3D world position.

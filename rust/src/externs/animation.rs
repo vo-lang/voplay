@@ -5,10 +5,16 @@ use vo_ext::prelude::*;
 use super::util::{read_u32_le, ret_bytes, with_renderer_or_panic};
 
 fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
-    assert!(data.len() >= 4, "voplay: animation entity-model map too short");
+    assert!(
+        data.len() >= 4,
+        "voplay: animation entity-model map too short"
+    );
     let mut pos = 0usize;
     let count = read_u32_le(data, &mut pos) as usize;
-    assert!(data.len() == 4 + count * 8, "voplay: animation entity-model map size mismatch");
+    assert!(
+        data.len() == 4 + count * 8,
+        "voplay: animation entity-model map size mismatch"
+    );
     let mut map = HashMap::with_capacity(count);
     for _ in 0..count {
         let target_id = read_u32_le(data, &mut pos);
@@ -18,7 +24,9 @@ fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
     map
 }
 
-pub(crate) fn serialize_model_animation_info(info: crate::animation::ModelAnimationInfo) -> Vec<u8> {
+pub(crate) fn serialize_model_animation_info(
+    info: crate::animation::ModelAnimationInfo,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.push(if info.has_skeleton { 1 } else { 0 });
     buf.extend_from_slice(&(info.joint_count as u32).to_le_bytes());
@@ -26,7 +34,10 @@ pub(crate) fn serialize_model_animation_info(info: crate::animation::ModelAnimat
     for clip in info.clips {
         buf.extend_from_slice(&clip.duration.to_le_bytes());
         let name = clip.name.into_bytes();
-        assert!(name.len() <= u16::MAX as usize, "voplay: animation clip name too long");
+        assert!(
+            name.len() <= u16::MAX as usize,
+            "voplay: animation clip name too long"
+        );
         buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
         buf.extend_from_slice(&name);
     }
@@ -54,7 +65,9 @@ pub fn animation_play(call: &mut ExternCallContext) -> ExternResult {
     let clip_index = call.arg_u64(2) as usize;
     let looping = call.arg_bool(3);
     let speed = call.arg_f64(4) as f32;
-    crate::animation::with_world(world_id, |world| world.play(target_id, clip_index, looping, speed));
+    crate::animation::with_world(world_id, |world| {
+        world.play(target_id, clip_index, looping, speed)
+    });
     ExternResult::Ok
 }
 
@@ -72,7 +85,9 @@ pub fn animation_crossfade(call: &mut ExternCallContext) -> ExternResult {
     let target_id = call.arg_u64(1) as u32;
     let clip_index = call.arg_u64(2) as usize;
     let duration = call.arg_f64(3) as f32;
-    crate::animation::with_world(world_id, |world| world.crossfade(target_id, clip_index, duration));
+    crate::animation::with_world(world_id, |world| {
+        world.crossfade(target_id, clip_index, duration)
+    });
     ExternResult::Ok
 }
 

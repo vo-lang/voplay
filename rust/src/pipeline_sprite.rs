@@ -3,18 +3,18 @@
 //! Uses the same unit quad as shape2d but with texture sampling.
 //! Sprites are batched per texture: each texture change flushes the current batch.
 
-use bytemuck::{Pod, Zeroable};
 use crate::pipeline2d::{QuadVertex, QUAD_VERTICES};
 use crate::texture::TextureId;
+use bytemuck::{Pod, Zeroable};
 
 /// Per-instance data for a sprite.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SpriteInstance {
-    pub dst_rect: [f32; 4],  // x, y, w, h in world/screen coords
-    pub src_rect: [f32; 4],  // u0, v0, u1, v1 (normalized UV)
-    pub color: [f32; 4],     // tint RGBA
-    pub params: [f32; 4],    // rotation, flipX (0/1), flipY (0/1), _unused
+    pub dst_rect: [f32; 4], // x, y, w, h in world/screen coords
+    pub src_rect: [f32; 4], // u0, v0, u1, v1 (normalized UV)
+    pub color: [f32; 4],    // tint RGBA
+    pub params: [f32; 4],   // rotation, flipX (0/1), flipY (0/1), _unused
 }
 
 impl SpriteInstance {
@@ -177,5 +177,4 @@ impl PipelineSprite {
         pass.set_bind_group(1, texture_bind_group, &[]);
         pass.draw(0..6, start..start + count);
     }
-
 }

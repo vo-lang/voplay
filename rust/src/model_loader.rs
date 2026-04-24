@@ -4,17 +4,20 @@
 //! (position + normal + UV), and uploads to GPU buffers.
 //! Materials are simplified to a base color + texture.
 
-use base64::{engine::general_purpose, Engine as _};
-use image::{DynamicImage, GenericImageView, ImageFormat};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
-use serde::Deserialize;
-use crate::animation::{self, AnimationChannel, AnimationClip, AnimationClipInfo, AnimationInterpolation, AnimationProperty, Joint, ModelAnimationInfo, Skeleton, Transform, MAX_JOINTS};
+use crate::animation::{
+    self, AnimationChannel, AnimationClip, AnimationClipInfo, AnimationInterpolation,
+    AnimationProperty, Joint, ModelAnimationInfo, Skeleton, Transform, MAX_JOINTS,
+};
 use crate::file_io;
 use crate::math3d::{self, Mat4, Quat, Vec3, MAT4_IDENTITY};
 use crate::primitives;
 use crate::texture::{TextureId, TextureManager};
+use base64::{engine::general_purpose, Engine as _};
+use image::{DynamicImage, GenericImageView, ImageFormat};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Opaque model handle matching Vo's ModelID.
 pub type ModelId = u32;
@@ -159,7 +162,10 @@ impl MeshMaterial {
         layer_texture_ids: [TextureId; 4],
         uv_scales: [f32; 4],
     ) -> Self {
-        assert!(uv_scales.iter().all(|value| *value > 0.0), "voplay: terrain splat uv scales must be > 0");
+        assert!(
+            uv_scales.iter().all(|value| *value > 0.0),
+            "voplay: terrain splat uv scales must be > 0"
+        );
         Self {
             base_color,
             texture_id: None,
@@ -237,11 +243,24 @@ impl SkinnedMeshVertex {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum PrimitiveKey {
-    Plane { width_bits: u32, depth_bits: u32, sub_x: u32, sub_z: u32 },
+    Plane {
+        width_bits: u32,
+        depth_bits: u32,
+        sub_x: u32,
+        sub_z: u32,
+    },
     Cube,
-    Sphere { segments: u32 },
-    Cylinder { segments: u32 },
-    Capsule { segments: u32, half_height_bits: u32, radius_bits: u32 },
+    Sphere {
+        segments: u32,
+    },
+    Cylinder {
+        segments: u32,
+    },
+    Capsule {
+        segments: u32,
+        half_height_bits: u32,
+        radius_bits: u32,
+    },
 }
 
 /// Manages all loaded models, keyed by ModelId.
@@ -353,16 +372,19 @@ impl ModelManager {
             .as_ref()
             .map(animation::compute_rest_joint_palette)
             .unwrap_or_default();
-        self.models.insert(id, GpuModel {
-            meshes,
-            cpu_positions,
-            cpu_indices,
-            aabb_min,
-            aabb_max,
-            skeleton,
-            clips,
-            rest_joint_palette,
-        });
+        self.models.insert(
+            id,
+            GpuModel {
+                meshes,
+                cpu_positions,
+                cpu_indices,
+                aabb_min,
+                aabb_max,
+                skeleton,
+                clips,
+                rest_joint_palette,
+            },
+        );
         id
     }
 
@@ -420,7 +442,13 @@ impl ModelManager {
     ) -> ModelId {
         let cpu_positions: Vec<[f32; 3]> = vertices.iter().map(|vertex| vertex.position).collect();
         let mesh = Self::create_gpu_mesh(device, queue, vertices, indices, material);
-        self.insert_model(vec![mesh], cpu_positions, indices.to_vec(), None, Vec::new())
+        self.insert_model(
+            vec![mesh],
+            cpu_positions,
+            indices.to_vec(),
+            None,
+            Vec::new(),
+        )
     }
 
     pub fn create_plane(
@@ -449,22 +477,26 @@ impl ModelManager {
         self.get_or_create_primitive(device, queue, PrimitiveKey::Cube, primitives::generate_cube)
     }
 
-    pub fn create_sphere(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, segments: u32) -> ModelId {
-        self.get_or_create_primitive(
-            device,
-            queue,
-            PrimitiveKey::Sphere { segments },
-            || primitives::generate_sphere(segments),
-        )
+    pub fn create_sphere(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segments: u32,
+    ) -> ModelId {
+        self.get_or_create_primitive(device, queue, PrimitiveKey::Sphere { segments }, || {
+            primitives::generate_sphere(segments)
+        })
     }
 
-    pub fn create_cylinder(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, segments: u32) -> ModelId {
-        self.get_or_create_primitive(
-            device,
-            queue,
-            PrimitiveKey::Cylinder { segments },
-            || primitives::generate_cylinder(segments),
-        )
+    pub fn create_cylinder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segments: u32,
+    ) -> ModelId {
+        self.get_or_create_primitive(device, queue, PrimitiveKey::Cylinder { segments }, || {
+            primitives::generate_cylinder(segments)
+        })
     }
 
     pub fn create_capsule(
@@ -616,41 +648,64 @@ impl ModelManager {
                     gltf::animation::Property::Rotation => AnimationProperty::Rotation,
                     gltf::animation::Property::Scale => AnimationProperty::Scale,
                     gltf::animation::Property::MorphTargetWeights => {
-                        return Err(format!("model '{}' uses unsupported morph target animation", label));
+                        return Err(format!(
+                            "model '{}' uses unsupported morph target animation",
+                            label
+                        ));
                     }
                 };
                 let interpolation = match channel.sampler().interpolation() {
                     gltf::animation::Interpolation::Step => AnimationInterpolation::Step,
                     gltf::animation::Interpolation::Linear => AnimationInterpolation::Linear,
-                    gltf::animation::Interpolation::CubicSpline => AnimationInterpolation::CubicSpline,
+                    gltf::animation::Interpolation::CubicSpline => {
+                        AnimationInterpolation::CubicSpline
+                    }
                 };
                 let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
                 let times: Vec<f32> = reader
                     .read_inputs()
-                    .unwrap_or_else(|| panic!("voplay: animation channel missing inputs in '{}'", label))
+                    .unwrap_or_else(|| {
+                        panic!("voplay: animation channel missing inputs in '{}'", label)
+                    })
                     .collect();
                 if times.is_empty() {
                     continue;
                 }
                 duration = duration.max(*times.last().unwrap());
-                let values: Vec<f32> = match reader
-                    .read_outputs()
-                    .unwrap_or_else(|| panic!("voplay: animation channel missing outputs in '{}'", label))
-                {
+                let values: Vec<f32> = match reader.read_outputs().unwrap_or_else(|| {
+                    panic!("voplay: animation channel missing outputs in '{}'", label)
+                }) {
                     gltf::animation::util::ReadOutputs::Translations(iter) => {
-                        assert_eq!(property, AnimationProperty::Translation, "voplay: translation output/property mismatch");
+                        assert_eq!(
+                            property,
+                            AnimationProperty::Translation,
+                            "voplay: translation output/property mismatch"
+                        );
                         iter.flat_map(|value| value.into_iter()).collect()
                     }
                     gltf::animation::util::ReadOutputs::Rotations(iter) => {
-                        assert_eq!(property, AnimationProperty::Rotation, "voplay: rotation output/property mismatch");
-                        iter.into_f32().flat_map(|value| value.into_iter()).collect()
+                        assert_eq!(
+                            property,
+                            AnimationProperty::Rotation,
+                            "voplay: rotation output/property mismatch"
+                        );
+                        iter.into_f32()
+                            .flat_map(|value| value.into_iter())
+                            .collect()
                     }
                     gltf::animation::util::ReadOutputs::Scales(iter) => {
-                        assert_eq!(property, AnimationProperty::Scale, "voplay: scale output/property mismatch");
+                        assert_eq!(
+                            property,
+                            AnimationProperty::Scale,
+                            "voplay: scale output/property mismatch"
+                        );
                         iter.flat_map(|value| value.into_iter()).collect()
                     }
                     gltf::animation::util::ReadOutputs::MorphTargetWeights(_) => {
-                        return Err(format!("model '{}' uses unsupported morph target animation", label));
+                        return Err(format!(
+                            "model '{}' uses unsupported morph target animation",
+                            label
+                        ));
                     }
                 };
                 let width = match property {
@@ -658,7 +713,9 @@ impl ModelManager {
                     AnimationProperty::Rotation => 4,
                 };
                 let expected = match interpolation {
-                    AnimationInterpolation::Step | AnimationInterpolation::Linear => times.len() * width,
+                    AnimationInterpolation::Step | AnimationInterpolation::Linear => {
+                        times.len() * width
+                    }
                     AnimationInterpolation::CubicSpline => times.len() * width * 3,
                 };
                 if values.len() != expected {
@@ -757,8 +814,7 @@ impl ModelManager {
         if node_skin.is_some() && node_skin != used_skin_index {
             return Err(format!(
                 "model '{}' node '{}' skinned mesh references a different skin",
-                label,
-                node_name
+                label, node_name
             ));
         }
         let mut primitives = Vec::new();
@@ -795,15 +851,20 @@ impl ModelManager {
             let skinning = if node_skin.is_some() {
                 let joint_indices: Vec<[u16; 4]> = reader
                     .read_joints(0)
-                    .unwrap_or_else(|| panic!("voplay: skinned mesh missing JOINTS_0 in '{}'", label))
+                    .unwrap_or_else(|| {
+                        panic!("voplay: skinned mesh missing JOINTS_0 in '{}'", label)
+                    })
                     .into_u16()
                     .collect();
                 let joint_weights: Vec<[f32; 4]> = reader
                     .read_weights(0)
-                    .unwrap_or_else(|| panic!("voplay: skinned mesh missing WEIGHTS_0 in '{}'", label))
+                    .unwrap_or_else(|| {
+                        panic!("voplay: skinned mesh missing WEIGHTS_0 in '{}'", label)
+                    })
                     .into_f32()
                     .collect();
-                if joint_indices.len() != positions.len() || joint_weights.len() != positions.len() {
+                if joint_indices.len() != positions.len() || joint_weights.len() != positions.len()
+                {
                     return Err(format!(
                         "model '{}' node '{}' skinned mesh attribute count mismatch (positions {}, joints {}, weights {})",
                         label,
@@ -832,8 +893,7 @@ impl ModelManager {
         if primitives.is_empty() {
             return Err(format!(
                 "model '{}' node '{}' contains no renderable meshes",
-                label,
-                node_name
+                label, node_name
             ));
         }
         Ok(Some(ParsedNodeModel {
@@ -860,8 +920,13 @@ impl ModelManager {
             .name()
             .map(str::to_string)
             .unwrap_or_else(|| format!("node_{}", node.index()));
-        let (world_pos, world_rot, world_scale) = math3d::decompose_matrix(&world)
-            .ok_or_else(|| format!("level '{}' node '{}' has a non-decomposable transform", label, name))?;
+        let (world_pos, world_rot, world_scale) =
+            math3d::decompose_matrix(&world).ok_or_else(|| {
+                format!(
+                    "level '{}' node '{}' has a non-decomposable transform",
+                    label, name
+                )
+            })?;
         Ok((
             world,
             FlattenedLevelNodeInfo {
@@ -902,7 +967,14 @@ impl ModelManager {
 
     fn import_path(
         path: &Path,
-    ) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+    ) -> Result<
+        (
+            gltf::Document,
+            Vec<gltf::buffer::Data>,
+            Vec<gltf::image::Data>,
+        ),
+        String,
+    > {
         let path_label = path.display().to_string();
         let data = file_io::read_bytes(path)
             .map_err(|e| format!("gltf import '{}': {}", path_label, e))?;
@@ -914,7 +986,10 @@ impl ModelManager {
         Ok((gltf.document, buffers, images))
     }
 
-    fn read_external_uri(base_dir: Option<&Path>, uri: &str) -> Result<(Vec<u8>, Option<String>), String> {
+    fn read_external_uri(
+        base_dir: Option<&Path>,
+        uri: &str,
+    ) -> Result<(Vec<u8>, Option<String>), String> {
         if let Some(rest) = uri.strip_prefix("data:") {
             let (mime, encoded) = rest
                 .split_once(";base64,")
@@ -938,7 +1013,8 @@ impl ModelManager {
         if uri.contains(':') {
             return Err(format!("unsupported URI scheme: {}", uri));
         }
-        let base_dir = base_dir.ok_or_else(|| "external reference in slice-only import".to_string())?;
+        let base_dir =
+            base_dir.ok_or_else(|| "external reference in slice-only import".to_string())?;
         file_io::read_bytes(base_dir.join(uri)).map(|data| (data, None))
     }
 
@@ -1032,9 +1108,11 @@ impl ModelManager {
             let image_data = match image.source() {
                 gltf::image::Source::Uri { uri, mime_type } => {
                     let (encoded_image, inline_mime) = Self::read_external_uri(base_dir, uri)?;
-                    let encoded_format = Self::image_format_for_uri(uri, mime_type, inline_mime.as_deref())?;
-                    let decoded_image = image::load_from_memory_with_format(&encoded_image, encoded_format)
-                        .map_err(|e| format!("image decode '{}': {}", uri, e))?;
+                    let encoded_format =
+                        Self::image_format_for_uri(uri, mime_type, inline_mime.as_deref())?;
+                    let decoded_image =
+                        image::load_from_memory_with_format(&encoded_image, encoded_format)
+                            .map_err(|e| format!("image decode '{}': {}", uri, e))?;
                     Self::dynamic_image_to_gltf_data(decoded_image)?
                 }
                 gltf::image::Source::View { view, mime_type } => {
@@ -1043,8 +1121,11 @@ impl ModelManager {
                     let end = begin + view.length();
                     let encoded_image = &parent_buffer_data[begin..end];
                     let encoded_format = Self::image_format_from_mime(mime_type)?;
-                    let decoded_image = image::load_from_memory_with_format(encoded_image, encoded_format)
-                        .map_err(|e| format!("image decode buffer view {}: {}", view.index(), e))?;
+                    let decoded_image =
+                        image::load_from_memory_with_format(encoded_image, encoded_format)
+                            .map_err(|e| {
+                                format!("image decode buffer view {}: {}", view.index(), e)
+                            })?;
                     Self::dynamic_image_to_gltf_data(decoded_image)?
                 }
             };
@@ -1065,7 +1146,8 @@ impl ModelManager {
         clips: &[AnimationClip],
         label: &str,
     ) -> Result<(ModelId, [f32; 3], [f32; 3]), String> {
-        let Some(parsed) = Self::parse_node_model(node, tex_map, buffers, used_skin_index, label)? else {
+        let Some(parsed) = Self::parse_node_model(node, tex_map, buffers, used_skin_index, label)?
+        else {
             return Ok((0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]));
         };
         let (aabb_min, aabb_max) = Self::compute_aabb(&parsed.cpu_positions);
@@ -1086,7 +1168,10 @@ impl ModelManager {
         Ok((model_id, aabb_min, aabb_max))
     }
 
-    fn parse_level_terrain_extras(node: &gltf::Node, label: &str) -> Result<Option<LevelTerrainExtras>, String> {
+    fn parse_level_terrain_extras(
+        node: &gltf::Node,
+        label: &str,
+    ) -> Result<Option<LevelTerrainExtras>, String> {
         let Some(raw) = node.extras().as_ref() else {
             return Ok(None);
         };
@@ -1136,17 +1221,28 @@ impl ModelManager {
     ) -> Result<MeshMaterial, String> {
         if extras.material.control.is_some() {
             if extras.material.albedo.is_some() {
-                return Err(format!("level '{}' node '{}' terrain material cannot mix albedo and splat", label, node_name));
+                return Err(format!(
+                    "level '{}' node '{}' terrain material cannot mix albedo and splat",
+                    label, node_name
+                ));
             }
             let control_path = Self::resolve_level_asset_path(
                 level_dir,
                 extras.material.control.as_deref().unwrap_or(""),
             );
             let layers = extras.material.layers.as_ref().ok_or_else(|| {
-                format!("level '{}' node '{}' terrain splat requires 4 layers", label, node_name)
+                format!(
+                    "level '{}' node '{}' terrain splat requires 4 layers",
+                    label, node_name
+                )
             })?;
             if layers.len() != 4 {
-                return Err(format!("level '{}' node '{}' terrain splat requires exactly 4 layers, got {}", label, node_name, layers.len()));
+                return Err(format!(
+                    "level '{}' node '{}' terrain splat requires exactly 4 layers, got {}",
+                    label,
+                    node_name,
+                    layers.len()
+                ));
             }
             let control_texture_id = Self::load_level_texture_cached(
                 texture_manager,
@@ -1159,7 +1255,10 @@ impl ModelManager {
             let mut uv_scales = [1.0f32; 4];
             for (index, layer) in layers.iter().enumerate() {
                 if layer.uv_scale <= 0.0 {
-                    return Err(format!("level '{}' node '{}' terrain layer {} uvScale must be > 0", label, node_name, index));
+                    return Err(format!(
+                        "level '{}' node '{}' terrain layer {} uvScale must be > 0",
+                        label, node_name, index
+                    ));
                 }
                 let texture_path = Self::resolve_level_asset_path(level_dir, &layer.texture);
                 layer_texture_ids[index] = Self::load_level_texture_cached(
@@ -1179,10 +1278,18 @@ impl ModelManager {
             ));
         }
         if let Some(layers) = extras.material.layers.as_ref() {
-            return Err(format!("level '{}' node '{}' terrain layers require a control texture, got {} layers", label, node_name, layers.len()));
+            return Err(format!(
+                "level '{}' node '{}' terrain layers require a control texture, got {} layers",
+                label,
+                node_name,
+                layers.len()
+            ));
         }
         if extras.material.uv_scale <= 0.0 {
-            return Err(format!("level '{}' node '{}' terrain uvScale must be > 0", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain uvScale must be > 0",
+                label, node_name
+            ));
         }
         let texture_id = match extras.material.albedo.as_deref() {
             Some(value) => {
@@ -1218,7 +1325,10 @@ impl ModelManager {
     ) -> Result<LevelNode, String> {
         let node_name = &flattened.name;
         if node.mesh().is_some() {
-            return Err(format!("level '{}' node '{}' terrain node must not contain a mesh", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain node must not contain a mesh",
+                label, node_name
+            ));
         }
         let identity = [0.0, 0.0, 0.0, 1.0];
         if flattened
@@ -1227,7 +1337,10 @@ impl ModelManager {
             .zip(identity.iter())
             .any(|(a, b)| (*a - *b).abs() > 0.0001)
         {
-            return Err(format!("level '{}' node '{}' terrain node rotation must be identity", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain node rotation must be identity",
+                label, node_name
+            ));
         }
         let unit_scale = [1.0, 1.0, 1.0];
         if flattened
@@ -1236,18 +1349,34 @@ impl ModelManager {
             .zip(unit_scale.iter())
             .any(|(a, b)| (*a - *b).abs() > 0.0001)
         {
-            return Err(format!("level '{}' node '{}' terrain node scale must be 1", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain node scale must be 1",
+                label, node_name
+            ));
         }
         let [scale_x, scale_y, scale_z] = extras.size;
         if scale_x <= 0.0 || scale_y <= 0.0 || scale_z <= 0.0 {
-            return Err(format!("level '{}' node '{}' terrain size must be > 0", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain size must be > 0",
+                label, node_name
+            ));
         }
         if extras.heightmap.is_empty() {
-            return Err(format!("level '{}' node '{}' terrain heightmap path is required", label, node_name));
+            return Err(format!(
+                "level '{}' node '{}' terrain heightmap path is required",
+                label, node_name
+            ));
         }
         let heightmap_path = Self::resolve_level_asset_path(level_dir, &extras.heightmap);
-        let image_data = file_io::read_bytes(&heightmap_path)
-            .map_err(|e| format!("level '{}' node '{}' terrain heightmap read '{}': {}", label, node_name, heightmap_path.display(), e))?;
+        let image_data = file_io::read_bytes(&heightmap_path).map_err(|e| {
+            format!(
+                "level '{}' node '{}' terrain heightmap read '{}': {}",
+                label,
+                node_name,
+                heightmap_path.display(),
+                e
+            )
+        })?;
         let material = Self::build_level_terrain_material(
             texture_manager,
             device,
@@ -1268,12 +1397,10 @@ impl ModelManager {
             scale_z,
             material,
         )?;
-        let (min_height, max_height) = terrain_data
-            .heights
-            .iter()
-            .fold((f32::INFINITY, f32::NEG_INFINITY), |(min_v, max_v), value| {
-                (min_v.min(*value), max_v.max(*value))
-            });
+        let (min_height, max_height) = terrain_data.heights.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(min_v, max_v), value| (min_v.min(*value), max_v.max(*value)),
+        );
         Ok(LevelNode {
             kind: LevelNodeKind::Terrain,
             name: flattened.name.clone(),
@@ -1386,7 +1513,8 @@ impl ModelManager {
             .ok_or_else(|| format!("level '{}' has no default scene", path))?;
         let tex_map = Self::upload_resolved_textures(device, queue, texture_manager, &images);
         let node_parent = Self::build_node_parent_map(&document);
-        let (used_skin_index, skeleton, clips) = Self::build_skin_and_clips(&document, &buffers, &node_parent, path)?;
+        let (used_skin_index, skeleton, clips) =
+            Self::build_skin_and_clips(&document, &buffers, &node_parent, path)?;
         let level_dir = path_ref
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -1425,7 +1553,15 @@ impl ModelManager {
         path: &str,
     ) -> Result<ModelId, String> {
         let (document, buffers, images) = Self::import_path(Path::new(path))?;
-        self.upload_gltf(device, queue, texture_manager, document, buffers, images, path)
+        self.upload_gltf(
+            device,
+            queue,
+            texture_manager,
+            document,
+            buffers,
+            images,
+            path,
+        )
     }
 
     /// Load a model from raw glTF/GLB bytes.
@@ -1439,10 +1575,18 @@ impl ModelManager {
         data: &[u8],
         source_path: Option<&str>,
     ) -> Result<ModelId, String> {
-        let (document, buffers, images) = gltf::import_slice(data)
-            .map_err(|e| format!("gltf import: {}", e))?;
+        let (document, buffers, images) =
+            gltf::import_slice(data).map_err(|e| format!("gltf import: {}", e))?;
         let label = source_path.unwrap_or("<bytes>");
-        self.upload_gltf(device, queue, texture_manager, document, buffers, images, label)
+        self.upload_gltf(
+            device,
+            queue,
+            texture_manager,
+            document,
+            buffers,
+            images,
+            label,
+        )
     }
 
     /// Upload a parsed glTF document to GPU. Shared by load_file and load_bytes.
@@ -1464,7 +1608,9 @@ impl ModelManager {
         let mut cpu_positions = Vec::new();
         let mut cpu_indices = Vec::new();
         for node in document.nodes() {
-            let Some(parsed) = Self::parse_node_model(&node, &tex_map, &buffers, used_skin_index, label)? else {
+            let Some(parsed) =
+                Self::parse_node_model(&node, &tex_map, &buffers, used_skin_index, label)?
+            else {
                 continue;
             };
             let ParsedNodeModel {
@@ -1476,7 +1622,9 @@ impl ModelManager {
             let index_base = cpu_positions.len() as u32;
             cpu_positions.extend(node_positions.into_iter());
             cpu_indices.extend(node_indices.into_iter().map(|index| index_base + index));
-            gpu_meshes.extend(Self::upload_parsed_node_primitives(device, queue, primitives));
+            gpu_meshes.extend(Self::upload_parsed_node_primitives(
+                device, queue, primitives,
+            ));
         }
         if gpu_meshes.is_empty() {
             return Err(format!("model '{}' contains no renderable meshes", label));
@@ -1544,7 +1692,13 @@ mod tests {
         TempFixture { dir, gltf_path }
     }
 
-    fn load_document(path: &Path) -> (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>) {
+    fn load_document(
+        path: &Path,
+    ) -> (
+        gltf::Document,
+        Vec<gltf::buffer::Data>,
+        Vec<gltf::image::Data>,
+    ) {
         gltf::import(path).expect("import gltf fixture")
     }
 
@@ -1567,8 +1721,9 @@ mod tests {
         );
         let (document, _, _) = load_document(&fixture.gltf_path);
         let scene = document.default_scene().expect("default scene");
-        let nodes = ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
-            .expect("flatten scene");
+        let nodes =
+            ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
+                .expect("flatten scene");
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].name, "root");
         assert_eq!(nodes[0].position, [1.0, 2.0, 3.0]);
@@ -1598,8 +1753,9 @@ mod tests {
         );
         let (document, _, _) = load_document(&fixture.gltf_path);
         let scene = document.default_scene().expect("default scene");
-        let nodes = ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
-            .expect("flatten scene");
+        let nodes =
+            ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
+                .expect("flatten scene");
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].name, "node_0");
         assert_eq!(nodes[1].name, "node_1");

@@ -122,11 +122,18 @@ pub fn with_world<R>(world_id: u32, f: impl FnOnce(&mut AnimationWorld) -> R) ->
 }
 
 pub fn get_palette(world_id: u32, target_id: u32) -> Option<Vec<Mat4>> {
-    with_world_ref_in(&WORLDS, world_id, |world| world.palettes.get(&target_id).cloned()).flatten()
+    with_world_ref_in(&WORLDS, world_id, |world| {
+        world.palettes.get(&target_id).cloned()
+    })
+    .flatten()
 }
 
 pub fn compute_rest_joint_palette(skeleton: &Skeleton) -> Vec<Mat4> {
-    let local_poses: Vec<Transform> = skeleton.joints.iter().map(|joint| joint.local_transform).collect();
+    let local_poses: Vec<Transform> = skeleton
+        .joints
+        .iter()
+        .map(|joint| joint.local_transform)
+        .collect();
     compute_joint_matrices(skeleton, &local_poses)
 }
 
@@ -148,7 +155,10 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, local_poses: &[Transform]) ->
     }
     let mut palette = vec![MAT4_IDENTITY; skeleton.joints.len()];
     for index in 0..skeleton.joints.len() {
-        palette[index] = math3d::mat4_mul(&world_matrices[index], &skeleton.inverse_bind_matrices[index]);
+        palette[index] = math3d::mat4_mul(
+            &world_matrices[index],
+            &skeleton.inverse_bind_matrices[index],
+        );
     }
     palette
 }
@@ -216,10 +226,12 @@ impl AnimationWorld {
         let model = models
             .get(model_id)
             .unwrap_or_else(|| panic!("voplay: animation model not found: {}", model_id));
-        let clip = model
-            .clips
-            .get(state.clip_index)
-            .unwrap_or_else(|| panic!("voplay: clip {} out of range for model {}", state.clip_index, model_id));
+        let clip = model.clips.get(state.clip_index).unwrap_or_else(|| {
+            panic!(
+                "voplay: clip {} out of range for model {}",
+                state.clip_index, model_id
+            )
+        });
         if clip.duration <= 0.0 {
             return 0.0;
         }
@@ -239,22 +251,38 @@ impl AnimationWorld {
                 .skeleton
                 .as_ref()
                 .unwrap_or_else(|| panic!("voplay: model {} has no skeleton", model_id));
-            let clip = model
-                .clips
-                .get(state.clip_index)
-                .unwrap_or_else(|| panic!("voplay: clip {} out of range for model {}", state.clip_index, model_id));
+            let clip = model.clips.get(state.clip_index).unwrap_or_else(|| {
+                panic!(
+                    "voplay: clip {} out of range for model {}",
+                    state.clip_index, model_id
+                )
+            });
 
             if state.playing {
-                advance_time(&mut state.time, clip.duration, dt * state.speed, state.looping, &mut state.playing);
+                advance_time(
+                    &mut state.time,
+                    clip.duration,
+                    dt * state.speed,
+                    state.looping,
+                    &mut state.playing,
+                );
             }
 
             let local_pose = if let Some(blend) = state.blend_from.as_mut() {
-                let from_clip = model
-                    .clips
-                    .get(blend.clip_index)
-                    .unwrap_or_else(|| panic!("voplay: clip {} out of range for model {}", blend.clip_index, model_id));
+                let from_clip = model.clips.get(blend.clip_index).unwrap_or_else(|| {
+                    panic!(
+                        "voplay: clip {} out of range for model {}",
+                        blend.clip_index, model_id
+                    )
+                });
                 let mut blend_playing = true;
-                advance_time(&mut blend.time, from_clip.duration, dt * state.speed, state.looping, &mut blend_playing);
+                advance_time(
+                    &mut blend.time,
+                    from_clip.duration,
+                    dt * state.speed,
+                    state.looping,
+                    &mut blend_playing,
+                );
                 blend.progress += dt;
                 let factor = (blend.progress / blend.duration).clamp(0.0, 1.0);
                 let from_pose = evaluate_clip(skeleton, from_clip, blend.time);
@@ -274,7 +302,11 @@ impl AnimationWorld {
 }
 
 pub fn evaluate_clip(skeleton: &Skeleton, clip: &AnimationClip, time: f32) -> Vec<Transform> {
-    let mut local_poses: Vec<Transform> = skeleton.joints.iter().map(|joint| joint.local_transform).collect();
+    let mut local_poses: Vec<Transform> = skeleton
+        .joints
+        .iter()
+        .map(|joint| joint.local_transform)
+        .collect();
     for channel in &clip.channels {
         match channel.property {
             AnimationProperty::Translation => {
@@ -316,11 +348,19 @@ fn advance_time(time: &mut f32, duration: f32, delta: f32, looping: bool, playin
 }
 
 fn blend_poses(from_pose: &[Transform], to_pose: &[Transform], factor: f32) -> Vec<Transform> {
-    assert_eq!(from_pose.len(), to_pose.len(), "voplay: animation blend pose length mismatch");
+    assert_eq!(
+        from_pose.len(),
+        to_pose.len(),
+        "voplay: animation blend pose length mismatch"
+    );
     let mut blended = Vec::with_capacity(from_pose.len());
     for index in 0..from_pose.len() {
         blended.push(Transform {
-            translation: lerp_vec3(from_pose[index].translation, to_pose[index].translation, factor),
+            translation: lerp_vec3(
+                from_pose[index].translation,
+                to_pose[index].translation,
+                factor,
+            ),
             rotation: quat_slerp(from_pose[index].rotation, to_pose[index].rotation, factor),
             scale: lerp_vec3(from_pose[index].scale, to_pose[index].scale, factor),
         });
@@ -329,10 +369,15 @@ fn blend_poses(from_pose: &[Transform], to_pose: &[Transform], factor: f32) -> V
 }
 
 fn sample_vec3(channel: &AnimationChannel, time: f32) -> Vec3 {
-    assert!(matches!(channel.property, AnimationProperty::Translation | AnimationProperty::Scale));
+    assert!(matches!(
+        channel.property,
+        AnimationProperty::Translation | AnimationProperty::Scale
+    ));
     let key = find_keyframe(&channel.times, time);
     match key {
-        Keyframe::Single(index) => vec3_from_values(channel, index, value_group_index(channel.interpolation)),
+        Keyframe::Single(index) => {
+            vec3_from_values(channel, index, value_group_index(channel.interpolation))
+        }
         Keyframe::Between(index, next_index, factor) => match channel.interpolation {
             AnimationInterpolation::Step => vec3_from_values(channel, index, 0),
             AnimationInterpolation::Linear => {
@@ -340,7 +385,9 @@ fn sample_vec3(channel: &AnimationChannel, time: f32) -> Vec3 {
                 let b = vec3_from_values(channel, next_index, 0);
                 lerp_vec3(a, b, factor)
             }
-            AnimationInterpolation::CubicSpline => sample_cubic_vec3(channel, index, next_index, factor),
+            AnimationInterpolation::CubicSpline => {
+                sample_cubic_vec3(channel, index, next_index, factor)
+            }
         },
     }
 }
@@ -349,7 +396,9 @@ fn sample_quat(channel: &AnimationChannel, time: f32) -> Quat {
     assert_eq!(channel.property, AnimationProperty::Rotation);
     let key = find_keyframe(&channel.times, time);
     match key {
-        Keyframe::Single(index) => quat_from_values(channel, index, value_group_index(channel.interpolation)),
+        Keyframe::Single(index) => {
+            quat_from_values(channel, index, value_group_index(channel.interpolation))
+        }
         Keyframe::Between(index, next_index, factor) => match channel.interpolation {
             AnimationInterpolation::Step => quat_from_values(channel, index, 0),
             AnimationInterpolation::Linear => {
@@ -357,7 +406,9 @@ fn sample_quat(channel: &AnimationChannel, time: f32) -> Quat {
                 let b = quat_from_values(channel, next_index, 0);
                 quat_slerp(a, b, factor)
             }
-            AnimationInterpolation::CubicSpline => sample_cubic_quat(channel, index, next_index, factor),
+            AnimationInterpolation::CubicSpline => {
+                sample_cubic_quat(channel, index, next_index, factor)
+            }
         },
     }
 }
@@ -368,7 +419,10 @@ enum Keyframe {
 }
 
 fn find_keyframe(times: &[f32], time: f32) -> Keyframe {
-    assert!(!times.is_empty(), "voplay: animation channel has no keyframes");
+    assert!(
+        !times.is_empty(),
+        "voplay: animation channel has no keyframes"
+    );
     if times.len() == 1 || time <= times[0] {
         return Keyframe::Single(0);
     }
@@ -409,7 +463,12 @@ fn value_group_index(interpolation: AnimationInterpolation) -> usize {
     }
 }
 
-fn value_offset(channel: &AnimationChannel, key_index: usize, component_index: usize, group_index: usize) -> usize {
+fn value_offset(
+    channel: &AnimationChannel,
+    key_index: usize,
+    component_index: usize,
+    group_index: usize,
+) -> usize {
     let width = channel_width(channel.property);
     (key_index * value_group_stride(channel.interpolation) + group_index) * width + component_index
 }
@@ -435,7 +494,12 @@ fn quat_from_raw_values(channel: &AnimationChannel, key_index: usize, group_inde
     )
 }
 
-fn sample_cubic_vec3(channel: &AnimationChannel, index: usize, next_index: usize, factor: f32) -> Vec3 {
+fn sample_cubic_vec3(
+    channel: &AnimationChannel,
+    index: usize,
+    next_index: usize,
+    factor: f32,
+) -> Vec3 {
     let t0 = channel.times[index];
     let t1 = channel.times[next_index];
     let dt = t1 - t0;
@@ -446,7 +510,12 @@ fn sample_cubic_vec3(channel: &AnimationChannel, index: usize, next_index: usize
     cubic_hermite_vec3(p0, m0, p1, m1, factor, dt)
 }
 
-fn sample_cubic_quat(channel: &AnimationChannel, index: usize, next_index: usize, factor: f32) -> Quat {
+fn sample_cubic_quat(
+    channel: &AnimationChannel,
+    index: usize,
+    next_index: usize,
+    factor: f32,
+) -> Quat {
     let t0 = channel.times[index];
     let t1 = channel.times[next_index];
     let dt = t1 - t0;

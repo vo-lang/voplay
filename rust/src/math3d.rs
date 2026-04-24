@@ -4,7 +4,7 @@
 //! Provides: Vec3, Quat, Mat4 types and construction helpers for
 //! model/view/projection transforms.
 
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 // ─── Vec3 ──────────────────────────────────────────────────────────────────
 
@@ -17,9 +17,21 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
-    pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0 };
-    pub const ONE: Self = Self { x: 1.0, y: 1.0, z: 1.0 };
-    pub const UP: Self = Self { x: 0.0, y: 1.0, z: 0.0 };
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    pub const ONE: Self = Self {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    };
+    pub const UP: Self = Self {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
 
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
@@ -54,35 +66,55 @@ impl Vec3 {
     }
 
     pub fn from_array(a: [f32; 3]) -> Self {
-        Self { x: a[0], y: a[1], z: a[2] }
+        Self {
+            x: a[0],
+            y: a[1],
+            z: a[2],
+        }
     }
 }
 
 impl Add for Vec3 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Self { x: self.x + rhs.x, y: self.y + rhs.y, z: self.z + rhs.z }
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+        }
     }
 }
 
 impl Sub for Vec3 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        Self { x: self.x - rhs.x, y: self.y - rhs.y, z: self.z - rhs.z }
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+            z: self.z - rhs.z,
+        }
     }
 }
 
 impl Mul<f32> for Vec3 {
     type Output = Self;
     fn mul(self, s: f32) -> Self {
-        Self { x: self.x * s, y: self.y * s, z: self.z * s }
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
     }
 }
 
 impl Neg for Vec3 {
     type Output = Self;
     fn neg(self) -> Self {
-        Self { x: -self.x, y: -self.y, z: -self.z }
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+        }
     }
 }
 
@@ -98,7 +130,12 @@ pub struct Quat {
 }
 
 impl Quat {
-    pub const IDENTITY: Self = Self { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
+    pub const IDENTITY: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    };
 
     pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
         Self { x, y, z, w }
@@ -139,8 +176,10 @@ pub fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut out = [[0.0f32; 4]; 4];
     for col in 0..4 {
         for row in 0..4 {
-            out[col][row] =
-                a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2] + a[3][row] * b[col][3];
+            out[col][row] = a[0][row] * b[col][0]
+                + a[1][row] * b[col][1]
+                + a[2][row] * b[col][2]
+                + a[3][row] * b[col][3];
         }
     }
     out
@@ -231,36 +270,16 @@ fn quat_from_basis(col0: Vec3, col1: Vec3, col2: Vec3) -> Quat {
     let trace = m00 + m11 + m22;
     let quat = if trace > 0.0 {
         let s = (trace + 1.0).sqrt() * 2.0;
-        Quat::new(
-            (m21 - m12) / s,
-            (m02 - m20) / s,
-            (m10 - m01) / s,
-            0.25 * s,
-        )
+        Quat::new((m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s)
     } else if m00 > m11 && m00 > m22 {
         let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
-        Quat::new(
-            0.25 * s,
-            (m01 + m10) / s,
-            (m02 + m20) / s,
-            (m21 - m12) / s,
-        )
+        Quat::new(0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s)
     } else if m11 > m22 {
         let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
-        Quat::new(
-            (m01 + m10) / s,
-            0.25 * s,
-            (m12 + m21) / s,
-            (m02 - m20) / s,
-        )
+        Quat::new((m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s)
     } else {
         let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
-        Quat::new(
-            (m02 + m20) / s,
-            (m12 + m21) / s,
-            0.25 * s,
-            (m10 - m01) / s,
-        )
+        Quat::new((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s)
     };
     quat.normalize()
 }
@@ -309,9 +328,24 @@ pub fn model_matrix(pos: Vec3, rot: Quat, scale: Vec3) -> Mat4 {
     let wz = rot.w * z2;
 
     [
-        [(1.0 - (yy + zz)) * scale.x, (xy + wz) * scale.x, (xz - wy) * scale.x, 0.0],
-        [(xy - wz) * scale.y, (1.0 - (xx + zz)) * scale.y, (yz + wx) * scale.y, 0.0],
-        [(xz + wy) * scale.z, (yz - wx) * scale.z, (1.0 - (xx + yy)) * scale.z, 0.0],
+        [
+            (1.0 - (yy + zz)) * scale.x,
+            (xy + wz) * scale.x,
+            (xz - wy) * scale.x,
+            0.0,
+        ],
+        [
+            (xy - wz) * scale.y,
+            (1.0 - (xx + zz)) * scale.y,
+            (yz + wx) * scale.y,
+            0.0,
+        ],
+        [
+            (xz + wy) * scale.z,
+            (yz - wx) * scale.z,
+            (1.0 - (xx + yy)) * scale.z,
+            0.0,
+        ],
         [pos.x, pos.y, pos.z, 1.0],
     ]
 }
@@ -350,14 +384,7 @@ pub fn perspective_rh_zo(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> Ma
     ]
 }
 
-pub fn orthographic(
-    left: f32,
-    right: f32,
-    bottom: f32,
-    top: f32,
-    near: f32,
-    far: f32,
-) -> Mat4 {
+pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Mat4 {
     let w = right - left;
     let h = top - bottom;
     let d = far - near;
@@ -471,9 +498,24 @@ pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
     let offset_z = near / (near - far);
 
     [
-        [scale_x * right.x, scale_y * light_up.x, scale_z * light_z.x, 0.0],
-        [scale_x * right.y, scale_y * light_up.y, scale_z * light_z.y, 0.0],
-        [scale_x * right.z, scale_y * light_up.z, scale_z * light_z.z, 0.0],
+        [
+            scale_x * right.x,
+            scale_y * light_up.x,
+            scale_z * light_z.x,
+            0.0,
+        ],
+        [
+            scale_x * right.y,
+            scale_y * light_up.y,
+            scale_z * light_z.y,
+            0.0,
+        ],
+        [
+            scale_x * right.z,
+            scale_y * light_up.z,
+            scale_z * light_z.z,
+            0.0,
+        ],
         [
             scale_x * tx + offset_x,
             scale_y * ty + offset_y,
@@ -522,7 +564,10 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        assert!(decompose_matrix(&sheared).is_none(), "sheared matrix must fail");
+        assert!(
+            decompose_matrix(&sheared).is_none(),
+            "sheared matrix must fail"
+        );
     }
 
     #[test]
@@ -558,9 +603,21 @@ mod tests {
                 shadow_clip[1] / shadow_clip[3],
                 shadow_clip[2] / shadow_clip[3],
             ];
-            assert!(shadow_ndc[0] >= -1.0 && shadow_ndc[0] <= 1.0, "shadow x out of range: {}", shadow_ndc[0]);
-            assert!(shadow_ndc[1] >= -1.0 && shadow_ndc[1] <= 1.0, "shadow y out of range: {}", shadow_ndc[1]);
-            assert!(shadow_ndc[2] >= 0.0 && shadow_ndc[2] <= 1.0, "shadow z out of range: {}", shadow_ndc[2]);
+            assert!(
+                shadow_ndc[0] >= -1.0 && shadow_ndc[0] <= 1.0,
+                "shadow x out of range: {}",
+                shadow_ndc[0]
+            );
+            assert!(
+                shadow_ndc[1] >= -1.0 && shadow_ndc[1] <= 1.0,
+                "shadow y out of range: {}",
+                shadow_ndc[1]
+            );
+            assert!(
+                shadow_ndc[2] >= 0.0 && shadow_ndc[2] <= 1.0,
+                "shadow z out of range: {}",
+                shadow_ndc[2]
+            );
         }
     }
 }

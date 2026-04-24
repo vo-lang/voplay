@@ -3,10 +3,19 @@ use std::f32::consts::{PI, TAU};
 use crate::model_loader::MeshVertex;
 
 fn vertex(position: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
-    MeshVertex { position, normal, uv }
+    MeshVertex {
+        position,
+        normal,
+        uv,
+    }
 }
 
-pub fn generate_plane(width: f32, depth: f32, sub_x: u32, sub_z: u32) -> (Vec<MeshVertex>, Vec<u32>) {
+pub fn generate_plane(
+    width: f32,
+    depth: f32,
+    sub_x: u32,
+    sub_z: u32,
+) -> (Vec<MeshVertex>, Vec<u32>) {
     assert!(sub_x >= 1, "generate_plane: sub_x must be >= 1");
     assert!(sub_z >= 1, "generate_plane: sub_z must be >= 1");
 
@@ -210,7 +219,11 @@ pub fn generate_cylinder(segments: u32) -> (Vec<MeshVertex>, Vec<u32>) {
     }
 
     let bottom_center = vertices.len() as u32;
-    vertices.push(vertex([0.0, -half_height, 0.0], [0.0, -1.0, 0.0], [0.5, 0.5]));
+    vertices.push(vertex(
+        [0.0, -half_height, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.5, 0.5],
+    ));
     let bottom_ring_start = vertices.len() as u32;
     for ix in 0..=segments {
         let u = ix as f32 / segments as f32;
@@ -232,9 +245,16 @@ pub fn generate_cylinder(segments: u32) -> (Vec<MeshVertex>, Vec<u32>) {
     (vertices, indices)
 }
 
-pub fn generate_capsule(segments: u32, half_height: f32, radius: f32) -> (Vec<MeshVertex>, Vec<u32>) {
+pub fn generate_capsule(
+    segments: u32,
+    half_height: f32,
+    radius: f32,
+) -> (Vec<MeshVertex>, Vec<u32>) {
     assert!(segments >= 3, "generate_capsule: segments must be >= 3");
-    assert!(half_height >= 0.0, "generate_capsule: half_height must be >= 0");
+    assert!(
+        half_height >= 0.0,
+        "generate_capsule: half_height must be >= 0"
+    );
     assert!(radius > 0.0, "generate_capsule: radius must be > 0");
 
     let lon_segments = segments * 2;

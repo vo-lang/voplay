@@ -34,10 +34,12 @@ static HOSTED_RENDERER: OnceLock<Mutex<HostedRendererState>> = OnceLock::new();
 
 #[cfg(not(feature = "wasm"))]
 fn hosted_renderer() -> &'static Mutex<HostedRendererState> {
-    HOSTED_RENDERER.get_or_init(|| Mutex::new(HostedRendererState {
-        generation: 0,
-        renderer: HostedRenderer::Empty,
-    }))
+    HOSTED_RENDERER.get_or_init(|| {
+        Mutex::new(HostedRendererState {
+            generation: 0,
+            renderer: HostedRenderer::Empty,
+        })
+    })
 }
 
 #[cfg(feature = "wasm")]

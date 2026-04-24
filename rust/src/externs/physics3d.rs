@@ -1,10 +1,10 @@
 //! Physics 3D externs (voplay/scene3d sub-package).
 
-use vo_ext::prelude::*;
-use crate::math3d::{Vec3, Quat};
+use super::util::{read_f64_le, read_u16_le, read_u32_le, ret_bytes, with_renderer_or_panic};
+use crate::math3d::{Quat, Vec3};
 use crate::physics3d::{BodyDesc3D, ColliderKind3D, HeightfieldDesc3D, TrimeshDesc3D};
 use crate::physics_registry::PhysBodyType;
-use super::util::{read_f64_le, read_u16_le, read_u32_le, ret_bytes, with_renderer_or_panic};
+use vo_ext::prelude::*;
 
 // --- Physics 3D world management ---
 
@@ -33,7 +33,11 @@ pub fn physics3d_destroy(call: &mut ExternCallContext) -> ExternResult {
 ///         linear_damping(f64)
 pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     // 3 flag bytes + 2 u16 fields + 17 f64 fields = 143 bytes minimum
-    assert!(data.len() >= 143, "voplay: physics3d body desc too short: {} bytes (expected 143)", data.len());
+    assert!(
+        data.len() >= 143,
+        "voplay: physics3d body desc too short: {} bytes (expected 143)",
+        data.len()
+    );
     let mut pos = 0;
     let body_type = PhysBodyType::from_u8(data[pos]);
     pos += 1;
@@ -121,7 +125,11 @@ pub(crate) fn decode_trimesh_desc(body_id: u32, data: &[u8]) -> TrimeshDesc3D {
 }
 
 pub(crate) fn decode_model_mesh_data_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u32>) {
-    assert!(data.len() >= 8, "voplay: model mesh data too short: {}", data.len());
+    assert!(
+        data.len() >= 8,
+        "voplay: model mesh data too short: {}",
+        data.len()
+    );
     let mut pos = 0usize;
     let position_count = read_u32_le(data, &mut pos) as usize;
     let index_count = read_u32_le(data, &mut pos) as usize;
@@ -330,7 +338,8 @@ pub fn physics3d_ray_cast(call: &mut ExternCallContext) -> ExternResult {
 
     let origin = Vec3::new(ox, oy, oz);
     let dir = Vec3::new(dx, dy, dz);
-    let result = crate::physics3d::with_world(world_id, |world| world.ray_cast(origin, dir, max_dist));
+    let result =
+        crate::physics3d::with_world(world_id, |world| world.ray_cast(origin, dir, max_dist));
     match result {
         Some(hit) => {
             // Serialize: found(u8=1), body_id(u32), hx(f64), hy(f64), hz(f64), nx(f64), ny(f64), nz(f64), dist(f64)

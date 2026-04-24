@@ -36,8 +36,7 @@ impl<W> WorldRegistry<W> {
 
     /// Access a world mutably by handle. Panics if not found.
     pub fn get_mut(&mut self, id: u32) -> &mut W {
-        self.worlds.get_mut(&id)
-            .expect("voplay: world not found")
+        self.worlds.get_mut(&id).expect("voplay: world not found")
     }
 
     /// Access a world immutably by handle.
@@ -54,7 +53,9 @@ pub fn with_world_in<W, R>(
     f: impl FnOnce(&mut W) -> R,
 ) -> R {
     let mut guard = mutex.lock().unwrap();
-    let reg = guard.as_mut().expect("voplay: world registry not initialized");
+    let reg = guard
+        .as_mut()
+        .expect("voplay: world registry not initialized");
     let world = reg.get_mut(world_id);
     f(world)
 }

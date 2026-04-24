@@ -4,13 +4,13 @@
 //! Manages rigid bodies, colliders, commands from Vo, state serialization,
 //! and contact detection.
 
+use rapier3d::na::{Quaternion, UnitQuaternion};
+use rapier3d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use rapier3d::prelude::*;
-use rapier3d::na::{UnitQuaternion, Quaternion};
 
-use crate::math3d::{Vec3, Quat};
-use crate::physics_registry::{WorldRegistry, PhysBodyType, with_world_in};
+use crate::math3d::{Quat, Vec3};
+use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 const BODY_STATE_BYTES_3D: usize = 4 + 10 * 8;
 
@@ -40,9 +40,9 @@ pub fn with_world<R>(world_id: u32, f: impl FnOnce(&mut PhysicsWorld3D) -> R) ->
 /// Collider kind matching Vo's Collider.kind values for 3D.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColliderKind3D {
-    Box3D,    // kind=4: args=[halfX, halfY, halfZ]
-    Sphere,   // kind=5: args=[radius, 0, 0]
-    Capsule,  // kind=3: args=[halfHeight, radius, 0]
+    Box3D,   // kind=4: args=[halfX, halfY, halfZ]
+    Sphere,  // kind=5: args=[radius, 0, 0]
+    Capsule, // kind=3: args=[halfHeight, radius, 0]
 }
 
 /// Descriptor for spawning a 3D physics body.
@@ -148,9 +148,8 @@ impl PhysicsWorld3D {
         fixed_rotation: bool,
     ) -> RigidBody {
         let translation = vector![pos.x, pos.y, pos.z];
-        let rotation = UnitQuaternion::from_quaternion(
-            Quaternion::new(rot.w, rot.x, rot.y, rot.z),
-        ).scaled_axis();
+        let rotation = UnitQuaternion::from_quaternion(Quaternion::new(rot.w, rot.x, rot.y, rot.z))
+            .scaled_axis();
 
         match body_type {
             PhysBodyType::Dynamic => {
@@ -199,12 +198,12 @@ impl PhysicsWorld3D {
         );
 
         let collider = match desc.collider_kind {
-            ColliderKind3D::Box3D => {
-                ColliderBuilder::cuboid(desc.collider_args[0], desc.collider_args[1], desc.collider_args[2])
-            }
-            ColliderKind3D::Sphere => {
-                ColliderBuilder::ball(desc.collider_args[0])
-            }
+            ColliderKind3D::Box3D => ColliderBuilder::cuboid(
+                desc.collider_args[0],
+                desc.collider_args[1],
+                desc.collider_args[2],
+            ),
+            ColliderKind3D::Sphere => ColliderBuilder::ball(desc.collider_args[0]),
             ColliderKind3D::Capsule => {
                 ColliderBuilder::capsule_y(desc.collider_args[0], desc.collider_args[1])
             }
@@ -217,7 +216,11 @@ impl PhysicsWorld3D {
                 desc.collider_offset.z,
             ])
             .collision_groups(groups)
-            .density(if desc.density > 0.0 { desc.density } else { 1.0 })
+            .density(if desc.density > 0.0 {
+                desc.density
+            } else {
+                1.0
+            })
             .friction(desc.friction)
             .restitution(desc.restitution)
             .active_events(ActiveEvents::COLLISION_EVENTS)
@@ -257,13 +260,7 @@ impl PhysicsWorld3D {
             .map(|chunk| [chunk[0], chunk[1], chunk[2]])
             .collect();
 
-        let rb = Self::build_rigid_body(
-            PhysBodyType::Static,
-            desc.pos,
-            desc.rot,
-            0.0,
-            false,
-        );
+        let rb = Self::build_rigid_body(PhysBodyType::Static, desc.pos, desc.rot, 0.0, false);
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
@@ -278,11 +275,7 @@ impl PhysicsWorld3D {
         self.register_body(desc.body_id, rb, collider);
     }
 
-    pub fn spawn_heightfield_body(
-        &mut self,
-        desc: &HeightfieldDesc3D,
-        heights: &[f32],
-    ) {
+    pub fn spawn_heightfield_body(&mut self, desc: &HeightfieldDesc3D, heights: &[f32]) {
         assert!(desc.rows >= 2, "voplay: heightfield rows must be >= 2");
         assert!(desc.cols >= 2, "voplay: heightfield cols must be >= 2");
         assert!(
@@ -291,33 +284,35 @@ impl PhysicsWorld3D {
             heights.len(),
             desc.rows * desc.cols
         );
-        assert!(desc.scale_x > 0.0, "voplay: heightfield scale_x must be > 0");
-        assert!(desc.scale_y > 0.0, "voplay: heightfield scale_y must be > 0");
-        assert!(desc.scale_z > 0.0, "voplay: heightfield scale_z must be > 0");
-
-        let matrix = rapier3d::na::DMatrix::from_fn(desc.rows as usize, desc.cols as usize, |r, c| {
-            heights[r * desc.cols as usize + c] * desc.scale_y
-        });
-        let rb = Self::build_rigid_body(
-            PhysBodyType::Static,
-            desc.pos,
-            Quat::IDENTITY,
-            0.0,
-            false,
+        assert!(
+            desc.scale_x > 0.0,
+            "voplay: heightfield scale_x must be > 0"
         );
+        assert!(
+            desc.scale_y > 0.0,
+            "voplay: heightfield scale_y must be > 0"
+        );
+        assert!(
+            desc.scale_z > 0.0,
+            "voplay: heightfield scale_z must be > 0"
+        );
+
+        let matrix =
+            rapier3d::na::DMatrix::from_fn(desc.rows as usize, desc.cols as usize, |r, c| {
+                heights[r * desc.cols as usize + c] * desc.scale_y
+            });
+        let rb = Self::build_rigid_body(PhysBodyType::Static, desc.pos, Quat::IDENTITY, 0.0, false);
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
         );
-        let collider = ColliderBuilder::heightfield(
-            matrix,
-            vector![desc.scale_x, 1.0, desc.scale_z],
-        )
-        .collision_groups(groups)
-        .friction(desc.friction)
-        .restitution(desc.restitution)
-        .active_events(ActiveEvents::COLLISION_EVENTS)
-        .build();
+        let collider =
+            ColliderBuilder::heightfield(matrix, vector![desc.scale_x, 1.0, desc.scale_z])
+                .collision_groups(groups)
+                .friction(desc.friction)
+                .restitution(desc.restitution)
+                .active_events(ActiveEvents::COLLISION_EVENTS)
+                .build();
 
         self.register_body(desc.body_id, rb, collider);
     }
@@ -348,11 +343,13 @@ impl PhysicsWorld3D {
             assert!(
                 pos + 5 <= data.len(),
                 "voplay: physics command stream truncated at header (pos={}, len={})",
-                pos, data.len()
+                pos,
+                data.len()
             );
             let op = data[pos];
             pos += 1;
-            let body_id = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            let body_id =
+                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
             pos += 4;
 
             match op {
@@ -361,7 +358,9 @@ impl PhysicsWorld3D {
                     assert!(
                         pos + 24 <= data.len(),
                         "voplay: physics Vec3 command truncated (op={}, pos={}, len={})",
-                        op, pos, data.len()
+                        op,
+                        pos,
+                        data.len()
                     );
                     let vx = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
                     pos += 8;
@@ -392,7 +391,8 @@ impl PhysicsWorld3D {
                     assert!(
                         pos + 32 <= data.len(),
                         "voplay: physics Quat command truncated (pos={}, len={})",
-                        pos, data.len()
+                        pos,
+                        data.len()
                     );
                     let qx = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
                     pos += 8;
@@ -411,14 +411,13 @@ impl PhysicsWorld3D {
                         Some(rb) => rb,
                         None => continue,
                     };
-                    let rotation = UnitQuaternion::from_quaternion(
-                        Quaternion::new(qw, qx, qy, qz),
-                    );
+                    let rotation = UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
                     rb.set_rotation(rotation, true);
                 }
                 _ => panic!(
                     "voplay: unknown physics command opcode {} at pos {}",
-                    op, pos - 5
+                    op,
+                    pos - 5
                 ),
             }
         }
@@ -536,17 +535,18 @@ impl PhysicsWorld3D {
         };
 
         let mut result = Vec::new();
-        self.query_pipeline.colliders_with_aabb_intersecting_aabb(&aabb, |col_handle| {
-            let rb_handle = self.collider_set.get(*col_handle).and_then(|c| c.parent());
-            if let Some(h) = rb_handle {
-                if let Some(&body_id) = self.reverse_map.get(&h) {
-                    if !result.contains(&body_id) {
-                        result.push(body_id);
+        self.query_pipeline
+            .colliders_with_aabb_intersecting_aabb(&aabb, |col_handle| {
+                let rb_handle = self.collider_set.get(*col_handle).and_then(|c| c.parent());
+                if let Some(h) = rb_handle {
+                    if let Some(&body_id) = self.reverse_map.get(&h) {
+                        if !result.contains(&body_id) {
+                            result.push(body_id);
+                        }
                     }
                 }
-            }
-            true // continue iterating
-        });
+                true // continue iterating
+            });
         result
     }
 
@@ -562,10 +562,9 @@ impl PhysicsWorld3D {
             let rb1 = self.collider_set.get(c1).and_then(|c| c.parent());
             let rb2 = self.collider_set.get(c2).and_then(|c| c.parent());
             if let (Some(h1), Some(h2)) = (rb1, rb2) {
-                if let (Some(id1), Some(id2)) = (
-                    self.reverse_map.get(&h1),
-                    self.reverse_map.get(&h2),
-                ) {
+                if let (Some(id1), Some(id2)) =
+                    (self.reverse_map.get(&h1), self.reverse_map.get(&h2))
+                {
                     contacts.push((*id1, *id2));
                 }
             }
@@ -679,7 +678,10 @@ mod tests {
             .ray_cast(Vec3::new(5.0, 20.0, -3.0), Vec3::new(0.0, -1.0, 0.0), 30.0)
             .expect("expected ray cast hit on heightfield");
         assert_eq!(hit.body_id, 11);
-        assert!(hit.point.y >= 2.0, "heightfield hit should include world translation");
+        assert!(
+            hit.point.y >= 2.0,
+            "heightfield hit should include world translation"
+        );
 
         let ids = world.query_aabb(Vec3::new(2.9, 1.9, -6.1), Vec3::new(7.1, 12.1, 0.1));
         assert_eq!(ids, vec![11]);

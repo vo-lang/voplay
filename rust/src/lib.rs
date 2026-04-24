@@ -6,31 +6,31 @@
 //! - `wasm-standalone`: pure C-ABI cdylib for dynamic WASM loading
 
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod animation;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod draw_list;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod externs;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod file_io;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod renderer;
-#[cfg(any(feature = "native", feature = "wasm"))]
-mod renderer_runtime;
-#[cfg(any(feature = "native", feature = "wasm"))]
-mod stream;
-#[cfg(any(feature = "native", feature = "wasm"))]
-mod draw_list;
-#[cfg(any(feature = "native", feature = "wasm"))]
-mod pipeline2d;
-#[cfg(any(feature = "native", feature = "wasm"))]
 mod font_manager;
 #[cfg(feature = "native")]
 mod host_api;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod input;
 #[allow(dead_code)]
 mod math3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod animation;
-#[cfg(any(feature = "native", feature = "wasm"))]
 mod model_loader;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod primitives;
+mod physics;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod physics3d;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod physics_registry;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -38,32 +38,29 @@ mod pipeline_shadow;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_skybox;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod physics_registry;
+mod pipeline_sprite;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod physics;
+mod primitives;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod physics3d;
+mod render_world;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_runtime;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod terrain;
 #[cfg(any(feature = "native", feature = "wasm"))]
-mod pipeline_sprite;
-#[cfg(any(feature = "native", feature = "wasm"))]
 mod texture;
-#[cfg(any(feature = "native", feature = "wasm"))]
-mod input;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use renderer::Renderer;
 
-
 #[cfg(feature = "native")]
 pub use host_api::{
-    vo_voplay_push_key_event,
-    vo_voplay_push_pointer_down,
-    vo_voplay_push_pointer_move,
-    vo_voplay_push_pointer_up,
-    vo_voplay_push_scroll_event,
-    vo_voplay_set_host_api,
+    vo_voplay_push_key_event, vo_voplay_push_pointer_down, vo_voplay_push_pointer_move,
+    vo_voplay_push_pointer_up, vo_voplay_push_scroll_event, vo_voplay_set_host_api,
 };
 
 #[cfg(feature = "native")]
@@ -73,9 +70,9 @@ vo_ext::export_extensions!();
 mod island_bindgen;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
-use vo_runtime::ffi::ExternRegistry;
-#[cfg(any(feature = "native", feature = "wasm"))]
 use vo_runtime::bytecode::ExternDef;
+#[cfg(any(feature = "native", feature = "wasm"))]
+use vo_runtime::ffi::ExternRegistry;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub fn register_externs(registry: &mut ExternRegistry, externs: &[ExternDef]) {

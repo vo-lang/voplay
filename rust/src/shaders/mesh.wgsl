@@ -48,6 +48,21 @@ struct VertexOutput {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) base_color: vec4<f32>,
+    @location(4) material_params: vec4<f32>,
+};
+
+struct InstanceInput {
+    @location(3) model_0: vec4<f32>,
+    @location(4) model_1: vec4<f32>,
+    @location(5) model_2: vec4<f32>,
+    @location(6) model_3: vec4<f32>,
+    @location(7) normal_0: vec4<f32>,
+    @location(8) normal_1: vec4<f32>,
+    @location(9) normal_2: vec4<f32>,
+    @location(10) normal_3: vec4<f32>,
+    @location(11) base_color: vec4<f32>,
+    @location(12) material_params: vec4<f32>,
 };
 
 fn apply_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
@@ -154,18 +169,47 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_pos = world_pos.xyz;
     out.world_normal = normalize((model.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz);
     out.uv = in.uv;
+    out.base_color = model.base_color;
+    out.material_params = model.material_params;
+    return out;
+}
+
+@vertex
+fn vs_instanced(in: VertexInput, instance: InstanceInput) -> VertexOutput {
+    var out: VertexOutput;
+    let model_mat = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+    let normal_mat = mat4x4<f32>(instance.normal_0, instance.normal_1, instance.normal_2, instance.normal_3);
+    let world_pos = model_mat * vec4<f32>(in.position, 1.0);
+    out.clip_position = camera.view_proj * world_pos;
+    out.world_pos = world_pos.xyz;
+    out.world_normal = normalize((normal_mat * vec4<f32>(in.normal, 0.0)).xyz);
+    out.uv = in.uv;
+    out.base_color = instance.base_color;
+    out.material_params = instance.material_params;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv_scale = model.material_params.x;
-    let albedo = textureSample(albedo_tex, albedo_sampler, in.uv * vec2<f32>(uv_scale, uv_scale)) * model.base_color;
+    let uv_scale = in.material_params.x;
+    let albedo = textureSample(albedo_tex, albedo_sampler, in.uv * vec2<f32>(uv_scale, uv_scale)) * in.base_color;
     return shade(albedo, in);
 }
 
 // Fragment shader variant without texture (uses base_color only).
 @fragment
 fn fs_main_no_tex(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(model.base_color, in);
+    return shade(in.base_color, in);
+}
+
+@fragment
+fn fs_instanced(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv_scale = in.material_params.x;
+    let albedo = textureSample(albedo_tex, albedo_sampler, in.uv * vec2<f32>(uv_scale, uv_scale)) * in.base_color;
+    return shade(albedo, in);
+}
+
+@fragment
+fn fs_instanced_no_tex(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in.base_color, in);
 }

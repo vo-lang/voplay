@@ -64,9 +64,11 @@ type Scene struct {
 	worldID      int
 	animationWorldID      int
 	nextBodyID   int
+	nextVehicleID int
 	nextAnimationTargetID int
 	physCmds     codec.ByteWriter
 	bodyMap      map[int]*Entity
+	vehicles     []*Vehicle
 	animationInfoCache map[int]AnimationModelInfo
 	renderSceneID int
 	renderSceneCreated bool
@@ -92,6 +94,7 @@ func New() *Scene {
 		nextEntityID: 1,
 		entityByID:   make(map[int]*Entity),
 		nextBodyID:   1,
+		nextVehicleID: 1,
 		nextAnimationTargetID: 1,
 		physCmds:     codec.NewByteWriter(256),
 		bodyMap:      make(map[int]*Entity),
@@ -396,6 +399,7 @@ func (s *Scene) releaseEntityState(e *Entity, removeEmitters bool, removeAnimati
 	s.removeAttachedAudioSources(e)
 	e.Active = false
 	if e.Physics != nil && e.Physics.bodyID != 0 {
+		s.destroyVehiclesForBody(e)
 		delete(s.bodyMap, e.Physics.bodyID)
 		physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
 		e.Physics.bodyID = 0
@@ -521,6 +525,8 @@ func (s *Scene) Clear() {
 	}
 	s.Emitters = nil
 	s.nextAnimationTargetID = 1
+	s.nextVehicleID = 1
+	s.vehicles = nil
 	s.physCmds.Reset()
 	if s.renderSceneCreated {
 		s.renderSceneCleared = true
@@ -737,6 +743,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 			ent.Physics.velocity = voplay.Vec3{vx, vy, vz}
 		}
 	}
+	s.syncVehicles()
 }
 
 // RayCast casts a ray into the 3D physics world and returns the first hit.

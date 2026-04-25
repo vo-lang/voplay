@@ -25,7 +25,11 @@ type Physics struct {
 	Friction      float64
 	Restitution   float64
 	LinearDamping float64
+	AngularDamping float64
 	FixedRotation bool
+	LockRotationX bool
+	LockRotationY bool
+	LockRotationZ bool
 
 	// Runtime state (managed by Scene, not user-set).
 	bodyID   int
@@ -214,10 +218,13 @@ func (e *Entity) Velocity() voplay.Vec3 {
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
 	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
-	w := codec.NewByteWriter(143)
+	w := codec.NewByteWriter(154)
 	w.WriteByte(byte(p.Type))
 	w.WriteByte(byte(p.Collider.kind))
 	w.WriteBool(p.FixedRotation)
+	w.WriteBool(p.LockRotationX)
+	w.WriteBool(p.LockRotationY)
+	w.WriteBool(p.LockRotationZ)
 	w.WriteU16(p.Layer)
 	w.WriteU16(p.Mask)
 	w.WriteF64(e.position.X)
@@ -237,6 +244,7 @@ func serializeBodyDesc(e *Entity) []byte {
 	w.WriteF64(p.Friction)
 	w.WriteF64(p.Restitution)
 	w.WriteF64(p.LinearDamping)
+	w.WriteF64(p.AngularDamping)
 	return w.Bytes()
 }
 
@@ -270,6 +278,11 @@ type PhysicsBackend interface {
 	SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte)
 	SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc)
 	DestroyBody(worldID, bodyID int)
+	CreateRaycastVehicle(worldID, vehicleID, bodyID int)
+	DestroyRaycastVehicle(worldID, vehicleID int)
+	AddRaycastVehicleWheel(worldID, vehicleID int, data []byte)
+	SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64)
+	RaycastVehicleState(worldID, vehicleID int) []byte
 	Step(worldID int, dt float64, cmds []byte) []byte
 	Contacts(worldID int) []byte
 	SetGravity(worldID int, gravity voplay.Vec3)
@@ -302,6 +315,26 @@ func (defaultPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc Heightfi
 
 func (defaultPhysicsBackend) DestroyBody(worldID, bodyID int) {
 	physicsDestroyBody(worldID, bodyID)
+}
+
+func (defaultPhysicsBackend) CreateRaycastVehicle(worldID, vehicleID, bodyID int) {
+	physicsCreateRaycastVehicle(worldID, vehicleID, bodyID)
+}
+
+func (defaultPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int) {
+	physicsDestroyRaycastVehicle(worldID, vehicleID)
+}
+
+func (defaultPhysicsBackend) AddRaycastVehicleWheel(worldID, vehicleID int, data []byte) {
+	physicsAddRaycastVehicleWheel(worldID, vehicleID, data)
+}
+
+func (defaultPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64) {
+	physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheelID, steering, engineForce, brake)
+}
+
+func (defaultPhysicsBackend) RaycastVehicleState(worldID, vehicleID int) []byte {
+	return physicsRaycastVehicleState(worldID, vehicleID)
 }
 
 func (defaultPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
@@ -342,6 +375,11 @@ func physicsSpawnTrimeshBody(worldID int, bodyID int, modelID int, data []byte)
 func physicsSpawnTrimeshBodyData(worldID int, bodyID int, data []byte, meshData []byte)
 func physicsSpawnHeightfield(worldID, bodyID int, heightData []byte, rows, cols int, scaleX, scaleY, scaleZ, posX, posY, posZ float64, layer, mask int, friction, restitution float64)
 func physicsDestroyBody(worldID int, bodyID int)
+func physicsCreateRaycastVehicle(worldID, vehicleID, bodyID int)
+func physicsDestroyRaycastVehicle(worldID, vehicleID int)
+func physicsAddRaycastVehicleWheel(worldID, vehicleID int, data []byte)
+func physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64)
+func physicsRaycastVehicleState(worldID, vehicleID int) []byte
 func physicsStep(worldID int, dt float64, cmds []byte) []byte
 func physicsContacts(worldID int) []byte
 func physicsSetGravity(worldID int, gx, gy, gz float64)

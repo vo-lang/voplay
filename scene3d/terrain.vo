@@ -255,7 +255,11 @@ func buildTerrainPhysics(base *Physics) (*Physics, error) {
 		Friction:      base.Friction,
 		Restitution:   base.Restitution,
 		LinearDamping: base.LinearDamping,
+		AngularDamping: base.AngularDamping,
 		FixedRotation: base.FixedRotation,
+		LockRotationX: base.LockRotationX,
+		LockRotationY: base.LockRotationY,
+		LockRotationZ: base.LockRotationZ,
 	}, nil
 }
 

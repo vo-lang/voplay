@@ -2,7 +2,9 @@
 
 use super::util::{read_f64_le, read_u16_le, read_u32_le, ret_bytes, with_renderer_or_panic};
 use crate::math3d::{Quat, Vec3};
-use crate::physics3d::{BodyDesc3D, ColliderKind3D, HeightfieldDesc3D, TrimeshDesc3D};
+use crate::physics3d::{
+    BodyDesc3D, ColliderKind3D, HeightfieldDesc3D, RaycastVehicleWheelDesc3D, TrimeshDesc3D,
+};
 use crate::physics_registry::PhysBodyType;
 use vo_ext::prelude::*;
 
@@ -27,15 +29,17 @@ pub fn physics3d_destroy(call: &mut ExternCallContext) -> ExternResult {
 }
 
 /// Decode a 3D BodyDesc from bytes.
-/// Format: body_type(u8), collider_kind(u8), fixed_rotation(u8), layer(u16), mask(u16),
+/// Format: body_type(u8), collider_kind(u8),
+///         fixed_rotation(u8), lock_rot_x(u8), lock_rot_y(u8), lock_rot_z(u8),
+///         layer(u16), mask(u16),
 ///         x(f64), y(f64), z(f64), qx(f64), qy(f64), qz(f64), qw(f64),
 ///         collider_args(3x f64), collider_offset(3x f64), density(f64), friction(f64), restitution(f64),
-///         linear_damping(f64)
+///         linear_damping(f64), angular_damping(f64)
 pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
-    // 3 flag bytes + 2 u16 fields + 17 f64 fields = 143 bytes minimum
+    // 6 flag bytes + 2 u16 fields + 18 f64 fields = 154 bytes minimum
     assert!(
-        data.len() >= 143,
-        "voplay: physics3d body desc too short: {} bytes (expected 143)",
+        data.len() >= 154,
+        "voplay: physics3d body desc too short: {} bytes (expected 154)",
         data.len()
     );
     let mut pos = 0;
@@ -49,6 +53,12 @@ pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     };
     pos += 1;
     let fixed_rotation = data[pos] != 0;
+    pos += 1;
+    let lock_rotation_x = data[pos] != 0;
+    pos += 1;
+    let lock_rotation_y = data[pos] != 0;
+    pos += 1;
+    let lock_rotation_z = data[pos] != 0;
     pos += 1;
     let layer = read_u16_le(data, &mut pos);
     let mask = read_u16_le(data, &mut pos);
@@ -70,6 +80,7 @@ pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     let friction = read_f64_le(data, &mut pos) as f32;
     let restitution = read_f64_le(data, &mut pos) as f32;
     let linear_damping = read_f64_le(data, &mut pos) as f32;
+    let angular_damping = read_f64_le(data, &mut pos) as f32;
 
     BodyDesc3D {
         body_id,
@@ -85,7 +96,11 @@ pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
         friction,
         restitution,
         linear_damping,
+        angular_damping,
         fixed_rotation,
+        lock_rotation_x,
+        lock_rotation_y,
+        lock_rotation_z,
     }
 }
 
@@ -178,6 +193,44 @@ fn decode_heightfield_data(data: &[u8]) -> Vec<f32> {
     data.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
+}
+
+pub(crate) fn decode_raycast_vehicle_wheel_desc(data: &[u8]) -> RaycastVehicleWheelDesc3D {
+    assert!(
+        data.len() >= 144,
+        "voplay: raycast vehicle wheel desc too short: {} bytes (expected 144)",
+        data.len()
+    );
+    let mut pos = 0usize;
+    let connection = Vec3::new(
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+    );
+    let direction = Vec3::new(
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+    );
+    let axle = Vec3::new(
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+        read_f64_le(data, &mut pos) as f32,
+    );
+    RaycastVehicleWheelDesc3D {
+        connection,
+        direction,
+        axle,
+        suspension_rest_length: read_f64_le(data, &mut pos) as f32,
+        radius: read_f64_le(data, &mut pos) as f32,
+        suspension_stiffness: read_f64_le(data, &mut pos) as f32,
+        suspension_compression: read_f64_le(data, &mut pos) as f32,
+        suspension_damping: read_f64_le(data, &mut pos) as f32,
+        max_suspension_travel: read_f64_le(data, &mut pos) as f32,
+        side_friction_stiffness: read_f64_le(data, &mut pos) as f32,
+        friction_slip: read_f64_le(data, &mut pos) as f32,
+        max_suspension_force: read_f64_le(data, &mut pos) as f32,
+    }
 }
 
 #[vo_fn("voplay/scene3d", "physicsSpawnBody")]
@@ -279,6 +332,69 @@ pub fn physics3d_destroy_body(call: &mut ExternCallContext) -> ExternResult {
     let body_id = call.arg_u64(1) as u32;
     crate::terrain::remove_terrain(world_id, body_id);
     crate::physics3d::with_world(world_id, |world| world.destroy_body(body_id));
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsCreateRaycastVehicle")]
+pub fn physics3d_create_raycast_vehicle(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    let body_id = call.arg_u64(2) as u32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.create_raycast_vehicle(vehicle_id, body_id)
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsDestroyRaycastVehicle")]
+pub fn physics3d_destroy_raycast_vehicle(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.destroy_raycast_vehicle(vehicle_id)
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsAddRaycastVehicleWheel")]
+pub fn physics3d_add_raycast_vehicle_wheel(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    let desc = decode_raycast_vehicle_wheel_desc(call.arg_bytes(2));
+    crate::physics3d::with_world(world_id, |world| {
+        world.add_raycast_vehicle_wheel(vehicle_id, &desc)
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsSetRaycastVehicleWheelControl")]
+pub fn physics3d_set_raycast_vehicle_wheel_control(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    let wheel_id = call.arg_u64(2) as usize;
+    let steering = call.arg_f64(3) as f32;
+    let engine_force = call.arg_f64(4) as f32;
+    let brake = call.arg_f64(5) as f32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_raycast_vehicle_wheel_control(
+            vehicle_id,
+            wheel_id,
+            steering,
+            engine_force,
+            brake,
+        )
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsRaycastVehicleState")]
+pub fn physics3d_raycast_vehicle_state(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    let state = crate::physics3d::with_world(world_id, |world| {
+        world.serialize_raycast_vehicle_state(vehicle_id)
+    });
+    ret_bytes(call, 0, &state);
     ExternResult::Ok
 }
 

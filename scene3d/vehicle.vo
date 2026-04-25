@@ -1,0 +1,546 @@
+package scene3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
+
+const (
+	raycastVehicleWheelDescBytes  = 18 * 8
+	raycastVehicleWheelStateBytes = 1 + 12 * 8
+)
+
+type VehicleWheelConfig struct {
+	Connection              voplay.Vec3
+	Direction               voplay.Vec3
+	Axle                    voplay.Vec3
+	SuspensionRestLength    float64
+	Radius                  float64
+	SuspensionStiffness     float64
+	SuspensionCompression   float64
+	SuspensionDamping       float64
+	MaxSuspensionTravel     float64
+	SideFrictionStiffness   float64
+	FrictionSlip            float64
+	MaxSuspensionForce      float64
+	Steer                   bool
+	Drive                   bool
+	Brake                   bool
+}
+
+type VehicleConfig struct {
+	Wheels             []VehicleWheelConfig
+	MaxForwardSpeed    float64
+	MaxReverseSpeed    float64
+	EngineForce        float64
+	ReverseEngineForce float64
+	BrakeForce         float64
+	CoastBrake         float64
+	BoostEngineForce   float64
+	MaxSteerAngle      float64
+	SteerRate          float64
+	DriftSteerScale    float64
+	DriftMinSpeed      float64
+}
+
+type VehicleInput struct {
+	Throttle float64
+	Steer    float64
+	Drift    bool
+	Boost    bool
+}
+
+type VehicleWheelState struct {
+	Center           voplay.Vec3
+	ContactPoint     voplay.Vec3
+	ContactNormal    voplay.Vec3
+	SuspensionLength float64
+	Steering         float64
+	Rotation         float64
+	InContact        bool
+}
+
+type Vehicle struct {
+	Body         *Entity
+	Config       VehicleConfig
+	Yaw          float64
+	Speed        float64
+	Grounded     bool
+	GroundNormal voplay.Vec3
+	GroundPoint  voplay.Vec3
+	Drifting     bool
+	SteerAngle   float64
+	WheelSpin    float64
+	Wheels       []VehicleWheelState
+
+	scene     *Scene
+	vehicleID int
+}
+
+func DefaultKartVehicleConfig() VehicleConfig {
+	wheel := VehicleWheelConfig{
+		Direction:             voplay.Vec3{Y: -1},
+		Axle:                  voplay.Vec3{X: 1},
+		SuspensionRestLength:  0.56,
+		Radius:                0.46,
+		SuspensionStiffness:   28.0,
+		SuspensionCompression: 4.4,
+		SuspensionDamping:     5.8,
+		MaxSuspensionTravel:   0.34,
+		SideFrictionStiffness: 1.45,
+		FrictionSlip:          4.2,
+		MaxSuspensionForce:    18000.0,
+		Brake:                 true,
+	}
+
+	frontLeft := wheel
+	frontLeft.Connection = voplay.Vec3{X: -0.84, Y: -0.34, Z: -0.82}
+	frontLeft.Steer = true
+
+	frontRight := wheel
+	frontRight.Connection = voplay.Vec3{X: 0.84, Y: -0.34, Z: -0.82}
+	frontRight.Steer = true
+
+	rearLeft := wheel
+	rearLeft.Connection = voplay.Vec3{X: -0.84, Y: -0.34, Z: 0.86}
+	rearLeft.Drive = true
+
+	rearRight := wheel
+	rearRight.Connection = voplay.Vec3{X: 0.84, Y: -0.34, Z: 0.86}
+	rearRight.Drive = true
+
+	return VehicleConfig{
+		Wheels:             []VehicleWheelConfig{frontLeft, frontRight, rearLeft, rearRight},
+		MaxForwardSpeed:    38.0,
+		MaxReverseSpeed:    10.0,
+		EngineForce:        9200.0,
+		ReverseEngineForce: 3600.0,
+		BrakeForce:         150.0,
+		CoastBrake:         6.0,
+		BoostEngineForce:   4200.0,
+		MaxSteerAngle:      0.54,
+		SteerRate:          9.5,
+		DriftSteerScale:    1.28,
+		DriftMinSpeed:      7.0,
+	}
+}
+
+func NewVehicle(body *Entity, config VehicleConfig) *Vehicle {
+	if body == nil || !body.Active || body.Physics == nil || body.Physics.bodyID == 0 || body.scene == nil {
+		panic("scene3d.NewVehicle: body must be an active physics entity")
+	}
+
+	scene := body.scene
+	scene.ensurePhysics()
+
+	config = normalizeVehicleConfig(config)
+	vehicleID := scene.nextVehicleID
+	scene.nextVehicleID++
+
+	v := &Vehicle{
+		Body:         body,
+		Config:       config,
+		Yaw:          vehicleYawFromRotation(body.Rotation()),
+		GroundNormal: voplay.Vec3{Y: 1},
+		scene:        scene,
+		vehicleID:    vehicleID,
+	}
+
+	physBackend.CreateRaycastVehicle(scene.worldID, vehicleID, body.Physics.bodyID)
+	for _, wheel := range config.Wheels {
+		physBackend.AddRaycastVehicleWheel(scene.worldID, vehicleID, serializeVehicleWheelConfig(wheel))
+	}
+	scene.registerVehicle(v)
+	return v
+}
+
+func (v *Vehicle) Destroy() {
+	if v == nil || v.scene == nil || v.vehicleID == 0 {
+		return
+	}
+	if v.scene.worldID != 0 {
+		physBackend.DestroyRaycastVehicle(v.scene.worldID, v.vehicleID)
+	}
+	v.scene.removeVehicle(v)
+	v.vehicleID = 0
+	v.scene = nil
+	v.Body = nil
+}
+
+func (v *Vehicle) Update(input VehicleInput, dt float64) {
+	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		return
+	}
+	scene := v.scene
+	if scene == nil || scene.worldID == 0 {
+		return
+	}
+
+	v.syncState()
+
+	input.Throttle = vehicleClamp(input.Throttle, -1, 1)
+	input.Steer = vehicleClamp(input.Steer, -1, 1)
+
+	v.Drifting = input.Drift && math.Abs(v.Speed) >= v.Config.DriftMinSpeed && v.Grounded
+	steerTarget := input.Steer * v.Config.MaxSteerAngle
+	if v.Drifting {
+		steerTarget *= v.Config.DriftSteerScale
+	}
+	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, steerTarget, v.Config.SteerRate*dt)
+
+	engineForce := 0.0
+	brake := v.Config.CoastBrake
+	if input.Throttle > 0 {
+		if v.Speed < v.Config.MaxForwardSpeed {
+			engineForce = input.Throttle * v.Config.EngineForce
+			if input.Boost {
+				engineForce += v.Config.BoostEngineForce
+			}
+		}
+		brake = 0
+	} else if input.Throttle < 0 {
+		if v.Speed > 1.5 {
+			brake = -input.Throttle * v.Config.BrakeForce
+		} else if math.Abs(v.Speed) < v.Config.MaxReverseSpeed {
+			engineForce = input.Throttle * v.Config.ReverseEngineForce
+			brake = 0
+		}
+	}
+
+	driveWheelCount := vehicleDriveWheelCount(v.Config.Wheels)
+	for i, wheel := range v.Config.Wheels {
+		steering := 0.0
+		force := 0.0
+		wheelBrake := 0.0
+
+		if wheel.Steer {
+			// Rapier's raycast vehicle steering sign is opposite to voplay's -Z-forward convention.
+			steering = -v.SteerAngle
+		}
+		if wheel.Drive {
+			force = engineForce / driveWheelCount
+		}
+		if wheel.Brake {
+			wheelBrake = brake
+		}
+		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, i, steering, force, wheelBrake)
+	}
+}
+
+func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {
+	if v == nil || v.Body == nil {
+		return
+	}
+	v.Yaw = yaw
+	v.Speed = 0
+	v.SteerAngle = 0
+	v.WheelSpin = 0
+	v.Drifting = false
+	v.Body.SetPosition(position)
+	v.Body.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw))
+	if v.Body.Physics != nil {
+		v.Body.SetVelocity(voplay.Vec3{})
+	}
+	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
+		for i := 0; i < len(v.Config.Wheels); i++ {
+			physBackend.SetRaycastVehicleWheelControl(v.scene.worldID, v.vehicleID, i, 0, 0, v.Config.BrakeForce)
+		}
+	}
+}
+
+func (v *Vehicle) Rotation() voplay.Quat {
+	if v != nil && v.Body != nil {
+		return v.Body.Rotation()
+	}
+	return voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, v.Yaw)
+}
+
+func (v *Vehicle) Forward() voplay.Vec3 {
+	if v == nil {
+		return voplay.Vec3{Z: -1}
+	}
+	forward := v.Rotation().RotateVec3(voplay.Vec3{Z: -1})
+	forward.Y = 0
+	if forward.LengthSq() == 0 {
+		return voplay.Vec3{Z: -1}
+	}
+	return forward.Normalize()
+}
+
+func (v *Vehicle) VisualRotation() voplay.Quat {
+	return v.Rotation()
+}
+
+func (v *Vehicle) WheelState(index int) (VehicleWheelState, bool) {
+	if v == nil || index < 0 || index >= len(v.Wheels) {
+		return VehicleWheelState{}, false
+	}
+	return v.Wheels[index], true
+}
+
+func (v *Vehicle) syncState() {
+	if v == nil || v.scene == nil || v.scene.worldID == 0 || v.vehicleID == 0 {
+		return
+	}
+
+	data := physBackend.RaycastVehicleState(v.scene.worldID, v.vehicleID)
+	if len(data) < 12 {
+		return
+	}
+
+	r := codec.NewByteReader(data)
+	v.Speed = r.ReadF64()
+	count := r.ReadU32()
+	if len(v.Wheels) != count {
+		v.Wheels = make([]VehicleWheelState, count)
+	}
+
+	v.Grounded = false
+	v.GroundNormal = voplay.Vec3{Y: 1}
+	v.GroundPoint = voplay.Vec3{}
+	normalSum := voplay.Vec3{}
+	pointSum := voplay.Vec3{}
+	contactCount := 0
+
+	for i := 0; i < count; i++ {
+		if r.Remaining() < raycastVehicleWheelStateBytes {
+			break
+		}
+
+		state := VehicleWheelState{}
+		state.InContact = r.ReadBool()
+		state.Center = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		state.ContactPoint = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		state.ContactNormal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		state.SuspensionLength = r.ReadF64()
+		state.Steering = -r.ReadF64()
+		state.Rotation = r.ReadF64()
+		v.Wheels[i] = state
+
+		if state.InContact {
+			normalSum = normalSum.Add(state.ContactNormal)
+			pointSum = pointSum.Add(state.ContactPoint)
+			contactCount++
+		}
+	}
+
+	if contactCount > 0 {
+		v.Grounded = true
+		v.GroundNormal = normalSum.Scale(1.0 / float64(contactCount)).Normalize()
+		v.GroundPoint = pointSum.Scale(1.0 / float64(contactCount))
+	}
+
+	if len(v.Wheels) > 0 {
+		totalRotation := 0.0
+		for _, wheel := range v.Wheels {
+			totalRotation += wheel.Rotation
+		}
+		v.WheelSpin = totalRotation / float64(len(v.Wheels))
+	} else {
+		v.WheelSpin = 0
+	}
+
+	if v.Body != nil {
+		v.Yaw = vehicleYawFromRotation(v.Body.Rotation())
+	}
+}
+
+func (s *Scene) registerVehicle(v *Vehicle) {
+	if v == nil {
+		return
+	}
+	s.vehicles = append(s.vehicles, v)
+}
+
+func (s *Scene) removeVehicle(target *Vehicle) {
+	for i, vehicle := range s.vehicles {
+		if vehicle != target {
+			continue
+		}
+		last := len(s.vehicles) - 1
+		s.vehicles[i] = s.vehicles[last]
+		s.vehicles[last] = nil
+		s.vehicles = s.vehicles[:last]
+		return
+	}
+}
+
+func (s *Scene) destroyVehiclesForBody(body *Entity) {
+	for {
+		var target *Vehicle
+		for _, vehicle := range s.vehicles {
+			if vehicle != nil && vehicle.Body == body {
+				target = vehicle
+				break
+			}
+		}
+		if target == nil {
+			return
+		}
+		target.Destroy()
+	}
+}
+
+func (s *Scene) syncVehicles() {
+	for _, vehicle := range s.vehicles {
+		if vehicle == nil || vehicle.Body == nil || !vehicle.Body.Active {
+			continue
+		}
+		vehicle.syncState()
+	}
+}
+
+func serializeVehicleWheelConfig(wheel VehicleWheelConfig) []byte {
+	w := codec.NewByteWriter(raycastVehicleWheelDescBytes)
+	w.WriteF64(wheel.Connection.X)
+	w.WriteF64(wheel.Connection.Y)
+	w.WriteF64(wheel.Connection.Z)
+	w.WriteF64(wheel.Direction.X)
+	w.WriteF64(wheel.Direction.Y)
+	w.WriteF64(wheel.Direction.Z)
+	w.WriteF64(wheel.Axle.X)
+	w.WriteF64(wheel.Axle.Y)
+	w.WriteF64(wheel.Axle.Z)
+	w.WriteF64(wheel.SuspensionRestLength)
+	w.WriteF64(wheel.Radius)
+	w.WriteF64(wheel.SuspensionStiffness)
+	w.WriteF64(wheel.SuspensionCompression)
+	w.WriteF64(wheel.SuspensionDamping)
+	w.WriteF64(wheel.MaxSuspensionTravel)
+	w.WriteF64(wheel.SideFrictionStiffness)
+	w.WriteF64(wheel.FrictionSlip)
+	w.WriteF64(wheel.MaxSuspensionForce)
+	return w.Bytes()
+}
+
+func normalizeVehicleConfig(config VehicleConfig) VehicleConfig {
+	defaults := DefaultKartVehicleConfig()
+	if len(config.Wheels) == 0 {
+		config.Wheels = defaults.Wheels
+	}
+	for i := 0; i < len(config.Wheels); i++ {
+		config.Wheels[i] = normalizeVehicleWheelConfig(config.Wheels[i])
+	}
+	if config.MaxForwardSpeed <= 0 {
+		config.MaxForwardSpeed = defaults.MaxForwardSpeed
+	}
+	if config.MaxReverseSpeed <= 0 {
+		config.MaxReverseSpeed = defaults.MaxReverseSpeed
+	}
+	if config.EngineForce <= 0 {
+		config.EngineForce = defaults.EngineForce
+	}
+	if config.ReverseEngineForce <= 0 {
+		config.ReverseEngineForce = defaults.ReverseEngineForce
+	}
+	if config.BrakeForce <= 0 {
+		config.BrakeForce = defaults.BrakeForce
+	}
+	if config.CoastBrake <= 0 {
+		config.CoastBrake = defaults.CoastBrake
+	}
+	if config.BoostEngineForce <= 0 {
+		config.BoostEngineForce = defaults.BoostEngineForce
+	}
+	if config.MaxSteerAngle <= 0 {
+		config.MaxSteerAngle = defaults.MaxSteerAngle
+	}
+	if config.SteerRate <= 0 {
+		config.SteerRate = defaults.SteerRate
+	}
+	if config.DriftSteerScale <= 0 {
+		config.DriftSteerScale = defaults.DriftSteerScale
+	}
+	if config.DriftMinSpeed <= 0 {
+		config.DriftMinSpeed = defaults.DriftMinSpeed
+	}
+	return config
+}
+
+func normalizeVehicleWheelConfig(wheel VehicleWheelConfig) VehicleWheelConfig {
+	defaults := DefaultKartVehicleConfig().Wheels[0]
+	if wheel.Direction.LengthSq() == 0 {
+		wheel.Direction = defaults.Direction
+	}
+	if wheel.Axle.LengthSq() == 0 {
+		wheel.Axle = defaults.Axle
+	}
+	if wheel.SuspensionRestLength <= 0 {
+		wheel.SuspensionRestLength = defaults.SuspensionRestLength
+	}
+	if wheel.Radius <= 0 {
+		wheel.Radius = defaults.Radius
+	}
+	if wheel.SuspensionStiffness <= 0 {
+		wheel.SuspensionStiffness = defaults.SuspensionStiffness
+	}
+	if wheel.SuspensionCompression <= 0 {
+		wheel.SuspensionCompression = defaults.SuspensionCompression
+	}
+	if wheel.SuspensionDamping <= 0 {
+		wheel.SuspensionDamping = defaults.SuspensionDamping
+	}
+	if wheel.MaxSuspensionTravel <= 0 {
+		wheel.MaxSuspensionTravel = defaults.MaxSuspensionTravel
+	}
+	if wheel.SideFrictionStiffness <= 0 {
+		wheel.SideFrictionStiffness = defaults.SideFrictionStiffness
+	}
+	if wheel.FrictionSlip <= 0 {
+		wheel.FrictionSlip = defaults.FrictionSlip
+	}
+	if wheel.MaxSuspensionForce <= 0 {
+		wheel.MaxSuspensionForce = defaults.MaxSuspensionForce
+	}
+	return wheel
+}
+
+func vehicleDriveWheelCount(wheels []VehicleWheelConfig) float64 {
+	count := 0
+	for _, wheel := range wheels {
+		if wheel.Drive {
+			count++
+		}
+	}
+	if count == 0 {
+		return 1
+	}
+	return float64(count)
+}
+
+func vehicleYawFromRotation(rot voplay.Quat) float64 {
+	forward := rot.RotateVec3(voplay.Vec3{Z: -1})
+	forward.Y = 0
+	if forward.LengthSq() == 0 {
+		return 0
+	}
+	forward = forward.Normalize()
+	return math.Atan2(-forward.X, -forward.Z)
+}
+
+func vehicleMoveTowards(current, target, maxDelta float64) float64 {
+	if maxDelta <= 0 {
+		return current
+	}
+	if current < target {
+		current += maxDelta
+		if current > target {
+			return target
+		}
+		return current
+	}
+	current -= maxDelta
+	if current < target {
+		return target
+	}
+	return current
+}
+
+func vehicleClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

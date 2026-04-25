@@ -1,0 +1,368 @@
+package scene3d
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"github.com/vo-lang/voplay"
+)
+
+type MapVec3 struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+type MapColor struct {
+	R float64 `json:"r"`
+	G float64 `json:"g"`
+	B float64 `json:"b"`
+	A float64 `json:"a"`
+}
+
+type MapTerrain struct {
+	Heightmap string   `json:"heightmap"`
+	Texture   string   `json:"texture,omitempty"`
+	Position  MapVec3  `json:"position,omitempty"`
+	Width     float64  `json:"width"`
+	Height    float64  `json:"height"`
+	Depth     float64  `json:"depth"`
+	UVScale   float64  `json:"uvScale,omitempty"`
+	Tint      MapColor `json:"tint,omitempty"`
+	TintSet   bool     `json:"tintSet,omitempty"`
+	Tag       string   `json:"tag,omitempty"`
+	Friction  float64  `json:"friction,omitempty"`
+}
+
+type MapMesh struct {
+	Name      string   `json:"name"`
+	Model     string   `json:"model"`
+	Collision string   `json:"collision,omitempty"`
+	Hidden    bool     `json:"hidden,omitempty"`
+	Position  MapVec3  `json:"position,omitempty"`
+	Rotation  MapVec3  `json:"rotation,omitempty"`
+	Scale     MapVec3  `json:"scale,omitempty"`
+	Tint      MapColor `json:"tint,omitempty"`
+	TintSet   bool     `json:"tintSet,omitempty"`
+	Friction  float64  `json:"friction,omitempty"`
+}
+
+type MapSpawn struct {
+	Name     string  `json:"name"`
+	Position MapVec3 `json:"position"`
+	Yaw      float64 `json:"yaw,omitempty"`
+}
+
+type MapAsset struct {
+	Version int          `json:"version"`
+	Name    string       `json:"name"`
+	Terrain *MapTerrain  `json:"terrain,omitempty"`
+	Meshes  []MapMesh    `json:"meshes,omitempty"`
+	Spawns  []MapSpawn   `json:"spawns,omitempty"`
+}
+
+type MapSpawnResult struct {
+	Asset    *MapAsset
+	Terrain  *Terrain
+	Entities []*Entity
+	Meshes   map[string]*Entity
+	Spawns   map[string]MapSpawn
+	Textures []voplay.TextureID
+}
+
+func LoadMapAsset(path string) (*MapAsset, error) {
+	if path == "" {
+		return nil, errors.New("scene3d.LoadMapAsset: path must not be empty")
+	}
+	data := os.ReadFile(path)?
+	var asset MapAsset
+	json.Unmarshal(data, &asset)?
+	validateMapAsset(&asset)?
+	return &asset, nil
+}
+
+func LoadMap(scene *Scene, path string) (*MapSpawnResult, error) {
+	asset, err := LoadMapAsset(path)
+	if err != nil {
+		return nil, err
+	}
+	return SpawnMapWithAssets(scene, nil, asset, filepath.Dir(path))
+}
+
+func LoadMapWithAssets(scene *Scene, assets *voplay.Assets, path string) (*MapSpawnResult, error) {
+	if assets == nil {
+		return LoadMap(scene, path)
+	}
+	if path == "" {
+		return nil, errors.New("scene3d.LoadMapWithAssets: path must not be empty")
+	}
+	data := assets.Bytes(path)?
+	var asset MapAsset
+	json.Unmarshal(data, &asset)?
+	validateMapAsset(&asset)?
+	return SpawnMapWithAssets(scene, assets, &asset, filepath.Dir(path))
+}
+
+func SpawnMap(scene *Scene, asset *MapAsset, baseDir string) (*MapSpawnResult, error) {
+	return SpawnMapWithAssets(scene, nil, asset, baseDir)
+}
+
+func SpawnMapWithAssets(scene *Scene, assets *voplay.Assets, asset *MapAsset, baseDir string) (*MapSpawnResult, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnMap: scene is nil")
+	}
+	if asset == nil {
+		return nil, errors.New("scene3d.SpawnMap: asset is nil")
+	}
+	validateMapAsset(asset)?
+	result := &MapSpawnResult{
+		Asset:    asset,
+		Entities: []*Entity{},
+		Meshes:   map[string]*Entity{},
+		Spawns:   map[string]MapSpawn{},
+		Textures: []voplay.TextureID{},
+	}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		result.Destroy(scene)
+		result.ReleaseTextures()
+	}()
+	if asset.Terrain != nil {
+		terrain, err := spawnMapTerrain(scene, assets, *asset.Terrain, baseDir, result)
+		if err != nil {
+			return nil, err
+		}
+		result.Terrain = terrain
+		result.Entities = append(result.Entities, terrain.Entity())
+	}
+	for _, mesh := range asset.Meshes {
+		ent, err := spawnMapMesh(scene, assets, mesh, baseDir)
+		if err != nil {
+			return nil, err
+		}
+		result.Entities = append(result.Entities, ent)
+		result.Meshes[mesh.Name] = ent
+	}
+	for _, spawn := range asset.Spawns {
+		result.Spawns[spawn.Name] = spawn
+	}
+	success = true
+	return result, nil
+}
+
+func (r *MapSpawnResult) Destroy(scene *Scene) {
+	if r == nil || scene == nil {
+		return
+	}
+	for _, e := range r.Entities {
+		if e != nil && e.scene == scene && e.Active {
+			scene.Destroy(e)
+		}
+	}
+	r.Entities = nil
+	r.Terrain = nil
+	r.Meshes = map[string]*Entity{}
+}
+
+func (r *MapSpawnResult) ReleaseTextures() {
+	if r == nil {
+		return
+	}
+	for _, texture := range r.Textures {
+		if texture != 0 {
+			texture.Free()
+		}
+	}
+	r.Textures = nil
+}
+
+func validateMapAsset(asset *MapAsset) error {
+	if asset.Version != 1 {
+		return errors.New("scene3d.LoadMapAsset: unsupported map version")
+	}
+	if asset.Terrain != nil {
+		validateMapTerrain(*asset.Terrain)?
+	}
+	seenMeshes := map[string]bool{}
+	for _, mesh := range asset.Meshes {
+		validateMapMesh(mesh)?
+		if seenMeshes[mesh.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate mesh name: " + mesh.Name)
+		}
+		seenMeshes[mesh.Name] = true
+	}
+	seenSpawns := map[string]bool{}
+	for _, spawn := range asset.Spawns {
+		if spawn.Name == "" {
+			return errors.New("scene3d.LoadMapAsset: spawn name must not be empty")
+		}
+		if seenSpawns[spawn.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate spawn name: " + spawn.Name)
+		}
+		seenSpawns[spawn.Name] = true
+	}
+	return nil
+}
+
+func validateMapTerrain(terrain MapTerrain) error {
+	if terrain.Heightmap == "" {
+		return errors.New("scene3d.LoadMapAsset: terrain heightmap is required")
+	}
+	if terrain.Width <= 0 || terrain.Height <= 0 || terrain.Depth <= 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain width, height, and depth must be > 0")
+	}
+	if terrain.UVScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain uvScale must be >= 0")
+	}
+	return nil
+}
+
+func validateMapMesh(mesh MapMesh) error {
+	if mesh.Name == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh name must not be empty")
+	}
+	if mesh.Model == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh model is required: " + mesh.Name)
+	}
+	if mesh.Collision != "" && mesh.Collision != "none" && mesh.Collision != "trimesh" {
+		return errors.New("scene3d.LoadMapAsset: unsupported mesh collision: " + mesh.Name)
+	}
+	return nil
+}
+
+func spawnMapTerrain(scene *Scene, assets *voplay.Assets, terrain MapTerrain, baseDir string, result *MapSpawnResult) (*Terrain, error) {
+	desc := TerrainDesc{
+		Position:      terrain.Position.Vec3(),
+		Width:         terrain.Width,
+		Height:        terrain.Height,
+		Depth:         terrain.Depth,
+		UVScale:       terrain.UVScale,
+		Tag:           terrain.Tag,
+		Tint:          terrain.Tint.Color(),
+		TintSet:       terrain.TintSet,
+		Physics:       mapTerrainPhysics(terrain),
+	}
+	heightmapPath := mapResolvePath(baseDir, terrain.Heightmap)
+	if assets != nil {
+		data, err := assets.Bytes(heightmapPath)
+		if err != nil {
+			return nil, err
+		}
+		desc.HeightmapData = data
+	} else {
+		desc.HeightmapPath = heightmapPath
+	}
+	if terrain.Texture != "" {
+		texturePath := mapResolvePath(baseDir, terrain.Texture)
+		var texture voplay.TextureID
+		var err error
+		if assets != nil {
+			texture, err = assets.Texture(texturePath)
+		} else {
+			texture, err = voplay.LoadTexture(texturePath)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if assets == nil {
+			result.Textures = append(result.Textures, texture)
+		}
+		desc.Texture = texture
+	}
+	return NewTerrain(scene, desc)
+}
+
+func spawnMapMesh(scene *Scene, assets *voplay.Assets, mesh MapMesh, baseDir string) (*Entity, error) {
+	modelPath := mapResolvePath(baseDir, mesh.Model)
+	var model voplay.ModelID
+	var err error
+	if assets != nil {
+		model, err = assets.Model(modelPath)
+	} else {
+		model, err = voplay.LoadModel(modelPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	spawned := false
+	defer func() {
+		if !spawned && assets == nil && model != 0 {
+			model.Free()
+		}
+	}()
+	desc := EntityDesc{
+		Position:   mesh.Position.Vec3(),
+		Rotation:   mapRotation(mesh.Rotation),
+		Scale:      mapScale(mesh.Scale),
+		Model:      model,
+		Tag:        mesh.Name,
+	}
+	if mesh.TintSet {
+		desc.Tint = mesh.Tint.Color()
+		desc.TintSet = true
+	}
+	if assets == nil {
+		desc.OwnedModel = model
+	}
+	if mesh.Collision == "trimesh" {
+		desc.Physics = TrimeshPhysics(model)
+		if mesh.Friction > 0 {
+			desc.Physics.Friction = mesh.Friction
+		}
+	}
+	ent := scene.Spawn(desc)
+	spawned = true
+	ent.Visible = !mesh.Hidden
+	return ent, nil
+}
+
+func mapTerrainPhysics(terrain MapTerrain) *Physics {
+	physics := &Physics{
+		Type:        Static,
+		Layer:       voplay.CollisionLayerDefault,
+		Mask:        voplay.CollisionMaskAll,
+		Friction:    0.8,
+		Restitution: 0,
+	}
+	if terrain.Friction > 0 {
+		physics.Friction = terrain.Friction
+	}
+	return physics
+}
+
+func mapResolvePath(baseDir, child string) string {
+	if child == "" || filepath.IsAbs(child) {
+		return child
+	}
+	if baseDir == "" || baseDir == "." {
+		return child
+	}
+	return filepath.Join([]string{baseDir, child})
+}
+
+func mapRotation(r MapVec3) voplay.Quat {
+	return voplay.QuatFromEuler(r.X, r.Y, r.Z)
+}
+
+func mapScale(s MapVec3) voplay.Vec3 {
+	if s.X == 0 && s.Y == 0 && s.Z == 0 {
+		return voplay.Vec3{X: 1, Y: 1, Z: 1}
+	}
+	return s.Vec3()
+}
+
+func (v MapVec3) Vec3() voplay.Vec3 {
+	return voplay.Vec3{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+func (c MapColor) Color() voplay.Color {
+	a := c.A
+	if a <= 0 {
+		a = 1
+	}
+	return voplay.Color{R: c.R, G: c.G, B: c.B, A: a}
+}

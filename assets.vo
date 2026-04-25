@@ -299,6 +299,12 @@ func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
 	return ModelID(id), nil
 }
 
+// Bytes reads a raw asset by path. Mounted archives are searched first,
+// then the filesystem. Raw bytes are not group-managed.
+func (a *Assets) Bytes(path string) ([]byte, error) {
+	return readAssetBytes(a.mounts, path)
+}
+
 // Audio loads an audio clip by path. Mounted archives are searched first,
 // then the filesystem. The path is the deduplication key.
 func (a *Assets) Audio(path string) (AudioClipID, error) {

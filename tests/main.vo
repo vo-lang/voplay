@@ -1560,6 +1560,18 @@ func (b *testScene3DPhysicsBackend) DestroyBody(worldID, bodyID int) {
 	b.destroyBodies = append(b.destroyBodies, bodyID)
 }
 
+func (b *testScene3DPhysicsBackend) CreateRaycastVehicle(worldID, vehicleID, bodyID int) {}
+
+func (b *testScene3DPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int) {}
+
+func (b *testScene3DPhysicsBackend) AddRaycastVehicleWheel(worldID, vehicleID int, data []byte) {}
+
+func (b *testScene3DPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64) {}
+
+func (b *testScene3DPhysicsBackend) RaycastVehicleState(worldID, vehicleID int) []byte {
+	return nil
+}
+
 func (b *testScene3DPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
 	return nil
 }

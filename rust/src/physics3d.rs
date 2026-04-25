@@ -4,6 +4,7 @@
 //! Manages rigid bodies, colliders, commands from Vo, state serialization,
 //! and contact detection.
 
+use rapier3d::control::{DynamicRayCastVehicleController, WheelTuning};
 use rapier3d::na::{Quaternion, UnitQuaternion};
 use rapier3d::prelude::*;
 use std::collections::HashMap;
@@ -60,7 +61,11 @@ pub struct BodyDesc3D {
     pub friction: f32,
     pub restitution: f32,
     pub linear_damping: f32,
+    pub angular_damping: f32,
     pub fixed_rotation: bool,
+    pub lock_rotation_x: bool,
+    pub lock_rotation_y: bool,
+    pub lock_rotation_z: bool,
 }
 
 pub struct TrimeshDesc3D {
@@ -88,12 +93,31 @@ pub struct HeightfieldDesc3D {
     pub scale_z: f32,
 }
 
+pub struct RaycastVehicleWheelDesc3D {
+    pub connection: Vec3,
+    pub direction: Vec3,
+    pub axle: Vec3,
+    pub suspension_rest_length: f32,
+    pub radius: f32,
+    pub suspension_stiffness: f32,
+    pub suspension_compression: f32,
+    pub suspension_damping: f32,
+    pub max_suspension_travel: f32,
+    pub side_friction_stiffness: f32,
+    pub friction_slip: f32,
+    pub max_suspension_force: f32,
+}
+
 /// Result of a 3D ray cast query.
 pub struct RayHit3D {
     pub body_id: u32,
     pub point: Vec3,
     pub normal: Vec3,
     pub toi: f32,
+}
+
+struct RaycastVehicle3D {
+    controller: DynamicRayCastVehicleController,
 }
 
 /// The 3D physics world wrapping Rapier3D components.
@@ -114,6 +138,7 @@ pub struct PhysicsWorld3D {
     handle_map: HashMap<u32, RigidBodyHandle>,
     /// Reverse map from Rapier RigidBodyHandle → Vo body ID (for contact queries).
     reverse_map: HashMap<RigidBodyHandle, u32>,
+    raycast_vehicles: HashMap<u32, RaycastVehicle3D>,
 }
 
 impl PhysicsWorld3D {
@@ -133,6 +158,7 @@ impl PhysicsWorld3D {
             query_pipeline: QueryPipeline::new(),
             handle_map: HashMap::new(),
             reverse_map: HashMap::new(),
+            raycast_vehicles: HashMap::new(),
         }
     }
 
@@ -145,7 +171,11 @@ impl PhysicsWorld3D {
         pos: Vec3,
         rot: Quat,
         linear_damping: f32,
+        angular_damping: f32,
         fixed_rotation: bool,
+        lock_rotation_x: bool,
+        lock_rotation_y: bool,
+        lock_rotation_z: bool,
     ) -> RigidBody {
         let translation = vector![pos.x, pos.y, pos.z];
         let rotation = UnitQuaternion::from_quaternion(Quaternion::new(rot.w, rot.x, rot.y, rot.z))
@@ -157,9 +187,17 @@ impl PhysicsWorld3D {
                     .translation(translation)
                     .rotation(rotation)
                     .linear_damping(linear_damping)
+                    .angular_damping(angular_damping)
                     .build();
                 if fixed_rotation {
                     rb.lock_rotations(true, true);
+                } else if lock_rotation_x || lock_rotation_y || lock_rotation_z {
+                    rb.set_enabled_rotations(
+                        !lock_rotation_x,
+                        !lock_rotation_y,
+                        !lock_rotation_z,
+                        true,
+                    );
                 }
                 rb
             }
@@ -189,7 +227,11 @@ impl PhysicsWorld3D {
             desc.pos,
             desc.rot,
             desc.linear_damping,
+            desc.angular_damping,
             desc.fixed_rotation,
+            desc.lock_rotation_x,
+            desc.lock_rotation_y,
+            desc.lock_rotation_z,
         );
 
         let groups = InteractionGroups::new(
@@ -260,7 +302,17 @@ impl PhysicsWorld3D {
             .map(|chunk| [chunk[0], chunk[1], chunk[2]])
             .collect();
 
-        let rb = Self::build_rigid_body(PhysBodyType::Static, desc.pos, desc.rot, 0.0, false);
+        let rb = Self::build_rigid_body(
+            PhysBodyType::Static,
+            desc.pos,
+            desc.rot,
+            0.0,
+            0.0,
+            false,
+            false,
+            false,
+            false,
+        );
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
@@ -301,7 +353,17 @@ impl PhysicsWorld3D {
             rapier3d::na::DMatrix::from_fn(desc.rows as usize, desc.cols as usize, |r, c| {
                 heights[r * desc.cols as usize + c] * desc.scale_y
             });
-        let rb = Self::build_rigid_body(PhysBodyType::Static, desc.pos, Quat::IDENTITY, 0.0, false);
+        let rb = Self::build_rigid_body(
+            PhysBodyType::Static,
+            desc.pos,
+            Quat::IDENTITY,
+            0.0,
+            0.0,
+            false,
+            false,
+            false,
+            false,
+        );
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
@@ -321,6 +383,8 @@ impl PhysicsWorld3D {
     pub fn destroy_body(&mut self, body_id: u32) {
         if let Some(handle) = self.handle_map.remove(&body_id) {
             self.reverse_map.remove(&handle);
+            self.raycast_vehicles
+                .retain(|_, vehicle| vehicle.controller.chassis != handle);
             self.rigid_body_set.remove(
                 handle,
                 &mut self.island_manager,
@@ -330,6 +394,129 @@ impl PhysicsWorld3D {
                 true,
             );
         }
+    }
+
+    pub fn create_raycast_vehicle(&mut self, vehicle_id: u32, body_id: u32) {
+        let chassis = *self.handle_map.get(&body_id).unwrap_or_else(|| {
+            panic!(
+                "voplay: raycast vehicle chassis body not found: body_id={}",
+                body_id
+            )
+        });
+        let mut controller = DynamicRayCastVehicleController::new(chassis);
+        controller.index_up_axis = 1;
+        controller.index_forward_axis = 2;
+        self.raycast_vehicles
+            .insert(vehicle_id, RaycastVehicle3D { controller });
+    }
+
+    pub fn destroy_raycast_vehicle(&mut self, vehicle_id: u32) {
+        self.raycast_vehicles.remove(&vehicle_id);
+    }
+
+    pub fn add_raycast_vehicle_wheel(
+        &mut self,
+        vehicle_id: u32,
+        desc: &RaycastVehicleWheelDesc3D,
+    ) {
+        let vehicle = self.raycast_vehicles.get_mut(&vehicle_id).unwrap_or_else(|| {
+            panic!(
+                "voplay: raycast vehicle not found while adding wheel: {}",
+                vehicle_id
+            )
+        });
+        let tuning = WheelTuning {
+            suspension_stiffness: desc.suspension_stiffness,
+            suspension_compression: desc.suspension_compression,
+            suspension_damping: desc.suspension_damping,
+            max_suspension_travel: desc.max_suspension_travel,
+            side_friction_stiffness: desc.side_friction_stiffness,
+            friction_slip: desc.friction_slip,
+            max_suspension_force: desc.max_suspension_force,
+        };
+        vehicle.controller.add_wheel(
+            point![desc.connection.x, desc.connection.y, desc.connection.z],
+            vector![desc.direction.x, desc.direction.y, desc.direction.z],
+            vector![desc.axle.x, desc.axle.y, desc.axle.z],
+            desc.suspension_rest_length,
+            desc.radius,
+            &tuning,
+        );
+    }
+
+    pub fn set_raycast_vehicle_wheel_control(
+        &mut self,
+        vehicle_id: u32,
+        wheel_id: usize,
+        steering: f32,
+        engine_force: f32,
+        brake: f32,
+    ) {
+        let Some(vehicle) = self.raycast_vehicles.get_mut(&vehicle_id) else {
+            return;
+        };
+        if let Some(wheel) = vehicle.controller.wheels_mut().get_mut(wheel_id) {
+            wheel.steering = steering;
+            wheel.engine_force = engine_force;
+            wheel.brake = brake;
+        }
+    }
+
+    fn update_raycast_vehicles(&mut self, dt: f32) {
+        if self.raycast_vehicles.is_empty() {
+            return;
+        }
+        self.query_pipeline.update(&self.collider_set);
+        for vehicle in self.raycast_vehicles.values_mut() {
+            let chassis = vehicle.controller.chassis;
+            let filter = QueryFilter::default().exclude_rigid_body(chassis);
+            vehicle.controller.update_vehicle(
+                dt,
+                &mut self.rigid_body_set,
+                &self.collider_set,
+                &self.query_pipeline,
+                filter,
+            );
+        }
+    }
+
+    pub fn serialize_raycast_vehicle_state(&self, vehicle_id: u32) -> Vec<u8> {
+        let Some(vehicle) = self.raycast_vehicles.get(&vehicle_id) else {
+            return Vec::new();
+        };
+        let wheels = vehicle.controller.wheels();
+        let mut speed = 0.0f32;
+        if let Some(chassis) = self.rigid_body_set.get(vehicle.controller.chassis) {
+            let forward = chassis.position() * vector![0.0, 0.0, -1.0];
+            speed = forward.dot(chassis.linvel());
+        }
+
+        // speed(f64), wheel_count(u32), then per wheel:
+        // contact(u8), center xyz, contact xyz, normal xyz,
+        // suspension_length, steering, rotation (all f64)
+        let mut buf = Vec::with_capacity(12 + wheels.len() * (1 + 12 * 8));
+        buf.extend_from_slice(&(speed as f64).to_le_bytes());
+        buf.extend_from_slice(&(wheels.len() as u32).to_le_bytes());
+        for wheel in wheels {
+            let info = wheel.raycast_info();
+            let center = wheel.center();
+            let contact = info.contact_point_ws;
+            let normal = info.contact_normal_ws;
+            buf.push(info.is_in_contact as u8);
+            buf.extend_from_slice(&(center.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(center.y as f64).to_le_bytes());
+            buf.extend_from_slice(&(center.z as f64).to_le_bytes());
+            buf.extend_from_slice(&(contact.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(contact.y as f64).to_le_bytes());
+            buf.extend_from_slice(&(contact.z as f64).to_le_bytes());
+            buf.extend_from_slice(&(normal.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(normal.y as f64).to_le_bytes());
+            buf.extend_from_slice(&(normal.z as f64).to_le_bytes());
+            buf.extend_from_slice(&(info.suspension_length as f64).to_le_bytes());
+            buf.extend_from_slice(&(wheel.steering as f64).to_le_bytes());
+            buf.extend_from_slice(&(wheel.rotation as f64).to_le_bytes());
+        }
+        buf
     }
 
     /// Apply batch commands from Vo.
@@ -426,6 +613,7 @@ impl PhysicsWorld3D {
     /// Step the physics world forward by dt seconds.
     pub fn step(&mut self, dt: f32) {
         self.integration_parameters.dt = dt;
+        self.update_raycast_vehicles(dt);
         self.physics_pipeline.step(
             &self.gravity,
             &self.integration_parameters,
@@ -598,7 +786,11 @@ mod tests {
             friction: 0.5,
             restitution: 0.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
             fixed_rotation: false,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
         };
 
         world.spawn_body(&desc);
@@ -729,7 +921,11 @@ mod tests {
             friction: 0.5,
             restitution: 0.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
             fixed_rotation: false,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
         };
         world.spawn_body(&desc);
 
@@ -780,7 +976,11 @@ mod tests {
             friction: 0.5,
             restitution: 0.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
             fixed_rotation: false,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
         };
         world.spawn_body(&desc);
         world.step(1.0 / 60.0);

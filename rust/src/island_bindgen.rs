@@ -1087,6 +1087,81 @@ pub fn scene3d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
     Vec::new()
 }
 
+/// scene3d_physicsCreateRaycastVehicle(worldId, vehicleId, bodyId)
+#[wasm_bindgen(js_name = "scene3d_physicsCreateRaycastVehicle")]
+pub fn scene3d_physics_create_raycast_vehicle(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.create_raycast_vehicle(vehicle_id, body_id)
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsDestroyRaycastVehicle(worldId, vehicleId)
+#[wasm_bindgen(js_name = "scene3d_physicsDestroyRaycastVehicle")]
+pub fn scene3d_physics_destroy_raycast_vehicle(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.destroy_raycast_vehicle(vehicle_id)
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsAddRaycastVehicleWheel(worldId, vehicleId, desc []byte)
+#[wasm_bindgen(js_name = "scene3d_physicsAddRaycastVehicleWheel")]
+pub fn scene3d_physics_add_raycast_vehicle_wheel(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    let desc_bytes = in_bytes(input, &mut pos);
+    let desc = crate::externs::physics3d::decode_raycast_vehicle_wheel_desc(desc_bytes);
+    crate::physics3d::with_world(world_id, |world| {
+        world.add_raycast_vehicle_wheel(vehicle_id, &desc)
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsSetRaycastVehicleWheelControl(worldId, vehicleId, wheelId, steering, engineForce, brake)
+#[wasm_bindgen(js_name = "scene3d_physicsSetRaycastVehicleWheelControl")]
+pub fn scene3d_physics_set_raycast_vehicle_wheel_control(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    let wheel_id = in_value(input, &mut pos) as usize;
+    let steering = in_f64(input, &mut pos) as f32;
+    let engine_force = in_f64(input, &mut pos) as f32;
+    let brake = in_f64(input, &mut pos) as f32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_raycast_vehicle_wheel_control(
+            vehicle_id,
+            wheel_id,
+            steering,
+            engine_force,
+            brake,
+        )
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsRaycastVehicleState(worldId, vehicleId) → []byte
+#[wasm_bindgen(js_name = "scene3d_physicsRaycastVehicleState")]
+pub fn scene3d_physics_raycast_vehicle_state(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    let state = crate::physics3d::with_world(world_id, |world| {
+        world.serialize_raycast_vehicle_state(vehicle_id)
+    });
+    let mut out = Vec::new();
+    out_bytes(&mut out, &state);
+    out
+}
+
 /// scene3d_physicsStep(worldId, dt, cmds []byte) → []byte
 #[wasm_bindgen(js_name = "scene3d_physicsStep")]
 pub fn scene3d_physics_step(input: &[u8]) -> Vec<u8> {

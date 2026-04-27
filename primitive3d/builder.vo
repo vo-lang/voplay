@@ -1,0 +1,186 @@
+package primitive3d
+
+import "github.com/vo-lang/voplay"
+
+type BuilderDesc struct {
+	Kind      LayerKind
+	Shapes    *ShapeRegistry
+	Materials *MaterialPalette
+	Chunking  ChunkingDesc
+	Name      string
+}
+
+type PartDesc struct {
+	Shape      ShapeDesc
+	ShapeID    ShapeID
+	Material   MaterialDesc
+	MaterialID MaterialID
+	Position   voplay.Vec3
+	Rotation   voplay.Quat
+	Scale      voplay.Vec3
+	Tint       voplay.Color
+	Flags      InstanceFlags
+	Object     ObjectID
+}
+
+type Builder struct {
+	shapes    *ShapeRegistry
+	materials *MaterialPalette
+	layer     *Layer
+}
+
+func NewBuilder(desc BuilderDesc) *Builder {
+	shapes := desc.Shapes
+	if shapes == nil {
+		shapes = NewShapeRegistry()
+	}
+	materials := desc.Materials
+	if materials == nil {
+		materials = NewMaterialPalette()
+	}
+	layer := NewLayer(LayerDesc{
+		Kind: desc.Kind,
+		Shapes: shapes,
+		Materials: materials,
+		Chunking: desc.Chunking,
+		Name: desc.Name,
+	})
+	return &Builder{shapes: shapes, materials: materials, layer: layer}
+}
+
+func (b *Builder) Shapes() *ShapeRegistry {
+	b.ensureReady()
+	return b.shapes
+}
+
+func (b *Builder) Materials() *MaterialPalette {
+	b.ensureReady()
+	return b.materials
+}
+
+func (b *Builder) Layer() *Layer {
+	b.ensureReady()
+	return b.layer
+}
+
+func (b *Builder) Shape(desc ShapeDesc) ShapeID {
+	b.ensureReady()
+	return b.shapes.Shape(desc)
+}
+
+func (b *Builder) Material(desc MaterialDesc) MaterialID {
+	b.ensureReady()
+	return b.materials.Material(desc)
+}
+
+func (b *Builder) AddPart(desc PartDesc) ObjectID {
+	b.ensureReady()
+	shape := desc.ShapeID
+	if shape == 0 {
+		shape = b.shapes.Shape(desc.Shape)
+	}
+	material := desc.MaterialID
+	if material == 0 {
+		material = b.materials.Material(desc.Material)
+	}
+	return b.layer.Add(Instance{
+		Shape: shape,
+		Material: material,
+		Position: desc.Position,
+		Rotation: desc.Rotation,
+		Scale: desc.Scale,
+		Tint: desc.Tint,
+		Flags: desc.Flags,
+		Object: desc.Object,
+	})
+}
+
+func (b *Builder) AddInstance(instance Instance) ObjectID {
+	b.ensureReady()
+	return b.layer.Add(instance)
+}
+
+func (b *Builder) Build() *Layer {
+	b.ensureReady()
+	b.layer.Build()
+	return b.layer
+}
+
+func (b *Builder) AddRoundedBox(material MaterialDesc, position, scale voplay.Vec3, bevelRadius float64) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeRoundedBox, BevelRadius: bevelRadius},
+		Material: material,
+		Position: position,
+		Scale: scale,
+	})
+}
+
+func (b *Builder) AddBox(material MaterialDesc, position, scale voplay.Vec3) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeBox},
+		Material: material,
+		Position: position,
+		Scale: scale,
+	})
+}
+
+func (b *Builder) AddSphere(material MaterialDesc, position voplay.Vec3, radius float64, segments int) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeSphere, Segments: segments},
+		Material: material,
+		Position: position,
+		Scale: voplay.Vec3{X: radius * 2, Y: radius * 2, Z: radius * 2},
+	})
+}
+
+func (b *Builder) AddCylinder(material MaterialDesc, position, scale voplay.Vec3, segments int) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeCylinder, Segments: segments},
+		Material: material,
+		Position: position,
+		Scale: scale,
+	})
+}
+
+func (b *Builder) AddCone(material MaterialDesc, position, scale voplay.Vec3, segments int) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeCone, Segments: segments},
+		Material: material,
+		Position: position,
+		Scale: scale,
+	})
+}
+
+func (b *Builder) AddPlane(material MaterialDesc, position voplay.Vec3, width, depth float64, subX, subZ int) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapePlane, Width: width, Depth: depth, SubX: subX, SubZ: subZ},
+		Material: material,
+		Position: position,
+		Scale: voplay.Vec3{X: 1, Y: 1, Z: 1},
+	})
+}
+
+func (b *Builder) AddWedge(material MaterialDesc, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3) ObjectID {
+	return b.AddPart(PartDesc{
+		Shape: ShapeDesc{Kind: ShapeWedge},
+		Material: material,
+		Position: position,
+		Rotation: rotation,
+		Scale: scale,
+	})
+}
+
+func (b *Builder) ensureReady() {
+	if b == nil {
+		panic("primitive3d.Builder: builder must not be nil")
+	}
+	if b.shapes == nil {
+		b.shapes = NewShapeRegistry()
+	}
+	if b.materials == nil {
+		b.materials = NewMaterialPalette()
+	}
+	if b.layer == nil {
+		b.layer = NewLayer(LayerDesc{Shapes: b.shapes, Materials: b.materials})
+	}
+}

@@ -350,9 +350,7 @@ pub fn physics3d_create_raycast_vehicle(call: &mut ExternCallContext) -> ExternR
 pub fn physics3d_destroy_raycast_vehicle(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let vehicle_id = call.arg_u64(1) as u32;
-    crate::physics3d::with_world(world_id, |world| {
-        world.destroy_raycast_vehicle(vehicle_id)
-    });
+    crate::physics3d::with_world(world_id, |world| world.destroy_raycast_vehicle(vehicle_id));
     ExternResult::Ok
 }
 
@@ -376,13 +374,7 @@ pub fn physics3d_set_raycast_vehicle_wheel_control(call: &mut ExternCallContext)
     let engine_force = call.arg_f64(4) as f32;
     let brake = call.arg_f64(5) as f32;
     crate::physics3d::with_world(world_id, |world| {
-        world.set_raycast_vehicle_wheel_control(
-            vehicle_id,
-            wheel_id,
-            steering,
-            engine_force,
-            brake,
-        )
+        world.set_raycast_vehicle_wheel_control(vehicle_id, wheel_id, steering, engine_force, brake)
     });
     ExternResult::Ok
 }

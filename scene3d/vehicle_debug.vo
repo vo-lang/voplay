@@ -1,0 +1,324 @@
+package scene3d
+
+import (
+	"errors"
+	"github.com/vo-lang/voplay"
+)
+
+type VehicleDebugOptions struct {
+	WheelContacts bool
+	SuspensionRays bool
+	MarkerSize float64
+	LineThickness float64
+	Model voplay.ModelID
+	ContactColor voplay.Color
+	RayColor voplay.Color
+}
+
+type VehicleDebugOverlay struct {
+	Vehicle *Vehicle
+	Entities []*Entity
+	model voplay.ModelID
+	ownedModel bool
+	opts VehicleDebugOptions
+}
+
+type VehicleWheelDebugSnapshot struct {
+	Index int
+	InContact bool
+	ContactPoint voplay.Vec3
+	ContactNormal voplay.Vec3
+	SuspensionLength float64
+	SuspensionCompression float64
+	Steering float64
+	NormalLoad float64
+	LongitudinalSlip float64
+	LateralSlip float64
+	SurfaceID string
+}
+
+type VehicleDebugSnapshot struct {
+	Speed float64
+	Grounded bool
+	Surface TrackSurfaceHit
+	Wheels []VehicleWheelDebugSnapshot
+}
+
+type RacingDebugOptions struct {
+	Track TrackDebugOptions
+	Vehicle VehicleDebugOptions
+	SurfaceMarker bool
+	SurfaceMarkerSize float64
+	SurfaceColor voplay.Color
+	Model voplay.ModelID
+}
+
+type RacingDebugOverlay struct {
+	Track *Track
+	Vehicle *Vehicle
+	TrackOverlay *TrackDebugOverlay
+	VehicleOverlay *VehicleDebugOverlay
+	SurfaceEntity *Entity
+	model voplay.ModelID
+	ownedModel bool
+	opts RacingDebugOptions
+}
+
+func BuildVehicleDebugSnapshot(vehicle *Vehicle, track *Track) VehicleDebugSnapshot {
+	if vehicle == nil {
+		return VehicleDebugSnapshot{}
+	}
+	if track == nil {
+		track = vehicle.Track
+	}
+	snapshot := VehicleDebugSnapshot{Speed: vehicle.Speed, Grounded: vehicle.Grounded, Wheels: []VehicleWheelDebugSnapshot{}}
+	if track != nil && vehicle.Body != nil {
+		snapshot.Surface = track.SurfaceAt(vehicle.Body.Position())
+	}
+	for i := 0; i < vehicle.WheelCount(); i++ {
+		state, ok := vehicle.WheelState(i)
+		if !ok {
+			continue
+		}
+		snapshot.Wheels = append(snapshot.Wheels, VehicleWheelDebugSnapshot{Index: i, InContact: state.InContact, ContactPoint: state.ContactPoint, ContactNormal: state.ContactNormal, SuspensionLength: state.SuspensionLength, SuspensionCompression: state.SuspensionCompression, Steering: state.Steering, NormalLoad: state.NormalLoad, LongitudinalSlip: state.LongitudinalSlip, LateralSlip: state.LateralSlip, SurfaceID: state.SurfaceID})
+	}
+	return snapshot
+}
+
+func SpawnRacingDebugOverlay(scene *Scene, track *Track, vehicle *Vehicle, opts RacingDebugOptions) (*RacingDebugOverlay, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnRacingDebugOverlay: scene is nil")
+	}
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnRacingDebugOverlay: track is nil")
+	}
+	if vehicle == nil {
+		return nil, errors.New("scene3d.SpawnRacingDebugOverlay: vehicle is nil")
+	}
+	opts = normalizeRacingDebugOptions(opts)
+	if opts.Model != 0 {
+		if opts.Track.Model == 0 {
+			opts.Track.Model = opts.Model
+		}
+		if opts.Vehicle.Model == 0 {
+			opts.Vehicle.Model = opts.Model
+		}
+	}
+	overlay := &RacingDebugOverlay{Track: track, Vehicle: vehicle, opts: opts}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		overlay.Destroy(scene)
+	}()
+	trackOverlay, err := SpawnTrackDebugOverlay(scene, track, opts.Track)
+	if err != nil {
+		return nil, err
+	}
+	overlay.TrackOverlay = trackOverlay
+	vehicleOverlay, err := SpawnVehicleDebugOverlay(scene, vehicle, opts.Vehicle)
+	if err != nil {
+		return nil, err
+	}
+	overlay.VehicleOverlay = vehicleOverlay
+	if opts.SurfaceMarker {
+		model := opts.Model
+		if model == 0 {
+			model = CubeMesh()
+			overlay.ownedModel = true
+		}
+		overlay.model = model
+		overlay.SurfaceEntity = scene.Spawn(EntityDesc{Model: model, Scale: voplay.Vec3{X: opts.SurfaceMarkerSize, Y: opts.SurfaceMarkerSize, Z: opts.SurfaceMarkerSize}, Tint: opts.SurfaceColor, TintSet: true, Tag: "racing_debug_surface", PickMode: PickDisabled})
+	}
+	success = true
+	overlay.Update(scene)
+	return overlay, nil
+}
+
+func (o *RacingDebugOverlay) Update(scene *Scene) VehicleDebugSnapshot {
+	if o == nil {
+		return VehicleDebugSnapshot{}
+	}
+	if o.VehicleOverlay != nil {
+		o.VehicleOverlay.Update(scene)
+	}
+	snapshot := BuildVehicleDebugSnapshot(o.Vehicle, o.Track)
+	if o.SurfaceEntity != nil {
+		o.SurfaceEntity.Visible = o.Track != nil && o.Vehicle != nil && o.Vehicle.Body != nil
+		if o.SurfaceEntity.Visible {
+			pose := o.Track.PoseAt(snapshot.Surface.Distance)
+			o.SurfaceEntity.SetPosition(pose.Position.Add(voplay.Vec3{Y: o.opts.Track.HeightOffset + o.opts.SurfaceMarkerSize}))
+			o.SurfaceEntity.SetRotation(voplay.QuatIdentity())
+			o.SurfaceEntity.SetScale(voplay.Vec3{X: o.opts.SurfaceMarkerSize, Y: o.opts.SurfaceMarkerSize, Z: o.opts.SurfaceMarkerSize})
+		}
+	}
+	return snapshot
+}
+
+func (o *RacingDebugOverlay) Destroy(scene *Scene) {
+	if o == nil {
+		return
+	}
+	if o.TrackOverlay != nil {
+		o.TrackOverlay.Destroy(scene)
+		o.TrackOverlay = nil
+	}
+	if o.VehicleOverlay != nil {
+		o.VehicleOverlay.Destroy(scene)
+		o.VehicleOverlay = nil
+	}
+	if o.SurfaceEntity != nil && scene != nil && o.SurfaceEntity.scene == scene && o.SurfaceEntity.Active {
+		scene.Destroy(o.SurfaceEntity)
+	}
+	o.SurfaceEntity = nil
+	if o.ownedModel && o.model != 0 {
+		o.model.Free()
+		o.model = 0
+		o.ownedModel = false
+	}
+}
+
+func SpawnVehicleDebugOverlay(scene *Scene, vehicle *Vehicle, opts VehicleDebugOptions) (*VehicleDebugOverlay, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnVehicleDebugOverlay: scene is nil")
+	}
+	if vehicle == nil {
+		return nil, errors.New("scene3d.SpawnVehicleDebugOverlay: vehicle is nil")
+	}
+	opts = normalizeVehicleDebugOptions(opts)
+	model := opts.Model
+	owned := false
+	if model == 0 {
+		model = CubeMesh()
+		owned = true
+	}
+	overlay := &VehicleDebugOverlay{Vehicle: vehicle, Entities: []*Entity{}, model: model, ownedModel: owned, opts: opts}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		overlay.Destroy(scene)
+	}()
+	for i := 0; i < vehicle.WheelCount(); i++ {
+		if opts.WheelContacts {
+			e := scene.Spawn(EntityDesc{Model: model, Scale: voplay.Vec3{X: opts.MarkerSize, Y: opts.MarkerSize, Z: opts.MarkerSize}, Tint: opts.ContactColor, TintSet: true, Tag: "vehicle_debug_contact", PickMode: PickDisabled})
+			overlay.Entities = append(overlay.Entities, e)
+		}
+		if opts.SuspensionRays {
+			e := scene.Spawn(EntityDesc{Model: model, Scale: voplay.Vec3{X: opts.LineThickness, Y: opts.LineThickness, Z: opts.LineThickness}, Tint: opts.RayColor, TintSet: true, Tag: "vehicle_debug_suspension", PickMode: PickDisabled})
+			overlay.Entities = append(overlay.Entities, e)
+		}
+	}
+	success = true
+	overlay.Update(scene)
+	return overlay, nil
+}
+
+func (o *VehicleDebugOverlay) Update(scene *Scene) {
+	if o == nil || scene == nil || o.Vehicle == nil {
+		return
+	}
+	idx := 0
+	for i := 0; i < o.Vehicle.WheelCount(); i++ {
+		state, ok := o.Vehicle.WheelState(i)
+		if !ok {
+			state = VehicleWheelState{}
+		}
+		if o.opts.WheelContacts {
+			e := o.entityAt(idx)
+			idx++
+			if e != nil {
+				e.Visible = ok && state.InContact
+				e.SetPosition(state.ContactPoint)
+				e.SetRotation(voplay.QuatIdentity())
+				e.SetScale(voplay.Vec3{X: o.opts.MarkerSize, Y: o.opts.MarkerSize, Z: o.opts.MarkerSize})
+			}
+		}
+		if o.opts.SuspensionRays {
+			e := o.entityAt(idx)
+			idx++
+			if e != nil {
+				o.updateSuspensionRay(e, state, ok && state.InContact)
+			}
+		}
+	}
+}
+
+func (o *VehicleDebugOverlay) Destroy(scene *Scene) {
+	if o == nil {
+		return
+	}
+	for _, e := range o.Entities {
+		if e != nil && scene != nil && e.scene == scene && e.Active {
+			scene.Destroy(e)
+		}
+	}
+	o.Entities = nil
+	if o.ownedModel && o.model != 0 {
+		o.model.Free()
+		o.model = 0
+		o.ownedModel = false
+	}
+}
+
+func (o *VehicleDebugOverlay) entityAt(index int) *Entity {
+	if o == nil || index < 0 || index >= len(o.Entities) {
+		return nil
+	}
+	return o.Entities[index]
+}
+
+func (o *VehicleDebugOverlay) updateSuspensionRay(e *Entity, state VehicleWheelState, visible bool) {
+	e.Visible = visible
+	if !visible {
+		return
+	}
+	start := state.Center
+	end := state.ContactPoint
+	dir := end.Sub(start)
+	length := dir.Length()
+	if length <= 0 {
+		e.Visible = false
+		return
+	}
+	mid := start.Lerp(end, 0.5)
+	yaw := trackYawFromForward(dir.Normalize())
+	e.SetPosition(mid)
+	e.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw))
+	e.SetScale(voplay.Vec3{X: o.opts.LineThickness, Y: o.opts.LineThickness, Z: length})
+}
+
+func normalizeVehicleDebugOptions(opts VehicleDebugOptions) VehicleDebugOptions {
+	if !opts.WheelContacts && !opts.SuspensionRays {
+		opts.WheelContacts = true
+		opts.SuspensionRays = true
+	}
+	if opts.MarkerSize <= 0 {
+		opts.MarkerSize = 0.22
+	}
+	if opts.LineThickness <= 0 {
+		opts.LineThickness = 0.08
+	}
+	if opts.ContactColor == (voplay.Color{}) {
+		opts.ContactColor = voplay.Color{R: 0.1, G: 1, B: 0.25, A: 1}
+	}
+	if opts.RayColor == (voplay.Color{}) {
+		opts.RayColor = voplay.Color{R: 1, G: 0.85, B: 0.1, A: 1}
+	}
+	return opts
+}
+
+func normalizeRacingDebugOptions(opts RacingDebugOptions) RacingDebugOptions {
+	if opts.SurfaceMarkerSize <= 0 {
+		opts.SurfaceMarkerSize = 0.42
+	}
+	if opts.SurfaceColor == (voplay.Color{}) {
+		opts.SurfaceColor = voplay.Color{R: 1, G: 0.25, B: 0.9, A: 1}
+	}
+	if !opts.SurfaceMarker {
+		opts.SurfaceMarker = true
+	}
+	return opts
+}

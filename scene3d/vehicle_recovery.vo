@@ -1,0 +1,145 @@
+package scene3d
+
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+// VehicleRecoveryConfig controls generic vehicle recovery and respawn detection.
+type VehicleRecoveryConfig struct {
+	FallY             float64
+	UpsideDownSeconds float64
+	StuckSeconds      float64
+	StuckSpeed        float64
+	StuckThrottle     float64
+}
+
+type VehicleRecoveryInput struct {
+	Throttle float64
+	Reset    bool
+}
+
+type VehicleRecoveryState struct {
+	Stuck          bool
+	UpsideDown     bool
+	ShouldRespawn bool
+}
+
+// VehicleRecovery tracks fall, upside-down, and stuck conditions for any track-bound vehicle.
+type VehicleRecovery struct {
+	Vehicle *Vehicle
+	Track   *Track
+	Config  VehicleRecoveryConfig
+	stuckTimer float64
+	upsideDownTimer float64
+	state VehicleRecoveryState
+}
+
+func DefaultVehicleRecoveryConfig() VehicleRecoveryConfig {
+	return VehicleRecoveryConfig{
+		FallY:             -25,
+		UpsideDownSeconds: 1.2,
+		StuckSeconds:      2.0,
+		StuckSpeed:        0.8,
+		StuckThrottle:     0.55,
+	}
+}
+
+func NewVehicleRecovery(vehicle *Vehicle, track *Track, config VehicleRecoveryConfig) *VehicleRecovery {
+	if vehicle == nil {
+		panic("scene3d.NewVehicleRecovery: vehicle must not be nil")
+	}
+	return &VehicleRecovery{Vehicle: vehicle, Track: track, Config: normalizeVehicleRecoveryConfig(config)}
+}
+
+func (r *VehicleRecovery) BindTrack(track *Track) {
+	if r == nil {
+		return
+	}
+	r.Track = track
+}
+
+func (r *VehicleRecovery) Update(input VehicleRecoveryInput, dt float64) VehicleRecoveryState {
+	if r == nil || r.Vehicle == nil || r.Vehicle.Body == nil || dt <= 0 {
+		return VehicleRecoveryState{}
+	}
+	r.Config = normalizeVehicleRecoveryConfig(r.Config)
+	r.state.ShouldRespawn = input.Reset
+	r.state.UpsideDown = false
+	r.state.Stuck = false
+	pos := r.Vehicle.Body.Position()
+	if pos.Y < r.Config.FallY {
+		r.state.ShouldRespawn = true
+	}
+	up := r.Vehicle.Rotation().RotateVec3(voplay.Vec3{Y: 1})
+	if up.Dot(voplay.Vec3{Y: 1}) < 0.2 {
+		r.upsideDownTimer += dt
+		r.state.UpsideDown = true
+	} else {
+		r.upsideDownTimer = 0
+	}
+	if r.upsideDownTimer >= r.Config.UpsideDownSeconds {
+		r.state.ShouldRespawn = true
+	}
+	if math.Abs(r.Vehicle.Speed) <= r.Config.StuckSpeed && input.Throttle >= r.Config.StuckThrottle {
+		r.stuckTimer += dt
+	} else {
+		r.stuckTimer = 0
+	}
+	if r.stuckTimer >= r.Config.StuckSeconds {
+		r.state.Stuck = true
+		r.state.ShouldRespawn = true
+	}
+	return r.state
+}
+
+func (r *VehicleRecovery) State() VehicleRecoveryState {
+	if r == nil {
+		return VehicleRecoveryState{}
+	}
+	return r.state
+}
+
+func (r *VehicleRecovery) Respawn(pose TrackPose) {
+	if r == nil || r.Vehicle == nil {
+		return
+	}
+	r.Vehicle.SetPose(pose.Position, pose.Yaw)
+	r.Reset()
+}
+
+func (r *VehicleRecovery) RespawnNear(pos voplay.Vec3) {
+	if r == nil || r.Track == nil {
+		return
+	}
+	r.Respawn(r.Track.RespawnPoseNear(pos))
+}
+
+func (r *VehicleRecovery) Reset() {
+	if r == nil {
+		return
+	}
+	r.stuckTimer = 0
+	r.upsideDownTimer = 0
+	r.state = VehicleRecoveryState{}
+}
+
+func normalizeVehicleRecoveryConfig(config VehicleRecoveryConfig) VehicleRecoveryConfig {
+	defaults := DefaultVehicleRecoveryConfig()
+	if config.FallY == 0 {
+		config.FallY = defaults.FallY
+	}
+	if config.UpsideDownSeconds <= 0 {
+		config.UpsideDownSeconds = defaults.UpsideDownSeconds
+	}
+	if config.StuckSeconds <= 0 {
+		config.StuckSeconds = defaults.StuckSeconds
+	}
+	if config.StuckSpeed <= 0 {
+		config.StuckSpeed = defaults.StuckSpeed
+	}
+	if config.StuckThrottle <= 0 {
+		config.StuckThrottle = defaults.StuckThrottle
+	}
+	return config
+}

@@ -1,0 +1,188 @@
+package primitive3d
+
+import "strconv"
+import "github.com/vo-lang/voplay"
+
+const (
+	defaultSegments = 16
+	defaultPlaneSize = 1.0
+	defaultSubdivs = 1
+	defaultCapsuleHalfHeight = 0.5
+	defaultCapsuleRadius = 0.5
+)
+
+type ShapeRegistry struct {
+	nextID int
+	revision int
+	keys   map[string]ShapeID
+	descs  map[int]ShapeDesc
+	models map[int]voplay.ModelID
+	order  []ShapeID
+}
+
+func NewShapeRegistry() *ShapeRegistry {
+	return &ShapeRegistry{
+		nextID: 1,
+		keys:   map[string]ShapeID{},
+		descs:  map[int]ShapeDesc{},
+		models: map[int]voplay.ModelID{},
+		order:  []ShapeID{},
+	}
+}
+
+func (r *ShapeRegistry) Shape(desc ShapeDesc) ShapeID {
+	r.ensureReady()
+	desc = normalizeShapeDesc(desc)
+	key := shapeKey(desc)
+	if id, ok := r.keys[key]; ok {
+		return id
+	}
+	id := ShapeID(r.nextID)
+	r.nextID++
+	r.keys[key] = id
+	r.descs[int(id)] = desc
+	r.order = append(r.order, id)
+	r.revision++
+	return id
+}
+
+func (r *ShapeRegistry) Desc(id ShapeID) ShapeDesc {
+	r.ensureReady()
+	desc, ok := r.descs[int(id)]
+	if !ok {
+		panic("primitive3d.ShapeRegistry.Desc: unknown shape")
+	}
+	return desc
+}
+
+func (r *ShapeRegistry) Model(id ShapeID) voplay.ModelID {
+	r.ensureReady()
+	if model, ok := r.models[int(id)]; ok {
+		return model
+	}
+	desc := r.Desc(id)
+	model := createShapeModel(desc)
+	r.models[int(id)] = model
+	return model
+}
+
+func (r *ShapeRegistry) Revision() int {
+	r.ensureReady()
+	return r.revision
+}
+
+func (r *ShapeRegistry) Entries() []ShapeEntry {
+	r.ensureReady()
+	entries := []ShapeEntry{}
+	for _, id := range r.order {
+		entries = append(entries, ShapeEntry{ID: id, Model: r.Model(id)})
+	}
+	return entries
+}
+
+func (r *ShapeRegistry) ensureReady() {
+	if r == nil {
+		panic("primitive3d.ShapeRegistry: registry must not be nil")
+	}
+	if r.nextID == 0 {
+		r.nextID = 1
+	}
+	if r.keys == nil {
+		r.keys = map[string]ShapeID{}
+	}
+	if r.descs == nil {
+		r.descs = map[int]ShapeDesc{}
+	}
+	if r.models == nil {
+		r.models = map[int]voplay.ModelID{}
+	}
+	if r.order == nil {
+		r.order = []ShapeID{}
+	}
+}
+
+func normalizeShapeDesc(desc ShapeDesc) ShapeDesc {
+	if desc.Kind == 0 {
+		desc.Kind = ShapeRoundedBox
+	}
+	desc.Segments = normalizePositiveInt(desc.Segments, defaultSegments)
+	desc.Radius = normalizeNonNegativeFloat(desc.Radius)
+	desc.BevelRadius = normalizeNonNegativeFloat(desc.BevelRadius)
+	desc.Width = normalizePositiveFloat(desc.Width, defaultPlaneSize)
+	desc.Height = normalizePositiveFloat(desc.Height, defaultCapsuleHalfHeight*2)
+	desc.Depth = normalizePositiveFloat(desc.Depth, defaultPlaneSize)
+	desc.SubX = normalizePositiveInt(desc.SubX, defaultSubdivs)
+	desc.SubZ = normalizePositiveInt(desc.SubZ, defaultSubdivs)
+	return desc
+}
+
+func createShapeModel(desc ShapeDesc) voplay.ModelID {
+	switch desc.Kind {
+	case ShapeRoundedBox:
+		bevelRadius := desc.BevelRadius
+		if bevelRadius <= 0 {
+			bevelRadius = 0.08
+		}
+		return voplay.CreateRoundedBoxMesh(bevelRadius, desc.Segments)
+	case ShapeBox:
+		return voplay.CreateCubeMesh()
+	case ShapeSphere:
+		return voplay.CreateSphereMesh(desc.Segments)
+	case ShapeCylinder:
+		return voplay.CreateCylinderMesh(desc.Segments)
+	case ShapeCone:
+		return voplay.CreateConeMesh(desc.Segments)
+	case ShapeCapsule:
+		radius := desc.Radius
+		if radius <= 0 {
+			radius = defaultCapsuleRadius
+		}
+		halfHeight := desc.Height * 0.5
+		if halfHeight <= 0 {
+			halfHeight = defaultCapsuleHalfHeight
+		}
+		return voplay.CreateCapsuleMesh(desc.Segments, halfHeight, radius)
+	case ShapePlane:
+		return voplay.CreatePlaneMesh(desc.Width, desc.Depth, desc.SubX, desc.SubZ)
+	case ShapeWedge:
+		return voplay.CreateWedgeMesh()
+	}
+	panic("primitive3d.ShapeRegistry.Model: unknown shape kind")
+}
+
+func shapeKey(desc ShapeDesc) string {
+	return strconv.Itoa(int(desc.Kind)) + ":" +
+		strconv.Itoa(desc.Segments) + ":" +
+		floatKey(desc.Radius) + ":" +
+		floatKey(desc.BevelRadius) + ":" +
+		floatKey(desc.Width) + ":" +
+		floatKey(desc.Height) + ":" +
+		floatKey(desc.Depth) + ":" +
+		strconv.Itoa(desc.SubX) + ":" +
+		strconv.Itoa(desc.SubZ)
+}
+
+func normalizePositiveInt(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func normalizePositiveFloat(value, fallback float64) float64 {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func normalizeNonNegativeFloat(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func floatKey(value float64) string {
+	return strconv.FormatFloat(value, 'g', -1, 64)
+}

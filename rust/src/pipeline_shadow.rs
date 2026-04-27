@@ -383,3 +383,34 @@ impl PipelineShadow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PipelineShadow;
+
+    #[test]
+    fn pipeline_shadow_creates_with_current_vertex_layouts() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let Some(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }))
+        else {
+            return;
+        };
+        let (device, _) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("voplay_shadow_test"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                memory_hints: wgpu::MemoryHints::default(),
+            },
+            None,
+        ))
+        .expect("request device");
+
+        let _pipeline = PipelineShadow::new(&device, 1024);
+    }
+}

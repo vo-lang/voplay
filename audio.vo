@@ -29,6 +29,7 @@ type AudioBackend interface {
 	CreateSource3D(clip AudioClipID, pos Vec3, volume, refDistance, maxDistance float64) (AudioSourceID, error)
 	UpdateSpatial()
 	SetSource3DPos(id AudioSourceID, pos Vec3)
+	SetSource3DParams(id AudioSourceID, volume, pitch float64)
 	RemoveSource3D(id AudioSourceID)
 }
 
@@ -65,6 +66,10 @@ func (defaultAudioBackend) UpdateSpatial() {
 
 func (defaultAudioBackend) SetSource3DPos(id AudioSourceID, pos Vec3) {
 	vogui.AudioSourceID(int(id)).SetPosition(toAudioVec3(pos))
+}
+
+func (defaultAudioBackend) SetSource3DParams(id AudioSourceID, volume, pitch float64) {
+	vogui.AudioSourceID(int(id)).SetParams(volume, pitch)
 }
 
 func (defaultAudioBackend) RemoveSource3D(id AudioSourceID) {
@@ -166,6 +171,10 @@ func UpdateSpatialAudio() {
 
 func (s AudioSourceID) SetPosition(pos Vec3) {
 	audioBackend.SetSource3DPos(s, pos)
+}
+
+func (s AudioSourceID) SetParams(volume, pitch float64) {
+	audioBackend.SetSource3DParams(s, volume, pitch)
 }
 
 func (s AudioSourceID) Remove() {

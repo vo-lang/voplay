@@ -1,0 +1,182 @@
+package primitive3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+type StressConfig struct {
+	Count            int
+	ShapeVariants    int
+	MaterialVariants int
+	Columns          int
+	Spacing          float64
+	ChunkCellSize    float64
+}
+
+type StressFixture struct {
+	Shapes      *ShapeRegistry
+	Materials   *MaterialPalette
+	Layer       *Layer
+	ShapeIDs    []ShapeID
+	MaterialIDs []MaterialID
+	Bounds      voplay.AABB
+}
+
+func DefaultStressConfig() StressConfig {
+	return StressConfig{
+		Count:            10000,
+		ShapeVariants:    8,
+		MaterialVariants: 16,
+		Spacing:          2.4,
+		ChunkCellSize:    32,
+	}
+}
+
+func NewStressFixture(config StressConfig) *StressFixture {
+	config = normalizeStressConfig(config)
+	shapes := NewShapeRegistry()
+	materials := NewMaterialPalette()
+	shapeIDs := stressShapeIDs(shapes, config.ShapeVariants)
+	materialIDs := stressMaterialIDs(materials, config.MaterialVariants)
+	layer := NewLayer(LayerDesc{
+		Kind: StaticLayer,
+		Shapes: shapes,
+		Materials: materials,
+		Chunking: ChunkingDesc{CellSize: config.ChunkCellSize},
+		Name: "primitive_stress",
+	})
+	rows := int(math.Ceil(float64(config.Count) / float64(config.Columns)))
+	originX := float64(config.Columns - 1) * config.Spacing * 0.5
+	originZ := float64(rows - 1) * config.Spacing * 0.5
+	for i := 0; i < config.Count; i++ {
+		col := i % config.Columns
+		row := i / config.Columns
+		layer.Add(Instance{
+			Shape: shapeIDs[i % len(shapeIDs)],
+			Material: materialIDs[(i / len(shapeIDs)) % len(materialIDs)],
+			Position: voplay.Vec3{
+				X: float64(col)*config.Spacing - originX,
+				Y: stressHeight(i),
+				Z: float64(row)*config.Spacing - originZ,
+			},
+			Rotation: voplay.QuatFromEuler(0, float64(i % 360) * math.Pi / 180.0, 0),
+			Scale: stressScale(i),
+		})
+	}
+	layer.Build()
+	return &StressFixture{
+		Shapes: shapes,
+		Materials: materials,
+		Layer: layer,
+		ShapeIDs: shapeIDs,
+		MaterialIDs: materialIDs,
+		Bounds: stressLayerBounds(layer),
+	}
+}
+
+func normalizeStressConfig(config StressConfig) StressConfig {
+	if config.Count <= 0 {
+		config.Count = 10000
+	}
+	if config.ShapeVariants <= 0 {
+		config.ShapeVariants = 8
+	}
+	if config.ShapeVariants > 8 {
+		config.ShapeVariants = 8
+	}
+	if config.MaterialVariants <= 0 {
+		config.MaterialVariants = 16
+	}
+	if config.Spacing <= 0 {
+		config.Spacing = 2.4
+	}
+	if config.ChunkCellSize <= 0 {
+		config.ChunkCellSize = 32
+	}
+	if config.Columns <= 0 {
+		config.Columns = int(math.Ceil(math.Sqrt(float64(config.Count))))
+	}
+	if config.Columns <= 0 {
+		config.Columns = 1
+	}
+	return config
+}
+
+func stressShapeIDs(registry *ShapeRegistry, count int) []ShapeID {
+	descs := []ShapeDesc{
+		{Kind: ShapeRoundedBox, BevelRadius: 0.09, Segments: 10},
+		{Kind: ShapeBox},
+		{Kind: ShapeSphere, Segments: 12},
+		{Kind: ShapeCylinder, Segments: 12},
+		{Kind: ShapeCone, Segments: 12},
+		{Kind: ShapeCapsule, Segments: 10, Height: 1.2, Radius: 0.45},
+		{Kind: ShapePlane, Width: 1, Depth: 1, SubX: 1, SubZ: 1},
+		{Kind: ShapeWedge},
+	}
+	ids := []ShapeID{}
+	for i := 0; i < count && i < len(descs); i++ {
+		ids = append(ids, registry.Shape(descs[i]))
+	}
+	return ids
+}
+
+func stressMaterialIDs(palette *MaterialPalette, count int) []MaterialID {
+	presets := []MaterialPreset{
+		MaterialToyPlastic,
+		MaterialRubber,
+		MaterialRoadAsphalt,
+		MaterialGrass,
+		MaterialStone,
+		MaterialWater,
+		MaterialGlow,
+		MaterialWood,
+	}
+	colors := []voplay.Color{
+		voplay.RGB(0.96, 0.20, 0.13),
+		voplay.RGB(0.10, 0.18, 0.95),
+		voplay.RGB(1.00, 0.66, 0.10),
+		voplay.RGB(0.18, 0.72, 0.26),
+		voplay.RGB(0.98, 0.96, 0.88),
+		voplay.RGB(0.52, 0.56, 0.64),
+		voplay.RGB(0.22, 0.76, 0.96),
+		voplay.RGB(0.72, 0.38, 0.16),
+		voplay.RGB(0.86, 0.10, 0.36),
+		voplay.RGB(0.45, 0.24, 0.82),
+		voplay.RGB(0.06, 0.11, 0.16),
+		voplay.RGB(0.74, 0.85, 0.38),
+		voplay.RGB(0.18, 0.58, 0.52),
+		voplay.RGB(0.96, 0.44, 0.18),
+		voplay.RGB(0.80, 0.82, 0.88),
+		voplay.RGB(0.30, 0.20, 0.14),
+	}
+	ids := []MaterialID{}
+	for i := 0; i < count; i++ {
+		preset := presets[i % len(presets)]
+		color := colors[i % len(colors)]
+		ids = append(ids, palette.Material(MaterialDesc{
+			Preset: preset,
+			Base: voplay.MaterialDesc{BaseColor: color},
+		}))
+	}
+	return ids
+}
+
+func stressHeight(i int) float64 {
+	return 0.35 + float64((i / 97) % 5) * 0.035
+}
+
+func stressScale(i int) voplay.Vec3 {
+	s := 0.82 + float64(i % 7) * 0.035
+	return voplay.Vec3{X: s, Y: s, Z: s}
+}
+
+func stressLayerBounds(layer *Layer) voplay.AABB {
+	chunks := layer.Chunks()
+	if len(chunks) == 0 {
+		return voplay.AABB{}
+	}
+	bounds := chunks[0].Bounds
+	for i := 1; i < len(chunks); i++ {
+		bounds = mergeBounds(bounds, chunks[i].Bounds)
+	}
+	return bounds
+}

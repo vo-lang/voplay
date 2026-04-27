@@ -23,6 +23,69 @@ func (id TextureID) Free() {
 	freeTexture(int(id))
 }
 
+// MaterialID is an optional stable handle for a material owned by game code or
+// assets. MaterialID(0) means the renderer should use the model's source
+// material with the explicit fields in MaterialDesc applied as overrides.
+type MaterialID int
+
+const (
+	MaterialShadingDefault = 0
+	MaterialShadingToon = 1
+)
+
+const (
+	MaterialWrapSource = 0
+	MaterialWrapRepeat = 1
+	MaterialWrapClamp = 2
+	MaterialWrapMirror = 3
+)
+
+const (
+	MaterialFilterSource = 0
+	MaterialFilterLinear = 1
+	MaterialFilterNearest = 2
+)
+
+// MaterialDesc is the engine-level 3D material contract passed through the
+// draw stream. Optional texture IDs use 0 as "not overridden".
+type MaterialDesc struct {
+	ID MaterialID
+	BaseColor Color
+	Albedo TextureID
+	Normal TextureID
+	MetallicRoughness TextureID
+	Emissive TextureID
+	EmissiveColor Color
+	Roughness float64
+	Metallic float64
+	NormalScale float64
+	UVScale float64
+	ToonRamp TextureID
+	ShadingMode int
+	WrapMode int
+	FilterMode int
+}
+
+func DefaultMaterial() MaterialDesc {
+	return MaterialDesc{BaseColor: White, Roughness: 0.55, Metallic: 0, UVScale: 1}
+}
+
+func MaterialColor(c Color) MaterialDesc {
+	m := DefaultMaterial()
+	m.BaseColor = c
+	return m
+}
+
+func NormalizeMaterial(m MaterialDesc) MaterialDesc {
+	if m.BaseColor == (Color{}) && m.ID == 0 {
+		m.BaseColor = White
+	}
+	if m.UVScale <= 0 {
+		m.UVScale = 1
+	}
+	return m
+}
+
 // FontID is an opaque handle to a loaded font.
 type FontID int
 
@@ -68,8 +131,11 @@ type ModelBackend interface {
 type PrimitiveMeshBackend interface {
 	Plane(width, depth float64, subX, subZ int) int
 	Cube() int
+	RoundedBox(bevelRadius float64, segments int) int
 	Sphere(segments int) int
 	Cylinder(segments int) int
+	Cone(segments int) int
+	Wedge() int
 	Capsule(segments int, halfHeight, radius float64) int
 }
 
@@ -106,12 +172,24 @@ func (defaultPrimitiveMeshBackend) Cube() int {
 	return createCubeMesh()
 }
 
+func (defaultPrimitiveMeshBackend) RoundedBox(bevelRadius float64, segments int) int {
+	return createRoundedBoxMesh(bevelRadius, segments)
+}
+
 func (defaultPrimitiveMeshBackend) Sphere(segments int) int {
 	return createSphereMesh(segments)
 }
 
 func (defaultPrimitiveMeshBackend) Cylinder(segments int) int {
 	return createCylinderMesh(segments)
+}
+
+func (defaultPrimitiveMeshBackend) Cone(segments int) int {
+	return createConeMesh(segments)
+}
+
+func (defaultPrimitiveMeshBackend) Wedge() int {
+	return createWedgeMesh()
 }
 
 func (defaultPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius float64) int {
@@ -156,12 +234,24 @@ func CreateCubeMesh() ModelID {
 	return ModelID(primitiveMeshBackend.Cube())
 }
 
+func CreateRoundedBoxMesh(bevelRadius float64, segments int) ModelID {
+	return ModelID(primitiveMeshBackend.RoundedBox(bevelRadius, segments))
+}
+
 func CreateSphereMesh(segments int) ModelID {
 	return ModelID(primitiveMeshBackend.Sphere(segments))
 }
 
 func CreateCylinderMesh(segments int) ModelID {
 	return ModelID(primitiveMeshBackend.Cylinder(segments))
+}
+
+func CreateConeMesh(segments int) ModelID {
+	return ModelID(primitiveMeshBackend.Cone(segments))
+}
+
+func CreateWedgeMesh() ModelID {
+	return ModelID(primitiveMeshBackend.Wedge())
 }
 
 func CreateCapsuleMesh(segments int, halfHeight, radius float64) ModelID {
@@ -241,8 +331,11 @@ func modelBounds(modelID int) (float64, float64, float64, float64, float64, floa
 func modelMeshDataBytes(modelID int) []byte
 func createPlaneMesh(width, depth float64, subX, subZ int) int
 func createCubeMesh() int
+func createRoundedBoxMesh(bevelRadius float64, segments int) int
 func createSphereMesh(segments int) int
 func createCylinderMesh(segments int) int
+func createConeMesh(segments int) int
+func createWedgeMesh() int
 func createCapsuleMesh(segments int, halfHeight, radius float64) int
 
 func loadCubemap(right, left, top, bottom, front, back string) (int, error)

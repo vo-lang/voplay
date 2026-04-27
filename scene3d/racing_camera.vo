@@ -1,0 +1,247 @@
+package scene3d
+
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+type RacingCameraTarget struct {
+	Position voplay.Vec3
+	Forward voplay.Vec3
+	Velocity voplay.Vec3
+	Speed float64
+	Drift float64
+	Boost bool
+	LandingShake float64
+}
+
+type RacingCamera struct {
+	BaseDistance float64
+	MaxDistance float64
+	Height float64
+	TargetHeight float64
+	LookaheadBase float64
+	LookaheadSpeedScale float64
+	DistanceSpeedScale float64
+	DriftOffset float64
+	Smoothing float64
+	TargetSmoothing float64
+	Fov float64
+	SpeedFov float64
+	BoostFovKick float64
+	BoostSmoothing float64
+	CollisionEnabled bool
+	CollisionOffset float64
+	ShakeScale float64
+
+	currentPos voplay.Vec3
+	currentTarget voplay.Vec3
+	currentFov float64
+	boostAmount float64
+	initialized bool
+}
+
+func NewRacingCamera() *RacingCamera {
+	return &RacingCamera{
+		BaseDistance: 7.5,
+		MaxDistance: 11.5,
+		Height: 3.0,
+		TargetHeight: 1.2,
+		LookaheadBase: 4.0,
+		LookaheadSpeedScale: 0.16,
+		DistanceSpeedScale: 0.055,
+		DriftOffset: 1.15,
+		Smoothing: 8.5,
+		TargetSmoothing: 12.0,
+		Fov: 58.0,
+		SpeedFov: 0.18,
+		BoostFovKick: 7.0,
+		BoostSmoothing: 10.0,
+		CollisionEnabled: true,
+		CollisionOffset: 0.35,
+		ShakeScale: 0.28,
+	}
+}
+
+func RacingCameraTargetFromVehicle(vehicle *Vehicle) RacingCameraTarget {
+	if vehicle == nil || vehicle.Body == nil {
+		return RacingCameraTarget{Forward: voplay.Vec3{Z: -1}}
+	}
+	vel := vehicle.Body.Velocity()
+	return RacingCameraTarget{
+		Position: vehicle.Body.Position(),
+		Forward: vehicle.Forward(),
+		Velocity: vel,
+		Speed: math.Abs(vehicle.Speed),
+		Drift: racingCameraBoolAmount(vehicle.Drifting),
+		Boost: false,
+	}
+}
+
+func (c *RacingCamera) Update(scene *Scene, target RacingCameraTarget, dt float64) {
+	c.normalize()
+	forward := target.Forward
+	forward.Y = 0
+	if forward.LengthSq() <= 0.000001 {
+		if target.Velocity.LengthSq() > 0.000001 {
+			forward = voplay.Vec3{X: target.Velocity.X, Z: target.Velocity.Z}
+		} else {
+			forward = voplay.Vec3{Z: -1}
+		}
+	}
+	forward = forward.Normalize()
+	right := forward.Cross(voplay.Vec3{Y: 1}).Normalize()
+	speed := target.Speed
+	if speed <= 0 {
+		speed = target.Velocity.Length()
+	}
+	if speed < 0 {
+		speed = -speed
+	}
+	boostTarget := 0.0
+	if target.Boost {
+		boostTarget = 1.0
+	}
+	c.boostAmount = racingCameraSmoothScalar(c.boostAmount, boostTarget, c.BoostSmoothing, dt)
+	drift := racingCameraClamp(target.Drift, -1, 1)
+	pivot := target.Position.Add(voplay.Vec3{Y: c.TargetHeight})
+	lookahead := c.LookaheadBase + speed*c.LookaheadSpeedScale
+	desiredTarget := pivot.Add(forward.Scale(lookahead)).Add(right.Scale(drift * c.DriftOffset * 0.35))
+	distance := c.BaseDistance + speed*c.DistanceSpeedScale + c.boostAmount*0.8
+	if distance > c.MaxDistance {
+		distance = c.MaxDistance
+	}
+	shake := racingCameraClamp(target.LandingShake, 0, 1) * c.ShakeScale
+	desiredPos := pivot.Sub(forward.Scale(distance)).Add(right.Scale(drift * c.DriftOffset)).Add(voplay.Vec3{Y: c.Height + shake})
+	if c.CollisionEnabled && scene != nil {
+		desiredPos = c.resolveCollision(scene, pivot, desiredPos)
+	}
+	desiredFov := c.Fov + speed*c.SpeedFov + c.boostAmount*c.BoostFovKick
+	if !c.initialized || dt <= 0 {
+		c.currentPos = desiredPos
+		c.currentTarget = desiredTarget
+		c.currentFov = desiredFov
+		c.initialized = true
+		return
+	}
+	c.currentPos = c.currentPos.Lerp(desiredPos, racingCameraSmoothT(c.Smoothing, dt))
+	c.currentTarget = c.currentTarget.Lerp(desiredTarget, racingCameraSmoothT(c.TargetSmoothing, dt))
+	c.currentFov = racingCameraLerp(c.currentFov, desiredFov, racingCameraSmoothT(c.TargetSmoothing, dt))
+	if c.CollisionEnabled && scene != nil {
+		c.currentPos = c.resolveCollision(scene, pivot, c.currentPos)
+	}
+}
+
+func (c *RacingCamera) Apply(cam *Camera) {
+	cam.Position = c.currentPos
+	cam.Target = c.currentTarget
+	cam.Up = voplay.Vec3{Y: 1}
+	cam.Fov = c.currentFov
+}
+
+func (c *RacingCamera) UpdateCamera(cam *Camera, scene *Scene, target RacingCameraTarget, dt float64) {
+	c.Update(scene, target, dt)
+	c.Apply(cam)
+}
+
+func (c *RacingCamera) Position() voplay.Vec3 {
+	return c.currentPos
+}
+
+func (c *RacingCamera) Target() voplay.Vec3 {
+	return c.currentTarget
+}
+
+func (c *RacingCamera) CurrentFov() float64 {
+	return c.currentFov
+}
+
+func (c *RacingCamera) resolveCollision(scene *Scene, pivot, desiredPos voplay.Vec3) voplay.Vec3 {
+	dir := desiredPos.Sub(pivot)
+	dist := dir.Length()
+	if dist <= 0.000001 {
+		return desiredPos
+	}
+	dir = dir.Scale(1.0 / dist)
+	hit := scene.RayCast(pivot, dir, dist)
+	if hit == nil {
+		return desiredPos
+	}
+	pullDist := hit.Distance - c.CollisionOffset
+	if pullDist < 0 {
+		pullDist = 0
+	}
+	if pullDist > dist {
+		pullDist = dist
+	}
+	return pivot.Add(dir.Scale(pullDist))
+}
+
+func (c *RacingCamera) normalize() {
+	defaults := NewRacingCamera()
+	if c.BaseDistance <= 0 {
+		c.BaseDistance = defaults.BaseDistance
+	}
+	if c.MaxDistance < c.BaseDistance {
+		c.MaxDistance = defaults.MaxDistance
+	}
+	if c.Height <= 0 {
+		c.Height = defaults.Height
+	}
+	if c.TargetHeight <= 0 {
+		c.TargetHeight = defaults.TargetHeight
+	}
+	if c.LookaheadBase <= 0 {
+		c.LookaheadBase = defaults.LookaheadBase
+	}
+	if c.Smoothing < 0 {
+		c.Smoothing = defaults.Smoothing
+	}
+	if c.TargetSmoothing < 0 {
+		c.TargetSmoothing = defaults.TargetSmoothing
+	}
+	if c.Fov <= 0 {
+		c.Fov = defaults.Fov
+	}
+	if c.BoostSmoothing < 0 {
+		c.BoostSmoothing = defaults.BoostSmoothing
+	}
+	if c.CollisionOffset <= 0 {
+		c.CollisionOffset = defaults.CollisionOffset
+	}
+	if c.ShakeScale <= 0 {
+		c.ShakeScale = defaults.ShakeScale
+	}
+}
+
+func racingCameraSmoothT(smoothing, dt float64) float64 {
+	if smoothing <= 0 || dt <= 0 {
+		return 1
+	}
+	return 1.0 - math.Exp(-smoothing*dt)
+}
+
+func racingCameraSmoothScalar(current, target, smoothing, dt float64) float64 {
+	return racingCameraLerp(current, target, racingCameraSmoothT(smoothing, dt))
+}
+
+func racingCameraLerp(a, b, t float64) float64 {
+	return a + (b-a)*t
+}
+
+func racingCameraClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func racingCameraBoolAmount(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
+}

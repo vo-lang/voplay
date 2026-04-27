@@ -1,0 +1,94 @@
+package scene3d
+
+import "github.com/vo-lang/voplay"
+
+const (
+	RacingActionSteerLeft = "racing.steer_left"
+	RacingActionSteerRight = "racing.steer_right"
+	RacingActionThrottle = "racing.throttle"
+	RacingActionBrake = "racing.brake"
+	RacingActionDrift = "racing.drift"
+	RacingActionBoost = "racing.boost"
+)
+
+type RacingInput struct {
+	Steer float64
+	Throttle float64
+	Brake float64
+	Drift bool
+	Boost bool
+}
+
+type RacingInputProfile struct {
+	Actions *voplay.ActionMap
+	Gamepad int
+	Deadzone float64
+}
+
+func NewRacingInputProfile(input *voplay.InputState) *RacingInputProfile {
+	if input == nil {
+		panic("scene3d.NewRacingInputProfile: input must not be nil")
+	}
+	p := &RacingInputProfile{
+		Actions: voplay.NewActionMap(input),
+		Gamepad: 0,
+		Deadzone: 0.18,
+	}
+	p.BindDefaults()
+	return p
+}
+
+func (p *RacingInputProfile) BindDefaults() {
+	if p == nil || p.Actions == nil {
+		panic("scene3d.RacingInputProfile.BindDefaults: profile is not initialized")
+	}
+	p.Actions.Rebind(RacingActionSteerLeft, voplay.KeyBinding("ArrowLeft"), voplay.KeyBinding("a"), voplay.GamepadAxisBinding(p.Gamepad, "left_x", -1, p.Deadzone))
+	p.Actions.Rebind(RacingActionSteerRight, voplay.KeyBinding("ArrowRight"), voplay.KeyBinding("d"), voplay.GamepadAxisBinding(p.Gamepad, "left_x", 1, p.Deadzone))
+	p.Actions.Rebind(RacingActionThrottle, voplay.KeyBinding("ArrowUp"), voplay.KeyBinding("w"), voplay.GamepadAxisBinding(p.Gamepad, "right_trigger", 1, 0.04))
+	p.Actions.Rebind(RacingActionBrake, voplay.KeyBinding("ArrowDown"), voplay.KeyBinding("s"), voplay.GamepadAxisBinding(p.Gamepad, "left_trigger", 1, 0.04))
+	p.Actions.Rebind(RacingActionDrift, voplay.KeyBinding(" "), voplay.GamepadButtonBinding(p.Gamepad, "right_shoulder"))
+	p.Actions.Rebind(RacingActionBoost, voplay.KeyBinding("Shift"), voplay.GamepadButtonBinding(p.Gamepad, "south"))
+}
+
+func (p *RacingInputProfile) Rebind(action string, bindings ...voplay.InputBinding) {
+	if p == nil || p.Actions == nil {
+		panic("scene3d.RacingInputProfile.Rebind: profile is not initialized")
+	}
+	p.Actions.Rebind(action, bindings...)
+}
+
+func (p *RacingInputProfile) Read() RacingInput {
+	if p == nil || p.Actions == nil {
+		panic("scene3d.RacingInputProfile.Read: profile is not initialized")
+	}
+	return RacingInput{
+		Steer: racingInputClamp(p.Actions.Axis(RacingActionSteerLeft, RacingActionSteerRight), -1, 1),
+		Throttle: racingInputClamp(p.Actions.Value(RacingActionThrottle), 0, 1),
+		Brake: racingInputClamp(p.Actions.Value(RacingActionBrake), 0, 1),
+		Drift: p.Actions.IsDown(RacingActionDrift),
+		Boost: p.Actions.IsDown(RacingActionBoost),
+	}
+}
+
+func (i RacingInput) VehicleInput() VehicleInput {
+	throttle := i.Throttle
+	if i.Brake > throttle {
+		throttle = -i.Brake
+	}
+	return VehicleInput{
+		Throttle: racingInputClamp(throttle, -1, 1),
+		Steer: racingInputClamp(i.Steer, -1, 1),
+		Drift: i.Drift,
+		Boost: i.Boost,
+	}
+}
+
+func racingInputClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

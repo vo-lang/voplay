@@ -53,6 +53,9 @@ export class RenderIsland {
   private stopped = false;
   private recentConsoleErrors: string[] = [];
   private originalConsoleError: ((...args: unknown[]) => void) | null = null;
+  private inboundFrameCount = 0;
+  private outboundFrameCount = 0;
+  private wakeCount = 0;
 
   constructor(config: RenderIslandConfig) {
     this.config = config;
@@ -94,6 +97,11 @@ export class RenderIsland {
     this.config.channel.onReceive((frame) => {
       try {
         if (this.stopped || !this.vm) return;
+        this.inboundFrameCount += 1;
+        this.debugFrameStatus(
+          `render island inbound #${this.inboundFrameCount} bytes=${frame.byteLength}`,
+          this.inboundFrameCount,
+        );
         this.vm.pushIslandCommand(frame);
         const outcome = this.vm.runScheduled();
         this.flush();
@@ -131,6 +139,11 @@ export class RenderIsland {
     if (!this.vm) return;
     const cmds = this.vm.takeOutboundCommands();
     for (const frame of cmds) {
+      this.outboundFrameCount += 1;
+      this.debugFrameStatus(
+        `render island outbound #${this.outboundFrameCount} bytes=${frame.byteLength}`,
+        this.outboundFrameCount,
+      );
       this.config.channel.send(frame);
     }
   }
@@ -144,6 +157,11 @@ export class RenderIsland {
         try {
           this.hostTimers.delete(ev.token);
           if (this.stopped || !this.vm) return;
+          this.wakeCount += 1;
+          this.debugFrameStatus(
+            `render island wake #${this.wakeCount} delay=${ev.delayMs}`,
+            this.wakeCount,
+          );
           this.vm.wakeHostEvent(ev.token);
           const outcome = this.vm.runScheduled();
           this.flush();
@@ -165,7 +183,7 @@ export class RenderIsland {
   }
 
   private fail(context: string, error: unknown): void {
-    let message = `${context}: ${this.describeError(error)}`;
+    let message = this.normalizeVmPanic(`${context}: ${this.describeError(error)}`);
     const captured = this.drainCapturedErrors();
     if (captured.length > 0) {
       message += `\nRust panic: ${captured.join('\n')}`;
@@ -181,7 +199,7 @@ export class RenderIsland {
       const extra = Object.entries(extraFields)
         .map(([key, value]) => `${key}=${this.describeValue(value)}`)
         .join(", ");
-      let message = `${error.name}: ${error.message}`;
+      let message = `${error.name}: ${this.normalizeVmPanic(error.message)}`;
       if (error.stack) {
         message += `\n${error.stack}`;
       }
@@ -197,19 +215,37 @@ export class RenderIsland {
   }
 
   private describeValue(value: unknown): string {
-    if (typeof value === "string") return value;
+    if (typeof value === "string") return this.normalizeVmPanic(value);
     if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) {
       return String(value);
     }
     try {
-      return JSON.stringify(value);
+      return this.normalizeVmPanic(JSON.stringify(value));
     } catch {
-      return String(value);
+      return this.normalizeVmPanic(String(value));
+    }
+  }
+
+  private normalizeVmPanic(message: string): string {
+    const panicMatch = message.match(/PanicUnwound \{ msg: Some\("((?:\\.|[^"\\])*)"\)/);
+    if (!panicMatch) {
+      return message;
+    }
+    try {
+      return JSON.parse(`"${panicMatch[1]}"`);
+    } catch {
+      return panicMatch[1];
     }
   }
 
   private debug(message: string): void {
     this.config.debugLog?.(message);
+  }
+
+  private debugFrameStatus(message: string, count: number): void {
+    if (count <= 4 || count % 60 === 0) {
+      this.debug(message);
+    }
   }
 
   private installConsoleErrorCapture(): void {

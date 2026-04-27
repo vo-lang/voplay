@@ -127,6 +127,8 @@ pub fn generate_terrain(
                 position: [x, h, z],
                 normal,
                 uv: [u, v],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
     }

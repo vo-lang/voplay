@@ -1,150 +1,115 @@
 package scene3d
 
-import "math"
-import "github.com/vo-lang/voplay"
-import "github.com/vo-lang/voplay/codec"
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
 
 const (
-	raycastVehicleWheelDescBytes  = 18 * 8
+	raycastVehicleWheelDescBytes = 18 * 8
 	raycastVehicleWheelStateBytes = 1 + 12 * 8
 )
 
 type VehicleWheelConfig struct {
-	Connection              voplay.Vec3
-	Direction               voplay.Vec3
-	Axle                    voplay.Vec3
-	SuspensionRestLength    float64
-	Radius                  float64
-	SuspensionStiffness     float64
-	SuspensionCompression   float64
-	SuspensionDamping       float64
-	MaxSuspensionTravel     float64
-	SideFrictionStiffness   float64
-	FrictionSlip            float64
-	MaxSuspensionForce      float64
-	Steer                   bool
-	Drive                   bool
-	Brake                   bool
+	Connection voplay.Vec3
+	Direction voplay.Vec3
+	Axle voplay.Vec3
+	SuspensionRestLength float64
+	Radius float64
+	SuspensionStiffness float64
+	SuspensionCompression float64
+	SuspensionDamping float64
+	MaxSuspensionTravel float64
+	SideFrictionStiffness float64
+	FrictionSlip float64
+	MaxSuspensionForce float64
+	Steer bool
+	Drive bool
+	Brake bool
 }
 
 type VehicleConfig struct {
-	Wheels             []VehicleWheelConfig
-	MaxForwardSpeed    float64
-	MaxReverseSpeed    float64
-	EngineForce        float64
+	Wheels []VehicleWheelConfig
+	MaxForwardSpeed float64
+	MaxReverseSpeed float64
+	EngineForce float64
 	ReverseEngineForce float64
-	BrakeForce         float64
-	CoastBrake         float64
-	BoostEngineForce   float64
-	MaxSteerAngle      float64
-	SteerRate          float64
-	DriftSteerScale    float64
-	DriftMinSpeed      float64
+	BrakeForce float64
+	CoastBrake float64
+	BoostEngineForce float64
+	MaxSteerAngle float64
+	SteerRate float64
+	DriftSteerScale float64
+	DriftMinSpeed float64
 }
 
 type VehicleInput struct {
 	Throttle float64
-	Steer    float64
-	Drift    bool
-	Boost    bool
+	Steer float64
+	Drift bool
+	Boost bool
 }
 
 type VehicleWheelState struct {
-	Center           voplay.Vec3
-	ContactPoint     voplay.Vec3
-	ContactNormal    voplay.Vec3
+	Center voplay.Vec3
+	ContactPoint voplay.Vec3
+	ContactNormal voplay.Vec3
 	SuspensionLength float64
-	Steering         float64
-	Rotation         float64
-	InContact        bool
+	SuspensionCompression float64
+	Steering float64
+	Rotation float64
+	NormalLoad float64
+	LongitudinalSlip float64
+	LateralSlip float64
+	SurfaceID string
+	InContact bool
 }
 
 type Vehicle struct {
-	Body         *Entity
-	Config       VehicleConfig
-	Yaw          float64
-	Speed        float64
-	Grounded     bool
+	Body *Entity
+	Config VehicleConfig
+	Yaw float64
+	Speed float64
+	Grounded bool
 	GroundNormal voplay.Vec3
-	GroundPoint  voplay.Vec3
-	Drifting     bool
-	SteerAngle   float64
-	WheelSpin    float64
-	Wheels       []VehicleWheelState
-
-	scene     *Scene
+	GroundPoint voplay.Vec3
+	Track *Track
+	Drifting bool
+	SteerAngle float64
+	WheelSpin float64
+	Wheels []VehicleWheelState
+	scene *Scene
 	vehicleID int
 }
 
 func DefaultKartVehicleConfig() VehicleConfig {
-	wheel := VehicleWheelConfig{
-		Direction:             voplay.Vec3{Y: -1},
-		Axle:                  voplay.Vec3{X: 1},
-		SuspensionRestLength:  0.56,
-		Radius:                0.46,
-		SuspensionStiffness:   28.0,
-		SuspensionCompression: 4.4,
-		SuspensionDamping:     5.8,
-		MaxSuspensionTravel:   0.34,
-		SideFrictionStiffness: 1.45,
-		FrictionSlip:          4.2,
-		MaxSuspensionForce:    18000.0,
-		Brake:                 true,
-	}
-
+	wheel := VehicleWheelConfig{Direction: voplay.Vec3{Y: -1}, Axle: voplay.Vec3{X: 1}, SuspensionRestLength: 0.56, Radius: 0.46, SuspensionStiffness: 28.0, SuspensionCompression: 4.4, SuspensionDamping: 5.8, MaxSuspensionTravel: 0.34, SideFrictionStiffness: 1.45, FrictionSlip: 4.2, MaxSuspensionForce: 18000.0, Brake: true}
 	frontLeft := wheel
 	frontLeft.Connection = voplay.Vec3{X: -0.84, Y: -0.34, Z: -0.82}
 	frontLeft.Steer = true
-
 	frontRight := wheel
 	frontRight.Connection = voplay.Vec3{X: 0.84, Y: -0.34, Z: -0.82}
 	frontRight.Steer = true
-
 	rearLeft := wheel
 	rearLeft.Connection = voplay.Vec3{X: -0.84, Y: -0.34, Z: 0.86}
 	rearLeft.Drive = true
-
 	rearRight := wheel
 	rearRight.Connection = voplay.Vec3{X: 0.84, Y: -0.34, Z: 0.86}
 	rearRight.Drive = true
-
-	return VehicleConfig{
-		Wheels:             []VehicleWheelConfig{frontLeft, frontRight, rearLeft, rearRight},
-		MaxForwardSpeed:    38.0,
-		MaxReverseSpeed:    10.0,
-		EngineForce:        9200.0,
-		ReverseEngineForce: 3600.0,
-		BrakeForce:         150.0,
-		CoastBrake:         6.0,
-		BoostEngineForce:   4200.0,
-		MaxSteerAngle:      0.54,
-		SteerRate:          9.5,
-		DriftSteerScale:    1.28,
-		DriftMinSpeed:      7.0,
-	}
+	return VehicleConfig{Wheels: []VehicleWheelConfig{frontLeft, frontRight, rearLeft, rearRight}, MaxForwardSpeed: 38.0, MaxReverseSpeed: 10.0, EngineForce: 9200.0, ReverseEngineForce: 3600.0, BrakeForce: 150.0, CoastBrake: 6.0, BoostEngineForce: 4200.0, MaxSteerAngle: 0.54, SteerRate: 9.5, DriftSteerScale: 1.28, DriftMinSpeed: 7.0}
 }
 
 func NewVehicle(body *Entity, config VehicleConfig) *Vehicle {
 	if body == nil || !body.Active || body.Physics == nil || body.Physics.bodyID == 0 || body.scene == nil {
 		panic("scene3d.NewVehicle: body must be an active physics entity")
 	}
-
 	scene := body.scene
 	scene.ensurePhysics()
-
 	config = normalizeVehicleConfig(config)
 	vehicleID := scene.nextVehicleID
 	scene.nextVehicleID++
-
-	v := &Vehicle{
-		Body:         body,
-		Config:       config,
-		Yaw:          vehicleYawFromRotation(body.Rotation()),
-		GroundNormal: voplay.Vec3{Y: 1},
-		scene:        scene,
-		vehicleID:    vehicleID,
-	}
-
+	v := &Vehicle{Body: body, Config: config, Yaw: vehicleYawFromRotation(body.Rotation()), GroundNormal: voplay.Vec3{Y: 1}, scene: scene, vehicleID: vehicleID}
 	physBackend.CreateRaycastVehicle(scene.worldID, vehicleID, body.Physics.bodyID)
 	for _, wheel := range config.Wheels {
 		physBackend.AddRaycastVehicleWheel(scene.worldID, vehicleID, serializeVehicleWheelConfig(wheel))
@@ -164,6 +129,7 @@ func (v *Vehicle) Destroy() {
 	v.vehicleID = 0
 	v.scene = nil
 	v.Body = nil
+	v.Wheels = nil
 }
 
 func (v *Vehicle) Update(input VehicleInput, dt float64) {
@@ -174,19 +140,15 @@ func (v *Vehicle) Update(input VehicleInput, dt float64) {
 	if scene == nil || scene.worldID == 0 {
 		return
 	}
-
 	v.syncState()
-
 	input.Throttle = vehicleClamp(input.Throttle, -1, 1)
 	input.Steer = vehicleClamp(input.Steer, -1, 1)
-
 	v.Drifting = input.Drift && math.Abs(v.Speed) >= v.Config.DriftMinSpeed && v.Grounded
 	steerTarget := input.Steer * v.Config.MaxSteerAngle
 	if v.Drifting {
 		steerTarget *= v.Config.DriftSteerScale
 	}
-	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, steerTarget, v.Config.SteerRate*dt)
-
+	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, steerTarget, v.Config.SteerRate * dt)
 	engineForce := 0.0
 	brake := v.Config.CoastBrake
 	if input.Throttle > 0 {
@@ -205,15 +167,12 @@ func (v *Vehicle) Update(input VehicleInput, dt float64) {
 			brake = 0
 		}
 	}
-
 	driveWheelCount := vehicleDriveWheelCount(v.Config.Wheels)
 	for i, wheel := range v.Config.Wheels {
 		steering := 0.0
 		force := 0.0
 		wheelBrake := 0.0
-
 		if wheel.Steer {
-			// Rapier's raycast vehicle steering sign is opposite to voplay's -Z-forward convention.
 			steering = -v.SteerAngle
 		}
 		if wheel.Drive {
@@ -239,6 +198,9 @@ func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {
 	v.Body.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw))
 	if v.Body.Physics != nil {
 		v.Body.SetVelocity(voplay.Vec3{})
+		v.Body.SetAngularVelocity(voplay.Vec3{})
+		v.Body.Physics.velocity = voplay.Vec3{}
+		v.Body.Physics.angularVelocity = voplay.Vec3{}
 	}
 	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
 		for i := 0; i < len(v.Config.Wheels); i++ {
@@ -266,6 +228,13 @@ func (v *Vehicle) Forward() voplay.Vec3 {
 	return forward.Normalize()
 }
 
+func (v *Vehicle) BindTrack(track *Track) {
+	if v == nil {
+		return
+	}
+	v.Track = track
+}
+
 func (v *Vehicle) VisualRotation() voplay.Quat {
 	return v.Rotation()
 }
@@ -277,58 +246,91 @@ func (v *Vehicle) WheelState(index int) (VehicleWheelState, bool) {
 	return v.Wheels[index], true
 }
 
+func (v *Vehicle) WheelCount() int {
+	if v == nil {
+		return 0
+	}
+	if len(v.Wheels) > 0 {
+		return len(v.Wheels)
+	}
+	return len(v.Config.Wheels)
+}
+
 func (v *Vehicle) syncState() {
 	if v == nil || v.scene == nil || v.scene.worldID == 0 || v.vehicleID == 0 {
 		return
 	}
-
 	data := physBackend.RaycastVehicleState(v.scene.worldID, v.vehicleID)
 	if len(data) < 12 {
 		return
 	}
-
 	r := codec.NewByteReader(data)
-	v.Speed = r.ReadF64()
+	v.Speed = vehicleFiniteOr(r.ReadF64(), 0)
 	count := r.ReadU32()
+	maxCount := r.Remaining() / raycastVehicleWheelStateBytes
+	if count > maxCount {
+		count = maxCount
+	}
+	if len(v.Config.Wheels) > 0 && count > len(v.Config.Wheels) {
+		count = len(v.Config.Wheels)
+	}
 	if len(v.Wheels) != count {
 		v.Wheels = make([]VehicleWheelState, count)
 	}
-
 	v.Grounded = false
 	v.GroundNormal = voplay.Vec3{Y: 1}
 	v.GroundPoint = voplay.Vec3{}
 	normalSum := voplay.Vec3{}
 	pointSum := voplay.Vec3{}
 	contactCount := 0
-
 	for i := 0; i < count; i++ {
 		if r.Remaining() < raycastVehicleWheelStateBytes {
 			break
 		}
-
 		state := VehicleWheelState{}
 		state.InContact = r.ReadBool()
 		state.Center = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
 		state.ContactPoint = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
 		state.ContactNormal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
-		state.SuspensionLength = r.ReadF64()
-		state.Steering = -r.ReadF64()
-		state.Rotation = r.ReadF64()
+		state.SuspensionLength = vehicleFiniteOr(r.ReadF64(), 0)
+		state.Steering = vehicleFiniteOr(-r.ReadF64(), 0)
+		state.Rotation = vehicleFiniteOr(r.ReadF64(), 0)
+		if i < len(v.Config.Wheels) {
+			cfg := v.Config.Wheels[i]
+			if cfg.SuspensionRestLength > 0 {
+				state.SuspensionCompression = vehicleClamp((cfg.SuspensionRestLength - state.SuspensionLength) / cfg.SuspensionRestLength, 0, 1)
+			}
+			state.NormalLoad = state.SuspensionCompression * cfg.MaxSuspensionForce
+			if cfg.Radius > 0 {
+				wheelLinearSpeed := state.Rotation * cfg.Radius
+				longitudinalVelocity, lateralVelocity := v.localWheelSlipVelocity()
+				state.LongitudinalSlip = math.Abs(longitudinalVelocity - wheelLinearSpeed)
+				state.LateralSlip = math.Abs(lateralVelocity)
+			}
+		}
+		state.Center = vehicleCleanVec3(state.Center)
+		state.ContactPoint = vehicleCleanVec3(state.ContactPoint)
+		state.ContactNormal = vehicleCleanNormal(state.ContactNormal)
+		state.SuspensionCompression = vehicleFiniteOr(state.SuspensionCompression, 0)
+		state.NormalLoad = vehicleFiniteOr(state.NormalLoad, 0)
+		state.LongitudinalSlip = vehicleFiniteOr(state.LongitudinalSlip, 0)
+		state.LateralSlip = vehicleFiniteOr(state.LateralSlip, 0)
+		if state.InContact && v.Track != nil {
+			surface := v.Track.SurfaceAt(state.ContactPoint)
+			state.SurfaceID = surface.Name
+		}
 		v.Wheels[i] = state
-
 		if state.InContact {
 			normalSum = normalSum.Add(state.ContactNormal)
 			pointSum = pointSum.Add(state.ContactPoint)
 			contactCount++
 		}
 	}
-
 	if contactCount > 0 {
 		v.Grounded = true
 		v.GroundNormal = normalSum.Scale(1.0 / float64(contactCount)).Normalize()
 		v.GroundPoint = pointSum.Scale(1.0 / float64(contactCount))
 	}
-
 	if len(v.Wheels) > 0 {
 		totalRotation := 0.0
 		for _, wheel := range v.Wheels {
@@ -338,10 +340,32 @@ func (v *Vehicle) syncState() {
 	} else {
 		v.WheelSpin = 0
 	}
-
 	if v.Body != nil {
 		v.Yaw = vehicleYawFromRotation(v.Body.Rotation())
 	}
+}
+
+func (v *Vehicle) localWheelSlipVelocity() (float64, float64) {
+	longitudinal := v.Speed
+	lateral := 0.0
+	if v == nil || v.Body == nil || v.Body.Physics == nil {
+		return longitudinal, lateral
+	}
+	vel := vehicleCleanVec3(v.Body.Physics.velocity)
+	if vel.LengthSq() == 0 {
+		return longitudinal, lateral
+	}
+	forward := v.Forward()
+	right := v.Rotation().RotateVec3(voplay.Vec3{X: 1})
+	right.Y = 0
+	if right.LengthSq() == 0 {
+		right = voplay.Vec3{X: 1}
+	} else {
+		right = right.Normalize()
+	}
+	longitudinal = math.Abs(vel.Dot(forward))
+	lateral = vel.Dot(right)
+	return longitudinal, lateral
 }
 
 func (s *Scene) registerVehicle(v *Vehicle) {
@@ -543,4 +567,23 @@ func vehicleClamp(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+func vehicleFiniteOr(v, fallback float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fallback
+	}
+	return v
+}
+
+func vehicleCleanVec3(v voplay.Vec3) voplay.Vec3 {
+	return voplay.Vec3{X: vehicleFiniteOr(v.X, 0), Y: vehicleFiniteOr(v.Y, 0), Z: vehicleFiniteOr(v.Z, 0)}
+}
+
+func vehicleCleanNormal(v voplay.Vec3) voplay.Vec3 {
+	v = vehicleCleanVec3(v)
+	if v.LengthSq() == 0 {
+		return voplay.Vec3{Y: 1}
+	}
+	return v.Normalize()
 }

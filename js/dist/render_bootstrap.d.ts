@@ -36,6 +36,9 @@ export declare class RenderIsland {
     private stopped;
     private recentConsoleErrors;
     private originalConsoleError;
+    private inboundFrameCount;
+    private outboundFrameCount;
+    private wakeCount;
     constructor(config: RenderIslandConfig);
     init(voWeb: VoWebModule): Promise<void>;
     start(): void;
@@ -45,7 +48,9 @@ export declare class RenderIsland {
     private fail;
     private describeError;
     private describeValue;
+    private normalizeVmPanic;
     private debug;
+    private debugFrameStatus;
     private installConsoleErrorCapture;
     private drainCapturedErrors;
 }

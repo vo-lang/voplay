@@ -149,6 +149,19 @@ impl TextureManager {
         height: u32,
         rgba_data: &[u8],
     ) -> TextureId {
+        self.load_rgba_with_srgb(device, queue, width, height, rgba_data, true)
+    }
+
+    /// Load a texture from raw RGBA8 pixel data with explicit color space.
+    pub fn load_rgba_with_srgb(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+        srgb: bool,
+    ) -> TextureId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -161,7 +174,11 @@ impl TextureManager {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });

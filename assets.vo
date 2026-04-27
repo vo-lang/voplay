@@ -1,6 +1,7 @@
 package voplay
 
 import "os"
+import "strconv"
 import "github.com/vo-lang/vopack"
 import "github.com/vo-lang/vogui"
 
@@ -71,6 +72,26 @@ type Assets struct {
 	fonts      *assetStore
 	models     *assetStore
 	audio      *assetStore
+}
+
+// BytesAssetKey builds a deterministic content-addressed key for generated assets.
+// Use it with *Bytes loaders when the same logical generated asset can change
+// contents during development or procedural rebuilds.
+func BytesAssetKey(prefix string, data []byte, ext string) string {
+	hash := bytesAssetHash(data)
+	return prefix + "_" + strconv.Itoa(len(data)) + "_" + strconv.Itoa(hash) + ext
+}
+
+func bytesAssetHash(data []byte) int {
+	hash := 2166136261
+	for _, b := range data {
+		hash = hash ^ int(b)
+		hash = (hash * 16777619) % 2147483647
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return hash
 }
 
 func newAssetStore(label string, loader AssetLoader) *assetStore {
@@ -303,6 +324,20 @@ func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
 // then the filesystem. Raw bytes are not group-managed.
 func (a *Assets) Bytes(path string) ([]byte, error) {
 	return readAssetBytes(a.mounts, path)
+}
+
+func (a *Assets) VerifyPackDependencies(path string) error {
+	if a.mounts == nil {
+		return nil
+	}
+	return a.mounts.VerifyManifestDependencies(path)
+}
+
+func (a *Assets) PackManifestFor(path string) (*vopack.Manifest, error) {
+	if a.mounts == nil {
+		return nil, os.ErrNotExist
+	}
+	return a.mounts.ManifestFor(path)
 }
 
 // Audio loads an audio clip by path. Mounted archives are searched first,

@@ -53,6 +53,47 @@ func (w *ByteWriter) WriteBool(v bool) {
 	}
 }
 
+func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, ry, rz, rw, sx, sy, sz float64, materialID int, tr, tg, tb, ta float64, visible bool) {
+	pXB := math.Float32bits(float32(px))
+	pYB := math.Float32bits(float32(py))
+	pZB := math.Float32bits(float32(pz))
+	rXB := math.Float32bits(float32(rx))
+	rYB := math.Float32bits(float32(ry))
+	rZB := math.Float32bits(float32(rz))
+	rWB := math.Float32bits(float32(rw))
+	sXB := math.Float32bits(float32(sx))
+	sYB := math.Float32bits(float32(sy))
+	sZB := math.Float32bits(float32(sz))
+	tRB := math.Float32bits(float32(tr))
+	tGB := math.Float32bits(float32(tg))
+	tBB := math.Float32bits(float32(tb))
+	tAB := math.Float32bits(float32(ta))
+	visibleByte := byte(0)
+	if visible {
+		visibleByte = 1
+	}
+	w.buf = append(w.buf,
+		byte(objectID), byte(objectID>>8), byte(objectID>>16), byte(objectID>>24),
+		byte(shapeID), byte(shapeID>>8), byte(shapeID>>16), byte(shapeID>>24),
+		byte(pXB), byte(pXB>>8), byte(pXB>>16), byte(pXB>>24),
+		byte(pYB), byte(pYB>>8), byte(pYB>>16), byte(pYB>>24),
+		byte(pZB), byte(pZB>>8), byte(pZB>>16), byte(pZB>>24),
+		byte(rXB), byte(rXB>>8), byte(rXB>>16), byte(rXB>>24),
+		byte(rYB), byte(rYB>>8), byte(rYB>>16), byte(rYB>>24),
+		byte(rZB), byte(rZB>>8), byte(rZB>>16), byte(rZB>>24),
+		byte(rWB), byte(rWB>>8), byte(rWB>>16), byte(rWB>>24),
+		byte(sXB), byte(sXB>>8), byte(sXB>>16), byte(sXB>>24),
+		byte(sYB), byte(sYB>>8), byte(sYB>>16), byte(sYB>>24),
+		byte(sZB), byte(sZB>>8), byte(sZB>>16), byte(sZB>>24),
+		byte(materialID), byte(materialID>>8), byte(materialID>>16), byte(materialID>>24),
+		byte(tRB), byte(tRB>>8), byte(tRB>>16), byte(tRB>>24),
+		byte(tGB), byte(tGB>>8), byte(tGB>>16), byte(tGB>>24),
+		byte(tBB), byte(tBB>>8), byte(tBB>>16), byte(tBB>>24),
+		byte(tAB), byte(tAB>>8), byte(tAB>>16), byte(tAB>>24),
+		visibleByte,
+	)
+}
+
 func (w *ByteWriter) WriteRawBytes(data []byte) {
 	w.buf = append(w.buf, data...)
 }

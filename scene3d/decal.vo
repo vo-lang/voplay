@@ -1,0 +1,81 @@
+package scene3d
+
+import (
+	"errors"
+	"github.com/vo-lang/voplay"
+)
+
+type DecalDesc struct {
+	Position voplay.Vec3
+	Yaw float64
+	Width float64
+	Height float64
+	SurfaceOffset float64
+	Material voplay.MaterialDesc
+	Model voplay.ModelID
+	Tag string
+}
+
+type Decal struct {
+	Entity *Entity
+	model voplay.ModelID
+	ownedModel bool
+}
+
+func SpawnDecal(scene *Scene, desc DecalDesc) (*Decal, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnDecal: scene is nil")
+	}
+	desc = normalizeDecalDesc(desc)
+	model := desc.Model
+	owned := false
+	if model == 0 {
+		model = PlaneMesh(desc.Width, desc.Height, 1, 1)
+		owned = true
+	}
+	tag := desc.Tag
+	if tag == "" {
+		tag = "decal"
+	}
+	entity := scene.Spawn(EntityDesc{Position: desc.Position.Add(voplay.Vec3{Y: desc.SurfaceOffset}), Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, desc.Yaw), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, Model: model, Material: desc.Material, Tag: tag, PickMode: PickDisabled})
+	return &Decal{Entity: entity, model: model, ownedModel: owned}, nil
+}
+
+func SpawnTrackDecal(scene *Scene, track *Track, distance, lateral float64, desc DecalDesc) (*Decal, error) {
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnTrackDecal: track is nil")
+	}
+	pose := track.PoseAt(distance)
+	desc.Position = pose.Position.Add(pose.Right.Scale(lateral))
+	desc.Yaw = pose.Yaw
+	return SpawnDecal(scene, desc)
+}
+
+func (d *Decal) Destroy(scene *Scene) {
+	if d == nil {
+		return
+	}
+	if d.Entity != nil && scene != nil && d.Entity.scene == scene && d.Entity.Active {
+		scene.Destroy(d.Entity)
+	}
+	d.Entity = nil
+	if d.ownedModel && d.model != 0 {
+		d.model.Free()
+		d.model = 0
+		d.ownedModel = false
+	}
+}
+
+func normalizeDecalDesc(desc DecalDesc) DecalDesc {
+	if desc.Width <= 0 {
+		desc.Width = 1
+	}
+	if desc.Height <= 0 {
+		desc.Height = 1
+	}
+	if desc.SurfaceOffset <= 0 {
+		desc.SurfaceOffset = 0.035
+	}
+	desc.Material = voplay.NormalizeMaterial(desc.Material)
+	return desc
+}

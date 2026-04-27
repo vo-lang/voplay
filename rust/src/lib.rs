@@ -19,6 +19,8 @@ mod font_manager;
 mod host_api;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod input;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod material;
 #[allow(dead_code)]
 mod math3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -39,6 +41,10 @@ mod pipeline_shadow;
 mod pipeline_skybox;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_sprite;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod primitive_pipeline;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod primitive_scene;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod primitives;
 #[cfg(any(feature = "native", feature = "wasm"))]

@@ -203,6 +203,12 @@ pub fn transpose_upper3x3(m: &Mat4) -> Mat4 {
     ]
 }
 
+pub fn normal_matrix(model: &Mat4) -> Mat4 {
+    mat4_inverse(model)
+        .map(|inverse| transpose_upper3x3(&inverse))
+        .unwrap_or(MAT4_IDENTITY)
+}
+
 pub fn mat4_inverse(m: &Mat4) -> Option<Mat4> {
     let mut aug = [[0.0f32; 8]; 4];
     for row in 0..4 {
@@ -567,6 +573,36 @@ mod tests {
         assert!(
             decompose_matrix(&sheared).is_none(),
             "sheared matrix must fail"
+        );
+    }
+
+    #[test]
+    fn normal_matrix_preserves_model_rotation_direction() {
+        let half_turn = std::f32::consts::FRAC_1_SQRT_2;
+        let model = model_matrix(
+            Vec3::ZERO,
+            Quat::new(0.0, 0.0, half_turn, half_turn),
+            Vec3::ONE,
+        );
+        let transformed = mat4_mul_vec4(&normal_matrix(&model), [1.0, 0.0, 0.0, 0.0]);
+        assert!((transformed[0]).abs() <= 1e-5);
+        assert!((transformed[1] - 1.0).abs() <= 1e-5);
+        assert!((transformed[2]).abs() <= 1e-5);
+    }
+
+    #[test]
+    fn normal_matrix_uses_inverse_scale() {
+        let model = model_matrix(Vec3::ZERO, Quat::IDENTITY, Vec3::new(2.0, 4.0, 8.0));
+        let normal = normal_matrix(&model);
+        assert_mat4_near(
+            &normal,
+            &[
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, 0.25, 0.0, 0.0],
+                [0.0, 0.0, 0.125, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            1e-6,
         );
     }
 

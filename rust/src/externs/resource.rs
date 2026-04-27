@@ -296,32 +296,96 @@ fn write_terrain_result(
     }
 }
 
-fn decode_terrain_splat_args(
-    call: &mut ExternCallContext,
-    base: usize,
-) -> Result<(u32, [u32; 4], [f32; 4]), String> {
-    let control_texture_id = call.arg_u64(base as u16) as u32;
+pub(crate) type TerrainSplatArgs = (u32, [u32; 4], [u32; 4], [u32; 4], [f32; 4], [f32; 4]);
+
+fn read_layer_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
+    if *pos + 4 > data.len() {
+        return Err("terrain splat layer data is truncated".to_string());
+    }
+    let value = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    *pos += 4;
+    Ok(value)
+}
+
+fn read_layer_f64(data: &[u8], pos: &mut usize) -> Result<f64, String> {
+    if *pos + 8 > data.len() {
+        return Err("terrain splat layer data is truncated".to_string());
+    }
+    let value = f64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
+    *pos += 8;
+    Ok(value)
+}
+
+pub(crate) fn decode_terrain_splat_layer_data(
+    control_texture_id: u32,
+    layer_data: &[u8],
+) -> Result<TerrainSplatArgs, String> {
+    const LAYER_COUNT: usize = 4;
+    const LAYER_BYTES: usize = 4 + 4 + 4 + 8 + 8;
+    const EXPECTED_BYTES: usize = LAYER_COUNT * LAYER_BYTES;
+
     if control_texture_id == 0 {
         return Err("terrain splat control texture must be non-zero".to_string());
     }
+    if layer_data.len() != EXPECTED_BYTES {
+        return Err(format!(
+            "terrain splat layer data must be {} bytes, got {}",
+            EXPECTED_BYTES,
+            layer_data.len()
+        ));
+    }
+
+    let mut pos = 0usize;
     let mut layer_texture_ids = [0u32; 4];
+    let mut layer_normal_texture_ids = [0u32; 4];
+    let mut layer_metallic_roughness_texture_ids = [0u32; 4];
     let mut uv_scales = [1.0f32; 4];
+    let mut normal_scales = [0.0f32; 4];
     for index in 0..4 {
-        let texture_id = call.arg_u64((base + 1 + index * 2) as u16) as u32;
+        let texture_id = read_layer_u32(layer_data, &mut pos)?;
         if texture_id == 0 {
             return Err(format!(
                 "terrain splat layer {} texture must be non-zero",
                 index
             ));
         }
-        let uv_scale = call.arg_f64((base + 2 + index * 2) as u16) as f32;
-        if uv_scale <= 0.0 {
+        let normal_texture_id = read_layer_u32(layer_data, &mut pos)?;
+        let metallic_roughness_texture_id = read_layer_u32(layer_data, &mut pos)?;
+        let uv_scale = read_layer_f64(layer_data, &mut pos)? as f32;
+        if !uv_scale.is_finite() || uv_scale <= 0.0 {
             return Err(format!("terrain splat layer {} uvScale must be > 0", index));
         }
+        let normal_scale = read_layer_f64(layer_data, &mut pos)? as f32;
+        if !normal_scale.is_finite() || normal_scale < 0.0 {
+            return Err(format!(
+                "terrain splat layer {} normalScale must be >= 0",
+                index
+            ));
+        }
         layer_texture_ids[index] = texture_id;
+        layer_normal_texture_ids[index] = normal_texture_id;
+        layer_metallic_roughness_texture_ids[index] = metallic_roughness_texture_id;
         uv_scales[index] = uv_scale;
+        normal_scales[index] = normal_scale;
     }
-    Ok((control_texture_id, layer_texture_ids, uv_scales))
+
+    Ok((
+        control_texture_id,
+        layer_texture_ids,
+        layer_normal_texture_ids,
+        layer_metallic_roughness_texture_ids,
+        uv_scales,
+        normal_scales,
+    ))
+}
+
+fn decode_terrain_splat_args(
+    call: &mut ExternCallContext,
+    base: usize,
+) -> Result<TerrainSplatArgs, String> {
+    let control_texture_id = call.arg_u64(base as u16) as u32;
+    let layer_data = call.arg_bytes((base + 1) as u16);
+    decode_terrain_splat_layer_data(control_texture_id, layer_data)
 }
 
 #[vo_fn("voplay/scene3d", "loadLevel")]
@@ -344,11 +408,34 @@ pub fn create_terrain(call: &mut ExternCallContext) -> ExternResult {
         0 => None,
         id => Some(id),
     };
+    let normal_texture_id = match call.arg_u64(6) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let metallic_roughness_texture_id = match call.arg_u64(7) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let normal_scale = call.arg_f64(8) as f32;
+    let roughness = call.arg_f64(9) as f32;
+    let metallic = call.arg_f64(10) as f32;
     let result = file_io::read_bytes(&path)
         .map_err(|e| format!("terrain: read {}: {}", path, e))
         .and_then(|data| {
             with_renderer_result(|r| {
-                r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
+                r.create_terrain(
+                    &data,
+                    scale_x,
+                    scale_y,
+                    scale_z,
+                    uv_scale,
+                    texture_id,
+                    normal_texture_id,
+                    metallic_roughness_texture_id,
+                    normal_scale,
+                    roughness,
+                    metallic,
+                )
             })
         });
     write_terrain_result(call, result);
@@ -362,23 +449,35 @@ pub fn create_terrain_splat(call: &mut ExternCallContext) -> ExternResult {
     let scale_y = call.arg_f64(2) as f32;
     let scale_z = call.arg_f64(3) as f32;
     let args = decode_terrain_splat_args(call, 4);
-    let result = args.and_then(|(control_texture_id, layer_texture_ids, uv_scales)| {
-        file_io::read_bytes(&path)
-            .map_err(|e| format!("terrain: read {}: {}", path, e))
-            .and_then(|data| {
-                with_renderer_result(|r| {
-                    r.create_terrain_splat(
-                        &data,
-                        scale_x,
-                        scale_y,
-                        scale_z,
-                        control_texture_id,
-                        layer_texture_ids,
-                        uv_scales,
-                    )
+    let result = args.and_then(
+        |(
+            control_texture_id,
+            layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
+            uv_scales,
+            normal_scales,
+        )| {
+            file_io::read_bytes(&path)
+                .map_err(|e| format!("terrain: read {}: {}", path, e))
+                .and_then(|data| {
+                    with_renderer_result(|r| {
+                        r.create_terrain_splat(
+                            &data,
+                            scale_x,
+                            scale_y,
+                            scale_z,
+                            control_texture_id,
+                            layer_texture_ids,
+                            layer_normal_texture_ids,
+                            layer_metallic_roughness_texture_ids,
+                            uv_scales,
+                            normal_scales,
+                        )
+                    })
                 })
-            })
-    });
+        },
+    );
     write_terrain_result(call, result);
     ExternResult::Ok
 }
@@ -394,8 +493,31 @@ pub fn create_terrain_bytes(call: &mut ExternCallContext) -> ExternResult {
         0 => None,
         id => Some(id),
     };
+    let normal_texture_id = match call.arg_u64(6) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let metallic_roughness_texture_id = match call.arg_u64(7) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let normal_scale = call.arg_f64(8) as f32;
+    let roughness = call.arg_f64(9) as f32;
+    let metallic = call.arg_f64(10) as f32;
     let result = with_renderer_result(|r| {
-        r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
+        r.create_terrain(
+            &data,
+            scale_x,
+            scale_y,
+            scale_z,
+            uv_scale,
+            texture_id,
+            normal_texture_id,
+            metallic_roughness_texture_id,
+            normal_scale,
+            roughness,
+            metallic,
+        )
     });
     write_terrain_result(call, result);
     ExternResult::Ok
@@ -408,19 +530,31 @@ pub fn create_terrain_bytes_splat(call: &mut ExternCallContext) -> ExternResult 
     let scale_y = call.arg_f64(2) as f32;
     let scale_z = call.arg_f64(3) as f32;
     let args = decode_terrain_splat_args(call, 4);
-    let result = args.and_then(|(control_texture_id, layer_texture_ids, uv_scales)| {
-        with_renderer_result(|r| {
-            r.create_terrain_splat(
-                &data,
-                scale_x,
-                scale_y,
-                scale_z,
-                control_texture_id,
-                layer_texture_ids,
-                uv_scales,
-            )
-        })
-    });
+    let result = args.and_then(
+        |(
+            control_texture_id,
+            layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
+            uv_scales,
+            normal_scales,
+        )| {
+            with_renderer_result(|r| {
+                r.create_terrain_splat(
+                    &data,
+                    scale_x,
+                    scale_y,
+                    scale_z,
+                    control_texture_id,
+                    layer_texture_ids,
+                    layer_normal_texture_ids,
+                    layer_metallic_roughness_texture_ids,
+                    uv_scales,
+                    normal_scales,
+                )
+            })
+        },
+    );
     write_terrain_result(call, result);
     ExternResult::Ok
 }
@@ -464,6 +598,17 @@ pub fn create_cube_mesh(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
+#[vo_fn("voplay", "createRoundedBoxMesh")]
+pub fn create_rounded_box_mesh(call: &mut ExternCallContext) -> ExternResult {
+    let bevel_radius = call.arg_f64(0) as f32;
+    let segments = call.arg_u64(1) as u32;
+    let id = with_renderer_or_panic("createRoundedBoxMesh", |r| {
+        r.create_rounded_box(bevel_radius, segments)
+    });
+    call.ret_u64(0, id as u64);
+    ExternResult::Ok
+}
+
 #[vo_fn("voplay", "createSphereMesh")]
 pub fn create_sphere_mesh(call: &mut ExternCallContext) -> ExternResult {
     let segments = call.arg_u64(0) as u32;
@@ -476,6 +621,21 @@ pub fn create_sphere_mesh(call: &mut ExternCallContext) -> ExternResult {
 pub fn create_cylinder_mesh(call: &mut ExternCallContext) -> ExternResult {
     let segments = call.arg_u64(0) as u32;
     let id = with_renderer_or_panic("createCylinderMesh", |r| r.create_cylinder(segments));
+    call.ret_u64(0, id as u64);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "createConeMesh")]
+pub fn create_cone_mesh(call: &mut ExternCallContext) -> ExternResult {
+    let segments = call.arg_u64(0) as u32;
+    let id = with_renderer_or_panic("createConeMesh", |r| r.create_cone(segments));
+    call.ret_u64(0, id as u64);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "createWedgeMesh")]
+pub fn create_wedge_mesh(call: &mut ExternCallContext) -> ExternResult {
+    let id = with_renderer_or_panic("createWedgeMesh", |r| r.create_wedge());
     call.ret_u64(0, id as u64);
     ExternResult::Ok
 }

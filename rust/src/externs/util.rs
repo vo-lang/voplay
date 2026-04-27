@@ -73,6 +73,24 @@ pub(crate) fn write_bytes_result(
     }
 }
 
+pub(crate) fn write_bool_result(
+    call: &mut ExternCallContext,
+    value_slot: u16,
+    error_slot: u16,
+    result: Result<bool, String>,
+) {
+    match result {
+        Ok(value) => {
+            call.ret_bool(value_slot, value);
+            write_nil_error(call, error_slot);
+        }
+        Err(msg) => {
+            call.ret_bool(value_slot, false);
+            write_error_to(call, error_slot, &msg);
+        }
+    }
+}
+
 pub(crate) fn write_unit_result(
     call: &mut ExternCallContext,
     error_slot: u16,

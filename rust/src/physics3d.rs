@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use crate::math3d::{Quat, Vec3};
 use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
-const BODY_STATE_BYTES_3D: usize = 4 + 10 * 8;
+const BODY_STATE_BYTES_3D: usize = 4 + 13 * 8;
 
 /// Global registry of 3D physics worlds, keyed by world handle.
 static REGISTRY_3D: Mutex<Option<WorldRegistry<PhysicsWorld3D>>> = Mutex::new(None);
@@ -414,17 +414,16 @@ impl PhysicsWorld3D {
         self.raycast_vehicles.remove(&vehicle_id);
     }
 
-    pub fn add_raycast_vehicle_wheel(
-        &mut self,
-        vehicle_id: u32,
-        desc: &RaycastVehicleWheelDesc3D,
-    ) {
-        let vehicle = self.raycast_vehicles.get_mut(&vehicle_id).unwrap_or_else(|| {
-            panic!(
-                "voplay: raycast vehicle not found while adding wheel: {}",
-                vehicle_id
-            )
-        });
+    pub fn add_raycast_vehicle_wheel(&mut self, vehicle_id: u32, desc: &RaycastVehicleWheelDesc3D) {
+        let vehicle = self
+            .raycast_vehicles
+            .get_mut(&vehicle_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "voplay: raycast vehicle not found while adding wheel: {}",
+                    vehicle_id
+                )
+            });
         let tuning = WheelTuning {
             suspension_stiffness: desc.suspension_stiffness,
             suspension_compression: desc.suspension_compression,
@@ -541,7 +540,7 @@ impl PhysicsWorld3D {
 
             match op {
                 // Vec3 commands: 3 × f64 = 24 bytes payload
-                1..=4 => {
+                1..=4 | 6 => {
                     assert!(
                         pos + 24 <= data.len(),
                         "voplay: physics Vec3 command truncated (op={}, pos={}, len={})",
@@ -570,6 +569,7 @@ impl PhysicsWorld3D {
                         2 => rb.apply_impulse(vector![vx, vy, vz], true),
                         3 => rb.set_linvel(vector![vx, vy, vz], true),
                         4 => rb.set_translation(vector![vx, vy, vz], true),
+                        6 => rb.set_angvel(vector![vx, vy, vz], true),
                         _ => unreachable!(),
                     }
                 }
@@ -665,6 +665,7 @@ impl PhysicsWorld3D {
             let pos = rb.translation();
             let rot = rb.rotation();
             let vel = rb.linvel();
+            let angvel = rb.angvel();
 
             buf.extend_from_slice(&body_id.to_le_bytes());
             buf.extend_from_slice(&(pos.x as f64).to_le_bytes());
@@ -677,6 +678,9 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&(vel.x as f64).to_le_bytes());
             buf.extend_from_slice(&(vel.y as f64).to_le_bytes());
             buf.extend_from_slice(&(vel.z as f64).to_le_bytes());
+            buf.extend_from_slice(&(angvel.x as f64).to_le_bytes());
+            buf.extend_from_slice(&(angvel.y as f64).to_le_bytes());
+            buf.extend_from_slice(&(angvel.z as f64).to_le_bytes());
         }
 
         buf
@@ -879,7 +883,7 @@ mod tests {
         assert_eq!(ids, vec![11]);
     }
 
-    /// Build a Vec3 physics command (opcodes 1–4): 29 bytes.
+    /// Build a Vec3 physics command (opcodes 1–4 and 6): 29 bytes.
     fn build_vec3_cmd(op: u8, body_id: u32, x: f64, y: f64, z: f64) -> Vec<u8> {
         let mut buf = Vec::with_capacity(29);
         buf.push(op);
@@ -960,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_state_uses_84_byte_body_records() {
+    fn serialize_state_uses_108_byte_body_records() {
         let mut world = PhysicsWorld3D::new(0.0, 0.0, 0.0);
         let desc = BodyDesc3D {
             body_id: 42,
@@ -1001,6 +1005,9 @@ mod tests {
         let vx = f64::from_le_bytes(state[64..72].try_into().unwrap()) as f32;
         let vy = f64::from_le_bytes(state[72..80].try_into().unwrap()) as f32;
         let vz = f64::from_le_bytes(state[80..88].try_into().unwrap()) as f32;
+        let avx = f64::from_le_bytes(state[88..96].try_into().unwrap()) as f32;
+        let avy = f64::from_le_bytes(state[96..104].try_into().unwrap()) as f32;
+        let avz = f64::from_le_bytes(state[104..112].try_into().unwrap()) as f32;
 
         assert_near(x, 1.0, 0.0001);
         assert_near(y, 2.0, 0.0001);
@@ -1009,6 +1016,43 @@ mod tests {
         assert_near(vx, 0.0, 0.0001);
         assert_near(vy, 0.0, 0.0001);
         assert_near(vz, 0.0, 0.0001);
+        assert_near(avx, 0.0, 0.0001);
+        assert_near(avy, 0.0, 0.0001);
+        assert_near(avz, 0.0, 0.0001);
+    }
+
+    #[test]
+    fn apply_commands_sets_angular_velocity() {
+        let mut world = PhysicsWorld3D::new(0.0, 0.0, 0.0);
+        let desc = BodyDesc3D {
+            body_id: 7,
+            body_type: PhysBodyType::Dynamic,
+            pos: Vec3::ZERO,
+            rot: Quat::IDENTITY,
+            collider_kind: ColliderKind3D::Box3D,
+            collider_args: [0.5, 0.5, 0.5],
+            collider_offset: Vec3::ZERO,
+            layer: 1,
+            mask: 0xFFFF,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            fixed_rotation: false,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
+        };
+        world.spawn_body(&desc);
+        world.apply_commands(&build_vec3_cmd(6, 7, 1.0, 2.0, 3.0));
+
+        let handle = *world.handle_map.get(&7).unwrap();
+        let rb = world.rigid_body_set.get(handle).unwrap();
+        let angvel = rb.angvel();
+        assert_near(angvel.x, 1.0, 0.0001);
+        assert_near(angvel.y, 2.0, 0.0001);
+        assert_near(angvel.z, 3.0, 0.0001);
     }
 
     #[test]

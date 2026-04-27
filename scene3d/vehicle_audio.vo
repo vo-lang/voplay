@@ -1,0 +1,268 @@
+package scene3d
+
+import (
+	"errors"
+	"github.com/vo-lang/voplay"
+)
+
+type VehicleAudioClips struct {
+	Engine voplay.AudioClipID
+	Skid voplay.AudioClipID
+	Boost voplay.AudioClipID
+	Collision voplay.AudioClipID
+	Surface voplay.AudioClipID
+}
+
+type VehicleAudioConfig struct {
+	EngineMinPitch float64
+	EngineMaxPitch float64
+	EngineMinVolume float64
+	EngineMaxVolume float64
+	EngineMaxSpeed float64
+	SkidSlipThreshold float64
+	SkidMaxSlip float64
+	SkidMaxVolume float64
+	BoostVolume float64
+	SurfaceVolume float64
+	RefDistance float64
+	MaxDistance float64
+}
+
+type VehicleAudioInput struct {
+	Speed float64
+	RPM float64
+	MaxRPM float64
+	LongitudinalSlip float64
+	LateralSlip float64
+	Boost bool
+	SurfaceAmount float64
+	CollisionImpulse float64
+}
+
+type VehicleAudioState struct {
+	EngineVolume float64
+	EnginePitch float64
+	SkidVolume float64
+	BoostVolume float64
+	SurfaceVolume float64
+}
+
+type VehicleAudio struct {
+	Entity *Entity
+	Clips VehicleAudioClips
+	Config VehicleAudioConfig
+	engine voplay.AudioSourceID
+	skid voplay.AudioSourceID
+	boost voplay.AudioSourceID
+	surface voplay.AudioSourceID
+}
+
+func DefaultVehicleAudioConfig() VehicleAudioConfig {
+	return VehicleAudioConfig{
+		EngineMinPitch: 0.72,
+		EngineMaxPitch: 1.85,
+		EngineMinVolume: 0.18,
+		EngineMaxVolume: 0.85,
+		EngineMaxSpeed: 42.0,
+		SkidSlipThreshold: 0.18,
+		SkidMaxSlip: 1.2,
+		SkidMaxVolume: 0.9,
+		BoostVolume: 0.8,
+		SurfaceVolume: 0.35,
+		RefDistance: 3.0,
+		MaxDistance: 80.0,
+	}
+}
+
+func AttachVehicleAudio(entity *Entity, clips VehicleAudioClips, config VehicleAudioConfig) (*VehicleAudio, error) {
+	if entity == nil || entity.scene == nil || !entity.Active {
+		return nil, errors.New("scene3d.AttachVehicleAudio: entity must belong to an active scene")
+	}
+	config = normalizeVehicleAudioConfig(config)
+	audio := &VehicleAudio{Entity: entity, Clips: clips, Config: config}
+	var err error
+	if clips.Engine != 0 {
+		audio.engine, err = entity.AttachAudioSource(clips.Engine, config.EngineMinVolume, config.RefDistance, config.MaxDistance)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if clips.Skid != 0 {
+		audio.skid, err = entity.AttachAudioSource(clips.Skid, 0, config.RefDistance, config.MaxDistance)
+		if err != nil {
+			audio.Destroy()
+			return nil, err
+		}
+	}
+	if clips.Boost != 0 {
+		audio.boost, err = entity.AttachAudioSource(clips.Boost, 0, config.RefDistance, config.MaxDistance)
+		if err != nil {
+			audio.Destroy()
+			return nil, err
+		}
+	}
+	if clips.Surface != 0 {
+		audio.surface, err = entity.AttachAudioSource(clips.Surface, 0, config.RefDistance, config.MaxDistance)
+		if err != nil {
+			audio.Destroy()
+			return nil, err
+		}
+	}
+	return audio, nil
+}
+
+func (a *VehicleAudio) Update(input VehicleAudioInput) VehicleAudioState {
+	if a == nil {
+		return VehicleAudioState{}
+	}
+	cfg := normalizeVehicleAudioConfig(a.Config)
+	state := computeVehicleAudioState(input, cfg)
+	if a.engine != 0 {
+		a.engine.SetParams(state.EngineVolume, state.EnginePitch)
+	}
+	if a.skid != 0 {
+		a.skid.SetParams(state.SkidVolume, 1.0)
+	}
+	if a.boost != 0 {
+		a.boost.SetParams(state.BoostVolume, 1.0)
+	}
+	if a.surface != 0 {
+		a.surface.SetParams(state.SurfaceVolume, 1.0)
+	}
+	if input.CollisionImpulse > 0 && a.Clips.Collision != 0 && a.Entity != nil && a.Entity.Active {
+		volume := vehicleAudioClamp(input.CollisionImpulse, 0, 1)
+		a.Entity.PlaySound3D(a.Clips.Collision, volume)
+	}
+	return state
+}
+
+func (a *VehicleAudio) Destroy() {
+	if a == nil || a.Entity == nil || a.Entity.scene == nil || !a.Entity.Active {
+		return
+	}
+	if a.engine != 0 {
+		a.Entity.RemoveAudioSource(a.engine)
+		a.engine = 0
+	}
+	if a.skid != 0 {
+		a.Entity.RemoveAudioSource(a.skid)
+		a.skid = 0
+	}
+	if a.boost != 0 {
+		a.Entity.RemoveAudioSource(a.boost)
+		a.boost = 0
+	}
+	if a.surface != 0 {
+		a.Entity.RemoveAudioSource(a.surface)
+		a.surface = 0
+	}
+}
+
+func VehicleAudioInputFromVehicle(vehicle *Vehicle) VehicleAudioInput {
+	if vehicle == nil {
+		return VehicleAudioInput{}
+	}
+	slip := 0.0
+	for _, wheel := range vehicle.Wheels {
+		s := vehicleAudioAbs(wheel.LateralSlip)
+		if s > slip {
+			slip = s
+		}
+	}
+	return VehicleAudioInput{
+		Speed: vehicleAudioAbs(vehicle.Speed),
+		LongitudinalSlip: 0,
+		LateralSlip: slip,
+		Boost: false,
+	}
+}
+
+func computeVehicleAudioState(input VehicleAudioInput, cfg VehicleAudioConfig) VehicleAudioState {
+	speedT := 0.0
+	if cfg.EngineMaxSpeed > 0 {
+		speedT = vehicleAudioClamp(vehicleAudioAbs(input.Speed)/cfg.EngineMaxSpeed, 0, 1)
+	}
+	rpmT := 0.0
+	if input.MaxRPM > 0 {
+		rpmT = vehicleAudioClamp(input.RPM/input.MaxRPM, 0, 1)
+	}
+	t := speedT
+	if rpmT > 0 {
+		t = rpmT
+	}
+	slip := vehicleAudioAbs(input.LateralSlip)
+	if vehicleAudioAbs(input.LongitudinalSlip) > slip {
+		slip = vehicleAudioAbs(input.LongitudinalSlip)
+	}
+	skidT := vehicleAudioClamp((slip-cfg.SkidSlipThreshold)/(cfg.SkidMaxSlip-cfg.SkidSlipThreshold), 0, 1)
+	boostVolume := 0.0
+	if input.Boost {
+		boostVolume = cfg.BoostVolume
+	}
+	return VehicleAudioState{
+		EngineVolume: vehicleAudioLerp(cfg.EngineMinVolume, cfg.EngineMaxVolume, t),
+		EnginePitch: vehicleAudioLerp(cfg.EngineMinPitch, cfg.EngineMaxPitch, t),
+		SkidVolume: skidT * cfg.SkidMaxVolume,
+		BoostVolume: boostVolume,
+		SurfaceVolume: vehicleAudioClamp(input.SurfaceAmount, 0, 1) * cfg.SurfaceVolume,
+	}
+}
+
+func normalizeVehicleAudioConfig(config VehicleAudioConfig) VehicleAudioConfig {
+	defaults := DefaultVehicleAudioConfig()
+	if config.EngineMinPitch <= 0 {
+		config.EngineMinPitch = defaults.EngineMinPitch
+	}
+	if config.EngineMaxPitch <= config.EngineMinPitch {
+		config.EngineMaxPitch = defaults.EngineMaxPitch
+	}
+	if config.EngineMaxVolume <= 0 {
+		config.EngineMaxVolume = defaults.EngineMaxVolume
+	}
+	if config.EngineMaxSpeed <= 0 {
+		config.EngineMaxSpeed = defaults.EngineMaxSpeed
+	}
+	if config.SkidSlipThreshold <= 0 {
+		config.SkidSlipThreshold = defaults.SkidSlipThreshold
+	}
+	if config.SkidMaxSlip <= config.SkidSlipThreshold {
+		config.SkidMaxSlip = defaults.SkidMaxSlip
+	}
+	if config.SkidMaxVolume <= 0 {
+		config.SkidMaxVolume = defaults.SkidMaxVolume
+	}
+	if config.BoostVolume <= 0 {
+		config.BoostVolume = defaults.BoostVolume
+	}
+	if config.SurfaceVolume <= 0 {
+		config.SurfaceVolume = defaults.SurfaceVolume
+	}
+	if config.RefDistance <= 0 {
+		config.RefDistance = defaults.RefDistance
+	}
+	if config.MaxDistance <= config.RefDistance {
+		config.MaxDistance = defaults.MaxDistance
+	}
+	return config
+}
+
+func vehicleAudioLerp(a, b, t float64) float64 {
+	return a + (b-a)*vehicleAudioClamp(t, 0, 1)
+}
+
+func vehicleAudioClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func vehicleAudioAbs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

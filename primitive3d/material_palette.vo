@@ -1,0 +1,193 @@
+package primitive3d
+
+import "strconv"
+import "github.com/vo-lang/voplay"
+
+type MaterialPalette struct {
+	nextID int
+	revision int
+	keys      map[string]MaterialID
+	materials map[int]voplay.MaterialDesc
+	names     map[int]string
+}
+
+func NewMaterialPalette() *MaterialPalette {
+	return &MaterialPalette{
+		nextID: 1,
+		keys:      map[string]MaterialID{},
+		materials: map[int]voplay.MaterialDesc{},
+		names:     map[int]string{},
+	}
+}
+
+func (p *MaterialPalette) Material(desc MaterialDesc) MaterialID {
+	p.ensureReady()
+	material := normalizePrimitiveMaterial(desc)
+	key := materialKey(material)
+	if id, ok := p.keys[key]; ok {
+		return id
+	}
+	id := MaterialID(p.nextID)
+	p.nextID++
+	p.keys[key] = id
+	p.materials[int(id)] = material
+	p.names[int(id)] = desc.Name
+	p.revision++
+	return id
+}
+
+func (p *MaterialPalette) Desc(id MaterialID) voplay.MaterialDesc {
+	p.ensureReady()
+	material, ok := p.materials[int(id)]
+	if !ok {
+		panic("primitive3d.MaterialPalette.Desc: unknown material")
+	}
+	return material
+}
+
+func (p *MaterialPalette) Name(id MaterialID) string {
+	p.ensureReady()
+	return p.names[int(id)]
+}
+
+func (p *MaterialPalette) Revision() int {
+	p.ensureReady()
+	return p.revision
+}
+
+func (p *MaterialPalette) Entries() []MaterialEntry {
+	p.ensureReady()
+	entries := []MaterialEntry{}
+	for id := 1; id < p.nextID; id++ {
+		material, ok := p.materials[id]
+		if !ok {
+			continue
+		}
+		entries = append(entries, MaterialEntry{ID: MaterialID(id), Material: material, Name: p.names[id]})
+	}
+	return entries
+}
+
+func (p *MaterialPalette) ensureReady() {
+	if p == nil {
+		panic("primitive3d.MaterialPalette: palette must not be nil")
+	}
+	if p.nextID == 0 {
+		p.nextID = 1
+	}
+	if p.keys == nil {
+		p.keys = map[string]MaterialID{}
+	}
+	if p.materials == nil {
+		p.materials = map[int]voplay.MaterialDesc{}
+	}
+	if p.names == nil {
+		p.names = map[int]string{}
+	}
+}
+
+func normalizePrimitiveMaterial(desc MaterialDesc) voplay.MaterialDesc {
+	preset := desc.Preset
+	if preset == 0 {
+		preset = MaterialToyPlastic
+	}
+	base := presetMaterial(preset)
+	if desc.Base != (voplay.MaterialDesc{}) {
+		base = mergeMaterial(base, desc.Base)
+	}
+	return voplay.NormalizeMaterial(base)
+}
+
+func mergeMaterial(base, override voplay.MaterialDesc) voplay.MaterialDesc {
+	out := base
+	if override.ID != 0 {
+		out.ID = override.ID
+	}
+	if override.BaseColor != (voplay.Color{}) {
+		out.BaseColor = override.BaseColor
+	}
+	if override.Albedo != 0 {
+		out.Albedo = override.Albedo
+	}
+	if override.Normal != 0 {
+		out.Normal = override.Normal
+	}
+	if override.MetallicRoughness != 0 {
+		out.MetallicRoughness = override.MetallicRoughness
+	}
+	if override.Emissive != 0 {
+		out.Emissive = override.Emissive
+	}
+	if override.EmissiveColor != (voplay.Color{}) {
+		out.EmissiveColor = override.EmissiveColor
+	}
+	if override.Roughness > 0 {
+		out.Roughness = override.Roughness
+	}
+	if override.Metallic > 0 {
+		out.Metallic = override.Metallic
+	}
+	if override.NormalScale > 0 {
+		out.NormalScale = override.NormalScale
+	}
+	if override.UVScale > 0 {
+		out.UVScale = override.UVScale
+	}
+	if override.ToonRamp != 0 {
+		out.ToonRamp = override.ToonRamp
+	}
+	if override.ShadingMode != 0 {
+		out.ShadingMode = override.ShadingMode
+	}
+	if override.WrapMode != 0 {
+		out.WrapMode = override.WrapMode
+	}
+	if override.FilterMode != 0 {
+		out.FilterMode = override.FilterMode
+	}
+	return out
+}
+
+func presetMaterial(preset MaterialPreset) voplay.MaterialDesc {
+	switch preset {
+	case MaterialToyPlastic:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.95, G: 0.18, B: 0.12, A: 1}, Roughness: 0.38, Metallic: 0, UVScale: 1}
+	case MaterialRubber:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.025, G: 0.025, B: 0.025, A: 1}, Roughness: 0.88, Metallic: 0, UVScale: 1}
+	case MaterialRoadAsphalt:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.08, G: 0.085, B: 0.09, A: 1}, Roughness: 0.78, Metallic: 0, UVScale: 3}
+	case MaterialGrass:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.33, G: 0.72, B: 0.18, A: 1}, Roughness: 0.7, Metallic: 0, UVScale: 2}
+	case MaterialStone:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.58, G: 0.55, B: 0.5, A: 1}, Roughness: 0.82, Metallic: 0, UVScale: 1.6}
+	case MaterialWater:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.18, G: 0.55, B: 0.95, A: 0.72}, Roughness: 0.12, Metallic: 0, UVScale: 1}
+	case MaterialGlow:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.18, G: 0.58, B: 1, A: 1}, EmissiveColor: voplay.Color{R: 0.18, G: 0.58, B: 1, A: 1}, Roughness: 0.28, Metallic: 0, UVScale: 1}
+	case MaterialWood:
+		return voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.58, G: 0.34, B: 0.16, A: 1}, Roughness: 0.62, Metallic: 0, UVScale: 1.4}
+	}
+	panic("primitive3d.MaterialPalette.Material: unknown material preset")
+}
+
+func materialKey(m voplay.MaterialDesc) string {
+	return strconv.Itoa(int(m.ID)) + ":" +
+		colorKey(m.BaseColor) + ":" +
+		strconv.Itoa(int(m.Albedo)) + ":" +
+		strconv.Itoa(int(m.Normal)) + ":" +
+		strconv.Itoa(int(m.MetallicRoughness)) + ":" +
+		strconv.Itoa(int(m.Emissive)) + ":" +
+		colorKey(m.EmissiveColor) + ":" +
+		floatKey(m.Roughness) + ":" +
+		floatKey(m.Metallic) + ":" +
+		floatKey(m.NormalScale) + ":" +
+		floatKey(m.UVScale) + ":" +
+		strconv.Itoa(int(m.ToonRamp)) + ":" +
+		strconv.Itoa(m.ShadingMode) + ":" +
+		strconv.Itoa(m.WrapMode) + ":" +
+		strconv.Itoa(m.FilterMode)
+}
+
+func colorKey(c voplay.Color) string {
+	return floatKey(c.R) + "," + floatKey(c.G) + "," + floatKey(c.B) + "," + floatKey(c.A)
+}

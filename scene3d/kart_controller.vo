@@ -1,0 +1,272 @@
+package scene3d
+
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+type KartInput struct {
+	Throttle float64
+	Steer    float64
+	Drift    bool
+	Boost    bool
+	Reset    bool
+}
+
+type KartControllerConfig struct {
+	Vehicle              VehicleConfig
+	OffroadSpeedScale    float64
+	OffroadEngineScale   float64
+	MinTurboCharge       float64
+	SuperTurboCharge     float64
+	MaxDriftCharge       float64
+	DriftChargeRate      float64
+	MiniTurboDuration    float64
+	SuperTurboDuration   float64
+	BoostDuration        float64
+	Recovery             VehicleRecoveryConfig
+}
+
+type KartControllerState struct {
+	SurfaceID          string
+	SurfaceFriction    float64
+	Boosting           bool
+	Drifting           bool
+	DriftCharge        float64
+	MiniTurboReleased  bool
+	SuperTurboReleased bool
+	Stuck              bool
+	UpsideDown         bool
+	ShouldRespawn     bool
+	Speed              float64
+}
+
+type KartController struct {
+	Vehicle    *Vehicle
+	Track      *Track
+	Config     KartControllerConfig
+	Recovery   *VehicleRecovery
+	BoostTimer float64
+	DriftCharge float64
+	wasDrifting bool
+	state KartControllerState
+}
+
+func DefaultKartControllerConfig() KartControllerConfig {
+	return KartControllerConfig{
+		Vehicle:            DefaultKartVehicleConfig(),
+		OffroadSpeedScale:  0.58,
+		OffroadEngineScale: 0.72,
+		MinTurboCharge:     0.55,
+		SuperTurboCharge:   1.08,
+		MaxDriftCharge:     1.35,
+		DriftChargeRate:    1.05,
+		MiniTurboDuration:  0.75,
+		SuperTurboDuration: 1.35,
+		BoostDuration:      1.0,
+		Recovery:           DefaultVehicleRecoveryConfig(),
+	}
+}
+
+func NewKartController(vehicle *Vehicle, track *Track, config KartControllerConfig) *KartController {
+	if vehicle == nil {
+		panic("scene3d.NewKartController: vehicle must not be nil")
+	}
+	config = normalizeKartControllerConfig(config)
+	vehicle.Config = config.Vehicle
+	vehicle.BindTrack(track)
+	return &KartController{Vehicle: vehicle, Track: track, Config: config, Recovery: NewVehicleRecovery(vehicle, track, config.Recovery)}
+}
+
+func (k *KartController) BindTrack(track *Track) {
+	if k == nil {
+		return
+	}
+	k.Track = track
+	if k.Vehicle != nil {
+		k.Vehicle.BindTrack(track)
+	}
+	if k.Recovery != nil {
+		k.Recovery.BindTrack(track)
+	}
+}
+
+func (k *KartController) Update(input KartInput, dt float64) KartControllerState {
+	if k == nil || k.Vehicle == nil || dt <= 0 {
+		return KartControllerState{}
+	}
+	k.Vehicle.BindTrack(k.Track)
+	surface := k.currentSurface()
+	adjusted := k.adjustedVehicleConfig(surface)
+	k.Vehicle.Config = adjusted
+	if input.Boost {
+		k.ActivateBoost(k.Config.BoostDuration)
+	}
+	boosting := k.BoostTimer > 0
+	k.Vehicle.Update(VehicleInput{Throttle: input.Throttle, Steer: input.Steer, Drift: input.Drift, Boost: boosting}, dt)
+	k.updateDrift(input, dt)
+	recovery := k.updateRecovery(input, dt)
+	k.BoostTimer = vehicleMoveTowards(k.BoostTimer, 0, dt)
+	k.state.SurfaceID = surface.Name
+	k.state.SurfaceFriction = surface.Friction
+	k.state.Boosting = boosting
+	k.state.Drifting = k.Vehicle.Drifting
+	k.state.DriftCharge = k.DriftCharge
+	k.state.Speed = math.Abs(k.Vehicle.Speed)
+	k.state.Stuck = recovery.Stuck
+	k.state.UpsideDown = recovery.UpsideDown
+	k.state.ShouldRespawn = recovery.ShouldRespawn
+	return k.state
+}
+
+func (k *KartController) State() KartControllerState {
+	if k == nil {
+		return KartControllerState{}
+	}
+	return k.state
+}
+
+func (k *KartController) ActivateBoost(duration float64) {
+	if k == nil || duration <= 0 {
+		return
+	}
+	if duration > k.BoostTimer {
+		k.BoostTimer = duration
+	}
+}
+
+func (k *KartController) Respawn(pose TrackPose) {
+	if k == nil || k.Vehicle == nil {
+		return
+	}
+	k.Vehicle.SetPose(pose.Position, pose.Yaw)
+	k.BoostTimer = 0
+	k.DriftCharge = 0
+	k.wasDrifting = false
+	if k.Recovery != nil {
+		k.Recovery.Reset()
+	}
+	k.state = KartControllerState{}
+}
+
+func (k *KartController) RespawnNear(pos voplay.Vec3) {
+	if k == nil || k.Track == nil {
+		return
+	}
+	k.Respawn(k.Track.RespawnPoseNear(pos))
+}
+
+func (k *KartController) currentSurface() TrackSurfaceHit {
+	if k == nil || k.Track == nil || k.Vehicle == nil || k.Vehicle.Body == nil {
+		return TrackSurfaceHit{Name: TrackSurfaceRoad, Kind: TrackSurfaceRoad, Friction: 1, OnSurface: true, OnRoad: true}
+	}
+	return k.Track.SurfaceAt(k.Vehicle.Body.Position())
+}
+
+func (k *KartController) adjustedVehicleConfig(surface TrackSurfaceHit) VehicleConfig {
+	cfg := cloneVehicleConfig(k.Config.Vehicle)
+	friction := surface.Friction
+	if friction <= 0 {
+		friction = 1
+	}
+	speedScale := friction
+	engineScale := friction
+	if !surface.OnRoad {
+		speedScale *= k.Config.OffroadSpeedScale
+		engineScale *= k.Config.OffroadEngineScale
+	}
+	cfg.MaxForwardSpeed *= speedScale
+	cfg.MaxReverseSpeed *= speedScale
+	cfg.EngineForce *= engineScale
+	cfg.ReverseEngineForce *= engineScale
+	for i := 0; i < len(cfg.Wheels); i++ {
+		cfg.Wheels[i].FrictionSlip *= friction
+		cfg.Wheels[i].SideFrictionStiffness *= friction
+	}
+	return cfg
+}
+
+func (k *KartController) updateDrift(input KartInput, dt float64) {
+	k.state.MiniTurboReleased = false
+	k.state.SuperTurboReleased = false
+	drifting := k.Vehicle.Drifting
+	charging := drifting && math.Abs(input.Steer) > 0.08 && input.Throttle > 0
+	if drifting {
+		if charging {
+			gain := k.Config.DriftChargeRate * (0.55 + math.Abs(input.Steer)*0.65) * dt
+			k.DriftCharge = vehicleClamp(k.DriftCharge+gain, 0, k.Config.MaxDriftCharge)
+		}
+		k.wasDrifting = true
+		return
+	}
+	if k.wasDrifting {
+		if k.DriftCharge >= k.Config.SuperTurboCharge {
+			k.ActivateBoost(k.Config.SuperTurboDuration)
+			k.state.SuperTurboReleased = true
+		} else if k.DriftCharge >= k.Config.MinTurboCharge {
+			k.ActivateBoost(k.Config.MiniTurboDuration)
+			k.state.MiniTurboReleased = true
+		}
+		k.DriftCharge = 0
+		k.wasDrifting = false
+		return
+	}
+	k.DriftCharge = vehicleMoveTowards(k.DriftCharge, 0, dt*1.5)
+}
+
+func (k *KartController) updateRecovery(input KartInput, dt float64) VehicleRecoveryState {
+	if k.Recovery == nil {
+		return VehicleRecoveryState{ShouldRespawn: input.Reset}
+	}
+	k.Recovery.Config = normalizeVehicleRecoveryConfig(k.Config.Recovery)
+	return k.Recovery.Update(VehicleRecoveryInput{Throttle: input.Throttle, Reset: input.Reset}, dt)
+}
+
+func normalizeKartControllerConfig(config KartControllerConfig) KartControllerConfig {
+	defaults := DefaultKartControllerConfig()
+	if len(config.Vehicle.Wheels) == 0 {
+		config.Vehicle = defaults.Vehicle
+	} else {
+		config.Vehicle = normalizeVehicleConfig(config.Vehicle)
+	}
+	if config.OffroadSpeedScale <= 0 {
+		config.OffroadSpeedScale = defaults.OffroadSpeedScale
+	}
+	if config.OffroadEngineScale <= 0 {
+		config.OffroadEngineScale = defaults.OffroadEngineScale
+	}
+	if config.MinTurboCharge <= 0 {
+		config.MinTurboCharge = defaults.MinTurboCharge
+	}
+	if config.SuperTurboCharge <= 0 {
+		config.SuperTurboCharge = defaults.SuperTurboCharge
+	}
+	if config.MaxDriftCharge <= 0 {
+		config.MaxDriftCharge = defaults.MaxDriftCharge
+	}
+	if config.DriftChargeRate <= 0 {
+		config.DriftChargeRate = defaults.DriftChargeRate
+	}
+	if config.MiniTurboDuration <= 0 {
+		config.MiniTurboDuration = defaults.MiniTurboDuration
+	}
+	if config.SuperTurboDuration <= 0 {
+		config.SuperTurboDuration = defaults.SuperTurboDuration
+	}
+	if config.BoostDuration <= 0 {
+		config.BoostDuration = defaults.BoostDuration
+	}
+	config.Recovery = normalizeVehicleRecoveryConfig(config.Recovery)
+	return config
+}
+
+func cloneVehicleConfig(config VehicleConfig) VehicleConfig {
+	cloned := config
+	if len(config.Wheels) > 0 {
+		cloned.Wheels = make([]VehicleWheelConfig, len(config.Wheels))
+		for i := range config.Wheels {
+			cloned.Wheels[i] = config.Wheels[i]
+		}
+	}
+	return cloned
+}

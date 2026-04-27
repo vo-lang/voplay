@@ -1,6 +1,8 @@
 //! wgpu-based renderer for voplay.
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
+use std::collections::HashMap;
+
 use crate::draw_list::{DrawCallKind, DrawList2D};
 use crate::font_manager::FontManager;
 use crate::math3d::{self, Vec3};
@@ -12,6 +14,8 @@ use crate::pipeline3d::{
 use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
 use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
+use crate::primitive_pipeline::PrimitivePipeline;
+use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
 use crate::render_world::{RenderObjectUpdate, RenderWorld};
 use crate::stream::{DrawCommand, StreamReader};
 use crate::terrain::TerrainData;
@@ -42,6 +46,7 @@ pub struct Renderer {
     draw_list: DrawList2D,
     // 3D pipeline
     pipeline3d: Pipeline3D,
+    primitive_pipeline: PrimitivePipeline,
     pipeline_shadow: PipelineShadow,
     pipeline_skybox: PipelineSkybox,
     model_manager: ModelManager,
@@ -50,6 +55,9 @@ pub struct Renderer {
     // Font manager for text rendering (TTF/OTF, dynamic glyph atlas)
     font_manager: FontManager,
     render_world: RenderWorld,
+    primitive_shapes: HashMap<(u32, u32, u32), u32>,
+    primitive_materials: HashMap<(u32, u32, u32), crate::pipeline3d::MaterialOverride>,
+    debug_frame_count: u64,
 }
 
 impl Renderer {
@@ -127,7 +135,18 @@ impl Renderer {
         let cubemap_bgl = texture_manager.cubemap_bind_group_layout();
         let pipeline_sprite =
             PipelineSprite::new(&device, &queue, surface_config.format, &camera_bgl, tex_bgl);
+        #[cfg(feature = "wasm")]
+        let debug_pipeline_errors = crate::externs::render::wasm_debug_enabled();
+        #[cfg(feature = "wasm")]
+        if debug_pipeline_errors {
+            device.push_error_scope(wgpu::ErrorFilter::Validation);
+        }
         let pipeline3d = Pipeline3D::new(&device, &queue, surface_config.format);
+        let primitive_pipeline = PrimitivePipeline::new(&device, &queue, surface_config.format);
+        #[cfg(feature = "wasm")]
+        if debug_pipeline_errors {
+            Self::pop_debug_error_scope(&device, "voplay pipeline3d create");
+        }
         let pipeline_shadow = PipelineShadow::new(&device, 2048);
         let pipeline_skybox = PipelineSkybox::new(&device, surface_config.format, cubemap_bgl);
         let model_manager = ModelManager::new();
@@ -150,12 +169,16 @@ impl Renderer {
             pipeline_sprite,
             draw_list,
             pipeline3d,
+            primitive_pipeline,
             pipeline_shadow,
             pipeline_skybox,
             model_manager,
             texture_manager,
             font_manager,
             render_world: RenderWorld::new(),
+            primitive_shapes: HashMap::new(),
+            primitive_materials: HashMap::new(),
+            debug_frame_count: 0,
         })
     }
 
@@ -167,14 +190,34 @@ impl Renderer {
         height: u32,
         no_vsync: bool,
     ) -> Result<Self, String> {
-        let adapter = instance
+        let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| "voplay: no suitable GPU adapter found".to_string())?;
+        {
+            Some(adapter) => adapter,
+            None => {
+                Self::debug_renderer_status(
+                    "voplay renderer high-performance adapter unavailable; trying fallback adapter",
+                );
+                instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::LowPower,
+                        compatible_surface: Some(&surface),
+                        force_fallback_adapter: true,
+                    })
+                    .await
+                    .ok_or_else(|| "voplay: no suitable GPU adapter found".to_string())?
+            }
+        };
+        let adapter_info = adapter.get_info();
+        Self::debug_renderer_status(&format!(
+            "voplay renderer adapter backend={:?} device={} name={} driver={}",
+            adapter_info.backend, adapter_info.device, adapter_info.name, adapter_info.driver
+        ));
 
         let (device, queue) = adapter
             .request_device(
@@ -197,6 +240,13 @@ impl Renderer {
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
+        Self::debug_renderer_status(&format!(
+            "voplay renderer surface format={:?} alpha={:?} size={}x{}",
+            format,
+            surface_caps.alpha_modes[0],
+            width.max(1),
+            height.max(1)
+        ));
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -302,6 +352,11 @@ impl Renderer {
         self.model_manager.create_cube(&self.device, &self.queue)
     }
 
+    pub fn create_rounded_box(&mut self, bevel_radius: f32, segments: u32) -> ModelId {
+        self.model_manager
+            .create_rounded_box(&self.device, &self.queue, bevel_radius, segments)
+    }
+
     pub fn create_sphere(&mut self, segments: u32) -> ModelId {
         self.model_manager
             .create_sphere(&self.device, &self.queue, segments)
@@ -310,6 +365,15 @@ impl Renderer {
     pub fn create_cylinder(&mut self, segments: u32) -> ModelId {
         self.model_manager
             .create_cylinder(&self.device, &self.queue, segments)
+    }
+
+    pub fn create_cone(&mut self, segments: u32) -> ModelId {
+        self.model_manager
+            .create_cone(&self.device, &self.queue, segments)
+    }
+
+    pub fn create_wedge(&mut self) -> ModelId {
+        self.model_manager.create_wedge(&self.device, &self.queue)
     }
 
     pub fn create_capsule(&mut self, segments: u32, half_height: f32, radius: f32) -> ModelId {
@@ -325,8 +389,22 @@ impl Renderer {
         scale_z: f32,
         uv_scale: f32,
         texture_id: Option<TextureId>,
+        normal_texture_id: Option<TextureId>,
+        metallic_roughness_texture_id: Option<TextureId>,
+        normal_scale: f32,
+        roughness: f32,
+        metallic: f32,
     ) -> Result<TerrainData, String> {
-        let material = MeshMaterial::standard([1.0, 1.0, 1.0, 1.0], texture_id, uv_scale);
+        let mut material = MeshMaterial::standard([1.0, 1.0, 1.0, 1.0], texture_id, uv_scale);
+        material.normal_texture_id = normal_texture_id;
+        material.metallic_roughness_texture_id = metallic_roughness_texture_id;
+        if normal_scale > 0.0 {
+            material.normal_scale = normal_scale;
+        }
+        if roughness > 0.0 {
+            material.roughness = roughness.clamp(0.04, 1.0);
+        }
+        material.metallic = metallic.clamp(0.0, 1.0);
         crate::terrain::generate_terrain(
             &self.device,
             &self.queue,
@@ -347,13 +425,37 @@ impl Renderer {
         scale_z: f32,
         control_texture_id: TextureId,
         layer_texture_ids: [TextureId; 4],
+        layer_normal_texture_ids: [TextureId; 4],
+        layer_metallic_roughness_texture_ids: [TextureId; 4],
         uv_scales: [f32; 4],
+        layer_normal_scales: [f32; 4],
     ) -> Result<TerrainData, String> {
+        if uv_scales
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(format!(
+                "terrain splat uv scales must be finite and > 0, got {:?}",
+                uv_scales
+            ));
+        }
+        if layer_normal_scales
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(format!(
+                "terrain splat normal scales must be finite and >= 0, got {:?}",
+                layer_normal_scales
+            ));
+        }
         let material = MeshMaterial::terrain_splat(
             [1.0, 1.0, 1.0, 1.0],
             control_texture_id,
             layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
             uv_scales,
+            layer_normal_scales,
         );
         crate::terrain::generate_terrain(
             &self.device,
@@ -549,8 +651,17 @@ impl Renderer {
 
     /// Execute a frame's draw command stream.
     pub fn submit_frame(&mut self, data: &[u8]) -> Result<(), String> {
+        self.debug_frame_count = self.debug_frame_count.wrapping_add(1);
+        let debug_frame_count = self.debug_frame_count;
+        #[cfg(feature = "wasm")]
+        let debug_scope_frame = Self::debug_should_log_frame(debug_frame_count);
+
         #[cfg(feature = "wasm")]
         self.auto_resize_from_canvas();
+        #[cfg(feature = "wasm")]
+        if debug_scope_frame {
+            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        }
 
         let output = self
             .surface
@@ -585,8 +696,10 @@ impl Renderer {
         let mut skybox_cubemap_id: Option<u32> = None;
         let mut shadow_enabled = false;
         let mut shadow_resolution = 2048u32;
+        let mut shadow_strength = 1.0f32;
         let mut light_uniform = LightUniform {
             ambient: [0.1, 0.1, 0.1, 1.0],
+            ambient_ground: [0.1, 0.1, 0.1, 1.0],
             count: [0, 0, 0, 0],
             lights: [LightData {
                 position_or_dir: [0.0; 4],
@@ -595,15 +708,30 @@ impl Renderer {
             fog_color: [0.0, 0.0, 0.0, 1.0],
             fog_params: [0.0, 0.0, 0.0, 0.0],
             shadow_vp: math3d::MAT4_IDENTITY,
-            shadow_params: [0.0, 0.002, 1.0 / 2048.0, 0.0],
+            shadow_params: [0.0, 0.002, 1.0 / 2048.0, 1.0],
+            color_params: [1.0, 1.0, 1.0, 0.0],
+            debug_params: [0, 0, 0, 0],
         };
         let mut model_draws: Vec<ModelDraw> = Vec::new();
+        let mut primitive_draws: Vec<PrimitiveDraw> = Vec::new();
+        let mut primitive_chunks: Vec<PrimitiveChunkRef> = Vec::new();
         let mut retained_scene_draws: Vec<u32> = Vec::new();
+        let mut command_count = 0u32;
+        let mut rect_count = 0u32;
+        let mut circle_count = 0u32;
+        let mut line_count = 0u32;
+        let mut text_count = 0u32;
+        let mut sprite_count = 0u32;
+        let mut model_command_count = 0u32;
+        let mut scene_upsert_count = 0u32;
+        let mut scene_draw_count = 0u32;
+        let mut skybox_count = 0u32;
         let aspect = w / h;
 
         // Decode command stream into the unified draw list
         let mut reader = StreamReader::new(data);
         while let Some(cmd) = reader.next_command() {
+            command_count += 1;
             match cmd {
                 DrawCommand::Clear { r, g, b, a } => {
                     clear_color = wgpu::Color {
@@ -637,6 +765,7 @@ impl Renderer {
                     b,
                     a,
                 } => {
+                    rect_count += 1;
                     self.draw_list.push_rect(x, y, w, h, [r, g, b, a]);
                 }
                 DrawCommand::DrawCircle {
@@ -648,6 +777,7 @@ impl Renderer {
                     b,
                     a,
                 } => {
+                    circle_count += 1;
                     self.draw_list.push_circle(cx, cy, radius, [r, g, b, a]);
                 }
                 DrawCommand::DrawLine {
@@ -661,6 +791,7 @@ impl Renderer {
                     b,
                     a,
                 } => {
+                    line_count += 1;
                     self.draw_list
                         .push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
@@ -677,6 +808,7 @@ impl Renderer {
                     a,
                     text,
                 } => {
+                    text_count += 1;
                     let draws = self.font_manager.layout_text(&text, x, y, size, r, g, b, a);
                     for draw in draws {
                         self.draw_list.push_sprite(draw.texture_id, draw.instance);
@@ -700,6 +832,7 @@ impl Renderer {
                     b,
                     a,
                 } => {
+                    sprite_count += 1;
                     let (u0, v0, u1, v1) = if let Some(tex) = self.texture_manager.get(tex_id) {
                         if src_w == 0.0 && src_h == 0.0 {
                             // src_w/src_h == 0 means "use full texture"
@@ -755,9 +888,14 @@ impl Renderer {
                     ambient_r,
                     ambient_g,
                     ambient_b,
+                    ambient_ground_r,
+                    ambient_ground_g,
+                    ambient_ground_b,
                     lights,
                 } => {
                     light_uniform.ambient = [ambient_r, ambient_g, ambient_b, 1.0];
+                    light_uniform.ambient_ground =
+                        [ambient_ground_r, ambient_ground_g, ambient_ground_b, 1.0];
                     let count = lights.len().min(8);
                     light_uniform.count[0] = count as u32;
                     for (i, l) in lights.iter().take(8).enumerate() {
@@ -783,14 +921,33 @@ impl Renderer {
                     light_uniform.fog_color = [color.x, color.y, color.z, 1.0];
                     light_uniform.fog_params = [start, end, density, 0.0];
                 }
+                DrawCommand::SetColorGrading3D {
+                    tone_map,
+                    exposure,
+                    contrast,
+                    saturation,
+                } => {
+                    light_uniform.color_params = [
+                        exposure.max(0.0),
+                        contrast.max(0.0),
+                        saturation.max(0.0),
+                        tone_map as f32,
+                    ];
+                }
                 DrawCommand::SetShadow3D {
                     enabled,
                     resolution,
+                    strength,
                 } => {
                     shadow_enabled = enabled;
                     shadow_resolution = resolution.max(1);
+                    shadow_strength = strength.clamp(0.0, 1.0);
+                }
+                DrawCommand::SetRenderDebug3D { mode } => {
+                    light_uniform.debug_params[0] = mode.min(7) as u32;
                 }
                 DrawCommand::DrawSkybox { cubemap_id } => {
+                    skybox_count += 1;
                     skybox_cubemap_id = Some(cubemap_id);
                 }
                 DrawCommand::DrawModel {
@@ -798,12 +955,13 @@ impl Renderer {
                     pos,
                     rot,
                     scale,
-                    tint,
+                    material,
                     animation_world_id,
                     animation_target_id,
                 } => {
+                    model_command_count += 1;
                     let model_mat = math3d::model_matrix(pos, rot, scale);
-                    let normal_mat = math3d::transpose_upper3x3(&model_mat);
+                    let normal_mat = math3d::normal_matrix(&model_mat);
                     model_draws.push(ModelDraw {
                         model_id,
                         model_uniform: ModelUniform {
@@ -811,8 +969,10 @@ impl Renderer {
                             normal_matrix: normal_mat,
                             base_color: [1.0, 1.0, 1.0, 1.0],
                             material_params: [1.0, 1.0, 1.0, 1.0],
+                            emissive_color: [0.0, 0.0, 0.0, 0.0],
+                            texture_flags: [0.0, 0.0, 0.0, 0.0],
                         },
-                        tint,
+                        material,
                         animation_world_id,
                         animation_target_id,
                     });
@@ -824,11 +984,12 @@ impl Renderer {
                     pos,
                     rot,
                     scale,
-                    tint,
+                    material,
                     visible,
                     animation_world_id,
                     animation_target_id,
                 } => {
+                    scene_upsert_count += 1;
                     self.render_world.upsert_object(RenderObjectUpdate {
                         scene_id,
                         object_id,
@@ -836,7 +997,7 @@ impl Renderer {
                         pos,
                         rot,
                         scale,
-                        tint,
+                        material,
                         visible,
                         animation_world_id,
                         animation_target_id,
@@ -850,9 +1011,248 @@ impl Renderer {
                 }
                 DrawCommand::Scene3DClear { scene_id } => {
                     self.render_world.clear_scene(scene_id);
+                    self.primitive_pipeline.clear_scene(scene_id);
+                    self.primitive_shapes
+                        .retain(|(shape_scene, _, _), _| *shape_scene != scene_id);
+                    self.primitive_materials
+                        .retain(|(material_scene, _, _), _| *material_scene != scene_id);
                 }
                 DrawCommand::Scene3DDraw { scene_id } => {
+                    scene_draw_count += 1;
                     retained_scene_draws.push(scene_id);
+                }
+                DrawCommand::Primitive3DUpsertInstance {
+                    scene_id,
+                    layer_id,
+                    object_id,
+                    model_id,
+                    pos,
+                    rot,
+                    scale,
+                    material,
+                    visible,
+                } => {
+                    scene_upsert_count += 1;
+                    let update = PrimitiveObjectUpdate {
+                        scene_id,
+                        layer_id,
+                        object_id,
+                        model_id,
+                        pos,
+                        rot,
+                        scale,
+                        material,
+                        visible,
+                    };
+                    self.primitive_pipeline.upsert_instance(
+                        &self.device,
+                        &self.queue,
+                        update,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                    self.render_world.upsert_primitive_instance(update);
+                }
+                DrawCommand::Primitive3DDestroyInstance {
+                    scene_id,
+                    layer_id,
+                    object_id,
+                } => {
+                    self.primitive_pipeline.destroy_instance(
+                        &self.device,
+                        &self.queue,
+                        scene_id,
+                        layer_id,
+                        object_id,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                    self.render_world
+                        .destroy_primitive_instance(scene_id, layer_id, object_id);
+                }
+                DrawCommand::Primitive3DClearLayer { scene_id, layer_id } => {
+                    self.primitive_pipeline.clear_layer(scene_id, layer_id);
+                    self.render_world.clear_primitive_layer(scene_id, layer_id);
+                    self.primitive_shapes
+                        .retain(|(shape_scene, shape_layer, _), _| {
+                            *shape_scene != scene_id || *shape_layer != layer_id
+                        });
+                    self.primitive_materials
+                        .retain(|(material_scene, material_layer, _), _| {
+                            *material_scene != scene_id || *material_layer != layer_id
+                        });
+                }
+                DrawCommand::Primitive3DDestroyLayer { scene_id, layer_id } => {
+                    self.primitive_pipeline.clear_layer(scene_id, layer_id);
+                    self.render_world
+                        .destroy_primitive_layer(scene_id, layer_id);
+                    self.primitive_shapes
+                        .retain(|(shape_scene, shape_layer, _), _| {
+                            *shape_scene != scene_id || *shape_layer != layer_id
+                        });
+                    self.primitive_materials
+                        .retain(|(material_scene, material_layer, _), _| {
+                            *material_scene != scene_id || *material_layer != layer_id
+                        });
+                }
+                DrawCommand::Primitive3DReplaceChunk {
+                    scene_id,
+                    layer_id,
+                    chunk_id,
+                    instances,
+                } => {
+                    scene_upsert_count += instances.len() as u32;
+                    let updates: Vec<PrimitiveObjectUpdate> = instances
+                        .into_iter()
+                        .map(|instance| PrimitiveObjectUpdate {
+                            scene_id,
+                            layer_id,
+                            object_id: instance.object_id,
+                            model_id: instance.model_id,
+                            pos: instance.pos,
+                            rot: instance.rot,
+                            scale: instance.scale,
+                            material: instance.material,
+                            visible: instance.visible,
+                        })
+                        .collect();
+                    self.primitive_pipeline.replace_chunk(
+                        &self.device,
+                        &self.queue,
+                        scene_id,
+                        layer_id,
+                        chunk_id,
+                        &updates,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                    self.render_world
+                        .replace_primitive_chunk(scene_id, layer_id, chunk_id, updates);
+                }
+                DrawCommand::Primitive3DReplaceChunkRefs {
+                    scene_id,
+                    layer_id,
+                    chunk_id,
+                    instances,
+                } => {
+                    scene_upsert_count += instances.len() as u32;
+                    let updates: Vec<PrimitiveObjectUpdate> = instances
+                        .into_iter()
+                        .map(|instance| {
+                            let material = self
+                                .primitive_materials
+                                .get(&(scene_id, layer_id, instance.material_id))
+                                .copied()
+                                .unwrap_or_default();
+                            PrimitiveObjectUpdate {
+                                scene_id,
+                                layer_id,
+                                object_id: instance.object_id,
+                                model_id: instance.model_id,
+                                pos: instance.pos,
+                                rot: instance.rot,
+                                scale: instance.scale,
+                                material,
+                                visible: instance.visible,
+                            }
+                        })
+                        .collect();
+                    self.primitive_pipeline.replace_chunk(
+                        &self.device,
+                        &self.queue,
+                        scene_id,
+                        layer_id,
+                        chunk_id,
+                        &updates,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                    self.render_world
+                        .replace_primitive_chunk(scene_id, layer_id, chunk_id, updates);
+                }
+                DrawCommand::Primitive3DReplaceChunkKeys {
+                    scene_id,
+                    layer_id,
+                    chunk_id,
+                    instances,
+                } => {
+                    scene_upsert_count += instances.len() as u32;
+                    let updates: Vec<PrimitiveObjectUpdate> = instances
+                        .into_iter()
+                        .map(|instance| {
+                            let model_id = self
+                                .primitive_shapes
+                                .get(&(scene_id, layer_id, instance.shape_id))
+                                .copied()
+                                .unwrap_or_default();
+                            let material = self
+                                .primitive_materials
+                                .get(&(scene_id, layer_id, instance.material_id))
+                                .copied()
+                                .unwrap_or_default();
+                            let mut material = material;
+                            if instance.tint != [0.0, 0.0, 0.0, 0.0] {
+                                material.base_color[0] *= instance.tint[0];
+                                material.base_color[1] *= instance.tint[1];
+                                material.base_color[2] *= instance.tint[2];
+                                material.base_color[3] *= instance.tint[3];
+                            }
+                            PrimitiveObjectUpdate {
+                                scene_id,
+                                layer_id,
+                                object_id: instance.object_id,
+                                model_id,
+                                pos: instance.pos,
+                                rot: instance.rot,
+                                scale: instance.scale,
+                                material,
+                                visible: instance.visible,
+                            }
+                        })
+                        .collect();
+                    self.primitive_pipeline.replace_chunk(
+                        &self.device,
+                        &self.queue,
+                        scene_id,
+                        layer_id,
+                        chunk_id,
+                        &updates,
+                        &self.model_manager,
+                        &self.texture_manager,
+                    );
+                    self.render_world
+                        .replace_primitive_chunk(scene_id, layer_id, chunk_id, updates);
+                }
+                DrawCommand::Primitive3DUpsertMaterials {
+                    scene_id,
+                    layer_id,
+                    materials,
+                } => {
+                    for material in materials {
+                        self.primitive_materials.insert(
+                            (scene_id, layer_id, material.material_id),
+                            material.material,
+                        );
+                    }
+                }
+                DrawCommand::Primitive3DUpsertShapes {
+                    scene_id,
+                    layer_id,
+                    shapes,
+                } => {
+                    for shape in shapes {
+                        self.primitive_shapes
+                            .insert((scene_id, layer_id, shape.shape_id), shape.model_id);
+                    }
+                }
+                DrawCommand::Primitive3DSetChunkVisible {
+                    scene_id,
+                    layer_id,
+                    chunk_id,
+                    visible,
+                } => {
+                    self.render_world
+                        .set_primitive_chunk_visible(scene_id, layer_id, chunk_id, visible);
                 }
                 DrawCommand::DrawBillboard {
                     tex_id,
@@ -915,6 +1315,12 @@ impl Renderer {
         for scene_id in retained_scene_draws {
             self.render_world
                 .collect_scene_draws(scene_id, &mut model_draws);
+            self.render_world.collect_scene_primitive_draws(
+                scene_id,
+                camera3d_uniform.as_ref(),
+                &mut primitive_draws,
+                &mut primitive_chunks,
+            );
         }
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
@@ -924,6 +1330,35 @@ impl Renderer {
 
         // Resolve draw list: sort by (layer, order), produce draw calls
         let frame = self.draw_list.resolve();
+        Self::debug_submit_status(
+            debug_frame_count,
+            &format!(
+                "voplay submit #{} bytes={} cmds={} cam3d={} modelCmds={} sceneUpserts={} sceneDraws={} models={} primitives={} primitiveChunks={} skybox={} 2d(rect/circ/line/text/sprite)={}/{}/{}/{}/{} resolved(shapes/sprites/calls/cams)={}/{}/{}/{} clear={:.2},{:.2},{:.2}",
+                debug_frame_count,
+                data.len(),
+                command_count,
+                camera3d_uniform.is_some(),
+                model_command_count,
+                scene_upsert_count,
+                scene_draw_count,
+                model_draws.len(),
+                primitive_draws.len(),
+                primitive_chunks.len(),
+                skybox_count,
+                rect_count,
+                circle_count,
+                line_count,
+                text_count,
+                sprite_count,
+                frame.shapes.len(),
+                frame.sprites.len(),
+                frame.draw_calls.len(),
+                frame.cameras.len(),
+                clear_color.r,
+                clear_color.g,
+                clear_color.b,
+            ),
+        );
 
         // Upload all camera uniforms into the dynamic offset buffer
         let align = self.camera_alignment;
@@ -978,7 +1413,7 @@ impl Renderer {
                         );
                         light_uniform.shadow_vp = shadow_vp;
                         light_uniform.shadow_params =
-                            [1.0, 0.002, 1.0 / shadow_resolution as f32, 0.0];
+                            [1.0, 0.002, 1.0 / shadow_resolution as f32, shadow_strength];
                         light_uniform.count[2] = 0;
                         shadow_active = true;
                     }
@@ -987,7 +1422,8 @@ impl Renderer {
         }
         if !shadow_active {
             light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
-            light_uniform.shadow_params = [0.0, 0.002, 1.0 / shadow_resolution as f32, 0.0];
+            light_uniform.shadow_params =
+                [0.0, 0.002, 1.0 / shadow_resolution as f32, shadow_strength];
         }
 
         // Render pass
@@ -1047,6 +1483,27 @@ impl Renderer {
                 }
             }
 
+            if !primitive_draws.is_empty() || !primitive_chunks.is_empty() {
+                if let Some(ref cam3d) = camera3d_uniform {
+                    self.primitive_pipeline.set_camera_and_lights(
+                        &self.queue,
+                        cam3d,
+                        &light_uniform,
+                    );
+                    let shadow_view = self.pipeline_shadow.shadow_texture_view();
+                    self.primitive_pipeline.draw(
+                        &self.device,
+                        &self.queue,
+                        &mut render_pass,
+                        &primitive_draws,
+                        &primitive_chunks,
+                        &self.model_manager,
+                        &self.texture_manager,
+                        shadow_view,
+                    );
+                }
+            }
+
             // Draw 2D content in layer-sorted order
             for dc in &frame.draw_calls {
                 let cam_offset = dc.camera_idx as u32 * align;
@@ -1082,7 +1539,60 @@ impl Renderer {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        #[cfg(feature = "wasm")]
+        if debug_scope_frame {
+            let error_future = self.device.pop_error_scope();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Some(error) = error_future.await {
+                    crate::externs::render::wasm_debug(&format!(
+                        "voplay gpu validation #{}: {}",
+                        debug_frame_count, error
+                    ));
+                }
+            });
+        }
 
         Ok(())
+    }
+
+    fn debug_submit_status(frame_count: u64, message: &str) {
+        if Self::debug_should_log_frame(frame_count) {
+            Self::debug_renderer_status(message);
+        }
+    }
+
+    fn debug_should_log_frame(frame_count: u64) -> bool {
+        if !(frame_count <= 4 || frame_count % 60 == 0) {
+            return false;
+        }
+        #[cfg(feature = "wasm")]
+        {
+            return crate::externs::render::wasm_debug_enabled();
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            false
+        }
+    }
+
+    fn debug_renderer_status(message: &str) {
+        #[cfg(feature = "wasm")]
+        {
+            crate::externs::render::wasm_debug(message);
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            log::debug!("{}", message);
+        }
+    }
+
+    #[cfg(feature = "wasm")]
+    fn pop_debug_error_scope(device: &wgpu::Device, label: &'static str) {
+        let error_future = device.pop_error_scope();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(error) = error_future.await {
+                crate::externs::render::wasm_debug(&format!("{} validation: {}", label, error));
+            }
+        });
     }
 }

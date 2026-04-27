@@ -32,6 +32,7 @@ type splitWidgetEvent struct {
 
 type renderWorkerConfig struct {
 	UncappedFrameRate bool
+	TargetFrameRate int
 }
 
 func useRenderIslandHost() bool {
@@ -46,6 +47,7 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 	renderIsland := make(island)
 	go @(renderIsland) runRenderWorker(canvasId, renderWorkerConfig{
 		UncappedFrameRate: game.UncappedFrameRate,
+		TargetFrameRate: game.TargetFrameRate,
 	}, renderWorkerPorts{
 		frameReq:   ports.frameReq,
 		frameReply: ports.frameReply,
@@ -202,4 +204,4 @@ func waitDisplayPulse()
 func pollInput() []byte
  
 // Runtime query
-func isRendererReady() bool
+func isRendererReady() (bool, error)

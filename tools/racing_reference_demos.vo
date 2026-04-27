@@ -1,0 +1,291 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"os"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/scene3d"
+)
+
+func demoFail(name string, msg string) {
+	fmt.Println("VO:REFERENCE_DEMO FAIL " + name + ": " + msg)
+	os.Exit(1)
+}
+
+func demoPass(name string) {
+	fmt.Println("VO:REFERENCE_DEMO PASS " + name)
+}
+
+func require(name string, cond bool, msg string) {
+	if !cond {
+		demoFail(name, msg)
+	}
+}
+
+func requireNoTrackErrors(name string, issues []scene3d.TrackIssue) {
+	for _, issue := range issues {
+		if issue.Severity == scene3d.TrackIssueError {
+			demoFail(name, issue.Code + " at " + issue.Path + ": " + issue.Message)
+		}
+	}
+}
+
+func requireFinite(name string, v float64, label string) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		demoFail(name, label + " is not finite")
+	}
+}
+
+func requireFiniteVec3(name string, v voplay.Vec3, label string) {
+	requireFinite(name, v.X, label + ".x")
+	requireFinite(name, v.Y, label + ".y")
+	requireFinite(name, v.Z, label + ".z")
+}
+
+func hasTrackIssue(issues []scene3d.TrackIssue, code string) bool {
+	for _, issue := range issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func minimalTrackAsset() *scene3d.TrackAsset {
+	return &scene3d.TrackAsset{
+		Version: 1,
+		Name: "track_minimal",
+		Terrain: &scene3d.MapTerrain{Heightmap: "height.png", Width: 40, Height: 3, Depth: 40},
+		Centerline: []scene3d.TrackControlPoint{
+			{Position: scene3d.MapVec3{X: -10, Y: 0, Z: 0}, Width: 8},
+			{Position: scene3d.MapVec3{X: 10, Y: 0, Z: 0}, Width: 8},
+		},
+	}
+}
+
+func referenceOvalAsset() *scene3d.TrackAsset {
+	points := []scene3d.TrackControlPoint{}
+	steps := 32
+	for i := 0; i <= steps; i++ {
+		angle := math.Pi * 2 * float64(i) / float64(steps)
+		points = append(points, scene3d.TrackControlPoint{
+			Position: scene3d.MapVec3{
+				X: 55 * math.Sin(angle),
+				Y: 0,
+				Z: -70 * math.Cos(angle),
+			},
+			Width: 13,
+			Bank: 0.06 * math.Sin(angle),
+		})
+	}
+	return &scene3d.TrackAsset{
+		Version: 1,
+		Name: "track_reference_oval",
+		ClosedLoop: true,
+		Terrain: &scene3d.MapTerrain{Heightmap: "height.png", Texture: "grass.png", Width: 180, Height: 10, Depth: 180, UVScale: 10, Friction: 0.8},
+		Meshes: []scene3d.TrackMesh{
+			{Name: "road_visual", Model: "road.glb", Collision: "none"},
+			{Name: "road_collision", Model: "road_collision.glb", Collision: "trimesh", Hidden: true, Friction: 1.0},
+		},
+		Centerline: points,
+		Surfaces: []scene3d.TrackSurface{
+			{Name: "road_main", Kind: scene3d.TrackSurfaceRoad, Start: 0, End: 350, Left: -6.5, Right: 6.5, Priority: 1, Friction: 1.0},
+			{Name: "grass_left", Kind: scene3d.TrackSurfaceOffroad, Start: 0, End: 350, Left: -60, Right: -6.5, Priority: 5, Friction: 0.42},
+			{Name: "grass_right", Kind: scene3d.TrackSurfaceOffroad, Start: 0, End: 350, Left: 6.5, Right: 60, Priority: 5, Friction: 0.42},
+			{Name: "boost_pad", Kind: scene3d.TrackSurfaceBoost, Start: 42, End: 60, Left: -2, Right: 2, Priority: 20, Friction: 1.05, Boost: 1.6},
+		},
+		Gates: []scene3d.TrackGate{
+			{Name: "start", Distance: 0, Width: 12},
+			{Name: "gate_1", Distance: 104, Width: 12},
+			{Name: "gate_2", Distance: 208, Width: 12},
+			{Name: "gate_3", Distance: 300, Width: 12},
+		},
+		Spawns: []scene3d.TrackSpawn{
+			{Name: "player_start", Distance: 4},
+		},
+		Respawns: []scene3d.TrackRespawn{
+			{Name: "respawn_start", Distance: 0},
+			{Name: "respawn_back", Distance: 208},
+			{Name: "respawn_return", Distance: 300},
+		},
+		Triggers: []scene3d.TrackTrigger{
+			{Name: "lap_line", Kind: "lap", Distance: 0, Radius: 7},
+		},
+		RacingLines: []scene3d.TrackRacingLine{
+			{Name: "main", Points: []scene3d.TrackRacingLinePoint{
+				{Distance: 0, Lateral: 0, TargetSpeed: 30},
+				{Distance: 80, Lateral: -1.5, TargetSpeed: 24},
+				{Distance: 160, Lateral: 1.4, TargetSpeed: 28},
+				{Distance: 240, Lateral: -1.2, TargetSpeed: 24},
+				{Distance: 300, Lateral: 1.0, TargetSpeed: 30},
+				{Distance: 350, Lateral: 0, TargetSpeed: 30},
+			}},
+		},
+		Metadata: []scene3d.TrackMetadataEntry{
+			{Key: "demo", Value: "reference"},
+		},
+	}
+}
+
+func runTrackMinimal() {
+	name := "track_minimal"
+	asset := minimalTrackAsset()
+	requireNoTrackErrors(name, scene3d.ValidateTrackAsset(asset))
+	track, err := scene3d.NewTrack(asset)
+	require(name, err == nil, "NewTrack returned error")
+	require(name, track.Length() > 0, "track length must be positive")
+	issues := scene3d.CheckTrackTraversability(track, scene3d.TrackTraversabilityOptions{SampleStep: 1, MaxSegmentLength: 80, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return pos.Y, true
+	}})
+	requireNoTrackErrors(name, issues)
+	demoPass(name)
+}
+
+func runTrackValidationBroken() {
+	name := "track_validation_broken"
+	asset := minimalTrackAsset()
+	asset.Version = 99
+	asset.Gates = []scene3d.TrackGate{{Name: "b", Distance: 5}, {Name: "a", Distance: 4}}
+	issues := scene3d.ValidateTrackAsset(asset)
+	require(name, hasTrackIssue(issues, "track.version"), "missing unsupported-version issue")
+	require(name, hasTrackIssue(issues, "track.gate.order"), "missing gate-order issue")
+	_, err := scene3d.NewTrack(asset)
+	require(name, err != nil, "error track must not create runtime Track")
+	demoPass(name)
+}
+
+func runTrackReferenceOval() *scene3d.Track {
+	name := "track_reference_oval"
+	asset := referenceOvalAsset()
+	requireNoTrackErrors(name, scene3d.ValidateTrackAsset(asset))
+	track, err := scene3d.NewTrack(asset)
+	require(name, err == nil, "NewTrack returned error")
+	require(name, track.Length() > 350, "reference oval is too short")
+	start := track.PoseAt(0)
+	end := track.PoseAt(track.Length())
+	require(name, start.Position.Distance(end.Position) <= 0.05, "closed loop endpoints are not continuous")
+	boost := track.SurfaceAt(track.PoseAt(48).Position)
+	require(name, boost.Name == "boost_pad" && boost.Boost > 1, "boost surface query failed")
+	left := track.PoseAt(20)
+	grass := track.SurfaceAt(left.Position.Add(left.Right.Scale(-8)))
+	require(name, grass.Name == "grass_left" && !grass.OnRoad, "offroad surface query failed")
+	line, err := track.PoseOnLine("main", 90)
+	require(name, err == nil && line.TargetSpeed > 0, "racing line query failed")
+	issues := scene3d.CheckTrackTraversability(track, scene3d.TrackTraversabilityOptions{SampleStep: 1, MaxHeightDelta: 1, MaxSegmentLength: 90, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return pos.Y, true
+	}})
+	requireNoTrackErrors(name, issues)
+	demoPass(name)
+	return track
+}
+
+type kartReferenceScene struct {
+	Scene *scene3d.Scene
+	Track *scene3d.Track
+	Body *scene3d.Entity
+	Vehicle *scene3d.Vehicle
+	Kart *scene3d.KartController
+}
+
+func newKartReferenceScene(name string) *kartReferenceScene {
+	track, err := scene3d.NewTrack(referenceOvalAsset())
+	require(name, err == nil, "reference track creation failed")
+	scene := scene3d.New()
+	scene.Spawn(scene3d.EntityDesc{
+		Position: voplay.Vec3{Y: -0.18},
+		Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(300, 0.2, 300), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 1.0},
+		Tag: "reference_ground",
+	})
+	spawn := track.PoseAt(4)
+	body := scene.Spawn(scene3d.EntityDesc{
+		Position: spawn.Position.Add(voplay.Vec3{Y: 1.15}),
+		Rotation: spawn.Rotation,
+		Physics: &scene3d.Physics{Type: scene3d.Dynamic, Collider: scene3d.Box(1.05, 0.42, 1.25), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Density: 1.0, Friction: 0.9, LinearDamping: 0.05, AngularDamping: 0.35},
+		Tag: "reference_kart",
+	})
+	config := scene3d.DefaultKartControllerConfig()
+	vehicle := scene3d.NewVehicle(body, config.Vehicle)
+	kart := scene3d.NewKartController(vehicle, track, config)
+	return &kartReferenceScene{Scene: scene, Track: track, Body: body, Vehicle: vehicle, Kart: kart}
+}
+
+func countWheelContacts(name string, vehicle *scene3d.Vehicle) int {
+	require(name, vehicle.WheelCount() == 4, "expected four raycast wheels, got " + fmt.Sprint(vehicle.WheelCount()))
+	contacts := 0
+	for i := 0; i < vehicle.WheelCount(); i++ {
+		state, ok := vehicle.WheelState(i)
+		require(name, ok, "missing wheel state " + fmt.Sprint(i))
+		requireFiniteVec3(name, state.Center, "wheel.center")
+		requireFiniteVec3(name, state.ContactPoint, "wheel.contact")
+		requireFiniteVec3(name, state.ContactNormal, "wheel.normal")
+		requireFinite(name, state.SuspensionLength, "wheel.suspension_length")
+		requireFinite(name, state.SuspensionCompression, "wheel.suspension_compression")
+		requireFinite(name, state.Steering, "wheel.steering")
+		requireFinite(name, state.Rotation, "wheel.rotation")
+		if state.InContact {
+			contacts++
+		}
+	}
+	return contacts
+}
+
+func runKartVehicleReference() {
+	name := "kart_vehicle_reference"
+	ref := newKartReferenceScene(name)
+	defer ref.Scene.Close()
+	for i := 0; i < 90; i++ {
+		ref.Vehicle.Update(scene3d.VehicleInput{}, 1.0 / 60.0)
+		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
+	}
+	settledContacts := countWheelContacts(name, ref.Vehicle)
+	require(name, settledContacts > 0, "no raycast wheel contacts after settling")
+	require(name, ref.Vehicle.Grounded, "vehicle is not grounded after settling")
+	for i := 0; i < 1; i++ {
+		state := ref.Kart.Update(scene3d.KartInput{Throttle: 0.25, Steer: 0.05}, 1.0 / 60.0)
+		requireFinite(name, state.Speed, "kart.speed")
+		requireFinite(name, state.SurfaceFriction, "kart.surface_friction")
+		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
+	}
+	contacts := countWheelContacts(name, ref.Vehicle)
+	require(name, contacts > 0, "no raycast wheel contacts after controller update")
+	requireFiniteVec3(name, ref.Body.Position(), "kart.position")
+	require(name, ref.Body.Position().Y > -5, "kart fell out of the reference scene")
+	demoPass(name)
+}
+
+func runRacingDebugOverlay() {
+	name := "racing_debug_overlay"
+	ref := newKartReferenceScene(name)
+	defer ref.Scene.Close()
+	for i := 0; i < 10; i++ {
+		_ = ref.Kart.Update(scene3d.KartInput{Throttle: 0.5, Steer: -0.2}, 1.0 / 60.0)
+		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
+	}
+	overlay, err := scene3d.SpawnRacingDebugOverlay(ref.Scene, ref.Track, ref.Vehicle, scene3d.RacingDebugOptions{
+		Model: voplay.ModelID(405),
+		Track: scene3d.TrackDebugOptions{Centerline: true, Boundaries: true, Gates: true, Respawns: true},
+		Vehicle: scene3d.VehicleDebugOptions{WheelContacts: true, SuspensionRays: true},
+		SurfaceMarker: true,
+	})
+	require(name, err == nil, "SpawnRacingDebugOverlay returned error")
+	require(name, overlay.TrackOverlay != nil && len(overlay.TrackOverlay.Entities) > 0, "track overlay did not spawn")
+	require(name, overlay.VehicleOverlay != nil && len(overlay.VehicleOverlay.Entities) == ref.Vehicle.WheelCount()*2, "vehicle overlay entity count mismatch")
+	require(name, overlay.SurfaceEntity != nil && overlay.SurfaceEntity.Visible, "surface marker did not spawn")
+	snapshot := overlay.Update(ref.Scene)
+	require(name, len(snapshot.Wheels) == ref.Vehicle.WheelCount(), "debug snapshot wheel count mismatch")
+	requireFinite(name, snapshot.Speed, "debug.speed")
+	surface := overlay.SurfaceEntity
+	overlay.Destroy(ref.Scene)
+	require(name, !surface.Active, "overlay destroy left surface marker active")
+	demoPass(name)
+}
+
+func main() {
+	runTrackMinimal()
+	runTrackValidationBroken()
+	_ = runTrackReferenceOval()
+	runKartVehicleReference()
+	runRacingDebugOverlay()
+	fmt.Println("VO:REFERENCE_DEMOS PASS all")
+}

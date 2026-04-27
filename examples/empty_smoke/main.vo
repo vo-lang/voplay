@@ -1,0 +1,40 @@
+package main
+
+import (
+	"strconv"
+	"github.com/vo-lang/voplay"
+)
+
+type EmptySmokeState struct {
+	frame int
+	lastBytes int
+}
+
+func main() {
+	voplay.Run(voplay.Game{Width: 1280, Height: 720, Title: "voplay empty smoke", InitialState: &EmptySmokeState{}})
+}
+
+func (s *EmptySmokeState) Enter(g *voplay.GameCtx) {
+	g.ShowDebugOverlay()
+}
+
+func (s *EmptySmokeState) Exit(g *voplay.GameCtx) {}
+
+func (s *EmptySmokeState) FixedUpdate(g *voplay.GameCtx, dt float64) {}
+
+func (s *EmptySmokeState) Update(g *voplay.GameCtx, dt float64) {
+	s.frame++
+}
+
+func (s *EmptySmokeState) Draw(g *voplay.GameCtx) {
+	g.Draw.ClearColor(voplay.Color{R: 0.46, G: 0.70, B: 0.93, A: 1})
+	g.Draw.ResetCamera()
+	g.Draw.SetLayer(65534)
+	g.Draw.DrawRect(18, 132, 330, 96, voplay.Color{R: 0.04, G: 0.06, B: 0.08, A: 0.68})
+	g.Draw.DrawRect(18, 132, 330, 5, voplay.Color{R: 0.22, G: 0.76, B: 0.96, A: 1})
+	s.lastBytes = len(g.Draw.Bytes())
+	text := voplay.Color{R: 0.90, G: 0.96, B: 1.00, A: 1}
+	muted := voplay.Color{R: 0.64, G: 0.76, B: 0.84, A: 1}
+	g.Draw.DrawText("empty smoke", 32, 162, 20, text)
+	g.Draw.DrawText("frame " + strconv.Itoa(s.frame) + "   bytes " + strconv.Itoa(s.lastBytes), 32, 190, 15, muted)
+}

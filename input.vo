@@ -15,6 +15,8 @@ const (
 	inputScroll      = 0x06
 	inputBindingKey     = 0x01
 	inputBindingPointer = 0x02
+	inputBindingGamepadButton = 0x03
+	inputBindingGamepadAxis   = 0x04
 )
 
 func normalizeKeyName(key string) string {
@@ -49,17 +51,34 @@ type InputState struct {
 
 	// Scroll wheel
 	scrollX, scrollY float64
+
+	gamepads map[int]*GamepadState
 }
 
 type InputBinding struct {
 	kind   byte
 	key    string
 	button int
+	gamepad int
+	axis string
+	axisSign int
+	deadzone float64
+	gamepadButton string
 }
 
 type ActionMap struct {
 	input   *InputState
 	actions map[string][]InputBinding
+}
+
+type GamepadState struct {
+	Connected bool
+	Axes map[string]float64
+	ButtonsDown map[string]bool
+	ButtonsPressed map[string]bool
+	ButtonsReleased map[string]bool
+	RumbleLow float64
+	RumbleHigh float64
 }
 
 // NewInputState creates a new InputState with empty state.
@@ -68,6 +87,7 @@ func NewInputState() *InputState {
 		keysDown:     map[string]bool{},
 		keysPressed:  map[string]bool{},
 		keysReleased: map[string]bool{},
+		gamepads:     map[int]*GamepadState{},
 	}
 }
 
@@ -93,6 +113,31 @@ func PointerBinding(button int) InputBinding {
 		panic("PointerBinding: button must be >= 0")
 	}
 	return InputBinding{kind: inputBindingPointer, button: button}
+}
+
+func GamepadButtonBinding(gamepad int, button string) InputBinding {
+	if gamepad < 0 {
+		panic("GamepadButtonBinding: gamepad must be >= 0")
+	}
+	if button == "" {
+		panic("GamepadButtonBinding: button must not be empty")
+	}
+	return InputBinding{kind: inputBindingGamepadButton, gamepad: gamepad, gamepadButton: button}
+}
+
+func GamepadAxisBinding(gamepad int, axis string, sign int, deadzone float64) InputBinding {
+	if gamepad < 0 {
+		panic("GamepadAxisBinding: gamepad must be >= 0")
+	}
+	if axis == "" {
+		panic("GamepadAxisBinding: axis must not be empty")
+	}
+	if sign < 0 {
+		sign = -1
+	} else {
+		sign = 1
+	}
+	return InputBinding{kind: inputBindingGamepadAxis, gamepad: gamepad, axis: axis, axisSign: sign, deadzone: inputClamp(deadzone, 0, 0.99)}
 }
 
 func (m *ActionMap) Bind(action string, bindings ...InputBinding) {
@@ -143,15 +188,19 @@ func (m *ActionMap) IsReleased(action string) bool {
 }
 
 func (m *ActionMap) Axis(negativeAction, positiveAction string) float64 {
-	negativeDown := m.IsDown(negativeAction)
-	positiveDown := m.IsDown(positiveAction)
-	if negativeDown == positiveDown {
-		return 0
+	return inputClamp(m.Value(positiveAction)-m.Value(negativeAction), -1, 1)
+}
+
+func (m *ActionMap) Value(action string) float64 {
+	bindings := m.mustBindings(action)
+	best := 0.0
+	for _, binding := range bindings {
+		v := binding.value(m.input)
+		if v > best {
+			best = v
+		}
 	}
-	if negativeDown {
-		return -1
-	}
-	return 1
+	return inputClamp(best, 0, 1)
 }
 
 func (m *ActionMap) mustBindings(action string) []InputBinding {
@@ -186,6 +235,10 @@ func (binding InputBinding) isDown(input *InputState) bool {
 		return input.IsKeyDown(binding.key)
 	case inputBindingPointer:
 		return input.IsPointerDown(binding.button)
+	case inputBindingGamepadButton:
+		return input.IsGamepadButtonDown(binding.gamepad, binding.gamepadButton)
+	case inputBindingGamepadAxis:
+		return binding.value(input) > 0
 	default:
 		panic("InputBinding: unsupported binding kind")
 	}
@@ -197,6 +250,10 @@ func (binding InputBinding) isPressed(input *InputState) bool {
 		return input.IsKeyPressed(binding.key)
 	case inputBindingPointer:
 		return input.IsPointerPressed(binding.button)
+	case inputBindingGamepadButton:
+		return input.IsGamepadButtonPressed(binding.gamepad, binding.gamepadButton)
+	case inputBindingGamepadAxis:
+		return false
 	default:
 		panic("InputBinding: unsupported binding kind")
 	}
@@ -208,6 +265,38 @@ func (binding InputBinding) isReleased(input *InputState) bool {
 		return input.IsKeyReleased(binding.key)
 	case inputBindingPointer:
 		return input.IsPointerReleased(binding.button)
+	case inputBindingGamepadButton:
+		return input.IsGamepadButtonReleased(binding.gamepad, binding.gamepadButton)
+	case inputBindingGamepadAxis:
+		return false
+	default:
+		panic("InputBinding: unsupported binding kind")
+	}
+}
+
+func (binding InputBinding) value(input *InputState) float64 {
+	switch binding.kind {
+	case inputBindingKey:
+		if input.IsKeyDown(binding.key) {
+			return 1
+		}
+		return 0
+	case inputBindingPointer:
+		if input.IsPointerDown(binding.button) {
+			return 1
+		}
+		return 0
+	case inputBindingGamepadButton:
+		if input.IsGamepadButtonDown(binding.gamepad, binding.gamepadButton) {
+			return 1
+		}
+		return 0
+	case inputBindingGamepadAxis:
+		raw := input.GamepadAxis(binding.gamepad, binding.axis)
+		if binding.axisSign < 0 {
+			raw = -raw
+		}
+		return inputApplyDeadzone(raw, binding.deadzone)
 	default:
 		panic("InputBinding: unsupported binding kind")
 	}
@@ -312,10 +401,95 @@ func (inp *InputState) endFrame() {
 	inp.prevPointerY = inp.pointerY
 	inp.scrollX = 0
 	inp.scrollY = 0
+	for _, gp := range inp.gamepads {
+		for b := range gp.ButtonsPressed {
+			delete(gp.ButtonsPressed, b)
+		}
+		for b := range gp.ButtonsReleased {
+			delete(gp.ButtonsReleased, b)
+		}
+	}
 }
 
 func (inp *InputState) EndFrame() {
 	inp.endFrame()
+}
+
+func (inp *InputState) SetGamepadConnected(gamepad int, connected bool) {
+	inp.gamepad(gamepad).Connected = connected
+}
+
+func (inp *InputState) IsGamepadConnected(gamepad int) bool {
+	return inp.gamepad(gamepad).Connected
+}
+
+func (inp *InputState) SetGamepadAxis(gamepad int, axis string, value float64) {
+	if axis == "" {
+		panic("SetGamepadAxis: axis must not be empty")
+	}
+	gp := inp.gamepad(gamepad)
+	gp.Connected = true
+	gp.Axes[axis] = inputClamp(value, -1, 1)
+}
+
+func (inp *InputState) GamepadAxis(gamepad int, axis string) float64 {
+	if axis == "" {
+		panic("GamepadAxis: axis must not be empty")
+	}
+	return inp.gamepad(gamepad).Axes[axis]
+}
+
+func (inp *InputState) GamepadButtonDown(gamepad int, button string) {
+	if button == "" {
+		panic("GamepadButtonDown: button must not be empty")
+	}
+	gp := inp.gamepad(gamepad)
+	gp.Connected = true
+	if !gp.ButtonsDown[button] {
+		gp.ButtonsPressed[button] = true
+	}
+	gp.ButtonsDown[button] = true
+}
+
+func (inp *InputState) GamepadButtonUp(gamepad int, button string) {
+	if button == "" {
+		panic("GamepadButtonUp: button must not be empty")
+	}
+	gp := inp.gamepad(gamepad)
+	gp.ButtonsDown[button] = false
+	gp.ButtonsReleased[button] = true
+}
+
+func (inp *InputState) IsGamepadButtonDown(gamepad int, button string) bool {
+	if button == "" {
+		panic("IsGamepadButtonDown: button must not be empty")
+	}
+	return inp.gamepad(gamepad).ButtonsDown[button]
+}
+
+func (inp *InputState) IsGamepadButtonPressed(gamepad int, button string) bool {
+	if button == "" {
+		panic("IsGamepadButtonPressed: button must not be empty")
+	}
+	return inp.gamepad(gamepad).ButtonsPressed[button]
+}
+
+func (inp *InputState) IsGamepadButtonReleased(gamepad int, button string) bool {
+	if button == "" {
+		panic("IsGamepadButtonReleased: button must not be empty")
+	}
+	return inp.gamepad(gamepad).ButtonsReleased[button]
+}
+
+func (inp *InputState) SetGamepadRumble(gamepad int, low, high float64) {
+	gp := inp.gamepad(gamepad)
+	gp.RumbleLow = inputClamp(low, 0, 1)
+	gp.RumbleHigh = inputClamp(high, 0, 1)
+}
+
+func (inp *InputState) GamepadRumble(gamepad int) (float64, float64) {
+	gp := inp.gamepad(gamepad)
+	return gp.RumbleLow, gp.RumbleHigh
 }
 
 // --- Keyboard polling ---
@@ -367,6 +541,40 @@ func (inp *InputState) ScrollDelta() (float64, float64) {
 // PointerDelta returns the pointer movement since the last frame.
 func (inp *InputState) PointerDelta() (float64, float64) {
 	return inp.pointerX - inp.prevPointerX, inp.pointerY - inp.prevPointerY
+}
+
+func (inp *InputState) gamepad(gamepad int) *GamepadState {
+	if gamepad < 0 {
+		panic("InputState: gamepad must be >= 0")
+	}
+	gp := inp.gamepads[gamepad]
+	if gp == nil {
+		gp = &GamepadState{
+			Axes: map[string]float64{},
+			ButtonsDown: map[string]bool{},
+			ButtonsPressed: map[string]bool{},
+			ButtonsReleased: map[string]bool{},
+		}
+		inp.gamepads[gamepad] = gp
+	}
+	return gp
+}
+
+func inputApplyDeadzone(v, deadzone float64) float64 {
+	if v <= deadzone {
+		return 0
+	}
+	return inputClamp((v-deadzone)/(1.0-deadzone), 0, 1)
+}
+
+func inputClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // --- binary decode helpers ---

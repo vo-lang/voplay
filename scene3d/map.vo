@@ -21,14 +21,33 @@ type MapColor struct {
 	A float64 `json:"a"`
 }
 
+type MapTerrainSplatLayer struct {
+	Texture string `json:"texture"`
+	Normal string `json:"normal,omitempty"`
+	MetallicRoughness string `json:"metallicRoughness,omitempty"`
+	UVScale float64 `json:"uvScale,omitempty"`
+	NormalScale float64 `json:"normalScale,omitempty"`
+}
+
+type MapTerrainSplat struct {
+	Control string `json:"control"`
+	Layers []MapTerrainSplatLayer `json:"layers"`
+}
+
 type MapTerrain struct {
 	Heightmap string   `json:"heightmap"`
 	Texture   string   `json:"texture,omitempty"`
+	Normal    string   `json:"normal,omitempty"`
+	MetallicRoughness string `json:"metallicRoughness,omitempty"`
+	Splat     *MapTerrainSplat `json:"splat,omitempty"`
 	Position  MapVec3  `json:"position,omitempty"`
 	Width     float64  `json:"width"`
 	Height    float64  `json:"height"`
 	Depth     float64  `json:"depth"`
 	UVScale   float64  `json:"uvScale,omitempty"`
+	NormalScale float64 `json:"normalScale,omitempty"`
+	Roughness float64 `json:"roughness,omitempty"`
+	Metallic float64 `json:"metallic,omitempty"`
 	Tint      MapColor `json:"tint,omitempty"`
 	TintSet   bool     `json:"tintSet,omitempty"`
 	Tag       string   `json:"tag,omitempty"`
@@ -218,6 +237,37 @@ func validateMapTerrain(terrain MapTerrain) error {
 	if terrain.UVScale < 0 {
 		return errors.New("scene3d.LoadMapAsset: terrain uvScale must be >= 0")
 	}
+	if terrain.NormalScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain normalScale must be >= 0")
+	}
+	if terrain.Roughness < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain roughness must be >= 0")
+	}
+	if terrain.Metallic < 0 || terrain.Metallic > 1 {
+		return errors.New("scene3d.LoadMapAsset: terrain metallic must be in range 0..1")
+	}
+	if terrain.Splat != nil {
+		if terrain.Texture != "" || terrain.Normal != "" || terrain.MetallicRoughness != "" || terrain.UVScale != 0 || terrain.NormalScale != 0 || terrain.Roughness != 0 || terrain.Metallic != 0 {
+			return errors.New("scene3d.LoadMapAsset: terrain single-material fields cannot be mixed with splat")
+		}
+		if terrain.Splat.Control == "" {
+			return errors.New("scene3d.LoadMapAsset: terrain splat control is required")
+		}
+		if len(terrain.Splat.Layers) != 4 {
+			return errors.New("scene3d.LoadMapAsset: terrain splat requires exactly 4 layers")
+		}
+		for _, layer := range terrain.Splat.Layers {
+			if layer.Texture == "" {
+				return errors.New("scene3d.LoadMapAsset: terrain splat layer texture is required")
+			}
+			if layer.UVScale < 0 {
+				return errors.New("scene3d.LoadMapAsset: terrain splat layer uvScale must be >= 0")
+			}
+			if layer.NormalScale < 0 {
+				return errors.New("scene3d.LoadMapAsset: terrain splat layer normalScale must be >= 0")
+			}
+		}
+	}
 	return nil
 }
 
@@ -241,6 +291,9 @@ func spawnMapTerrain(scene *Scene, assets *voplay.Assets, terrain MapTerrain, ba
 		Height:        terrain.Height,
 		Depth:         terrain.Depth,
 		UVScale:       terrain.UVScale,
+		NormalScale:   terrain.NormalScale,
+		Roughness:     terrain.Roughness,
+		Metallic:      terrain.Metallic,
 		Tag:           terrain.Tag,
 		Tint:          terrain.Tint.Color(),
 		TintSet:       terrain.TintSet,
@@ -256,24 +309,76 @@ func spawnMapTerrain(scene *Scene, assets *voplay.Assets, terrain MapTerrain, ba
 	} else {
 		desc.HeightmapPath = heightmapPath
 	}
-	if terrain.Texture != "" {
-		texturePath := mapResolvePath(baseDir, terrain.Texture)
-		var texture voplay.TextureID
-		var err error
-		if assets != nil {
-			texture, err = assets.Texture(texturePath)
-		} else {
-			texture, err = voplay.LoadTexture(texturePath)
-		}
+	if terrain.Splat != nil {
+		splat := &TerrainSplatMaterial{Layers: make([]TerrainLayer, 4)}
+		control, err := loadMapTexture(assets, mapResolvePath(baseDir, terrain.Splat.Control), result)
 		if err != nil {
 			return nil, err
 		}
-		if assets == nil {
-			result.Textures = append(result.Textures, texture)
+		splat.Control = control
+		for i := 0; i < 4; i++ {
+			layer := terrain.Splat.Layers[i]
+			texture, textureErr := loadMapTexture(assets, mapResolvePath(baseDir, layer.Texture), result)
+			if textureErr != nil {
+				return nil, textureErr
+			}
+			splat.Layers[i].Texture = texture
+			if layer.Normal != "" {
+				normal, normalErr := loadMapTexture(assets, mapResolvePath(baseDir, layer.Normal), result)
+				if normalErr != nil {
+					return nil, normalErr
+				}
+				splat.Layers[i].Normal = normal
+			}
+			if layer.MetallicRoughness != "" {
+				mr, mrErr := loadMapTexture(assets, mapResolvePath(baseDir, layer.MetallicRoughness), result)
+				if mrErr != nil {
+					return nil, mrErr
+				}
+				splat.Layers[i].MetallicRoughness = mr
+			}
+			splat.Layers[i].UVScale = layer.UVScale
+			splat.Layers[i].NormalScale = layer.NormalScale
+		}
+		desc.Splat = splat
+		return NewTerrain(scene, desc)
+	}
+	if terrain.Texture != "" {
+		texture, err := loadMapTexture(assets, mapResolvePath(baseDir, terrain.Texture), result)
+		if err != nil {
+			return nil, err
 		}
 		desc.Texture = texture
 	}
+	if terrain.Normal != "" {
+		normal, err := loadMapTexture(assets, mapResolvePath(baseDir, terrain.Normal), result)
+		if err != nil {
+			return nil, err
+		}
+		desc.Normal = normal
+	}
+	if terrain.MetallicRoughness != "" {
+		mr, err := loadMapTexture(assets, mapResolvePath(baseDir, terrain.MetallicRoughness), result)
+		if err != nil {
+			return nil, err
+		}
+		desc.MetallicRoughness = mr
+	}
 	return NewTerrain(scene, desc)
+}
+
+func loadMapTexture(assets *voplay.Assets, path string, result *MapSpawnResult) (voplay.TextureID, error) {
+	if assets != nil {
+		return assets.Texture(path)
+	}
+	texture, err := voplay.LoadTexture(path)
+	if err != nil {
+		return 0, err
+	}
+	if result != nil {
+		result.Textures = append(result.Textures, texture)
+	}
+	return texture, nil
 }
 
 func spawnMapMesh(scene *Scene, assets *voplay.Assets, mesh MapMesh, baseDir string) (*Entity, error) {

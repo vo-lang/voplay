@@ -92,6 +92,21 @@ fn out_unit_result(out: &mut Vec<u8>, result: Result<(), String>) {
     }
 }
 
+/// Encode a Result<bool, String> as (TAG_VALUE bool)(nil_error|error_str)
+#[inline]
+fn out_bool_result(out: &mut Vec<u8>, result: Result<bool, String>) {
+    match result {
+        Ok(value) => {
+            out_value_bool(out, value);
+            out_nil_error(out);
+        }
+        Err(e) => {
+            out_value_bool(out, false);
+            out_error(out, &e);
+        }
+    }
+}
+
 /// Encode a Result<Vec<u8>, String> as (TAG_BYTES)(nil_error|error_str)
 #[inline]
 fn out_bytes_result(out: &mut Vec<u8>, result: Result<Vec<u8>, String>) {
@@ -174,9 +189,8 @@ pub fn init_surface(input: &[u8]) -> Vec<u8> {
 /// isRendererReady() → bool
 #[wasm_bindgen(js_name = "isRendererReady")]
 pub fn is_renderer_ready(_input: &[u8]) -> Vec<u8> {
-    let ready = crate::externs::renderer_ready_result().unwrap_or_else(|msg| panic!("{}", msg));
     let mut out = Vec::new();
-    out_value_bool(&mut out, ready);
+    out_bool_result(&mut out, crate::externs::renderer_ready_result());
     out
 }
 
@@ -445,7 +459,7 @@ pub fn scene3d_load_level(input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// scene3d_createTerrain(path, sx, sy, sz, uvScale, texId) → terrain result
+/// scene3d_createTerrain(path, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
 #[wasm_bindgen(js_name = "scene3d_createTerrain")]
 pub fn scene3d_create_terrain(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
@@ -458,17 +472,40 @@ pub fn scene3d_create_terrain(input: &[u8]) -> Vec<u8> {
         0 => None,
         id => Some(id),
     };
+    let normal_texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let metallic_roughness_texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let normal_scale = in_f64(input, &mut pos) as f32;
+    let roughness = in_f64(input, &mut pos) as f32;
+    let metallic = in_f64(input, &mut pos) as f32;
     let result = crate::file_io::read_bytes(&path)
         .map_err(|e| format!("terrain: read {}: {}", path, e))
         .and_then(|data| {
             crate::externs::util::with_renderer_result(|r| {
-                r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
+                r.create_terrain(
+                    &data,
+                    scale_x,
+                    scale_y,
+                    scale_z,
+                    uv_scale,
+                    texture_id,
+                    normal_texture_id,
+                    metallic_roughness_texture_id,
+                    normal_scale,
+                    roughness,
+                    metallic,
+                )
             })
         });
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
-/// scene3d_createTerrainSplat(path, sx, sy, sz, controlTexId, [tex, uv]*4) → terrain result
+/// scene3d_createTerrainSplat(path, sx, sy, sz, controlTexId, layerData) → terrain result
 #[wasm_bindgen(js_name = "scene3d_createTerrainSplat")]
 pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
@@ -476,27 +513,40 @@ pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
     let scale_x = in_f64(input, &mut pos) as f32;
     let scale_y = in_f64(input, &mut pos) as f32;
     let scale_z = in_f64(input, &mut pos) as f32;
-    let (control_texture_id, layer_texture_ids, uv_scales) =
-        decode_terrain_splat_input(input, &mut pos);
-    let result = crate::file_io::read_bytes(&path)
-        .map_err(|e| format!("terrain: read {}: {}", path, e))
-        .and_then(|data| {
-            crate::externs::util::with_renderer_result(|r| {
-                r.create_terrain_splat(
-                    &data,
-                    scale_x,
-                    scale_y,
-                    scale_z,
-                    control_texture_id,
-                    layer_texture_ids,
-                    uv_scales,
-                )
-            })
-        });
+    let args = decode_terrain_splat_input(input, &mut pos);
+    let result = args.and_then(
+        |(
+            control_texture_id,
+            layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
+            uv_scales,
+            normal_scales,
+        )| {
+            crate::file_io::read_bytes(&path)
+                .map_err(|e| format!("terrain: read {}: {}", path, e))
+                .and_then(|data| {
+                    crate::externs::util::with_renderer_result(|r| {
+                        r.create_terrain_splat(
+                            &data,
+                            scale_x,
+                            scale_y,
+                            scale_z,
+                            control_texture_id,
+                            layer_texture_ids,
+                            layer_normal_texture_ids,
+                            layer_metallic_roughness_texture_ids,
+                            uv_scales,
+                            normal_scales,
+                        )
+                    })
+                })
+        },
+    );
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
-/// scene3d_createTerrainBytes(data []byte, sx, sy, sz, uvScale, texId) → terrain result
+/// scene3d_createTerrainBytes(data []byte, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
 #[wasm_bindgen(js_name = "scene3d_createTerrainBytes")]
 pub fn scene3d_create_terrain_bytes(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
@@ -509,13 +559,36 @@ pub fn scene3d_create_terrain_bytes(input: &[u8]) -> Vec<u8> {
         0 => None,
         id => Some(id),
     };
+    let normal_texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let metallic_roughness_texture_id = match in_value(input, &mut pos) as u32 {
+        0 => None,
+        id => Some(id),
+    };
+    let normal_scale = in_f64(input, &mut pos) as f32;
+    let roughness = in_f64(input, &mut pos) as f32;
+    let metallic = in_f64(input, &mut pos) as f32;
     let result = crate::externs::util::with_renderer_result(|r| {
-        r.create_terrain(&data, scale_x, scale_y, scale_z, uv_scale, texture_id)
+        r.create_terrain(
+            &data,
+            scale_x,
+            scale_y,
+            scale_z,
+            uv_scale,
+            texture_id,
+            normal_texture_id,
+            metallic_roughness_texture_id,
+            normal_scale,
+            roughness,
+            metallic,
+        )
     });
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
-/// scene3d_createTerrainBytesSplat(data, sx, sy, sz, controlTexId, [tex, uv]*4) → terrain result
+/// scene3d_createTerrainBytesSplat(data, sx, sy, sz, controlTexId, layerData) → terrain result
 #[wasm_bindgen(js_name = "scene3d_createTerrainBytesSplat")]
 pub fn scene3d_create_terrain_bytes_splat(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
@@ -523,31 +596,42 @@ pub fn scene3d_create_terrain_bytes_splat(input: &[u8]) -> Vec<u8> {
     let scale_x = in_f64(input, &mut pos) as f32;
     let scale_y = in_f64(input, &mut pos) as f32;
     let scale_z = in_f64(input, &mut pos) as f32;
-    let (control_texture_id, layer_texture_ids, uv_scales) =
-        decode_terrain_splat_input(input, &mut pos);
-    let result = crate::externs::util::with_renderer_result(|r| {
-        r.create_terrain_splat(
-            &data,
-            scale_x,
-            scale_y,
-            scale_z,
+    let args = decode_terrain_splat_input(input, &mut pos);
+    let result = args.and_then(
+        |(
             control_texture_id,
             layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
             uv_scales,
-        )
-    });
+            normal_scales,
+        )| {
+            crate::externs::util::with_renderer_result(|r| {
+                r.create_terrain_splat(
+                    &data,
+                    scale_x,
+                    scale_y,
+                    scale_z,
+                    control_texture_id,
+                    layer_texture_ids,
+                    layer_normal_texture_ids,
+                    layer_metallic_roughness_texture_ids,
+                    uv_scales,
+                    normal_scales,
+                )
+            })
+        },
+    );
     crate::externs::resource::encode_terrain_result_bytes(result)
 }
 
-fn decode_terrain_splat_input(input: &[u8], pos: &mut usize) -> (u32, [u32; 4], [f32; 4]) {
+fn decode_terrain_splat_input(
+    input: &[u8],
+    pos: &mut usize,
+) -> Result<crate::externs::resource::TerrainSplatArgs, String> {
     let control_texture_id = in_value(input, pos) as u32;
-    let mut layer_texture_ids = [0u32; 4];
-    let mut uv_scales = [1.0f32; 4];
-    for i in 0..4 {
-        layer_texture_ids[i] = in_value(input, pos) as u32;
-        uv_scales[i] = in_f64(input, pos) as f32;
-    }
-    (control_texture_id, layer_texture_ids, uv_scales)
+    let layer_data = in_bytes(input, pos);
+    crate::externs::resource::decode_terrain_splat_layer_data(control_texture_id, layer_data)
 }
 
 /// scene3d_terrainHeightAt(worldId, bodyId, x, z) → (float, bool)
@@ -597,6 +681,20 @@ pub fn scene3d_create_cube_mesh(_input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// scene3d_createRoundedBoxMesh(bevelRadius, segments) → uint32
+#[wasm_bindgen(js_name = "createRoundedBoxMesh")]
+pub fn scene3d_create_rounded_box_mesh(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let bevel_radius = in_f64(input, &mut pos) as f32;
+    let segments = in_value(input, &mut pos) as u32;
+    let id = crate::externs::util::with_renderer_or_panic("createRoundedBoxMesh", |r| {
+        r.create_rounded_box(bevel_radius, segments)
+    });
+    let mut out = Vec::new();
+    out_value_u64(&mut out, id as u64);
+    out
+}
+
 /// scene3d_createSphereMesh(segments) → uint32
 #[wasm_bindgen(js_name = "createSphereMesh")]
 pub fn scene3d_create_sphere_mesh(input: &[u8]) -> Vec<u8> {
@@ -618,6 +716,27 @@ pub fn scene3d_create_cylinder_mesh(input: &[u8]) -> Vec<u8> {
     let id = crate::externs::util::with_renderer_or_panic("createCylinderMesh", |r| {
         r.create_cylinder(segments)
     });
+    let mut out = Vec::new();
+    out_value_u64(&mut out, id as u64);
+    out
+}
+
+/// scene3d_createConeMesh(segments) → uint32
+#[wasm_bindgen(js_name = "createConeMesh")]
+pub fn scene3d_create_cone_mesh(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let segments = in_value(input, &mut pos) as u32;
+    let id =
+        crate::externs::util::with_renderer_or_panic("createConeMesh", |r| r.create_cone(segments));
+    let mut out = Vec::new();
+    out_value_u64(&mut out, id as u64);
+    out
+}
+
+/// scene3d_createWedgeMesh() → uint32
+#[wasm_bindgen(js_name = "createWedgeMesh")]
+pub fn scene3d_create_wedge_mesh(_input: &[u8]) -> Vec<u8> {
+    let id = crate::externs::util::with_renderer_or_panic("createWedgeMesh", |r| r.create_wedge());
     let mut out = Vec::new();
     out_value_u64(&mut out, id as u64);
     out
@@ -1106,9 +1225,7 @@ pub fn scene3d_physics_destroy_raycast_vehicle(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
-    crate::physics3d::with_world(world_id, |world| {
-        world.destroy_raycast_vehicle(vehicle_id)
-    });
+    crate::physics3d::with_world(world_id, |world| world.destroy_raycast_vehicle(vehicle_id));
     Vec::new()
 }
 
@@ -1137,13 +1254,7 @@ pub fn scene3d_physics_set_raycast_vehicle_wheel_control(input: &[u8]) -> Vec<u8
     let engine_force = in_f64(input, &mut pos) as f32;
     let brake = in_f64(input, &mut pos) as f32;
     crate::physics3d::with_world(world_id, |world| {
-        world.set_raycast_vehicle_wheel_control(
-            vehicle_id,
-            wheel_id,
-            steering,
-            engine_force,
-            brake,
-        )
+        world.set_raycast_vehicle_wheel_control(vehicle_id, wheel_id, steering, engine_force, brake)
     });
     Vec::new()
 }

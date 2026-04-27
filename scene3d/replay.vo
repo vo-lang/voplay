@@ -1,0 +1,221 @@
+package scene3d
+
+import (
+	"encoding/json"
+	"errors"
+	"github.com/vo-lang/voplay"
+)
+
+const RacingReplayFormatVersion = 1
+const RacingReplayEngineVersion = "voplay-racing-1"
+
+type RacingReplay struct {
+	FormatVersion int `json:"formatVersion"`
+	EngineVersion string `json:"engineVersion"`
+	FixedStep float64 `json:"fixedStep"`
+	Inputs []RacingReplayInputSample `json:"inputs"`
+	Transforms []RacingReplayTransformSample `json:"transforms,omitempty"`
+	Checkpoints []RacingReplayCheckpoint `json:"checkpoints,omitempty"`
+}
+
+type RacingReplayInputSample struct {
+	Step int `json:"step"`
+	Input RacingInput `json:"input"`
+}
+
+type RacingReplayTransformSample struct {
+	Step int `json:"step"`
+	Position voplay.Vec3 `json:"position"`
+	Rotation voplay.Quat `json:"rotation"`
+}
+
+type RacingReplayCheckpoint struct {
+	Step int `json:"step"`
+	Name string `json:"name"`
+	Distance float64 `json:"distance,omitempty"`
+}
+
+type RacingReplayRecorder struct {
+	replay RacingReplay
+}
+
+type RacingReplayCursor struct {
+	replay *RacingReplay
+	inputIndex int
+	checkpointIndex int
+}
+
+func NewRacingReplayRecorder(fixedStep float64) *RacingReplayRecorder {
+	if fixedStep <= 0 {
+		panic("scene3d.NewRacingReplayRecorder: fixedStep must be > 0")
+	}
+	return &RacingReplayRecorder{replay: RacingReplay{FormatVersion: RacingReplayFormatVersion, EngineVersion: RacingReplayEngineVersion, FixedStep: fixedStep, Inputs: []RacingReplayInputSample{}, Transforms: []RacingReplayTransformSample{}, Checkpoints: []RacingReplayCheckpoint{}}}
+}
+
+func (r *RacingReplayRecorder) RecordInput(step int, input RacingInput) {
+	r.requireStep(step)
+	r.replay.Inputs = append(r.replay.Inputs, RacingReplayInputSample{Step: step, Input: normalizeReplayInput(input)})
+}
+
+func (r *RacingReplayRecorder) RecordTransform(step int, position voplay.Vec3, rotation voplay.Quat) {
+	r.requireStep(step)
+	r.replay.Transforms = append(r.replay.Transforms, RacingReplayTransformSample{Step: step, Position: position, Rotation: rotation})
+}
+
+func (r *RacingReplayRecorder) RecordCheckpoint(step int, name string, distance float64) {
+	r.requireStep(step)
+	if name == "" {
+		panic("scene3d.RacingReplayRecorder.RecordCheckpoint: name must not be empty")
+	}
+	r.replay.Checkpoints = append(r.replay.Checkpoints, RacingReplayCheckpoint{Step: step, Name: name, Distance: distance})
+}
+
+func (r *RacingReplayRecorder) Replay() RacingReplay {
+	return cloneRacingReplay(r.replay)
+}
+
+func (r *RacingReplayRecorder) MarshalJSON() ([]byte, error) {
+	replay := r.Replay()
+	return MarshalRacingReplay(replay)
+}
+
+func (r *RacingReplayRecorder) requireStep(step int) {
+	if r == nil {
+		panic("scene3d.RacingReplayRecorder: recorder is nil")
+	}
+	if step < 0 {
+		panic("scene3d.RacingReplayRecorder: step must be >= 0")
+	}
+}
+
+func MarshalRacingReplay(replay RacingReplay) ([]byte, error) {
+	if err := ValidateRacingReplay(replay); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(replay, "", "  ")
+}
+
+func UnmarshalRacingReplay(data []byte) (RacingReplay, error) {
+	var replay RacingReplay
+	json.Unmarshal(data, &replay)?
+	if err := ValidateRacingReplay(replay); err != nil {
+		return RacingReplay{}, err
+	}
+	return replay, nil
+}
+
+func ValidateRacingReplay(replay RacingReplay) error {
+	if replay.FormatVersion != RacingReplayFormatVersion {
+		return errors.New("scene3d.ValidateRacingReplay: unsupported format version")
+	}
+	if replay.EngineVersion == "" {
+		return errors.New("scene3d.ValidateRacingReplay: engineVersion must not be empty")
+	}
+	if replay.FixedStep <= 0 {
+		return errors.New("scene3d.ValidateRacingReplay: fixedStep must be > 0")
+	}
+	if !replayStepsIncreasingInputs(replay.Inputs) {
+		return errors.New("scene3d.ValidateRacingReplay: input steps must be non-decreasing")
+	}
+	if !replayStepsIncreasingTransforms(replay.Transforms) {
+		return errors.New("scene3d.ValidateRacingReplay: transform steps must be non-decreasing")
+	}
+	if !replayStepsIncreasingCheckpoints(replay.Checkpoints) {
+		return errors.New("scene3d.ValidateRacingReplay: checkpoint steps must be non-decreasing")
+	}
+	return nil
+}
+
+func NewRacingReplayCursor(replay *RacingReplay) (*RacingReplayCursor, error) {
+	if replay == nil {
+		return nil, errors.New("scene3d.NewRacingReplayCursor: replay is nil")
+	}
+	if err := ValidateRacingReplay(*replay); err != nil {
+		return nil, err
+	}
+	return &RacingReplayCursor{replay: replay}, nil
+}
+
+func (c *RacingReplayCursor) InputAt(step int) (RacingInput, bool) {
+	if c == nil || c.replay == nil {
+		return RacingInput{}, false
+	}
+	for c.inputIndex < len(c.replay.Inputs) && c.replay.Inputs[c.inputIndex].Step < step {
+		c.inputIndex++
+	}
+	if c.inputIndex < len(c.replay.Inputs) && c.replay.Inputs[c.inputIndex].Step == step {
+		return c.replay.Inputs[c.inputIndex].Input, true
+	}
+	return RacingInput{}, false
+}
+
+func (c *RacingReplayCursor) CheckpointsAt(step int) []RacingReplayCheckpoint {
+	result := []RacingReplayCheckpoint{}
+	if c == nil || c.replay == nil {
+		return result
+	}
+	for c.checkpointIndex < len(c.replay.Checkpoints) && c.replay.Checkpoints[c.checkpointIndex].Step < step {
+		c.checkpointIndex++
+	}
+	for c.checkpointIndex < len(c.replay.Checkpoints) && c.replay.Checkpoints[c.checkpointIndex].Step == step {
+		result = append(result, c.replay.Checkpoints[c.checkpointIndex])
+		c.checkpointIndex++
+	}
+	return result
+}
+
+func CheckpointSequence(replay RacingReplay) []string {
+	result := make([]string, 0, len(replay.Checkpoints))
+	for _, checkpoint := range replay.Checkpoints {
+		result = append(result, checkpoint.Name)
+	}
+	return result
+}
+
+func normalizeReplayInput(input RacingInput) RacingInput {
+	input.Steer = racingInputClamp(input.Steer, -1, 1)
+	input.Throttle = racingInputClamp(input.Throttle, 0, 1)
+	input.Brake = racingInputClamp(input.Brake, 0, 1)
+	return input
+}
+
+func cloneRacingReplay(replay RacingReplay) RacingReplay {
+	out := replay
+	out.Inputs = append([]RacingReplayInputSample{}, replay.Inputs...)
+	out.Transforms = append([]RacingReplayTransformSample{}, replay.Transforms...)
+	out.Checkpoints = append([]RacingReplayCheckpoint{}, replay.Checkpoints...)
+	return out
+}
+
+func replayStepsIncreasingInputs(samples []RacingReplayInputSample) bool {
+	prev := -1
+	for _, sample := range samples {
+		if sample.Step < prev {
+			return false
+		}
+		prev = sample.Step
+	}
+	return true
+}
+
+func replayStepsIncreasingTransforms(samples []RacingReplayTransformSample) bool {
+	prev := -1
+	for _, sample := range samples {
+		if sample.Step < prev {
+			return false
+		}
+		prev = sample.Step
+	}
+	return true
+}
+
+func replayStepsIncreasingCheckpoints(samples []RacingReplayCheckpoint) bool {
+	prev := -1
+	for _, sample := range samples {
+		if sample.Step < prev {
+			return false
+		}
+		prev = sample.Step
+	}
+	return true
+}

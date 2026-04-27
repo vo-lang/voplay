@@ -10,12 +10,24 @@ func CubeMesh() voplay.ModelID {
 	return voplay.CreateCubeMesh()
 }
 
+func RoundedBoxMesh(bevelRadius float64, segments int) voplay.ModelID {
+	return voplay.CreateRoundedBoxMesh(bevelRadius, segments)
+}
+
 func SphereMesh(segments int) voplay.ModelID {
 	return voplay.CreateSphereMesh(segments)
 }
 
 func CylinderMesh(segments int) voplay.ModelID {
 	return voplay.CreateCylinderMesh(segments)
+}
+
+func ConeMesh(segments int) voplay.ModelID {
+	return voplay.CreateConeMesh(segments)
+}
+
+func WedgeMesh() voplay.ModelID {
+	return voplay.CreateWedgeMesh()
 }
 
 func CapsuleMesh(segments int, halfHeight, radius float64) voplay.ModelID {

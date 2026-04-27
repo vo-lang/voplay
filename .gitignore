@@ -1,5 +1,7 @@
 /rust/target/
 /rust/.cargo/
+.DS_Store
+**/.DS_Store
 *.wasm
 !web-artifacts/
 !web-artifacts/*.wasm

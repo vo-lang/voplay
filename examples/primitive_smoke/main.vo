@@ -1,0 +1,136 @@
+package main
+
+import (
+	"math"
+	"strconv"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+	"github.com/vo-lang/voplay/scene3d"
+)
+
+type PrimitiveSmokeState struct {
+	scene *scene3d.Scene
+	staticLayer *primitive3d.Layer
+	dynamicLayer *primitive3d.Layer
+	ball primitive3d.ObjectID
+	ballShape primitive3d.ShapeID
+	ballMaterial primitive3d.MaterialID
+	frame int
+	angle float64
+}
+
+func main() {
+	voplay.Run(voplay.Game{Width: 1280, Height: 720, Title: "voplay primitive smoke", TargetFrameRate: 120, InitialState: &PrimitiveSmokeState{}})
+}
+
+func (s *PrimitiveSmokeState) Enter(g *voplay.GameCtx) {
+	g.ShowDebugOverlay()
+	s.scene = scene3d.New()
+	s.scene.Camera.Position = voplay.Vec3{X: 7, Y: 6, Z: 12}
+	s.scene.Camera.Target = voplay.Vec3{X: 0, Y: 0.7, Z: 0}
+	s.scene.Camera.Fov = 54
+	s.scene.Ambient = voplay.Color{R: 0.58, G: 0.66, B: 0.72, A: 1}
+	s.scene.AmbientGround = voplay.Color{R: 0.26, G: 0.32, B: 0.28, A: 1}
+	s.scene.Lights = []scene3d.Light{
+		scene3d.Light{Type: scene3d.DirectionalLight, Direction: voplay.Vec3{X: -0.45, Y: -0.85, Z: -0.28}, Color: voplay.White, Intensity: 2.8},
+	}
+	s.buildPrimitiveLayers()
+}
+
+func (s *PrimitiveSmokeState) Exit(g *voplay.GameCtx) {}
+
+func (s *PrimitiveSmokeState) FixedUpdate(g *voplay.GameCtx, dt float64) {}
+
+func (s *PrimitiveSmokeState) Update(g *voplay.GameCtx, dt float64) {
+	s.frame++
+	s.angle += dt * 1.8
+	if s.dynamicLayer == nil || s.ball == 0 {
+		return
+	}
+	x := math.Cos(s.angle) * 2.9
+	z := math.Sin(s.angle) * 1.4 - 0.4
+	y := 0.9 + math.Sin(s.angle*2.0) * 0.18
+	s.dynamicLayer.Set(s.ball, primitive3d.Instance{
+		Shape: s.ballShape,
+		Material: s.ballMaterial,
+		Position: voplay.Vec3{X: x, Y: y, Z: z},
+		Rotation: voplay.QuatFromEuler(s.angle*0.4, s.angle, 0),
+		Scale: voplay.Vec3{X: 0.7, Y: 0.7, Z: 0.7},
+	})
+}
+
+func (s *PrimitiveSmokeState) Draw(g *voplay.GameCtx) {
+	g.Draw.ClearColor(voplay.Color{R: 0.48, G: 0.74, B: 0.96, A: 1})
+	if s.scene != nil {
+		s.scene.Draw(g.Draw)
+	}
+	s.drawHud(g)
+}
+
+func (s *PrimitiveSmokeState) OnResize(g *voplay.GameCtx, w int, h int) {}
+
+func (s *PrimitiveSmokeState) buildPrimitiveLayers() {
+	staticBuilder := primitive3d.NewBuilder(primitive3d.BuilderDesc{Kind: primitive3d.StaticLayer, Chunking: primitive3d.ChunkingDesc{CellSize: 5}, Name: "primitive_smoke_static"})
+
+	ground := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapePlane, Width: 12, Depth: 8, SubX: 2, SubZ: 2})
+	road := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeRoundedBox, BevelRadius: 0.05, Segments: 8})
+	block := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeRoundedBox, BevelRadius: 0.08, Segments: 8})
+	cone := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeCone, Segments: 16})
+	cylinder := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeCylinder, Segments: 16})
+	wedge := staticBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeWedge})
+
+	grass := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGrass, Base: voplay.MaterialColor(voplay.Color{R: 0.42, G: 0.82, B: 0.20, A: 1}), Name: "grass"})
+	asphalt := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialRoadAsphalt, Name: "asphalt"})
+	red := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.Color{R: 0.95, G: 0.16, B: 0.10, A: 1}), Name: "red plastic"})
+	white := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.Color{R: 0.96, G: 0.94, B: 0.86, A: 1}), Name: "warm white plastic"})
+	yellow := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGlow, Base: voplay.MaterialColor(voplay.Color{R: 1.00, G: 0.76, B: 0.08, A: 1}), Name: "yellow glow"})
+	wood := staticBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialWood, Name: "wood"})
+
+	staticBuilder.AddInstance(primitive3d.Instance{Shape: ground, Material: grass, Position: voplay.Vec3{Y: 0}, Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}})
+	staticBuilder.AddInstance(primitive3d.Instance{Shape: road, Material: asphalt, Position: voplay.Vec3{Y: 0.05}, Scale: voplay.Vec3{X: 7.2, Y: 0.10, Z: 1.15}})
+	for i := 0; i < 8; i++ {
+		x := -3.5 + float64(i)
+		mat := red
+		if i % 2 == 0 {
+			mat = white
+		}
+		staticBuilder.AddInstance(primitive3d.Instance{Shape: block, Material: mat, Position: voplay.Vec3{X: x, Y: 0.22, Z: -1.05}, Scale: voplay.Vec3{X: 0.82, Y: 0.30, Z: 0.28}})
+		staticBuilder.AddInstance(primitive3d.Instance{Shape: block, Material: mat, Position: voplay.Vec3{X: x, Y: 0.22, Z: 1.05}, Scale: voplay.Vec3{X: 0.82, Y: 0.30, Z: 0.28}})
+	}
+	for i := 0; i < 5; i++ {
+		x := -4 + float64(i)*2
+		staticBuilder.AddInstance(primitive3d.Instance{Shape: cone, Material: yellow, Position: voplay.Vec3{X: x, Y: 0.55, Z: 2.45}, Scale: voplay.Vec3{X: 0.34, Y: 0.82, Z: 0.34}})
+		staticBuilder.AddInstance(primitive3d.Instance{Shape: cylinder, Material: wood, Position: voplay.Vec3{X: x, Y: 0.45, Z: -2.65}, Scale: voplay.Vec3{X: 0.18, Y: 0.9, Z: 0.18}})
+	}
+	staticBuilder.AddInstance(primitive3d.Instance{Shape: wedge, Material: yellow, Position: voplay.Vec3{X: 3.7, Y: 0.38, Z: 0}, Rotation: voplay.QuatFromEuler(0, math.Pi*0.5, 0), Scale: voplay.Vec3{X: 1.0, Y: 0.55, Z: 1.2}})
+	staticLayer := staticBuilder.Build()
+	s.scene.AddPrimitiveLayer(staticLayer)
+
+	dynamicBuilder := primitive3d.NewBuilder(primitive3d.BuilderDesc{Kind: primitive3d.DynamicLayer, Name: "primitive_smoke_dynamic"})
+	ballShape := dynamicBuilder.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeSphere, Segments: 18})
+	ballMat := dynamicBuilder.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.Color{R: 0.12, G: 0.46, B: 1.0, A: 1}), Name: "blue plastic"})
+	dynamicLayer := dynamicBuilder.Layer()
+	s.ball = dynamicLayer.Add(primitive3d.Instance{Shape: ballShape, Material: ballMat, Position: voplay.Vec3{X: 0, Y: 0.9, Z: 0}, Scale: voplay.Vec3{X: 0.7, Y: 0.7, Z: 0.7}})
+	s.ballShape = ballShape
+	s.ballMaterial = ballMat
+	s.scene.AddPrimitiveLayer(dynamicLayer)
+
+	s.staticLayer = staticLayer
+	s.dynamicLayer = dynamicLayer
+}
+
+func (s *PrimitiveSmokeState) drawHud(g *voplay.GameCtx) {
+	g.Draw.ResetCamera()
+	g.Draw.SetLayer(65534)
+	g.Draw.DrawRect(18, 132, 415, 116, voplay.Color{R: 0.04, G: 0.06, B: 0.08, A: 0.72})
+	g.Draw.DrawRect(18, 132, 415, 5, voplay.Color{R: 1.0, G: 0.74, B: 0.12, A: 1})
+	text := voplay.Color{R: 0.94, G: 0.98, B: 1.0, A: 1}
+	muted := voplay.Color{R: 0.66, G: 0.78, B: 0.84, A: 1}
+	stats := primitive3d.Stats{}
+	if s.scene != nil {
+		stats = s.scene.PrimitiveStats()
+	}
+	g.Draw.DrawText("primitive smoke", 32, 162, 20, text)
+	g.Draw.DrawText("static chunks " + strconv.Itoa(stats.TotalChunks) + "   instances " + strconv.Itoa(stats.TotalInstances), 32, 190, 15, muted)
+	g.Draw.DrawText("frame " + strconv.Itoa(s.frame) + "   bytes " + strconv.Itoa(len(g.Draw.Bytes())), 32, 216, 15, muted)
+}

@@ -28,17 +28,31 @@ function makeCanvasId(props) {
     widgetSequence += 1;
     return `${prefix}-${widgetSequence}`;
 }
+function shouldShowDebugOverlay() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.has("rendererDebug")
+            || params.has("debug")
+            || window.localStorage.getItem("voplay.rendererDebug") === "1";
+    }
+    catch {
+        return false;
+    }
+}
 class RenderIslandWidgetInstance {
     constructor(container, props, onEvent, services) {
         this.container = container;
         this.onEvent = onEvent;
         this.services = services;
+        this.debugOverlay = null;
+        this.debugStatusCallback = null;
         this.island = null;
         this.channel = null;
+        this.debugMessages = [];
         this.destroyed = false;
         this.mounted = false;
         this.canvasId = makeCanvasId(props);
-        this.services.debugLog(`[voplay] widget.create canvasId=${this.canvasId}`);
+        this.debug(`[voplay] widget.create canvasId=${this.canvasId}`);
         this.canvas = document.createElement("canvas");
         this.canvas.id = this.canvasId;
         this.canvas.tabIndex = 0;
@@ -47,7 +61,29 @@ class RenderIslandWidgetInstance {
         this.canvas.style.display = "block";
         this.container.style.display = "block";
         this.container.style.overflow = "hidden";
+        if (shouldShowDebugOverlay()) {
+            this.container.style.position = this.container.style.position || "relative";
+            this.debugOverlay = document.createElement("div");
+            this.debugOverlay.style.position = "absolute";
+            this.debugOverlay.style.left = "8px";
+            this.debugOverlay.style.bottom = "8px";
+            this.debugOverlay.style.maxWidth = "min(92%, 760px)";
+            this.debugOverlay.style.padding = "6px 8px";
+            this.debugOverlay.style.borderRadius = "4px";
+            this.debugOverlay.style.background = "rgba(7, 10, 18, 0.72)";
+            this.debugOverlay.style.color = "#d7e3ff";
+            this.debugOverlay.style.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+            this.debugOverlay.style.lineHeight = "1.35";
+            this.debugOverlay.style.pointerEvents = "none";
+            this.debugOverlay.style.zIndex = "20";
+            this.debugOverlay.textContent = "voplay: creating render island";
+            this.debugStatusCallback = (message) => this.setDebugStatus(message);
+            globalThis.__voplayDebugStatus = this.debugStatusCallback;
+        }
         this.container.appendChild(this.canvas);
+        if (this.debugOverlay) {
+            this.container.appendChild(this.debugOverlay);
+        }
         this.resizeObserver = new ResizeObserver(() => {
             if (!this.mounted) {
                 return;
@@ -63,7 +99,7 @@ class RenderIslandWidgetInstance {
             return;
         }
         this.destroyed = true;
-        this.services.debugLog(`[voplay] widget.destroy canvasId=${this.canvasId}`);
+        this.debug(`[voplay] widget.destroy canvasId=${this.canvasId}`);
         this.resizeObserver.disconnect();
         if (this.island) {
             stopWebView(this.island);
@@ -74,11 +110,16 @@ class RenderIslandWidgetInstance {
             this.channel.close();
             this.channel = null;
         }
+        const debugGlobal = globalThis;
+        if (this.debugStatusCallback && debugGlobal.__voplayDebugStatus === this.debugStatusCallback) {
+            delete debugGlobal.__voplayDebugStatus;
+        }
+        this.debugOverlay?.remove();
         this.canvas.remove();
         activeInstances.delete(this);
     }
     async start() {
-        this.services.debugLog(`[voplay] island.start.begin canvasId=${this.canvasId}`);
+        this.debug(`[voplay] island.start.begin canvasId=${this.canvasId}`);
         const wasmBytes = this.services.getVfsBytes(WASM_BG_PATH);
         if (!wasmBytes) {
             this.services.reportError(`[voplay] WASM binary not found in VFS snapshot: ${WASM_BG_PATH}`);
@@ -91,31 +132,31 @@ class RenderIslandWidgetInstance {
         }
         let channel = null;
         try {
-            this.services.debugLog(`[voplay] island.channel.create.begin canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.channel.create.begin canvasId=${this.canvasId}`);
             channel = await this.services.createChannel();
-            this.services.debugLog(`[voplay] island.channel.create.ready canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.channel.create.ready canvasId=${this.canvasId}`);
             if (this.destroyed) {
                 channel.close();
                 return;
             }
-            this.services.debugLog(`[voplay] island.channel.init.begin canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.channel.init.begin canvasId=${this.canvasId}`);
             await channel.init();
-            this.services.debugLog(`[voplay] island.channel.init.ready canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.channel.init.ready canvasId=${this.canvasId}`);
             if (this.destroyed) {
                 channel.close();
                 return;
             }
-            this.services.debugLog(`[voplay] island.voweb.begin canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.voweb.begin canvasId=${this.canvasId}`);
             const voWeb = await this.services.getVoWeb();
-            this.services.debugLog(`[voplay] island.voweb.ready canvasId=${this.canvasId}`);
-            this.services.debugLog(`[voplay] island.bootstrap.begin canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.voweb.ready canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.bootstrap.begin canvasId=${this.canvasId}`);
             const island = await bootstrapWebView({
                 canvasId: this.canvasId,
                 bytecode: this.services.moduleBytes,
                 voplayWasm: wasmBytes,
                 voplayWasmJsGlue: jsGlueBytes,
-            }, voWeb, channel, this.services.debugLog, this.services.reportError);
-            this.services.debugLog(`[voplay] island.bootstrap.ready canvasId=${this.canvasId}`);
+            }, voWeb, channel, (message) => this.debug(message), this.services.reportError);
+            this.debug(`[voplay] island.bootstrap.ready canvasId=${this.canvasId}`);
             if (this.destroyed) {
                 stopWebView(island);
                 return;
@@ -123,7 +164,7 @@ class RenderIslandWidgetInstance {
             this.channel = channel;
             this.island = island;
             this.mounted = true;
-            this.services.debugLog(`[voplay] island.start.ready canvasId=${this.canvasId}`);
+            this.debug(`[voplay] island.start.ready canvasId=${this.canvasId}`);
             this.emitWidgetEvent("mount");
             requestAnimationFrame(() => {
                 if (!this.destroyed) {
@@ -140,11 +181,24 @@ class RenderIslandWidgetInstance {
         const width = Math.round(this.container.clientWidth);
         const height = Math.round(this.container.clientHeight);
         if (width <= 0 || height <= 0) {
-            this.services.debugLog(`[voplay] widget.event.skip type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
+            this.debug(`[voplay] widget.event.skip type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
             return;
         }
-        this.services.debugLog(`[voplay] widget.event type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
+        this.debug(`[voplay] widget.event type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
         this.onEvent(JSON.stringify({ type, width, height, canvasId: this.canvasId }));
+    }
+    debug(message) {
+        this.services.debugLog(message);
+        this.setDebugStatus(message);
+    }
+    setDebugStatus(message) {
+        if (this.debugOverlay) {
+            this.debugMessages.push(message);
+            while (this.debugMessages.length > 6) {
+                this.debugMessages.shift();
+            }
+            this.debugOverlay.textContent = this.debugMessages.join("\n");
+        }
     }
 }
 export async function init(host) {

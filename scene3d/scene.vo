@@ -3,8 +3,10 @@
 package scene3d
 
 import "errors"
+import "math"
 import "github.com/vo-lang/voplay"
 import "github.com/vo-lang/voplay/codec"
+import "github.com/vo-lang/voplay/primitive3d"
 
 // Light is a light source in the 3D scene (alias for voplay.LightDesc).
 type Light = voplay.LightDesc
@@ -23,10 +25,27 @@ const (
 )
 
 const (
+	ToneMapNone = voplay.ToneMapNone
+	ToneMapReinhard = voplay.ToneMapReinhard
+	ToneMapACES = voplay.ToneMapACES
+)
+
+const (
+	RenderDebugLit = voplay.RenderDebugLit
+	RenderDebugAlbedo = voplay.RenderDebugAlbedo
+	RenderDebugNormal = voplay.RenderDebugNormal
+	RenderDebugRoughness = voplay.RenderDebugRoughness
+	RenderDebugMetallic = voplay.RenderDebugMetallic
+	RenderDebugShadow = voplay.RenderDebugShadow
+	RenderDebugDirect = voplay.RenderDebugDirect
+	RenderDebugAmbient = voplay.RenderDebugAmbient
+)
+
+const (
 	PickDefault  = 0
 	PickEnabled  = 1
 	PickDisabled = 2
-	physics3DBodyStateBytes = 4 + 10*8
+	physics3DBodyStateBytes = 4 + 13*8
 )
 
 var nextRenderSceneID = 1
@@ -45,15 +64,26 @@ type FogConfig struct {
 	Density float64
 }
 
+type ColorGradingConfig struct {
+	ToneMap int
+	Exposure float64
+	Contrast float64
+	Saturation float64
+}
+
 // Scene holds the 3D scene state.
 type Scene struct {
 	Camera  Camera
 	Skybox  voplay.CubemapID
 	Lights  []Light
 	Ambient voplay.Color
+	AmbientGround voplay.Color
 	ShadowsEnabled bool
 	ShadowResolution int
+	ShadowStrength float64
 	Fog     FogConfig
+	ColorGrading ColorGradingConfig
+	RenderDebugMode int
 	Gravity voplay.Vec3
 	Emitters []*ParticleEmitter
 
@@ -74,6 +104,11 @@ type Scene struct {
 	renderSceneCreated bool
 	renderSceneCleared bool
 	renderDestroyedIDs []int
+	renderStats SceneRenderStats
+	primitiveLayers []*primitiveLayerAttachment
+	primitiveDestroyedLayerHandles []primitive3d.LayerHandle
+	nextPrimitiveLayerHandle int
+	primitiveStats primitive3d.Stats
 }
 
 // New creates a new 3D scene with default camera and gravity.
@@ -88,8 +123,10 @@ func New() *Scene {
 			Far:      1000,
 		},
 		Ambient:      voplay.Color{0.1, 0.1, 0.1, 1},
+		AmbientGround: voplay.Color{0.1, 0.1, 0.1, 1},
 		ShadowsEnabled: false,
 		ShadowResolution: 2048,
+		ShadowStrength: 1.0,
 		Gravity:      voplay.Vec3{0, -9.8, 0},
 		nextEntityID: 1,
 		entityByID:   make(map[int]*Entity),
@@ -100,6 +137,7 @@ func New() *Scene {
 		bodyMap:      make(map[int]*Entity),
 		animationInfoCache: make(map[int]AnimationModelInfo),
 		renderSceneID: allocateRenderSceneID(),
+		nextPrimitiveLayerHandle: 1,
 	}
 }
 
@@ -110,12 +148,30 @@ type EntityDesc struct {
 	Scale    voplay.Vec3
 	Model    voplay.ModelID
 	OwnedModel voplay.ModelID
+	Material voplay.MaterialDesc
 	PickMode int
 	Tint     voplay.Color
 	TintSet  bool
 	Tag      string
 	Data     any
 	Physics  *Physics
+	StaticRenderable bool
+	CullDistance float64
+	CullRadius float64
+	FrustumCull bool
+}
+
+type SceneRenderStats struct {
+	ActiveEntities int
+	VisibleEntities int
+	CulledEntities int
+	ModelEntities int
+	UpsertedObjects int
+	DestroyedObjects int
+	BatchEligibleObjects int
+	BatchGroups int
+	FlushCpuMs float64
+	FrameCpuMs float64
 }
 
 // Entity is a 3D game object managed by the scene.
@@ -129,6 +185,7 @@ type Entity struct {
 	scale    voplay.Vec3
 	Model    voplay.ModelID
 	ownedModel voplay.ModelID
+	Material voplay.MaterialDesc
 	Pickable bool
 	Tint     voplay.Color
 	Tag      string
@@ -143,6 +200,7 @@ type Entity struct {
 	scene    *Scene
 	renderObjectCreated bool
 	renderLastModel voplay.ModelID
+	renderLastMaterial voplay.MaterialDesc
 	renderLastPosition voplay.Vec3
 	renderLastRotation voplay.Quat
 	renderLastScale voplay.Vec3
@@ -150,6 +208,10 @@ type Entity struct {
 	renderLastVisible bool
 	renderLastAnimationWorldID int
 	renderLastAnimationTargetID int
+	StaticRenderable bool
+	CullDistance float64
+	CullRadius float64
+	FrustumCull bool
 }
 
 // Position returns the entity's world position.
@@ -177,6 +239,17 @@ func (e *Entity) ID() int {
 func (e *Entity) HasSkeleton() bool {
 	e.ensureHasSkeleton()
 	return e.hasSkeleton
+}
+
+func (e *Entity) SetCullDistance(distance float64) {
+	if distance < 0 {
+		panic("scene3d.Entity.SetCullDistance: distance must be >= 0")
+	}
+	e.CullDistance = distance
+}
+
+func (e *Entity) SetFrustumCull(enabled bool) {
+	e.FrustumCull = enabled
 }
 
 func (e *Entity) ensureHasSkeleton() {
@@ -266,6 +339,16 @@ func resolveEntityTint(desc EntityDesc) voplay.Color {
 	return voplay.White
 }
 
+func resolveEntityMaterial(desc EntityDesc) voplay.MaterialDesc {
+	if desc.Material != (voplay.MaterialDesc{}) {
+		return voplay.NormalizeMaterial(desc.Material)
+	}
+	if desc.TintSet || !isZeroColor(desc.Tint) {
+		return voplay.MaterialColor(resolveEntityTint(desc))
+	}
+	return voplay.MaterialDesc{}
+}
+
 func normalizeEntityScale(scale voplay.Vec3) voplay.Vec3 {
 	if scale.X == 0 && scale.Y == 0 && scale.Z == 0 {
 		return voplay.Vec3{1, 1, 1}
@@ -282,13 +365,15 @@ func normalizeEntityRotation(rotation voplay.Quat) voplay.Quat {
 
 func (s *Scene) newEntity(desc EntityDesc) *Entity {
 	model, ownedModel := normalizeEntityModels(desc)
+	scale := normalizeEntityScale(desc.Scale)
 	ent := &Entity{
 		id:       s.nextEntityID,
 		position: desc.Position,
 		rotation: normalizeEntityRotation(desc.Rotation),
-		scale:    normalizeEntityScale(desc.Scale),
+		scale:    scale,
 		Model:    model,
 		ownedModel: ownedModel,
+		Material: resolveEntityMaterial(desc),
 		Pickable: resolveEntityPickable(desc, model),
 		Tint:     resolveEntityTint(desc),
 		Tag:      desc.Tag,
@@ -296,7 +381,17 @@ func (s *Scene) newEntity(desc EntityDesc) *Entity {
 		Visible:  true,
 		Data:     desc.Data,
 		Physics:  desc.Physics,
+		StaticRenderable: desc.StaticRenderable,
+		CullDistance: desc.CullDistance,
+		CullRadius: desc.CullRadius,
+		FrustumCull: desc.FrustumCull,
 		scene:    s,
+	}
+	if ent.Physics != nil && ent.Physics.Type == Static {
+		ent.StaticRenderable = true
+	}
+	if ent.CullRadius <= 0 {
+		ent.CullRadius = estimateEntityCullRadius(scale)
 	}
 	s.nextEntityID++
 	return ent
@@ -531,7 +626,9 @@ func (s *Scene) Clear() {
 	if s.renderSceneCreated {
 		s.renderSceneCleared = true
 		s.renderDestroyedIDs = nil
+		s.primitiveDestroyedLayerHandles = nil
 	}
+	s.invalidatePrimitiveLayers()
 }
 
 // EntityCount returns the number of entities in the scene.
@@ -591,6 +688,18 @@ func (s *Scene) VisibleEntities() []*Entity {
 		}
 	}
 	return s.visibleBuf
+}
+
+func (s *Scene) RenderStats() SceneRenderStats {
+	return s.renderStats
+}
+
+func estimateEntityCullRadius(scale voplay.Vec3) float64 {
+	r := math.Sqrt(scale.X*scale.X + scale.Y*scale.Y + scale.Z*scale.Z) * 0.5
+	if r <= 0 {
+		return 0.5
+	}
+	return r
 }
 
 // ForEach calls fn for every active entity in the scene.
@@ -669,6 +778,8 @@ func (s *Scene) HasPhysics() bool {
 // Close destroys the physics world and releases all resources.
 func (s *Scene) Close() {
 	s.Clear()
+	s.primitiveLayers = nil
+	s.primitiveStats = primitive3d.Stats{}
 	if s.worldID != 0 {
 		physBackend.Destroy(s.worldID)
 		s.worldID = 0
@@ -714,7 +825,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	s.physCmds.Reset()
 
 	// Decode state: count(u32), then per body:
-	// body_id(u32), x(f64), y(f64), z(f64), qx(f64), qy(f64), qz(f64), qw(f64), vx(f64), vy(f64), vz(f64)
+	// body_id(u32), x/y/z, qx/qy/qz/qw, linear velocity, angular velocity.
 	r := codec.NewByteReader(state)
 	if r.Remaining() < 4 {
 		return
@@ -736,11 +847,15 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 		vx := r.ReadF64()
 		vy := r.ReadF64()
 		vz := r.ReadF64()
+		avx := r.ReadF64()
+		avy := r.ReadF64()
+		avz := r.ReadF64()
 
 		if ent, ok := s.bodyMap[bodyID]; ok {
 			ent.position = voplay.Vec3{x, y, z}
 			ent.rotation = voplay.Quat{qx, qy, qz, qw}
 			ent.Physics.velocity = voplay.Vec3{vx, vy, vz}
+			ent.Physics.angularVelocity = voplay.Vec3{avx, avy, avz}
 		}
 	}
 	s.syncVehicles()

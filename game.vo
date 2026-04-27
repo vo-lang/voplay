@@ -8,6 +8,7 @@ type Game struct {
 	Title           string
 	FixedStep       float64
 	MaxCatchUpSteps int
+	TargetFrameRate int
 	UncappedFrameRate bool
 	InitialState    State
 	OnClose         func(g *GameCtx) // optional; called when the game loop exits
@@ -248,6 +249,14 @@ func (b *proxyPrimitiveMeshBackendImpl) Cube() int {
 	return id
 }
 
+func (b *proxyPrimitiveMeshBackendImpl) RoundedBox(bevelRadius float64, segments int) int {
+	id, err := proxyCreateRoundedBoxMesh(b.reqPort, b.respPort, bevelRadius, segments)
+	if err != nil {
+		panic("split-island: createRoundedBoxMesh failed: " + err.Error())
+	}
+	return id
+}
+
 func (b *proxyPrimitiveMeshBackendImpl) Sphere(segments int) int {
 	id, err := proxyCreateSphereMesh(b.reqPort, b.respPort, segments)
 	if err != nil {
@@ -260,6 +269,22 @@ func (b *proxyPrimitiveMeshBackendImpl) Cylinder(segments int) int {
 	id, err := proxyCreateCylinderMesh(b.reqPort, b.respPort, segments)
 	if err != nil {
 		panic("split-island: createCylinderMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Cone(segments int) int {
+	id, err := proxyCreateConeMesh(b.reqPort, b.respPort, segments)
+	if err != nil {
+		panic("split-island: createConeMesh failed: " + err.Error())
+	}
+	return id
+}
+
+func (b *proxyPrimitiveMeshBackendImpl) Wedge() int {
+	id, err := proxyCreateWedgeMesh(b.reqPort, b.respPort)
+	if err != nil {
+		panic("split-island: createWedgeMesh failed: " + err.Error())
 	}
 	return id
 }

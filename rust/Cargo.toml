@@ -43,11 +43,11 @@ vogui        = { git = "https://github.com/vo-lang/vogui", rev = "e80b37be37050d
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys      = { version = "0.3", optional = true, features = [
-    "Document", "Window", "HtmlCanvasElement", "Element", "DomRect",
+    "Document", "Window", "Location", "HtmlCanvasElement", "Element", "DomRect",
     "KeyboardEvent", "PointerEvent", "MouseEvent", "WheelEvent", "EventTarget",
+    "console",
 ] }
 js-sys       = { version = "0.3", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 
 [workspace]
-

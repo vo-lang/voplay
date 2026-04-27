@@ -1,21 +1,25 @@
 //! glTF/GLB model loader.
 //!
 //! Loads 3D models via the `gltf` crate, extracts mesh geometry
-//! (position + normal + UV), and uploads to GPU buffers.
-//! Materials are simplified to a base color + texture.
+//! (position + normal + UV + tangent + vertex color), and uploads to GPU buffers.
+//! Materials preserve the core glTF PBR texture slots used by the renderer.
 
 use crate::animation::{
     self, AnimationChannel, AnimationClip, AnimationClipInfo, AnimationInterpolation,
     AnimationProperty, Joint, ModelAnimationInfo, Skeleton, Transform, MAX_JOINTS,
 };
 use crate::file_io;
+use crate::material::{
+    MaterialSamplerKey, MATERIAL_FILTER_LINEAR, MATERIAL_FILTER_NEAREST, MATERIAL_WRAP_CLAMP,
+    MATERIAL_WRAP_MIRROR, MATERIAL_WRAP_REPEAT,
+};
 use crate::math3d::{self, Mat4, Quat, Vec3, MAT4_IDENTITY};
 use crate::primitives;
 use crate::texture::{TextureId, TextureManager};
 use base64::{engine::general_purpose, Engine as _};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -61,6 +65,8 @@ struct ParsedPrimitive {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
+    tangents: Vec<[f32; 4]>,
+    colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
     material: MeshMaterial,
     skinning: Option<ParsedSkinning>,
@@ -109,8 +115,13 @@ struct LevelTerrainMaterialExtras {
 #[derive(Deserialize)]
 struct LevelTerrainLayerExtras {
     texture: String,
+    normal: Option<String>,
+    #[serde(rename = "metallicRoughness")]
+    metallic_roughness: Option<String>,
     #[serde(default = "default_terrain_uv_scale", rename = "uvScale")]
     uv_scale: f32,
+    #[serde(default, rename = "normalScale")]
+    normal_scale: f32,
 }
 
 #[derive(Default, Deserialize)]
@@ -119,6 +130,11 @@ struct LevelTerrainPhysicsExtras {
     mask: Option<u16>,
     friction: Option<f32>,
     restitution: Option<f32>,
+}
+
+struct UploadedGltfTextures {
+    srgb: HashMap<usize, TextureId>,
+    linear: HashMap<usize, TextureId>,
 }
 
 fn default_terrain_uv_scale() -> f32 {
@@ -134,14 +150,26 @@ pub struct GpuMesh {
     pub skinned: bool,
 }
 
-/// Simplified material for Blinn-Phong rendering.
+/// Material payload consumed by the forward renderer.
 #[derive(Clone, Copy)]
 pub struct MeshMaterial {
     pub base_color: [f32; 4],
     pub texture_id: Option<TextureId>,
+    pub normal_texture_id: Option<TextureId>,
+    pub metallic_roughness_texture_id: Option<TextureId>,
+    pub emissive_texture_id: Option<TextureId>,
+    pub toon_ramp_texture_id: Option<TextureId>,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub normal_scale: f32,
+    pub emissive_factor: [f32; 3],
     pub uv_scales: [f32; 4],
+    pub sampler: MaterialSamplerKey,
     pub control_texture_id: Option<TextureId>,
     pub layer_texture_ids: [Option<TextureId>; 4],
+    pub layer_normal_texture_ids: [Option<TextureId>; 4],
+    pub layer_metallic_roughness_texture_ids: [Option<TextureId>; 4],
+    pub layer_normal_scales: [f32; 4],
 }
 
 impl MeshMaterial {
@@ -150,9 +178,21 @@ impl MeshMaterial {
         Self {
             base_color,
             texture_id,
+            normal_texture_id: None,
+            metallic_roughness_texture_id: None,
+            emissive_texture_id: None,
+            toon_ramp_texture_id: None,
+            metallic: 0.0,
+            roughness: 0.55,
+            normal_scale: 1.0,
+            emissive_factor: [0.0, 0.0, 0.0],
             uv_scales: [uv_scale, 1.0, 1.0, 1.0],
+            sampler: MaterialSamplerKey::REPEAT_LINEAR,
             control_texture_id: None,
             layer_texture_ids: [None, None, None, None],
+            layer_normal_texture_ids: [None, None, None, None],
+            layer_metallic_roughness_texture_ids: [None, None, None, None],
+            layer_normal_scales: [0.0, 0.0, 0.0, 0.0],
         }
     }
 
@@ -160,18 +200,66 @@ impl MeshMaterial {
         base_color: [f32; 4],
         control_texture_id: TextureId,
         layer_texture_ids: [TextureId; 4],
+        layer_normal_texture_ids: [TextureId; 4],
+        layer_metallic_roughness_texture_ids: [TextureId; 4],
         uv_scales: [f32; 4],
+        layer_normal_scales: [f32; 4],
     ) -> Self {
-        assert!(
-            uv_scales.iter().all(|value| *value > 0.0),
-            "voplay: terrain splat uv scales must be > 0"
-        );
+        let uv_scales: [f32; 4] = std::array::from_fn(|index| {
+            let value = uv_scales[index];
+            if value.is_finite() && value > 0.0 {
+                value
+            } else {
+                1.0
+            }
+        });
+        let layer_normal_scales: [f32; 4] = std::array::from_fn(|index| {
+            let value = layer_normal_scales[index];
+            if value.is_finite() && value >= 0.0 {
+                value
+            } else {
+                0.0
+            }
+        });
+        let layer_normal_scales = std::array::from_fn(|index| {
+            if layer_normal_texture_ids[index] == 0 {
+                0.0
+            } else if layer_normal_scales[index] > 0.0 {
+                layer_normal_scales[index]
+            } else {
+                1.0
+            }
+        });
         Self {
             base_color,
             texture_id: None,
+            normal_texture_id: None,
+            metallic_roughness_texture_id: None,
+            emissive_texture_id: None,
+            toon_ramp_texture_id: None,
+            metallic: 0.0,
+            roughness: 0.55,
+            normal_scale: 1.0,
+            emissive_factor: [0.0, 0.0, 0.0],
             uv_scales,
+            sampler: MaterialSamplerKey::REPEAT_LINEAR,
             control_texture_id: Some(control_texture_id),
             layer_texture_ids: layer_texture_ids.map(Some),
+            layer_normal_texture_ids: layer_normal_texture_ids.map(|id| {
+                if id == 0 {
+                    None
+                } else {
+                    Some(id)
+                }
+            }),
+            layer_metallic_roughness_texture_ids: layer_metallic_roughness_texture_ids.map(|id| {
+                if id == 0 {
+                    None
+                } else {
+                    Some(id)
+                }
+            }),
+            layer_normal_scales,
         }
     }
 }
@@ -188,13 +276,15 @@ pub struct GpuModel {
     pub rest_joint_palette: Vec<Mat4>,
 }
 
-/// Interleaved vertex format: position (3) + normal (3) + UV (2) = 8 floats.
+/// Interleaved vertex format: position (3) + normal (3) + UV (2) + tangent (4) + color (4).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    pub tangent: [f32; 4],
+    pub color: [f32; 4],
 }
 
 #[repr(C)]
@@ -203,15 +293,19 @@ pub struct SkinnedMeshVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    pub tangent: [f32; 4],
+    pub color: [f32; 4],
     pub joint_indices: [u16; 4],
     pub joint_weights: [f32; 4],
 }
 
 impl MeshVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3, // position
         1 => Float32x3, // normal
         2 => Float32x2, // uv
+        3 => Float32x4, // tangent.xyz + handedness
+        4 => Float32x4, // vertex color
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -224,12 +318,14 @@ impl MeshVertex {
 }
 
 impl SkinnedMeshVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x2,
-        3 => Uint16x4,
+        3 => Float32x4,
         4 => Float32x4,
+        5 => Uint16x4,
+        6 => Float32x4,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -250,12 +346,20 @@ enum PrimitiveKey {
         sub_z: u32,
     },
     Cube,
+    RoundedBox {
+        bevel_radius_bits: u32,
+        segments: u32,
+    },
     Sphere {
         segments: u32,
     },
     Cylinder {
         segments: u32,
     },
+    Cone {
+        segments: u32,
+    },
+    Wedge,
     Capsule {
         segments: u32,
         half_height_bits: u32,
@@ -477,6 +581,24 @@ impl ModelManager {
         self.get_or_create_primitive(device, queue, PrimitiveKey::Cube, primitives::generate_cube)
     }
 
+    pub fn create_rounded_box(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bevel_radius: f32,
+        segments: u32,
+    ) -> ModelId {
+        self.get_or_create_primitive(
+            device,
+            queue,
+            PrimitiveKey::RoundedBox {
+                bevel_radius_bits: bevel_radius.to_bits(),
+                segments,
+            },
+            || primitives::generate_rounded_box(bevel_radius, segments),
+        )
+    }
+
     pub fn create_sphere(
         &mut self,
         device: &wgpu::Device,
@@ -499,6 +621,26 @@ impl ModelManager {
         })
     }
 
+    pub fn create_cone(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segments: u32,
+    ) -> ModelId {
+        self.get_or_create_primitive(device, queue, PrimitiveKey::Cone { segments }, || {
+            primitives::generate_cone(segments)
+        })
+    }
+
+    pub fn create_wedge(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> ModelId {
+        self.get_or_create_primitive(
+            device,
+            queue,
+            PrimitiveKey::Wedge,
+            primitives::generate_wedge,
+        )
+    }
+
     pub fn create_capsule(
         &mut self,
         device: &wgpu::Device,
@@ -519,30 +661,123 @@ impl ModelManager {
         )
     }
 
+    fn collect_gltf_texture_usage(document: &gltf::Document) -> (HashSet<usize>, HashSet<usize>) {
+        let mut srgb = HashSet::new();
+        let mut linear = HashSet::new();
+        for material in document.materials() {
+            let pbr = material.pbr_metallic_roughness();
+            if let Some(info) = pbr.base_color_texture() {
+                srgb.insert(info.texture().source().index());
+            }
+            if let Some(info) = material.emissive_texture() {
+                srgb.insert(info.texture().source().index());
+            }
+            if let Some(info) = material.normal_texture() {
+                linear.insert(info.texture().source().index());
+            }
+            if let Some(info) = pbr.metallic_roughness_texture() {
+                linear.insert(info.texture().source().index());
+            }
+        }
+        (srgb, linear)
+    }
+
+    fn gltf_texture_sampler(texture: gltf::Texture<'_>) -> MaterialSamplerKey {
+        let sampler = texture.sampler();
+        let wrap_mode = if sampler.wrap_s() == gltf::texture::WrappingMode::ClampToEdge
+            || sampler.wrap_t() == gltf::texture::WrappingMode::ClampToEdge
+        {
+            MATERIAL_WRAP_CLAMP
+        } else if sampler.wrap_s() == gltf::texture::WrappingMode::MirroredRepeat
+            || sampler.wrap_t() == gltf::texture::WrappingMode::MirroredRepeat
+        {
+            MATERIAL_WRAP_MIRROR
+        } else {
+            MATERIAL_WRAP_REPEAT
+        };
+
+        let filter_mode = match (sampler.mag_filter(), sampler.min_filter()) {
+            (Some(gltf::texture::MagFilter::Nearest), _)
+            | (_, Some(gltf::texture::MinFilter::Nearest))
+            | (_, Some(gltf::texture::MinFilter::NearestMipmapNearest))
+            | (_, Some(gltf::texture::MinFilter::NearestMipmapLinear)) => MATERIAL_FILTER_NEAREST,
+            _ => MATERIAL_FILTER_LINEAR,
+        };
+        MaterialSamplerKey {
+            wrap_mode,
+            filter_mode,
+        }
+    }
+
+    fn gltf_image_to_rgba(image: &gltf::image::Data) -> Option<Vec<u8>> {
+        match image.format {
+            gltf::image::Format::R8 => {
+                let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
+                for value in &image.pixels {
+                    rgba.extend_from_slice(&[*value, *value, *value, 255]);
+                }
+                Some(rgba)
+            }
+            gltf::image::Format::R8G8 => {
+                let mut rgba = Vec::with_capacity(image.pixels.len() / 2 * 4);
+                for chunk in image.pixels.chunks_exact(2) {
+                    rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                }
+                Some(rgba)
+            }
+            gltf::image::Format::R8G8B8 => {
+                let mut rgba = Vec::with_capacity(image.pixels.len() / 3 * 4);
+                for chunk in image.pixels.chunks_exact(3) {
+                    rgba.extend_from_slice(chunk);
+                    rgba.push(255);
+                }
+                Some(rgba)
+            }
+            gltf::image::Format::R8G8B8A8 => Some(image.pixels.clone()),
+            _ => None,
+        }
+    }
+
     fn upload_resolved_textures(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture_manager: &mut TextureManager,
+        document: &gltf::Document,
         images: &[gltf::image::Data],
-    ) -> HashMap<usize, TextureId> {
-        let mut tex_map: HashMap<usize, TextureId> = HashMap::new();
+    ) -> UploadedGltfTextures {
+        let (srgb_usage, linear_usage) = Self::collect_gltf_texture_usage(document);
+        let mut textures = UploadedGltfTextures {
+            srgb: HashMap::new(),
+            linear: HashMap::new(),
+        };
         for (idx, image) in images.iter().enumerate() {
-            let rgba = match image.format {
-                gltf::image::Format::R8G8B8A8 => image.pixels.clone(),
-                gltf::image::Format::R8G8B8 => {
-                    let mut rgba = Vec::with_capacity(image.pixels.len() / 3 * 4);
-                    for chunk in image.pixels.chunks(3) {
-                        rgba.extend_from_slice(chunk);
-                        rgba.push(255);
-                    }
-                    rgba
-                }
-                _ => continue,
+            let Some(rgba) = Self::gltf_image_to_rgba(image) else {
+                continue;
             };
-            let tex_id = texture_manager.load_rgba(device, queue, image.width, image.height, &rgba);
-            tex_map.insert(idx, tex_id);
+            if srgb_usage.contains(&idx) || !linear_usage.contains(&idx) {
+                let tex_id = texture_manager.load_rgba_with_srgb(
+                    device,
+                    queue,
+                    image.width,
+                    image.height,
+                    &rgba,
+                    true,
+                );
+                textures.srgb.insert(idx, tex_id);
+            }
+            if linear_usage.contains(&idx) {
+                let tex_id = texture_manager.load_rgba_with_srgb(
+                    device,
+                    queue,
+                    image.width,
+                    image.height,
+                    &rgba,
+                    false,
+                );
+                textures.linear.insert(idx, tex_id);
+            }
         }
-        tex_map
+        textures
     }
 
     fn build_node_parent_map(document: &gltf::Document) -> HashMap<usize, usize> {
@@ -762,6 +997,8 @@ impl ModelManager {
                         position: *pos,
                         normal: primitive.normals[i],
                         uv: primitive.uvs[i],
+                        tangent: primitive.tangents[i],
+                        color: primitive.colors[i],
                         joint_indices: skinning.joint_indices[i],
                         joint_weights: skinning.joint_weights[i],
                     })
@@ -782,6 +1019,8 @@ impl ModelManager {
                         position: *pos,
                         normal: primitive.normals[i],
                         uv: primitive.uvs[i],
+                        tangent: primitive.tangents[i],
+                        color: primitive.colors[i],
                     })
                     .collect();
                 gpu_meshes.push(Self::create_gpu_mesh(
@@ -796,9 +1035,122 @@ impl ModelManager {
         gpu_meshes
     }
 
+    fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+
+    fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    }
+
+    fn normalize3(value: [f32; 3]) -> Option<[f32; 3]> {
+        let len_sq = Self::dot3(value, value);
+        if len_sq <= 0.00000001 {
+            return None;
+        }
+        let inv_len = len_sq.sqrt().recip();
+        Some([value[0] * inv_len, value[1] * inv_len, value[2] * inv_len])
+    }
+
+    fn fallback_tangent(normal: [f32; 3]) -> [f32; 3] {
+        let reference = if normal[0].abs() < 0.9 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let projected = [
+            reference[0] - normal[0] * Self::dot3(reference, normal),
+            reference[1] - normal[1] * Self::dot3(reference, normal),
+            reference[2] - normal[2] * Self::dot3(reference, normal),
+        ];
+        Self::normalize3(projected).unwrap_or([1.0, 0.0, 0.0])
+    }
+
+    fn generate_tangents(
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        uvs: &[[f32; 2]],
+        indices: &[u32],
+    ) -> Vec<[f32; 4]> {
+        let mut tangents = vec![[0.0f32; 3]; positions.len()];
+        let mut bitangents = vec![[0.0f32; 3]; positions.len()];
+        for tri in indices.chunks_exact(3) {
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+                continue;
+            }
+            let p0 = positions[i0];
+            let p1 = positions[i1];
+            let p2 = positions[i2];
+            let uv0 = uvs.get(i0).copied().unwrap_or([0.0, 0.0]);
+            let uv1 = uvs.get(i1).copied().unwrap_or([0.0, 0.0]);
+            let uv2 = uvs.get(i2).copied().unwrap_or([0.0, 0.0]);
+            let edge1 = Self::sub3(p1, p0);
+            let edge2 = Self::sub3(p2, p0);
+            let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+            let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+            let det = duv1[0] * duv2[1] - duv2[0] * duv1[1];
+            if det.abs() <= 0.00000001 {
+                continue;
+            }
+            let inv_det = det.recip();
+            let tangent = [
+                (edge1[0] * duv2[1] - edge2[0] * duv1[1]) * inv_det,
+                (edge1[1] * duv2[1] - edge2[1] * duv1[1]) * inv_det,
+                (edge1[2] * duv2[1] - edge2[2] * duv1[1]) * inv_det,
+            ];
+            let bitangent = [
+                (edge2[0] * duv1[0] - edge1[0] * duv2[0]) * inv_det,
+                (edge2[1] * duv1[0] - edge1[1] * duv2[0]) * inv_det,
+                (edge2[2] * duv1[0] - edge1[2] * duv2[0]) * inv_det,
+            ];
+            for index in [i0, i1, i2] {
+                tangents[index][0] += tangent[0];
+                tangents[index][1] += tangent[1];
+                tangents[index][2] += tangent[2];
+                bitangents[index][0] += bitangent[0];
+                bitangents[index][1] += bitangent[1];
+                bitangents[index][2] += bitangent[2];
+            }
+        }
+
+        positions
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let normal = Self::normalize3(normals[index]).unwrap_or([0.0, 1.0, 0.0]);
+                let tangent_accum = tangents[index];
+                let projected = [
+                    tangent_accum[0] - normal[0] * Self::dot3(normal, tangent_accum),
+                    tangent_accum[1] - normal[1] * Self::dot3(normal, tangent_accum),
+                    tangent_accum[2] - normal[2] * Self::dot3(normal, tangent_accum),
+                ];
+                let tangent =
+                    Self::normalize3(projected).unwrap_or_else(|| Self::fallback_tangent(normal));
+                let handedness =
+                    if Self::dot3(Self::cross3(normal, tangent), bitangents[index]) < 0.0 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                [tangent[0], tangent[1], tangent[2], handedness]
+            })
+            .collect()
+    }
+
     fn parse_node_model(
         node: &gltf::Node,
-        tex_map: &HashMap<usize, TextureId>,
+        textures: &UploadedGltfTextures,
         buffers: &[gltf::buffer::Data],
         used_skin_index: Option<usize>,
         label: &str,
@@ -838,13 +1190,75 @@ impl ModelManager {
                 Some(iter) => iter.into_u32().collect(),
                 None => (0..positions.len() as u32).collect(),
             };
-            let pbr = primitive.material().pbr_metallic_roughness();
-            let material = MeshMaterial::standard(
+            let tangents: Vec<[f32; 4]> = match reader.read_tangents() {
+                Some(iter) => iter.collect(),
+                None => Self::generate_tangents(&positions, &normals, &uvs, &indices),
+            };
+            let colors: Vec<[f32; 4]> = match reader.read_colors(0) {
+                Some(iter) => iter.into_rgba_f32().collect(),
+                None => vec![[1.0, 1.0, 1.0, 1.0]; positions.len()],
+            };
+            if normals.len() != positions.len()
+                || uvs.len() != positions.len()
+                || tangents.len() != positions.len()
+                || colors.len() != positions.len()
+            {
+                return Err(format!(
+                    "model '{}' node '{}' mesh attribute count mismatch (positions {}, normals {}, uvs {}, tangents {}, colors {})",
+                    label,
+                    node_name,
+                    positions.len(),
+                    normals.len(),
+                    uvs.len(),
+                    tangents.len(),
+                    colors.len()
+                ));
+            }
+            let material_src = primitive.material();
+            let pbr = material_src.pbr_metallic_roughness();
+            let base_color_texture = pbr.base_color_texture();
+            let mut material = MeshMaterial::standard(
                 pbr.base_color_factor(),
-                pbr.base_color_texture()
-                    .and_then(|info| tex_map.get(&info.texture().source().index()).copied()),
+                base_color_texture
+                    .as_ref()
+                    .and_then(|info| textures.srgb.get(&info.texture().source().index()).copied()),
                 1.0,
             );
+            if let Some(info) = base_color_texture {
+                material.sampler = Self::gltf_texture_sampler(info.texture());
+            }
+            material.roughness = pbr.roughness_factor();
+            material.metallic = pbr.metallic_factor();
+            if let Some(info) = pbr.metallic_roughness_texture() {
+                material.metallic_roughness_texture_id = textures
+                    .linear
+                    .get(&info.texture().source().index())
+                    .copied();
+                if material.texture_id.is_none() && material.normal_texture_id.is_none() {
+                    material.sampler = Self::gltf_texture_sampler(info.texture());
+                }
+            }
+            if let Some(info) = material_src.normal_texture() {
+                material.normal_texture_id = textures
+                    .linear
+                    .get(&info.texture().source().index())
+                    .copied();
+                material.normal_scale = info.scale();
+                if material.texture_id.is_none() {
+                    material.sampler = Self::gltf_texture_sampler(info.texture());
+                }
+            }
+            if let Some(info) = material_src.emissive_texture() {
+                material.emissive_texture_id =
+                    textures.srgb.get(&info.texture().source().index()).copied();
+                if material.texture_id.is_none()
+                    && material.normal_texture_id.is_none()
+                    && material.metallic_roughness_texture_id.is_none()
+                {
+                    material.sampler = Self::gltf_texture_sampler(info.texture());
+                }
+            }
+            material.emissive_factor = material_src.emissive_factor();
             let index_base = cpu_positions.len() as u32;
             cpu_positions.extend(positions.iter().copied());
             cpu_indices.extend(indices.iter().map(|index| index_base + *index));
@@ -885,6 +1299,8 @@ impl ModelManager {
                 positions,
                 normals,
                 uvs,
+                tangents,
+                colors,
                 indices,
                 material,
                 skinning,
@@ -1138,7 +1554,7 @@ impl ModelManager {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        tex_map: &HashMap<usize, TextureId>,
+        textures: &UploadedGltfTextures,
         buffers: &[gltf::buffer::Data],
         node: &gltf::Node,
         used_skin_index: Option<usize>,
@@ -1146,7 +1562,7 @@ impl ModelManager {
         clips: &[AnimationClip],
         label: &str,
     ) -> Result<(ModelId, [f32; 3], [f32; 3]), String> {
-        let Some(parsed) = Self::parse_node_model(node, tex_map, buffers, used_skin_index, label)?
+        let Some(parsed) = Self::parse_node_model(node, textures, buffers, used_skin_index, label)?
         else {
             return Ok((0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]));
         };
@@ -1252,11 +1668,20 @@ impl ModelManager {
                 &control_path,
             )?;
             let mut layer_texture_ids = [0u32; 4];
+            let mut layer_normal_texture_ids = [0u32; 4];
+            let mut layer_metallic_roughness_texture_ids = [0u32; 4];
             let mut uv_scales = [1.0f32; 4];
+            let mut normal_scales = [0.0f32; 4];
             for (index, layer) in layers.iter().enumerate() {
                 if layer.uv_scale <= 0.0 {
                     return Err(format!(
                         "level '{}' node '{}' terrain layer {} uvScale must be > 0",
+                        label, node_name, index
+                    ));
+                }
+                if layer.normal_scale < 0.0 {
+                    return Err(format!(
+                        "level '{}' node '{}' terrain layer {} normalScale must be >= 0",
                         label, node_name, index
                     ));
                 }
@@ -1268,13 +1693,37 @@ impl ModelManager {
                     texture_cache,
                     &texture_path,
                 )?;
+                if let Some(normal) = layer.normal.as_deref() {
+                    let normal_path = Self::resolve_level_asset_path(level_dir, normal);
+                    layer_normal_texture_ids[index] = Self::load_level_texture_cached(
+                        texture_manager,
+                        device,
+                        queue,
+                        texture_cache,
+                        &normal_path,
+                    )?;
+                }
+                if let Some(metallic_roughness) = layer.metallic_roughness.as_deref() {
+                    let mr_path = Self::resolve_level_asset_path(level_dir, metallic_roughness);
+                    layer_metallic_roughness_texture_ids[index] = Self::load_level_texture_cached(
+                        texture_manager,
+                        device,
+                        queue,
+                        texture_cache,
+                        &mr_path,
+                    )?;
+                }
                 uv_scales[index] = layer.uv_scale;
+                normal_scales[index] = layer.normal_scale;
             }
             return Ok(MeshMaterial::terrain_splat(
                 [1.0, 1.0, 1.0, 1.0],
                 control_texture_id,
                 layer_texture_ids,
+                layer_normal_texture_ids,
+                layer_metallic_roughness_texture_ids,
                 uv_scales,
+                normal_scales,
             ));
         }
         if let Some(layers) = extras.material.layers.as_ref() {
@@ -1430,7 +1879,7 @@ impl ModelManager {
         texture_manager: &mut TextureManager,
         texture_cache: &mut HashMap<String, TextureId>,
         level_dir: &Path,
-        tex_map: &HashMap<usize, TextureId>,
+        textures: &UploadedGltfTextures,
         buffers: &[gltf::buffer::Data],
         node: gltf::Node,
         parent_world: &Mat4,
@@ -1458,7 +1907,7 @@ impl ModelManager {
             let (model_id, aabb_min, aabb_max) = self.build_level_node_model(
                 device,
                 queue,
-                tex_map,
+                textures,
                 buffers,
                 &node,
                 used_skin_index,
@@ -1485,7 +1934,7 @@ impl ModelManager {
                 texture_manager,
                 texture_cache,
                 level_dir,
-                tex_map,
+                textures,
                 buffers,
                 child,
                 &world,
@@ -1511,7 +1960,8 @@ impl ModelManager {
         let scene = document
             .default_scene()
             .ok_or_else(|| format!("level '{}' has no default scene", path))?;
-        let tex_map = Self::upload_resolved_textures(device, queue, texture_manager, &images);
+        let textures =
+            Self::upload_resolved_textures(device, queue, texture_manager, &document, &images);
         let node_parent = Self::build_node_parent_map(&document);
         let (used_skin_index, skeleton, clips) =
             Self::build_skin_and_clips(&document, &buffers, &node_parent, path)?;
@@ -1528,7 +1978,7 @@ impl ModelManager {
                 texture_manager,
                 &mut texture_cache,
                 &level_dir,
-                &tex_map,
+                &textures,
                 &buffers,
                 root,
                 &MAT4_IDENTITY,
@@ -1600,7 +2050,8 @@ impl ModelManager {
         images: Vec<gltf::image::Data>,
         label: &str,
     ) -> Result<ModelId, String> {
-        let tex_map = Self::upload_resolved_textures(device, queue, texture_manager, &images);
+        let textures =
+            Self::upload_resolved_textures(device, queue, texture_manager, &document, &images);
         let node_parent = Self::build_node_parent_map(&document);
         let (used_skin_index, skeleton, clips) =
             Self::build_skin_and_clips(&document, &buffers, &node_parent, label)?;
@@ -1609,7 +2060,7 @@ impl ModelManager {
         let mut cpu_indices = Vec::new();
         for node in document.nodes() {
             let Some(parsed) =
-                Self::parse_node_model(&node, &tex_map, &buffers, used_skin_index, label)?
+                Self::parse_node_model(&node, &textures, &buffers, used_skin_index, label)?
             else {
                 continue;
             };
@@ -1811,7 +2262,10 @@ mod tests {
         let node = document.nodes().next().expect("triangle node");
         let parsed = ModelManager::parse_node_model(
             &node,
-            &HashMap::new(),
+            &UploadedGltfTextures {
+                srgb: HashMap::new(),
+                linear: HashMap::new(),
+            },
             &buffers,
             None,
             fixture.gltf_path.to_str().unwrap(),
@@ -1825,5 +2279,21 @@ mod tests {
         assert_eq!(parsed.cpu_positions[1], [2.0, 0.0, 0.0]);
         assert_eq!(parsed.primitives[0].normals[0], [0.0, 1.0, 0.0]);
         assert_eq!(parsed.primitives[0].uvs[0], [0.0, 0.0]);
+        assert_eq!(parsed.primitives[0].tangents[0], [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(parsed.primitives[0].colors[0], [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn generate_tangents_uses_uv_orientation() {
+        let positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals = vec![[0.0, 0.0, 1.0]; 3];
+        let uvs = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let tangents = ModelManager::generate_tangents(&positions, &normals, &uvs, &[0, 1, 2]);
+        for tangent in tangents {
+            assert!((tangent[0] - 1.0).abs() < 0.000001);
+            assert!(tangent[1].abs() < 0.000001);
+            assert!(tangent[2].abs() < 0.000001);
+            assert_eq!(tangent[3], 1.0);
+        }
     }
 }

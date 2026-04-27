@@ -9,6 +9,9 @@ export class RenderIsland {
         this.stopped = false;
         this.recentConsoleErrors = [];
         this.originalConsoleError = null;
+        this.inboundFrameCount = 0;
+        this.outboundFrameCount = 0;
+        this.wakeCount = 0;
         this.config = config;
     }
     async init(voWeb) {
@@ -49,6 +52,8 @@ export class RenderIsland {
             try {
                 if (this.stopped || !this.vm)
                     return;
+                this.inboundFrameCount += 1;
+                this.debugFrameStatus(`render island inbound #${this.inboundFrameCount} bytes=${frame.byteLength}`, this.inboundFrameCount);
                 this.vm.pushIslandCommand(frame);
                 const outcome = this.vm.runScheduled();
                 this.flush();
@@ -86,6 +91,8 @@ export class RenderIsland {
             return;
         const cmds = this.vm.takeOutboundCommands();
         for (const frame of cmds) {
+            this.outboundFrameCount += 1;
+            this.debugFrameStatus(`render island outbound #${this.outboundFrameCount} bytes=${frame.byteLength}`, this.outboundFrameCount);
             this.config.channel.send(frame);
         }
     }
@@ -101,6 +108,8 @@ export class RenderIsland {
                     this.hostTimers.delete(ev.token);
                     if (this.stopped || !this.vm)
                         return;
+                    this.wakeCount += 1;
+                    this.debugFrameStatus(`render island wake #${this.wakeCount} delay=${ev.delayMs}`, this.wakeCount);
                     this.vm.wakeHostEvent(ev.token);
                     const outcome = this.vm.runScheduled();
                     this.flush();
@@ -123,7 +132,7 @@ export class RenderIsland {
         }
     }
     fail(context, error) {
-        let message = `${context}: ${this.describeError(error)}`;
+        let message = this.normalizeVmPanic(`${context}: ${this.describeError(error)}`);
         const captured = this.drainCapturedErrors();
         if (captured.length > 0) {
             message += `\nRust panic: ${captured.join('\n')}`;
@@ -138,7 +147,7 @@ export class RenderIsland {
             const extra = Object.entries(extraFields)
                 .map(([key, value]) => `${key}=${this.describeValue(value)}`)
                 .join(", ");
-            let message = `${error.name}: ${error.message}`;
+            let message = `${error.name}: ${this.normalizeVmPanic(error.message)}`;
             if (error.stack) {
                 message += `\n${error.stack}`;
             }
@@ -154,19 +163,36 @@ export class RenderIsland {
     }
     describeValue(value) {
         if (typeof value === "string")
-            return value;
+            return this.normalizeVmPanic(value);
         if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) {
             return String(value);
         }
         try {
-            return JSON.stringify(value);
+            return this.normalizeVmPanic(JSON.stringify(value));
         }
         catch {
-            return String(value);
+            return this.normalizeVmPanic(String(value));
+        }
+    }
+    normalizeVmPanic(message) {
+        const panicMatch = message.match(/PanicUnwound \{ msg: Some\("((?:\\.|[^"\\])*)"\)/);
+        if (!panicMatch) {
+            return message;
+        }
+        try {
+            return JSON.parse(`"${panicMatch[1]}"`);
+        }
+        catch {
+            return panicMatch[1];
         }
     }
     debug(message) {
         this.config.debugLog?.(message);
+    }
+    debugFrameStatus(message, count) {
+        if (count <= 4 || count % 60 === 0) {
+            this.debug(message);
+        }
     }
     installConsoleErrorCapture() {
         if (this.originalConsoleError)

@@ -1,0 +1,128 @@
+package main
+
+import (
+	"math"
+	"strconv"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+	"github.com/vo-lang/voplay/scene3d"
+)
+
+type PrimitiveStressState struct {
+	scene *scene3d.Scene
+	fixture *primitive3d.StressFixture
+	count int
+	frame int
+	elapsed float64
+	cameraAngle float64
+	lastBytes int
+	maxBytes int
+}
+
+func main() {
+	voplay.Run(voplay.Game{Width: 1280, Height: 720, Title: "voplay primitive stress", TargetFrameRate: 120, InitialState: &PrimitiveStressState{count: 10000}})
+}
+
+func (s *PrimitiveStressState) Enter(g *voplay.GameCtx) {
+	g.ShowDebugOverlay()
+	s.rebuild()
+}
+
+func (s *PrimitiveStressState) Exit(g *voplay.GameCtx) {
+	if s.scene != nil {
+		s.scene.Close()
+	}
+}
+
+func (s *PrimitiveStressState) FixedUpdate(g *voplay.GameCtx, dt float64) {}
+
+func (s *PrimitiveStressState) Update(g *voplay.GameCtx, dt float64) {
+	s.frame++
+	s.elapsed += dt
+	s.cameraAngle += dt * 0.18
+	s.updateCamera()
+}
+
+func (s *PrimitiveStressState) Draw(g *voplay.GameCtx) {
+	g.Draw.ClearColor(voplay.Color{R: 0.49, G: 0.74, B: 0.96, A: 1})
+	if s.scene != nil {
+		s.scene.Draw(g.Draw)
+	}
+	s.lastBytes = len(g.Draw.Bytes())
+	if s.lastBytes > s.maxBytes {
+		s.maxBytes = s.lastBytes
+	}
+	s.drawHud(g)
+}
+
+func (s *PrimitiveStressState) OnResize(g *voplay.GameCtx, w int, h int) {}
+
+func (s *PrimitiveStressState) rebuild() {
+	if s.count <= 0 {
+		s.count = 10000
+	}
+	if s.scene != nil {
+		s.scene.Close()
+	}
+	s.fixture = primitive3d.NewStressFixture(primitive3d.StressConfig{
+		Count: s.count,
+		ShapeVariants: 8,
+		MaterialVariants: 16,
+		ChunkCellSize: 32,
+	})
+	s.scene = scene3d.New()
+	s.scene.Ambient = voplay.Color{R: 0.52, G: 0.60, B: 0.66, A: 1}
+	s.scene.AmbientGround = voplay.Color{R: 0.20, G: 0.24, B: 0.22, A: 1}
+	s.scene.Lights = []scene3d.Light{
+		scene3d.Light{Type: scene3d.DirectionalLight, Direction: voplay.Vec3{X: -0.45, Y: -0.9, Z: -0.25}, Color: voplay.White, Intensity: 2.6},
+	}
+	s.scene.AddPrimitiveLayer(s.fixture.Layer)
+	s.updateCamera()
+}
+
+func (s *PrimitiveStressState) updateCamera() {
+	if s.scene == nil || s.fixture == nil {
+		return
+	}
+	center := s.fixture.Bounds.Center()
+	size := s.fixture.Bounds.Size()
+	span := size.X
+	if size.Z > span {
+		span = size.Z
+	}
+	if span < 20 {
+		span = 20
+	}
+	radius := span*0.70 + 120
+	height := span*0.55 + 90
+	s.scene.Camera.Position = center.Add(voplay.Vec3{
+		X: math.Cos(s.cameraAngle) * radius,
+		Y: height,
+		Z: math.Sin(s.cameraAngle) * radius,
+	})
+	s.scene.Camera.Target = center
+	s.scene.Camera.Up = voplay.Vec3{Y: 1}
+	s.scene.Camera.Fov = 92
+	s.scene.Camera.Near = 0.1
+	s.scene.Camera.Far = span*3.0 + 500
+}
+
+func (s *PrimitiveStressState) drawHud(g *voplay.GameCtx) {
+	g.Draw.ResetCamera()
+	g.Draw.SetLayer(65534)
+	g.Draw.DrawRect(18, 132, 560, 154, voplay.Color{R: 0.04, G: 0.06, B: 0.08, A: 0.72})
+	g.Draw.DrawRect(18, 132, 560, 5, voplay.Color{R: 0.20, G: 0.86, B: 0.35, A: 1})
+	text := voplay.Color{R: 0.94, G: 0.98, B: 1.0, A: 1}
+	muted := voplay.Color{R: 0.66, G: 0.78, B: 0.84, A: 1}
+	stats := primitive3d.Stats{}
+	renderStats := scene3d.SceneRenderStats{}
+	if s.scene != nil {
+		stats = s.scene.PrimitiveStats()
+		renderStats = s.scene.RenderStats()
+	}
+	g.Draw.DrawText("primitive stress", 32, 162, 20, text)
+	g.Draw.DrawText("instances " + strconv.Itoa(stats.TotalInstances) + "   chunks " + strconv.Itoa(stats.TotalChunks) + "   groups " + strconv.Itoa(stats.ShapeMaterialGroups), 32, 190, 15, muted)
+	g.Draw.DrawText("upserts " + strconv.Itoa(renderStats.UpsertedObjects) + "   batch groups " + strconv.Itoa(renderStats.BatchGroups), 32, 216, 15, muted)
+	g.Draw.DrawText("frame bytes " + strconv.Itoa(s.lastBytes) + "   max bytes " + strconv.Itoa(s.maxBytes), 32, 242, 15, muted)
+	g.Draw.DrawText("orbit: Rust culls retained chunks; Vo sends no reupload", 32, 268, 13, muted)
+}

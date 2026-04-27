@@ -2,21 +2,30 @@ package scene3d
 
 import "errors"
 import "github.com/vo-lang/voplay"
+import "github.com/vo-lang/voplay/codec"
 
 type TerrainLayer struct {
 	Texture voplay.TextureID
+	Normal voplay.TextureID
+	MetallicRoughness voplay.TextureID
 	UVScale float64
+	NormalScale float64
 }
 
 type TerrainSplatMaterial struct {
 	Control voplay.TextureID
-	Layers  [4]TerrainLayer
+	Layers  []TerrainLayer
 }
 
 type TerrainDesc struct {
 	HeightmapPath string
 	HeightmapData []byte
 	Texture       voplay.TextureID
+	Normal        voplay.TextureID
+	MetallicRoughness voplay.TextureID
+	NormalScale   float64
+	Roughness      float64
+	Metallic       float64
 	Splat         *TerrainSplatMaterial
 	Position      voplay.Vec3
 	Width         float64
@@ -43,6 +52,11 @@ type TerrainCreateDesc struct {
 	Scale   voplay.Vec3
 	UVScale float64
 	Texture voplay.TextureID
+	Normal  voplay.TextureID
+	MetallicRoughness voplay.TextureID
+	NormalScale float64
+	Roughness float64
+	Metallic float64
 	Splat   *TerrainSplatMaterial
 }
 
@@ -65,33 +79,25 @@ type defaultTerrainBackend struct{}
 
 func (defaultTerrainBackend) Create(desc TerrainCreateDesc) (TerrainCreateResult, error) {
 	if desc.Splat != nil {
-		l := desc.Splat.Layers
+		layerData := encodeTerrainSplatLayers(desc.Splat)
 		if desc.Path != "" {
 			modelID, rows, cols, hd := createTerrainSplat(
 				desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
-				int(desc.Splat.Control),
-				int(l[0].Texture), l[0].UVScale,
-				int(l[1].Texture), l[1].UVScale,
-				int(l[2].Texture), l[2].UVScale,
-				int(l[3].Texture), l[3].UVScale,
+				int(desc.Splat.Control), layerData,
 			)?
 			return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 		}
 		modelID, rows, cols, hd := createTerrainBytesSplat(
 			desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
-			int(desc.Splat.Control),
-			int(l[0].Texture), l[0].UVScale,
-			int(l[1].Texture), l[1].UVScale,
-			int(l[2].Texture), l[2].UVScale,
-			int(l[3].Texture), l[3].UVScale,
+			int(desc.Splat.Control), layerData,
 		)?
 		return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 	}
 	if desc.Path != "" {
-		modelID, rows, cols, hd := createTerrain(desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture))?
+		modelID, rows, cols, hd := createTerrain(desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture), int(desc.Normal), int(desc.MetallicRoughness), desc.NormalScale, desc.Roughness, desc.Metallic)?
 		return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 	}
-	modelID, rows, cols, hd := createTerrainBytes(desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture))?
+	modelID, rows, cols, hd := createTerrainBytes(desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.UVScale, int(desc.Texture), int(desc.Normal), int(desc.MetallicRoughness), desc.NormalScale, desc.Roughness, desc.Metallic)?
 	return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 }
 
@@ -181,8 +187,16 @@ func NewTerrain(scene *Scene, desc TerrainDesc) (*Terrain, error) {
 		Data:    desc.HeightmapData,
 		Scale:   voplay.Vec3{desc.Width, desc.Height, desc.Depth},
 		Texture: desc.Texture,
+		Normal:  desc.Normal,
+		MetallicRoughness: desc.MetallicRoughness,
+		NormalScale: desc.NormalScale,
+		Roughness: desc.Roughness,
+		Metallic: desc.Metallic,
 	}
 	if desc.Splat != nil {
+		if desc.Normal != 0 || desc.MetallicRoughness != 0 || desc.NormalScale != 0 || desc.Roughness != 0 || desc.Metallic != 0 {
+			return nil, errors.New("scene3d.NewTerrain: single-material terrain fields cannot be mixed with Splat")
+		}
 		splat, splatErr := validateAndNormalizeSplat(desc.Splat)
 		if splatErr != nil {
 			return nil, splatErr
@@ -195,6 +209,15 @@ func NewTerrain(scene *Scene, desc TerrainDesc) (*Terrain, error) {
 		}
 		if uvScale == 0 {
 			uvScale = 1
+		}
+		if desc.NormalScale < 0 {
+			return nil, errors.New("scene3d.NewTerrain: NormalScale must be >= 0")
+		}
+		if desc.Roughness < 0 {
+			return nil, errors.New("scene3d.NewTerrain: Roughness must be >= 0")
+		}
+		if desc.Metallic < 0 || desc.Metallic > 1 {
+			return nil, errors.New("scene3d.NewTerrain: Metallic must be in range 0..1")
 		}
 		createDesc.UVScale = uvScale
 	}
@@ -209,9 +232,12 @@ func validateAndNormalizeSplat(splat *TerrainSplatMaterial) (*TerrainSplatMateri
 	if splat.Control == 0 {
 		return nil, errors.New("scene3d.NewTerrain: Splat control texture must be non-zero")
 	}
+	if len(splat.Layers) != 4 {
+		return nil, errors.New("scene3d.NewTerrain: splat requires exactly 4 layers")
+	}
 	normalized := &TerrainSplatMaterial{
 		Control: splat.Control,
-		Layers:  splat.Layers,
+		Layers:  append([]TerrainLayer{}, splat.Layers...),
 	}
 	for i := 0; i < 4; i++ {
 		if normalized.Layers[i].Texture == 0 {
@@ -223,8 +249,24 @@ func validateAndNormalizeSplat(splat *TerrainSplatMaterial) (*TerrainSplatMateri
 		if normalized.Layers[i].UVScale < 0 {
 			return nil, errors.New("scene3d.NewTerrain: splat layer UVScale must be > 0")
 		}
+		if normalized.Layers[i].NormalScale < 0 {
+			return nil, errors.New("scene3d.NewTerrain: splat layer NormalScale must be >= 0")
+		}
 	}
 	return normalized, nil
+}
+
+func encodeTerrainSplatLayers(splat *TerrainSplatMaterial) []byte {
+	w := codec.NewByteWriter(4 * (4 + 4 + 4 + 8 + 8))
+	for i := 0; i < 4; i++ {
+		layer := splat.Layers[i]
+		w.WriteU32(int(layer.Texture))
+		w.WriteU32(int(layer.Normal))
+		w.WriteU32(int(layer.MetallicRoughness))
+		w.WriteF64(layer.UVScale)
+		w.WriteF64(layer.NormalScale)
+	}
+	return w.Bytes()
 }
 
 func buildTerrainPhysics(base *Physics) (*Physics, error) {
@@ -263,8 +305,8 @@ func buildTerrainPhysics(base *Physics) (*Physics, error) {
 	}, nil
 }
 
-func createTerrain(path string, scaleX, scaleY, scaleZ, uvScale float64, textureID int) (int, int, int, []byte, error)
-func createTerrainSplat(path string, scaleX, scaleY, scaleZ float64, controlTextureID int, layer0TextureID int, layer0UVScale float64, layer1TextureID int, layer1UVScale float64, layer2TextureID int, layer2UVScale float64, layer3TextureID int, layer3UVScale float64) (int, int, int, []byte, error)
-func createTerrainBytes(data []byte, scaleX, scaleY, scaleZ, uvScale float64, textureID int) (int, int, int, []byte, error)
-func createTerrainBytesSplat(data []byte, scaleX, scaleY, scaleZ float64, controlTextureID int, layer0TextureID int, layer0UVScale float64, layer1TextureID int, layer1UVScale float64, layer2TextureID int, layer2UVScale float64, layer3TextureID int, layer3UVScale float64) (int, int, int, []byte, error)
+func createTerrain(path string, scaleX, scaleY, scaleZ, uvScale float64, textureID int, normalTextureID int, metallicRoughnessTextureID int, normalScale float64, roughness float64, metallic float64) (int, int, int, []byte, error)
+func createTerrainSplat(path string, scaleX, scaleY, scaleZ float64, controlTextureID int, layerData []byte) (int, int, int, []byte, error)
+func createTerrainBytes(data []byte, scaleX, scaleY, scaleZ, uvScale float64, textureID int, normalTextureID int, metallicRoughnessTextureID int, normalScale float64, roughness float64, metallic float64) (int, int, int, []byte, error)
+func createTerrainBytesSplat(data []byte, scaleX, scaleY, scaleZ float64, controlTextureID int, layerData []byte) (int, int, int, []byte, error)
 func terrainHeightAt(worldID, bodyID int, x, z float64) (float64, bool)

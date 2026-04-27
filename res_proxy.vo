@@ -42,6 +42,9 @@ const (
 	resTagAnimationTick      byte = 28
 	resTagAnimationProgress  byte = 29
 	resTagAnimationModelInfo byte = 30
+	resTagCreateRoundedBoxMesh byte = 31
+	resTagCreateConeMesh byte = 32
+	resTagCreateWedgeMesh byte = 33
 
 	resRespOK    byte = 0
 	resRespError byte = 1
@@ -167,6 +170,14 @@ func encodeResPlaneMesh(width, depth float64, subX, subZ int) []byte {
 	w.WriteF64(depth)
 	w.WriteU32(subX)
 	w.WriteU32(subZ)
+	return w.Bytes()
+}
+
+func encodeResRoundedBoxMesh(bevelRadius float64, segments int) []byte {
+	w := codec.NewByteWriter(1 + 8 + 4)
+	w.WriteByte(resTagCreateRoundedBoxMesh)
+	w.WriteF64(bevelRadius)
+	w.WriteU32(segments)
 	return w.Bytes()
 }
 
@@ -433,6 +444,11 @@ func handleCreateCubeMesh(_ []byte) []byte {
 	return encodeResOKU32(createCubeMesh())
 }
 
+func handleCreateRoundedBoxMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKU32(createRoundedBoxMesh(r.ReadF64(), r.ReadU32()))
+}
+
 func handleCreateSphereMesh(payload []byte) []byte {
 	r := codec.NewByteReader(payload)
 	return encodeResOKU32(createSphereMesh(r.ReadU32()))
@@ -441,6 +457,15 @@ func handleCreateSphereMesh(payload []byte) []byte {
 func handleCreateCylinderMesh(payload []byte) []byte {
 	r := codec.NewByteReader(payload)
 	return encodeResOKU32(createCylinderMesh(r.ReadU32()))
+}
+
+func handleCreateConeMesh(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	return encodeResOKU32(createConeMesh(r.ReadU32()))
+}
+
+func handleCreateWedgeMesh(_ []byte) []byte {
+	return encodeResOKU32(createWedgeMesh())
 }
 
 func handleCreateCapsuleMesh(payload []byte) []byte {
@@ -758,6 +783,12 @@ func proxyCreateCubeMesh(reqPort, respPort port []byte) (int, error) {
 	return decodeResU32(resp)
 }
 
+func proxyCreateRoundedBoxMesh(reqPort, respPort port []byte, bevelRadius float64, segments int) (int, error) {
+	req := encodeResRoundedBoxMesh(bevelRadius, segments)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
 func proxyCreateSphereMesh(reqPort, respPort port []byte, segments int) (int, error) {
 	req := encodeResU32(resTagCreateSphereMesh, segments)
 	resp := resProxyRoundTrip(reqPort, respPort, req)
@@ -766,6 +797,18 @@ func proxyCreateSphereMesh(reqPort, respPort port []byte, segments int) (int, er
 
 func proxyCreateCylinderMesh(reqPort, respPort port []byte, segments int) (int, error) {
 	req := encodeResU32(resTagCreateCylinderMesh, segments)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateConeMesh(reqPort, respPort port []byte, segments int) (int, error) {
+	req := encodeResU32(resTagCreateConeMesh, segments)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateWedgeMesh(reqPort, respPort port []byte) (int, error) {
+	req := encodeResTag(resTagCreateWedgeMesh)
 	resp := resProxyRoundTrip(reqPort, respPort, req)
 	return decodeResU32(resp)
 }

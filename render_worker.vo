@@ -3,6 +3,8 @@
 // frame requests to the logic island and submitting the returned draw commands.
 package voplay
 
+import "time"
+
 // renderWorkerPorts holds the port endpoints for the render worker.
 type renderWorkerPorts struct {
 	frameReq   port []byte // send frame requests (input snapshots) to logic island
@@ -18,10 +20,22 @@ type renderWorkerPorts struct {
 // the loop to the display refresh rate.
 func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWorkerPorts) {
 	// Phase 1: Init surface (may be async on WASM).
-	initSurface(canvasRef, config.UncappedFrameRate)?
+	initSurface(canvasRef, config.UncappedFrameRate || config.TargetFrameRate > 0)?
 
 	// Wait for renderer async init without hammering the browser main thread.
-	for !isRendererReady() {
+	waitFrames := 0
+	for {
+		ready, err := isRendererReady()
+		if err != nil {
+			panic("voplay renderer init failed: " + err.Error())
+		}
+		if ready {
+			break
+		}
+		waitFrames++
+		if waitFrames > 600 {
+			panic("voplay renderer init timed out")
+		}
 		waitDisplayPulse()
 	}
 
@@ -37,10 +51,16 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	// Each iteration: sample input → request → wait reply → submit → present.
 	// Present with AutoVsync blocks until the next display refresh,
 	// making the GPU vsync the natural frame pacer.
+	frameInterval := targetFrameInterval(config.TargetFrameRate)
+	nextFrameTime := time.Now()
 	for {
 		// On wasm, normal games follow requestAnimationFrame. Performance debug
 		// runs can opt out to measure the engine's real CPU/GPU submission headroom.
-		if !config.UncappedFrameRate {
+		if config.UncappedFrameRate {
+			// Deliberately unpaced.
+		} else if frameInterval > 0 {
+			nextFrameTime = waitTargetFrame(nextFrameTime, frameInterval)
+		} else {
 			waitDisplayPulse()
 		}
 
@@ -61,6 +81,29 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 			submitFrame(drawCmds)?
 		}
 	}
+}
+
+func targetFrameInterval(fps int) time.Duration {
+	if fps <= 0 {
+		return 0
+	}
+	if fps > 1000 {
+		fps = 1000
+	}
+	return time.Duration(int64(1000000000) / int64(fps))
+}
+
+func waitTargetFrame(next time.Time, interval time.Duration) time.Time {
+	now := time.Now()
+	if next.Before(now) {
+		late := now.Sub(next)
+		if late > interval * 4 {
+			next = now
+		}
+	} else {
+		time.Sleep(next.Sub(now))
+	}
+	return next.Add(interval)
 }
 
 func serviceResourceRequestsLoop(reqPort, respPort port []byte) {
@@ -117,10 +160,16 @@ func handleResourceRequest(req []byte) []byte {
 		return handleCreatePlaneMesh(payload)
 	case resTagCreateCubeMesh:
 		return handleCreateCubeMesh(payload)
+	case resTagCreateRoundedBoxMesh:
+		return handleCreateRoundedBoxMesh(payload)
 	case resTagCreateSphereMesh:
 		return handleCreateSphereMesh(payload)
 	case resTagCreateCylinderMesh:
 		return handleCreateCylinderMesh(payload)
+	case resTagCreateConeMesh:
+		return handleCreateConeMesh(payload)
+	case resTagCreateWedgeMesh:
+		return handleCreateWedgeMesh(payload)
 	case resTagCreateCapsuleMesh:
 		return handleCreateCapsuleMesh(payload)
 	case resTagAnimationInit:

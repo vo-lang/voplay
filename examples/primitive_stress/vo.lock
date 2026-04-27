@@ -1,0 +1,89 @@
+version = 1
+created_by = "vo mod sync"
+
+[root]
+module = "github.com/vo-lang/voplay/examples/primitive_stress"
+vo = "^0.1.0"
+
+[[resolved]]
+path = "github.com/vo-lang/vogui"
+version = "v0.1.11"
+vo = "^0.1.0"
+commit = "e80b37be37050d96d2b55dbef5ce3b81091c3b5f"
+release_manifest = "sha256:2596c120decdf2a038c3dad51211d68952348b154d4f03bedce49f5bb28c8a0a"
+source = "sha256:7383997db3a7f93446e939f76fe37cc8f8b0182d0a7202beaec29c9a5598dbef"
+deps = []
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "aarch64-apple-darwin"
+name = "libvo_vogui.dylib"
+size = 1590528
+digest = "sha256:5258a99650e30937390e178d11be8eff125fdfc8ff7ef3d8cbc9aec987230515"
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "x86_64-pc-windows-msvc"
+name = "vo_vogui.dll"
+size = 1379328
+digest = "sha256:89eb200bbac2a1e2c822ffde97e1730b2ea8609c31278d631f98e746009e7247"
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "x86_64-unknown-linux-gnu"
+name = "libvo_vogui.so"
+size = 2064856
+digest = "sha256:77b9f32987b0084f5a693df06d9f3f638ce1784227a22f52d02463b2ec9973f3"
+
+[[resolved.artifact]]
+kind = "extension-wasm"
+target = "wasm32-unknown-unknown"
+name = "vogui.wasm"
+size = 26031
+digest = "sha256:2e87a33cbcebef01bcb6ccd4e2a4feac0daf3591365c712ceab3ee5f1f82aa16"
+
+[[resolved]]
+path = "github.com/vo-lang/vopack"
+version = "v0.1.0"
+vo = "^0.1.0"
+commit = "9b9ed084848c9621aacc5948b384e704ffdc6406"
+release_manifest = "sha256:f8d4c62e0435f92334bd2e480ba28bf6549c6556dbbd1ae7f262c52752210d9b"
+source = "sha256:66332c9bcae3d0c060d86de987a717bc3e5d86bcbf8439e0bea18cba339d0f72"
+deps = []
+
+[[resolved]]
+path = "github.com/vo-lang/voplay"
+version = "v0.1.18"
+vo = "^0.1.0"
+commit = "299b1524d0d74c78f0919c7877490d2c425697f2"
+release_manifest = "sha256:78392c900691c13f01752e337e7f43a3f15b1c96eba07136b936ed228133d3fc"
+source = "sha256:7e30c08325b95862cab072adc39ed146f810eb602a7289ef2c3e334f9ee58326"
+deps = ["github.com/vo-lang/vogui", "github.com/vo-lang/vopack"]
+
+[[resolved.artifact]]
+kind = "extension-js-glue"
+target = "wasm32-unknown-unknown"
+name = "voplay_island.js"
+size = 94795
+digest = "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d"
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "aarch64-apple-darwin"
+name = "libvo_voplay.dylib"
+size = 9691216
+digest = "sha256:8cede378bc422b9ce74e6ad8cf16ef4af3a3de592586dd10e8a1811efa2ef4b3"
+
+[[resolved.artifact]]
+kind = "extension-native"
+target = "x86_64-unknown-linux-gnu"
+name = "libvo_voplay.so"
+size = 13243192
+digest = "sha256:4c4288d7c773943ac406d066cb92869e0ecd06fdeb341fd69fe6c32480e679ee"
+
+[[resolved.artifact]]
+kind = "extension-wasm"
+target = "wasm32-unknown-unknown"
+name = "voplay_island_bg.wasm"
+size = 3158764
+digest = "sha256:330ad83bb2847aa1632e4b847b239be9919b8941687bf2bc13f80e7500a46b3e"

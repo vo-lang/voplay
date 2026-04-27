@@ -27,16 +27,69 @@ const (
 	opSetLights3D   = 0x23
 	opSetFog3D      = 0x24
 	opDrawSkybox    = 0x25
+	opSetColorGrading3D = 0x26
 	opSetShadow3D   = 0x27
+	opSetRenderDebug3D = 0x28
 	opScene3DUpsertObject  = 0x30
 	opScene3DDestroyObject = 0x31
 	opScene3DClear         = 0x32
 	opScene3DDraw          = 0x33
+	opPrimitive3DUpsertInstance = 0x34
+	opPrimitive3DDestroyInstance = 0x35
+	opPrimitive3DClearLayer = 0x36
+	opPrimitive3DDestroyLayer = 0x37
+	opPrimitive3DReplaceChunk = 0x38
+	opPrimitive3DReplaceChunkRefs = 0x39
+	opPrimitive3DUpsertMaterials = 0x3A
+	opPrimitive3DUpsertShapes = 0x3B
+	opPrimitive3DReplaceChunkKeys = 0x3C
+	opPrimitive3DSetChunkVisible = 0x3D
 )
 
 // DrawCtx buffers binary draw commands for the current frame.
 type DrawCtx struct {
 	w codec.ByteWriter
+}
+
+type Primitive3DInstanceDraw struct {
+	ObjectID int
+	Model    ModelID
+	Position Vec3
+	Rotation Quat
+	Scale    Vec3
+	Material MaterialDesc
+	Visible  bool
+}
+
+type Primitive3DMaterialDraw struct {
+	ID       int
+	Material MaterialDesc
+}
+
+type Primitive3DShapeDraw struct {
+	ID    int
+	Model ModelID
+}
+
+type Primitive3DInstanceRefDraw struct {
+	ObjectID   int
+	Model      ModelID
+	Position   Vec3
+	Rotation   Quat
+	Scale      Vec3
+	MaterialID int
+	Visible    bool
+}
+
+type Primitive3DInstanceKeyDraw struct {
+	ObjectID   int
+	ShapeID    int
+	Position   Vec3
+	Rotation   Quat
+	Scale      Vec3
+	MaterialID int
+	Tint       Color
+	Visible    bool
 }
 
 // NewDrawCtx creates a new draw command context.
@@ -292,6 +345,23 @@ const (
 	FogExpSquared = 3
 )
 
+const (
+	ToneMapNone = 0
+	ToneMapReinhard = 1
+	ToneMapACES = 2
+)
+
+const (
+	RenderDebugLit = 0
+	RenderDebugAlbedo = 1
+	RenderDebugNormal = 2
+	RenderDebugRoughness = 3
+	RenderDebugMetallic = 4
+	RenderDebugShadow = 5
+	RenderDebugDirect = 6
+	RenderDebugAmbient = 7
+)
+
 // LightDesc describes a light for the SetLights3D draw command.
 type LightDesc struct {
 	Type      int // DirectionalLight or PointLight
@@ -302,12 +372,15 @@ type LightDesc struct {
 }
 
 // SetLights3D encodes the lighting state for subsequent 3D draw commands.
-// ambient is the ambient light color, lights is a list of up to 8 lights.
-func (d *DrawCtx) SetLights3D(ambient Color, lights []LightDesc) {
+// ambientSky and ambientGround form a simple hemisphere ambient model.
+func (d *DrawCtx) SetLights3D(ambientSky, ambientGround Color, lights []LightDesc) {
 	d.w.WriteByte(opSetLights3D)
-	d.w.WriteF32(ambient.R)
-	d.w.WriteF32(ambient.G)
-	d.w.WriteF32(ambient.B)
+	d.w.WriteF32(ambientSky.R)
+	d.w.WriteF32(ambientSky.G)
+	d.w.WriteF32(ambientSky.B)
+	d.w.WriteF32(ambientGround.R)
+	d.w.WriteF32(ambientGround.G)
+	d.w.WriteF32(ambientGround.B)
 	count := len(lights)
 	if count > 8 {
 		panic("SetLights3D: lights must not exceed 8")
@@ -340,9 +413,33 @@ func (d *DrawCtx) SetFog3D(mode int, color Color, start, end, density float64) {
 	d.w.WriteF32(density)
 }
 
-func (d *DrawCtx) SetShadow3D(enabled bool, resolution int) {
+// SetColorGrading3D applies simple renderer-side color management to 3D mesh output.
+func (d *DrawCtx) SetColorGrading3D(toneMap int, exposure, contrast, saturation float64) {
+	if toneMap < ToneMapNone || toneMap > ToneMapACES {
+		panic("SetColorGrading3D: unsupported tone map")
+	}
+	if exposure < 0 {
+		panic("SetColorGrading3D: exposure must be >= 0")
+	}
+	if contrast < 0 {
+		panic("SetColorGrading3D: contrast must be >= 0")
+	}
+	if saturation < 0 {
+		panic("SetColorGrading3D: saturation must be >= 0")
+	}
+	d.w.WriteByte(opSetColorGrading3D)
+	d.w.WriteByte(byte(toneMap))
+	d.w.WriteF32(exposure)
+	d.w.WriteF32(contrast)
+	d.w.WriteF32(saturation)
+}
+
+func (d *DrawCtx) SetShadow3D(enabled bool, resolution int, strength float64) {
 	if enabled && resolution <= 0 {
 		panic("SetShadow3D: resolution must be > 0")
+	}
+	if strength < 0 || strength > 1 {
+		panic("SetShadow3D: strength must be in range 0..1")
 	}
 	if resolution <= 0 {
 		resolution = 1
@@ -350,6 +447,17 @@ func (d *DrawCtx) SetShadow3D(enabled bool, resolution int) {
 	d.w.WriteByte(opSetShadow3D)
 	d.w.WriteBool(enabled)
 	d.w.WriteU32(resolution)
+	d.w.WriteF32(strength)
+}
+
+// SetRenderDebug3D selects a renderer debug output for subsequent 3D mesh draws.
+// It is meant for material and lighting validation, not gameplay presentation.
+func (d *DrawCtx) SetRenderDebug3D(mode int) {
+	if mode < RenderDebugLit || mode > RenderDebugAmbient {
+		panic("SetRenderDebug3D: unsupported mode")
+	}
+	d.w.WriteByte(opSetRenderDebug3D)
+	d.w.WriteByte(byte(mode))
 }
 
 func (d *DrawCtx) DrawSkybox(cubemap CubemapID) {
@@ -358,15 +466,16 @@ func (d *DrawCtx) DrawSkybox(cubemap CubemapID) {
 }
 
 // DrawModel draws a 3D model at the given transform.
-func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color) {
-	d.writeModel(model, pos, rot, scale, tint, 0, 0)
+func (d *DrawCtx) DrawModel(model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc) {
+	d.writeModel(model, pos, rot, scale, material, 0, 0)
 }
 
-func (d *DrawCtx) DrawSkinnedModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, animationWorldID, animationTargetID int) {
-	d.writeModel(model, pos, rot, scale, tint, animationWorldID, animationTargetID)
+func (d *DrawCtx) DrawSkinnedModel(model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, animationWorldID, animationTargetID int) {
+	d.writeModel(model, pos, rot, scale, material, animationWorldID, animationTargetID)
 }
 
-func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, animationWorldID, animationTargetID int) {
+func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, animationWorldID, animationTargetID int) {
+	material = NormalizeMaterial(material)
 	d.w.WriteByte(opDrawModel)
 	d.w.WriteU32(int(model))
 	d.w.WriteF32(pos.X)
@@ -379,15 +488,13 @@ func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, tint
 	d.w.WriteF32(scale.X)
 	d.w.WriteF32(scale.Y)
 	d.w.WriteF32(scale.Z)
-	d.w.WriteF32(tint.R)
-	d.w.WriteF32(tint.G)
-	d.w.WriteF32(tint.B)
-	d.w.WriteF32(tint.A)
+	d.writeMaterial(material)
 	d.w.WriteU32(animationWorldID)
 	d.w.WriteU32(animationTargetID)
 }
 
-func (d *DrawCtx) UpsertScene3DObject(sceneID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, tint Color, visible bool, animationWorldID, animationTargetID int) {
+func (d *DrawCtx) UpsertScene3DObject(sceneID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, visible bool, animationWorldID, animationTargetID int) {
+	material = NormalizeMaterial(material)
 	d.w.WriteByte(opScene3DUpsertObject)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(objectID)
@@ -402,19 +509,211 @@ func (d *DrawCtx) UpsertScene3DObject(sceneID, objectID int, model ModelID, pos 
 	d.w.WriteF32(scale.X)
 	d.w.WriteF32(scale.Y)
 	d.w.WriteF32(scale.Z)
-	d.w.WriteF32(tint.R)
-	d.w.WriteF32(tint.G)
-	d.w.WriteF32(tint.B)
-	d.w.WriteF32(tint.A)
+	d.writeMaterial(material)
 	d.w.WriteBool(visible)
 	d.w.WriteU32(animationWorldID)
 	d.w.WriteU32(animationTargetID)
+}
+
+func (d *DrawCtx) writeMaterial(material MaterialDesc) {
+	d.w.WriteU32(int(material.ID))
+	d.w.WriteF32(material.BaseColor.R)
+	d.w.WriteF32(material.BaseColor.G)
+	d.w.WriteF32(material.BaseColor.B)
+	d.w.WriteF32(material.BaseColor.A)
+	d.w.WriteU32(int(material.Albedo))
+	d.w.WriteU32(int(material.Normal))
+	d.w.WriteU32(int(material.MetallicRoughness))
+	d.w.WriteU32(int(material.Emissive))
+	d.w.WriteF32(material.EmissiveColor.R)
+	d.w.WriteF32(material.EmissiveColor.G)
+	d.w.WriteF32(material.EmissiveColor.B)
+	d.w.WriteF32(material.EmissiveColor.A)
+	d.w.WriteF32(material.Roughness)
+	d.w.WriteF32(material.Metallic)
+	d.w.WriteF32(material.NormalScale)
+	d.w.WriteF32(material.UVScale)
+	d.w.WriteU32(int(material.ToonRamp))
+	d.w.WriteU32(material.ShadingMode)
+	d.w.WriteU32(material.WrapMode)
+	d.w.WriteU32(material.FilterMode)
 }
 
 func (d *DrawCtx) DestroyScene3DObject(sceneID, objectID int) {
 	d.w.WriteByte(opScene3DDestroyObject)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(objectID)
+}
+
+func (d *DrawCtx) UpsertPrimitive3DInstance(sceneID, layerID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, visible bool) {
+	material = NormalizeMaterial(material)
+	d.w.WriteByte(opPrimitive3DUpsertInstance)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(objectID)
+	d.w.WriteU32(int(model))
+	d.w.WriteF32(pos.X)
+	d.w.WriteF32(pos.Y)
+	d.w.WriteF32(pos.Z)
+	d.w.WriteF32(rot.X)
+	d.w.WriteF32(rot.Y)
+	d.w.WriteF32(rot.Z)
+	d.w.WriteF32(rot.W)
+	d.w.WriteF32(scale.X)
+	d.w.WriteF32(scale.Y)
+	d.w.WriteF32(scale.Z)
+	d.writeMaterial(material)
+	d.w.WriteBool(visible)
+}
+
+func (d *DrawCtx) ReplacePrimitive3DChunk(sceneID, layerID, chunkID int, instances []Primitive3DInstanceDraw) {
+	d.w.WriteByte(opPrimitive3DReplaceChunk)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(chunkID)
+	d.w.WriteU32(len(instances))
+	for _, instance := range instances {
+		d.writePrimitive3DInstanceDraw(instance)
+	}
+}
+
+func (d *DrawCtx) UpsertPrimitive3DMaterials(sceneID, layerID int, materials []Primitive3DMaterialDraw) {
+	d.w.WriteByte(opPrimitive3DUpsertMaterials)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(len(materials))
+	for _, entry := range materials {
+		d.w.WriteU32(entry.ID)
+		d.writeMaterial(NormalizeMaterial(entry.Material))
+	}
+}
+
+func (d *DrawCtx) UpsertPrimitive3DShapes(sceneID, layerID int, shapes []Primitive3DShapeDraw) {
+	d.w.WriteByte(opPrimitive3DUpsertShapes)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(len(shapes))
+	for _, entry := range shapes {
+		d.w.WriteU32(entry.ID)
+		d.w.WriteU32(int(entry.Model))
+	}
+}
+
+func (d *DrawCtx) ReplacePrimitive3DChunkRefs(sceneID, layerID, chunkID int, instances []Primitive3DInstanceRefDraw) {
+	d.w.WriteByte(opPrimitive3DReplaceChunkRefs)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(chunkID)
+	d.w.WriteU32(len(instances))
+	for _, instance := range instances {
+		d.writePrimitive3DInstanceRefDraw(instance)
+	}
+}
+
+func (d *DrawCtx) ReplacePrimitive3DChunkKeys(sceneID, layerID, chunkID int, instances []Primitive3DInstanceKeyDraw) {
+	d.w.WriteByte(opPrimitive3DReplaceChunkKeys)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(chunkID)
+	d.w.WriteU32(len(instances))
+	for _, instance := range instances {
+		d.writePrimitive3DInstanceKeyDraw(instance)
+	}
+}
+
+func (d *DrawCtx) BeginPrimitive3DChunkKeys(sceneID, layerID, chunkID, count int) {
+	d.w.WriteByte(opPrimitive3DReplaceChunkKeys)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(chunkID)
+	d.w.WriteU32(count)
+}
+
+func (d *DrawCtx) WritePrimitive3DChunkKey(objectID, shapeID int, position Vec3, rotation Quat, scale Vec3, materialID int, tint Color, visible bool) {
+	d.w.WritePrimitive3DKey(
+		objectID, shapeID,
+		position.X, position.Y, position.Z,
+		rotation.X, rotation.Y, rotation.Z, rotation.W,
+		scale.X, scale.Y, scale.Z,
+		materialID,
+		tint.R, tint.G, tint.B, tint.A,
+		visible,
+	)
+}
+
+func (d *DrawCtx) SetPrimitive3DChunkVisible(sceneID, layerID, chunkID int, visible bool) {
+	d.w.WriteByte(opPrimitive3DSetChunkVisible)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(chunkID)
+	d.w.WriteBool(visible)
+}
+
+func (d *DrawCtx) writePrimitive3DInstanceDraw(instance Primitive3DInstanceDraw) {
+	material := NormalizeMaterial(instance.Material)
+	d.w.WriteU32(instance.ObjectID)
+	d.w.WriteU32(int(instance.Model))
+	d.w.WriteF32(instance.Position.X)
+	d.w.WriteF32(instance.Position.Y)
+	d.w.WriteF32(instance.Position.Z)
+	d.w.WriteF32(instance.Rotation.X)
+	d.w.WriteF32(instance.Rotation.Y)
+	d.w.WriteF32(instance.Rotation.Z)
+	d.w.WriteF32(instance.Rotation.W)
+	d.w.WriteF32(instance.Scale.X)
+	d.w.WriteF32(instance.Scale.Y)
+	d.w.WriteF32(instance.Scale.Z)
+	d.writeMaterial(material)
+	d.w.WriteBool(instance.Visible)
+}
+
+func (d *DrawCtx) writePrimitive3DInstanceRefDraw(instance Primitive3DInstanceRefDraw) {
+	d.w.WriteU32(instance.ObjectID)
+	d.w.WriteU32(int(instance.Model))
+	d.w.WriteF32(instance.Position.X)
+	d.w.WriteF32(instance.Position.Y)
+	d.w.WriteF32(instance.Position.Z)
+	d.w.WriteF32(instance.Rotation.X)
+	d.w.WriteF32(instance.Rotation.Y)
+	d.w.WriteF32(instance.Rotation.Z)
+	d.w.WriteF32(instance.Rotation.W)
+	d.w.WriteF32(instance.Scale.X)
+	d.w.WriteF32(instance.Scale.Y)
+	d.w.WriteF32(instance.Scale.Z)
+	d.w.WriteU32(instance.MaterialID)
+	d.w.WriteBool(instance.Visible)
+}
+
+func (d *DrawCtx) writePrimitive3DInstanceKeyDraw(instance Primitive3DInstanceKeyDraw) {
+	d.WritePrimitive3DChunkKey(
+		instance.ObjectID,
+		instance.ShapeID,
+		instance.Position,
+		instance.Rotation,
+		instance.Scale,
+		instance.MaterialID,
+		instance.Tint,
+		instance.Visible,
+	)
+}
+
+func (d *DrawCtx) DestroyPrimitive3DInstance(sceneID, layerID, objectID int) {
+	d.w.WriteByte(opPrimitive3DDestroyInstance)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+	d.w.WriteU32(objectID)
+}
+
+func (d *DrawCtx) ClearPrimitive3DLayer(sceneID, layerID int) {
+	d.w.WriteByte(opPrimitive3DClearLayer)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
+}
+
+func (d *DrawCtx) DestroyPrimitive3DLayer(sceneID, layerID int) {
+	d.w.WriteByte(opPrimitive3DDestroyLayer)
+	d.w.WriteU32(sceneID)
+	d.w.WriteU32(layerID)
 }
 
 func (d *DrawCtx) ClearScene3D(sceneID int) {

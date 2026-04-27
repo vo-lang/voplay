@@ -13,14 +13,20 @@ struct ShadowModelUniform {
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec4<f32>,
+    @location(4) color: vec4<f32>,
 };
 
 struct SkinnedVertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @location(3) joint_indices: vec4<u32>,
-    @location(4) joint_weights: vec4<f32>,
+    @location(3) tangent: vec4<f32>,
+    @location(4) color: vec4<f32>,
+    @location(5) joint_indices: vec4<u32>,
+    @location(6) joint_weights: vec4<f32>,
 };
 
 fn skin_matrix(joint_indices: vec4<u32>, joint_weights: vec4<f32>) -> mat4x4<f32> {

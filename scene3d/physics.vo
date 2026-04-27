@@ -34,6 +34,7 @@ type Physics struct {
 	// Runtime state (managed by Scene, not user-set).
 	bodyID   int
 	velocity voplay.Vec3
+	angularVelocity voplay.Vec3
 }
 
 type Trimesh struct {
@@ -145,6 +146,7 @@ const (
 	physicsCmdSetVel  byte = 3
 	physicsCmdSetPos  byte = 4
 	physicsCmdSetRot  byte = 5
+	physicsCmdSetAngVel byte = 6
 )
 
 // writePhysCmd appends a 3D physics command to this scene's command buffer.
@@ -178,7 +180,14 @@ func (e *Entity) ApplyImpulse(impulse voplay.Vec3) {
 
 // SetVelocity sets the linear velocity of a 3D physics entity (buffered until next step).
 func (e *Entity) SetVelocity(vel voplay.Vec3) {
+	e.Physics.velocity = vel
 	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vel.X, vel.Y, vel.Z)
+}
+
+// SetAngularVelocity sets the angular velocity of a 3D physics entity (buffered until next step).
+func (e *Entity) SetAngularVelocity(vel voplay.Vec3) {
+	e.Physics.angularVelocity = vel
+	e.scene.writePhysCmd(physicsCmdSetAngVel, e.Physics.bodyID, vel.X, vel.Y, vel.Z)
 }
 
 // SetPosition teleports the entity to the given world position.
@@ -212,6 +221,12 @@ func (e *Entity) SetScale(s voplay.Vec3) {
 // Panics if the entity has no Physics component.
 func (e *Entity) Velocity() voplay.Vec3 {
 	return e.Physics.velocity
+}
+
+// AngularVelocity returns the current angular velocity (updated after each physics step).
+// Panics if the entity has no Physics component.
+func (e *Entity) AngularVelocity() voplay.Vec3 {
+	return e.Physics.angularVelocity
 }
 
 // serializeBodyDesc encodes a 3D body description for the physics extern.

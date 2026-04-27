@@ -1,0 +1,73 @@
+package scene3d
+
+import "github.com/vo-lang/voplay"
+
+type LightingProfile struct {
+	Ambient voplay.Color
+	AmbientGround voplay.Color
+	Lights []Light
+	Fog FogConfig
+	ColorGrading ColorGradingConfig
+	ShadowsEnabled bool
+	ShadowResolution int
+	ShadowStrength float64
+}
+
+func DefaultColorGradingConfig() ColorGradingConfig {
+	return ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1, Contrast: 1, Saturation: 1}
+}
+
+func KartRacingLightingProfile() LightingProfile {
+	return LightingProfile{
+		Ambient: voplay.Color{R: 0.52, G: 0.64, B: 0.70, A: 1},
+		AmbientGround: voplay.Color{R: 0.22, G: 0.30, B: 0.30, A: 1},
+		Lights: []Light{
+			{Type: DirectionalLight, Direction: voplay.Vec3{X: -0.36, Y: 0.58, Z: -0.73}.Normalize(), Color: voplay.Hex(0xfff2d2), Intensity: 0.92},
+			{Type: DirectionalLight, Direction: voplay.Vec3{X: 0.48, Y: 0.34, Z: 0.2}.Normalize(), Color: voplay.Hex(0x8fc8ff), Intensity: 0.14},
+		},
+		Fog: FogConfig{Mode: FogLinear, Color: voplay.Hex(0xb8e3ef), Start: 180, End: 420},
+		ColorGrading: ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.04, Contrast: 1.04, Saturation: 1.08},
+		ShadowsEnabled: false,
+		ShadowResolution: 2048,
+		ShadowStrength: 0.58,
+	}
+}
+
+func (s *Scene) ApplyLightingProfile(profile LightingProfile) {
+	if s == nil {
+		return
+	}
+	s.Ambient = profile.Ambient
+	s.AmbientGround = normalizeAmbientGround(profile.Ambient, profile.AmbientGround)
+	s.Lights = append([]Light{}, profile.Lights...)
+	s.Fog = profile.Fog
+	s.ColorGrading = normalizeColorGrading(profile.ColorGrading)
+	s.ShadowsEnabled = profile.ShadowsEnabled
+	if profile.ShadowResolution > 0 {
+		s.ShadowResolution = profile.ShadowResolution
+	}
+	s.ShadowStrength = normalizeShadowStrength(profile.ShadowStrength)
+}
+
+func normalizeAmbientGround(ambientSky, ambientGround voplay.Color) voplay.Color {
+	if ambientGround == (voplay.Color{}) {
+		return ambientSky
+	}
+	return ambientGround
+}
+
+func normalizeColorGrading(config ColorGradingConfig) ColorGradingConfig {
+	if config.Exposure <= 0 {
+		config.Exposure = 1
+	}
+	if config.Contrast <= 0 {
+		config.Contrast = 1
+	}
+	if config.Saturation <= 0 {
+		config.Saturation = 1
+	}
+	if config.ToneMap < ToneMapNone || config.ToneMap > ToneMapACES {
+		config.ToneMap = ToneMapNone
+	}
+	return config
+}

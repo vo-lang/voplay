@@ -1,0 +1,167 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+	"github.com/vo-lang/voplay/scene3d"
+)
+
+type stressFrameSample struct {
+	Bytes int
+	CpuMs float64
+	SceneStats scene3d.SceneRenderStats
+	PrimitiveStats primitive3d.Stats
+}
+
+func main() {
+	args := []string{}
+	if len(os.Args) > 1 {
+		args = os.Args[1:]
+	}
+	heavy, count := primitiveStressArgs(args)
+	meshes := &stressPrimitiveMeshBackend{}
+	prev := voplay.SetPrimitiveMeshBackend(meshes)
+	defer voplay.SetPrimitiveMeshBackend(prev)
+	if count > 0 {
+		runPrimitiveStress(primitive3d.StressConfig{Count: count, ShapeVariants: 8, MaterialVariants: 16, ChunkCellSize: 24}, meshes)
+		return
+	}
+	if heavy {
+		runPrimitiveStress(primitive3d.StressConfig{Count: 10000, ShapeVariants: 8, MaterialVariants: 16, ChunkCellSize: 32}, meshes)
+		runPrimitiveStress(primitive3d.StressConfig{Count: 50000, ShapeVariants: 8, MaterialVariants: 16, ChunkCellSize: 40}, meshes)
+		return
+	}
+	runPrimitiveStress(primitive3d.StressConfig{Count: 128, ShapeVariants: 4, MaterialVariants: 8, ChunkCellSize: 16}, meshes)
+	runPrimitiveStress(primitive3d.StressConfig{Count: 512, ShapeVariants: 8, MaterialVariants: 16, ChunkCellSize: 24}, meshes)
+	runPrimitiveStress(primitive3d.StressConfig{Count: 10000, ShapeVariants: 8, MaterialVariants: 16, ChunkCellSize: 32}, meshes)
+}
+
+func primitiveStressArgs(args []string) (bool, int) {
+	heavy := false
+	count := 0
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-heavy" || arg == "--heavy" {
+			heavy = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-count=") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(arg, "-count=")); err == nil {
+				count = n
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--count=") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(arg, "--count=")); err == nil {
+				count = n
+			}
+			continue
+		}
+		if (arg == "-count" || arg == "--count") && i + 1 < len(args) {
+			if n, err := strconv.Atoi(args[i + 1]); err == nil {
+				count = n
+			}
+			i++
+		}
+	}
+	return heavy, count
+}
+
+func runPrimitiveStress(config primitive3d.StressConfig, meshes *stressPrimitiveMeshBackend) {
+	meshCallsBefore := meshes.calls
+	fixture := primitive3d.NewStressFixture(config)
+	scene := scene3d.New()
+	defer scene.Close()
+	scene.AddPrimitiveLayer(fixture.Layer)
+	configureStressCamera(scene, fixture.Bounds)
+	first := drawStressFrame(scene)
+	steady := drawStressFrame(scene)
+	scene.Camera.Position.X += 0.5
+	scene.Camera.Target.X += 0.5
+	moved := drawStressFrame(scene)
+	fmt.Println("VO:PRIMITIVE_STRESS count=" + fmt.Sprint(fixture.Layer.Stats().TotalInstances) + " shapes=" + fmt.Sprint(len(fixture.ShapeIDs)) + " materials=" + fmt.Sprint(len(fixture.MaterialIDs)) + " chunks=" + fmt.Sprint(first.PrimitiveStats.TotalChunks) + " visibleChunks=" + fmt.Sprint(first.PrimitiveStats.VisibleChunks) + " meshCreates=" + fmt.Sprint(meshes.calls - meshCallsBefore) + " firstBytes=" + fmt.Sprint(first.Bytes) + " steadyBytes=" + fmt.Sprint(steady.Bytes) + " movedBytes=" + fmt.Sprint(moved.Bytes) + " firstUpserts=" + fmt.Sprint(first.SceneStats.UpsertedObjects) + " steadyUpserts=" + fmt.Sprint(steady.SceneStats.UpsertedObjects) + " movedUpserts=" + fmt.Sprint(moved.SceneStats.UpsertedObjects) + " firstCpuMs=" + formatMs(first.CpuMs) + " steadyCpuMs=" + formatMs(steady.CpuMs) + " movedCpuMs=" + formatMs(moved.CpuMs))
+}
+
+func drawStressFrame(scene *scene3d.Scene) stressFrameSample {
+	draw := voplay.NewDrawCtx()
+	start := time.Now()
+	scene.Draw(draw)
+	cpuMs := float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0
+	return stressFrameSample{Bytes: len(draw.Bytes()), CpuMs: cpuMs, SceneStats: scene.RenderStats(), PrimitiveStats: scene.PrimitiveStats()}
+}
+
+func configureStressCamera(scene *scene3d.Scene, bounds voplay.AABB) {
+	center := bounds.Center()
+	size := bounds.Size()
+	span := size.X
+	if size.Z > span {
+		span = size.Z
+	}
+	if span < 20 {
+		span = 20
+	}
+	scene.Camera.Position = center.Add(voplay.Vec3{Y: span * 0.8 + 120, Z: span * 0.85 + 120})
+	scene.Camera.Target = center
+	scene.Camera.Up = voplay.Vec3{Y: 1}
+	scene.Camera.Fov = 105
+	scene.Camera.Near = 0.1
+	scene.Camera.Far = span * 4 + 500
+	scene.Ambient = voplay.Color{R: 0.52, G: 0.58, B: 0.64, A: 1}
+	scene.AmbientGround = voplay.Color{R: 0.22, G: 0.24, B: 0.20, A: 1}
+	scene.Lights = []scene3d.Light{scene3d.Light{Type: scene3d.DirectionalLight, Direction: voplay.Vec3{X: -0.45, Y: -0.9, Z: -0.25}, Color: voplay.White, Intensity: 2.2}}
+}
+
+func formatMs(v float64) string {
+	return strconv.FormatFloat(v, 'f', 3, 64)
+}
+
+type stressPrimitiveMeshBackend struct {
+	nextID int
+	calls int
+}
+
+func (b *stressPrimitiveMeshBackend) alloc() int {
+	if b.nextID == 0 {
+		b.nextID = 9000
+	}
+	b.nextID++
+	b.calls++
+	return b.nextID
+}
+
+func (b *stressPrimitiveMeshBackend) Plane(width, depth float64, subX, subZ int) int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Cube() int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) RoundedBox(bevelRadius float64, segments int) int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Sphere(segments int) int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Cylinder(segments int) int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Cone(segments int) int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Wedge() int {
+	return b.alloc()
+}
+
+func (b *stressPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius float64) int {
+	return b.alloc()
+}

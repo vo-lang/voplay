@@ -1,0 +1,206 @@
+package scene3d
+
+import (
+	"encoding/json"
+	"errors"
+	"path/filepath"
+)
+
+const TrackBakeManifestPath = ".vopack/manifest.json"
+
+type TrackBakeResource struct {
+	Path string
+	Kind string
+}
+
+type TrackBakeOutput struct {
+	TrackPath string
+	GeneratedManifestPath string
+	Resources []TrackBakeResource
+	HasTerrain bool
+	HasVisualTrackMesh bool
+	HasCollisionTrackMesh bool
+	HasSurfaceMetadata bool
+	HasGateMetadata bool
+	HasRespawnMetadata bool
+}
+
+func BuildTrackBakeOutput(trackPath string, asset *TrackAsset) TrackBakeOutput {
+	out := TrackBakeOutput{
+		TrackPath: trackPath,
+		GeneratedManifestPath: TrackBakeManifestPath,
+		Resources: []TrackBakeResource{},
+	}
+	if trackPath == "" || asset == nil {
+		return out
+	}
+	baseDir := filepath.Dir(trackPath)
+	if asset.Terrain != nil {
+		out.HasTerrain = true
+		if asset.Terrain.Heightmap != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, asset.Terrain.Heightmap), "terrain-heightmap")
+		}
+		if asset.Terrain.Texture != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, asset.Terrain.Texture), "terrain-texture")
+		}
+		if asset.Terrain.Normal != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, asset.Terrain.Normal), "terrain-normal")
+		}
+		if asset.Terrain.MetallicRoughness != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, asset.Terrain.MetallicRoughness), "terrain-metallic-roughness")
+		}
+		out = appendTerrainSplatBakeResources(out, baseDir, asset.Terrain.Splat)
+	}
+	for _, terrain := range asset.TerrainChunks {
+		out.HasTerrain = true
+		if terrain.Heightmap != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, terrain.Heightmap), "terrain-heightmap")
+		}
+		if terrain.Texture != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, terrain.Texture), "terrain-texture")
+		}
+		if terrain.Normal != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, terrain.Normal), "terrain-normal")
+		}
+		if terrain.MetallicRoughness != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, terrain.MetallicRoughness), "terrain-metallic-roughness")
+		}
+		out = appendTerrainSplatBakeResources(out, baseDir, terrain.Splat)
+	}
+	for _, mesh := range asset.Meshes {
+		if mesh.Model != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, mesh.Model), "visual-track-mesh")
+			if !mesh.Hidden {
+				out.HasVisualTrackMesh = true
+			}
+		}
+		collision := mesh.CollisionModel
+		if collision == "" && mesh.Hidden && mesh.Model != "" {
+			collision = mesh.Model
+		}
+		if collision != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, collision), "collision-track-mesh")
+			out.HasCollisionTrackMesh = true
+		}
+	}
+	out.HasSurfaceMetadata = len(asset.Surfaces) > 0
+	out.HasGateMetadata = len(asset.Gates) > 0
+	out.HasRespawnMetadata = len(asset.Respawns) > 0
+	return out
+}
+
+func ValidateTrackBakeOutput(asset *TrackAsset, out TrackBakeOutput) []TrackIssue {
+	issues := ValidateTrackAsset(asset)
+	if out.TrackPath == "" {
+		issues = appendTrackIssue(issues, "track.bake.track", TrackIssueError, "trackPath", "baked output must include track.json")
+	}
+	if out.GeneratedManifestPath == "" {
+		issues = appendTrackIssue(issues, "track.bake.manifest", TrackIssueError, "generatedManifestPath", "baked output must include generated manifest")
+	}
+	if !out.HasTerrain {
+		issues = appendTrackIssue(issues, "track.bake.terrain", TrackIssueError, "terrain", "baked output must include terrain heightmap or terrain chunks")
+	}
+	if !out.HasVisualTrackMesh {
+		issues = appendTrackIssue(issues, "track.bake.visual_mesh", TrackIssueError, "meshes", "baked output must include a visible visual track mesh")
+	}
+	if !out.HasCollisionTrackMesh {
+		issues = appendTrackIssue(issues, "track.bake.collision_mesh", TrackIssueError, "meshes", "baked output must include a collision track mesh")
+	}
+	if !out.HasSurfaceMetadata {
+		issues = appendTrackIssue(issues, "track.bake.surfaces", TrackIssueError, "surfaces", "baked output must include surface metadata")
+	}
+	if !out.HasGateMetadata {
+		issues = appendTrackIssue(issues, "track.bake.gates", TrackIssueError, "gates", "baked output must include gate metadata")
+	}
+	if !out.HasRespawnMetadata {
+		issues = appendTrackIssue(issues, "track.bake.respawns", TrackIssueError, "respawns", "baked output must include respawn metadata")
+	}
+	if len(out.Resources) == 0 {
+		issues = appendTrackIssue(issues, "track.bake.resources", TrackIssueError, "resources", "baked output must include runtime resource files")
+	}
+	return issues
+}
+
+func MarshalBakedTrackAsset(asset *TrackAsset) ([]byte, error) {
+	issues := ValidateTrackAsset(asset)
+	if trackHasErrors(issues) {
+		return nil, trackIssuesError("scene3d.MarshalBakedTrackAsset", issues)
+	}
+	return json.MarshalIndent(asset, "", "  ")
+}
+
+func TrackBakeDependencies(out TrackBakeOutput, requester string) []string {
+	if requester != out.TrackPath {
+		return nil
+	}
+	deps := make([]string, 0, len(out.Resources))
+	seen := map[string]bool{}
+	for _, r := range out.Resources {
+		if r.Path != "" && !seen[r.Path] {
+			seen[r.Path] = true
+			deps = append(deps, r.Path)
+		}
+	}
+	return deps
+}
+
+func AddTrackBakeResource(out TrackBakeOutput, path, kind string) TrackBakeOutput {
+	return appendTrackBakeResource(out, path, kind)
+}
+
+func RequireValidTrackBakeOutput(asset *TrackAsset, out TrackBakeOutput) error {
+	issues := ValidateTrackBakeOutput(asset, out)
+	if trackHasErrors(issues) {
+		return trackIssuesError("scene3d.RequireValidTrackBakeOutput", issues)
+	}
+	return nil
+}
+
+func appendTrackBakeResource(out TrackBakeOutput, path, kind string) TrackBakeOutput {
+	if path == "" {
+		return out
+	}
+	for _, existing := range out.Resources {
+		if existing.Path == path {
+			return out
+		}
+	}
+	out.Resources = append(out.Resources, TrackBakeResource{Path: path, Kind: kind})
+	return out
+}
+
+func appendTerrainSplatBakeResources(out TrackBakeOutput, baseDir string, splat *MapTerrainSplat) TrackBakeOutput {
+	if splat == nil {
+		return out
+	}
+	if splat.Control != "" {
+		out = appendTrackBakeResource(out, mapResolvePath(baseDir, splat.Control), "terrain-splat-control")
+	}
+	for _, layer := range splat.Layers {
+		if layer.Texture != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, layer.Texture), "terrain-splat-texture")
+		}
+		if layer.Normal != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, layer.Normal), "terrain-splat-normal")
+		}
+		if layer.MetallicRoughness != "" {
+			out = appendTrackBakeResource(out, mapResolvePath(baseDir, layer.MetallicRoughness), "terrain-splat-metallic-roughness")
+		}
+	}
+	return out
+}
+
+func EnsureBakedTrackJSONStable(asset *TrackAsset) error {
+	a, err := MarshalBakedTrackAsset(asset)
+	if err != nil {
+		return err
+	}
+	b, err := MarshalBakedTrackAsset(asset)
+	if err != nil {
+		return err
+	}
+	if string(a) != string(b) {
+		return errors.New("scene3d.EnsureBakedTrackJSONStable: deterministic marshal mismatch")
+	}
+	return nil
+}

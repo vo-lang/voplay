@@ -2,29 +2,36 @@
 // These wrap voplay.DrawCtx methods with scene3d types (Scene, Light).
 package scene3d
 
+import "math"
+import "strconv"
+import "time"
 import "github.com/vo-lang/voplay"
 
 // SetLights encodes the lighting state for subsequent 3D draw commands.
-func SetLights(d *voplay.DrawCtx, ambient voplay.Color, lights []Light) {
-	d.SetLights3D(ambient, lights)
+func SetLights(d *voplay.DrawCtx, ambientSky, ambientGround voplay.Color, lights []Light) {
+	d.SetLights3D(ambientSky, ambientGround, lights)
 }
 
 func (s *Scene) writeFrame3DState(d *voplay.DrawCtx) {
 	c := &s.Camera
 	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
-	d.SetShadow3D(s.ShadowsEnabled, s.ShadowResolution)
+	d.SetShadow3D(s.ShadowsEnabled, s.ShadowResolution, normalizeShadowStrength(s.ShadowStrength))
 	if s.Skybox != 0 {
 		d.DrawSkybox(s.Skybox)
 	}
-	SetLights(d, s.Ambient, s.Lights)
+	SetLights(d, s.Ambient, normalizeAmbientGround(s.Ambient, s.AmbientGround), s.Lights)
 	if s.Fog.Mode != voplay.FogNone {
 		d.SetFog3D(s.Fog.Mode, s.Fog.Color, s.Fog.Start, s.Fog.End, s.Fog.Density)
 	}
+	grading := normalizeColorGrading(s.ColorGrading)
+	d.SetColorGrading3D(grading.ToneMap, grading.Exposure, grading.Contrast, grading.Saturation)
+	d.SetRenderDebug3D(s.RenderDebugMode)
 }
 
 func (e *Entity) renderObjectNeedsUpsert(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) bool {
 	return !e.renderObjectCreated ||
 		e.renderLastModel != model ||
+		e.renderLastMaterial != e.Material ||
 		e.renderLastPosition != e.position ||
 		e.renderLastRotation != e.rotation ||
 		e.renderLastScale != e.scale ||
@@ -37,6 +44,7 @@ func (e *Entity) renderObjectNeedsUpsert(model voplay.ModelID, visible bool, ani
 func (e *Entity) rememberRenderedObject(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) {
 	e.renderObjectCreated = true
 	e.renderLastModel = model
+	e.renderLastMaterial = e.Material
 	e.renderLastPosition = e.position
 	e.renderLastRotation = e.rotation
 	e.renderLastScale = e.scale
@@ -47,6 +55,9 @@ func (e *Entity) rememberRenderedObject(model voplay.ModelID, visible bool, anim
 }
 
 func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
+	start := time.Now()
+	stats := SceneRenderStats{}
+	batchGroups := map[string]bool{}
 	if !s.renderSceneCreated {
 		s.renderSceneCreated = true
 	}
@@ -56,6 +67,7 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 	}
 	for _, id := range s.renderDestroyedIDs {
 		d.DestroyScene3DObject(s.renderSceneID, id)
+		stats.DestroyedObjects++
 	}
 	s.renderDestroyedIDs = s.renderDestroyedIDs[:0]
 
@@ -63,13 +75,16 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 		if !n.Active {
 			continue
 		}
+		stats.ActiveEntities++
 		if n.Model == 0 {
 			if n.renderObjectCreated {
 				d.DestroyScene3DObject(s.renderSceneID, n.id)
 				n.renderObjectCreated = false
+				stats.DestroyedObjects++
 			}
 			continue
 		}
+		stats.ModelEntities++
 
 		n.ensureHasSkeleton()
 		animationWorldID := 0
@@ -78,7 +93,18 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 			animationWorldID = s.animationWorldID
 			animationTargetID = n.animationTargetID
 		}
-		visible := n.Visible
+		culled := s.entityCulled(n)
+		visible := n.Visible && !culled
+		if visible {
+			stats.VisibleEntities++
+		}
+		if culled {
+			stats.CulledEntities++
+		}
+		if visible && n.StaticRenderable && !n.hasSkeleton {
+			stats.BatchEligibleObjects++
+			batchGroups[sceneRenderBatchKey(n)] = true
+		}
 		if !n.renderObjectNeedsUpsert(n.Model, visible, animationWorldID, animationTargetID) {
 			continue
 		}
@@ -89,18 +115,93 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 			n.position,
 			n.rotation,
 			n.scale,
-			n.Tint,
+			n.Material,
 			visible,
 			animationWorldID,
 			animationTargetID,
 		)
+		stats.UpsertedObjects++
 		n.rememberRenderedObject(n.Model, visible, animationWorldID, animationTargetID)
 	}
+	s.flushPrimitiveLayers(d, &stats, batchGroups)
+	stats.BatchGroups = len(batchGroups)
+	stats.FlushCpuMs = float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0
+	s.renderStats = stats
+}
+
+func (s *Scene) entityCulled(e *Entity) bool {
+	if e == nil {
+		return true
+	}
+	if e.CullDistance > 0 && e.position.Distance(s.Camera.Position)-e.CullRadius > e.CullDistance {
+		return true
+	}
+	if e.FrustumCull && !s.cameraSeesSphere(e.position, e.CullRadius) {
+		return true
+	}
+	return false
+}
+
+func (s *Scene) cameraSeesSphere(center voplay.Vec3, radius float64) bool {
+	forward := s.Camera.Target.Sub(s.Camera.Position).Normalize()
+	if forward.LengthSq() <= 0.000001 {
+		return true
+	}
+	toCenter := center.Sub(s.Camera.Position)
+	dist := toCenter.Length()
+	if dist <= radius {
+		return true
+	}
+	depth := toCenter.Dot(forward)
+	if depth < -radius || depth > s.Camera.Far+radius {
+		return false
+	}
+	halfFov := s.Camera.Fov * math.Pi / 360.0
+	if halfFov <= 0 {
+		halfFov = math.Pi / 6
+	}
+	dir := toCenter.Normalize()
+	angle := math.Acos(sceneClamp(dir.Dot(forward), -1, 1))
+	padding := math.Asin(sceneClamp(radius/dist, 0, 1))
+	return angle <= halfFov*1.35+padding
+}
+
+func sceneRenderBatchKey(e *Entity) string {
+	m := e.Material
+	return strconv.Itoa(int(e.Model)) + ":" +
+		strconv.Itoa(int(m.ID)) + ":" +
+		strconv.Itoa(int(m.Albedo)) + ":" +
+		strconv.Itoa(int(m.Normal)) + ":" +
+		strconv.Itoa(int(m.MetallicRoughness)) + ":" +
+		strconv.Itoa(int(m.Emissive)) + ":" +
+		strconv.Itoa(int(m.ToonRamp)) + ":" +
+		strconv.FormatFloat(m.NormalScale, 'f', 3, 64) + ":" +
+		strconv.Itoa(m.ShadingMode) + ":" +
+		strconv.Itoa(m.WrapMode) + ":" +
+		strconv.Itoa(m.FilterMode)
+}
+
+func sceneClamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func normalizeShadowStrength(strength float64) float64 {
+	if strength <= 0 {
+		return 1
+	}
+	return sceneClamp(strength, 0, 1)
 }
 
 // Draw renders the entire 3D scene: camera, lights, then all visible entities.
 // Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
 func (s *Scene) Draw(d *voplay.DrawCtx) {
+	start := time.Now()
 	s.writeFrame3DState(d)
 	s.flushRenderScene(d)
 	d.DrawScene3D(s.renderSceneID)
@@ -108,4 +209,7 @@ func (s *Scene) Draw(d *voplay.DrawCtx) {
 		emitter.Draw(d)
 	}
 	d.ResetCamera()
+	stats := s.renderStats
+	stats.FrameCpuMs = float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0
+	s.renderStats = stats
 }

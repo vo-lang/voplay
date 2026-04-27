@@ -1,0 +1,120 @@
+package primitive3d
+
+import "github.com/vo-lang/voplay"
+
+type ShapeID int
+type MaterialID int
+type ObjectID int
+type LayerHandle int
+type InstanceFlags int
+
+type ShapeKind int
+
+const (
+	ShapeRoundedBox ShapeKind = 1
+	ShapeBox        ShapeKind = 2
+	ShapeSphere     ShapeKind = 3
+	ShapeCylinder   ShapeKind = 4
+	ShapeCone       ShapeKind = 5
+	ShapeCapsule    ShapeKind = 6
+	ShapePlane      ShapeKind = 7
+	ShapeWedge      ShapeKind = 8
+)
+
+type MaterialPreset int
+
+const (
+	MaterialToyPlastic  MaterialPreset = 1
+	MaterialRubber      MaterialPreset = 2
+	MaterialRoadAsphalt MaterialPreset = 3
+	MaterialGrass       MaterialPreset = 4
+	MaterialStone       MaterialPreset = 5
+	MaterialWater       MaterialPreset = 6
+	MaterialGlow        MaterialPreset = 7
+	MaterialWood        MaterialPreset = 8
+)
+
+type LayerKind int
+
+const (
+	StaticLayer      LayerKind = 1
+	DynamicLayer     LayerKind = 2
+	TransparentLayer LayerKind = 3
+)
+
+type ShapeDesc struct {
+	Kind        ShapeKind
+	Segments    int
+	Radius      float64
+	BevelRadius float64
+	Width       float64
+	Height      float64
+	Depth       float64
+	SubX        int
+	SubZ        int
+}
+
+type MaterialDesc struct {
+	Preset MaterialPreset
+	Base   voplay.MaterialDesc
+	Name   string
+}
+
+type MaterialEntry struct {
+	ID       MaterialID
+	Material voplay.MaterialDesc
+	Name     string
+}
+
+type ShapeEntry struct {
+	ID    ShapeID
+	Model voplay.ModelID
+}
+
+type Instance struct {
+	Shape    ShapeID
+	Material MaterialID
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Scale    voplay.Vec3
+	Tint     voplay.Color
+	Flags    InstanceFlags
+	Object   ObjectID
+}
+
+type ChunkingDesc struct {
+	CellSize float64
+}
+
+type Chunk struct {
+	ID      int
+	Bounds  voplay.AABB
+	Objects []ObjectID
+}
+
+type LayerDesc struct {
+	Kind      LayerKind
+	Shapes    *ShapeRegistry
+	Materials *MaterialPalette
+	Chunking  ChunkingDesc
+	Name      string
+}
+
+type Stats struct {
+	TotalInstances     int
+	VisibleInstances   int
+	TotalChunks        int
+	VisibleChunks      int
+	DirtyRanges        int
+	ShapeMaterialGroups int
+	DrawCalls          int
+	UploadBytes        int
+}
+
+type PickHit struct {
+	Layer    LayerHandle
+	Object   ObjectID
+	Position voplay.Vec3
+	Normal   voplay.Vec3
+	Distance float64
+}

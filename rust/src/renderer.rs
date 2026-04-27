@@ -565,6 +565,7 @@ impl Renderer {
     /// Free a texture by ID.
     pub fn free_texture(&mut self, id: TextureId) {
         self.texture_manager.free(id);
+        self.clear_texture_bind_group_caches();
     }
 
     pub fn free_cubemap(&mut self, id: u32) {
@@ -602,6 +603,11 @@ impl Renderer {
             lights.fog_color[2] + (tint[2] - lights.fog_color[2]) * factor,
             tint[3],
         ]
+    }
+
+    fn clear_texture_bind_group_caches(&mut self) {
+        self.pipeline3d.clear_texture_bind_group_cache();
+        self.primitive_pipeline.clear_texture_bind_group_cache();
     }
 
     /// Check if the canvas CSS size has changed and reconfigure the surface.
@@ -1395,6 +1401,7 @@ impl Renderer {
                     let shadow_dir = (-shadow_to_light).normalize();
                     if shadow_dir.length() > 0.0 {
                         if self.pipeline_shadow.size() != shadow_resolution {
+                            self.clear_texture_bind_group_caches();
                             self.pipeline_shadow.resize(&self.device, shadow_resolution);
                         }
                         let inv_view_proj =

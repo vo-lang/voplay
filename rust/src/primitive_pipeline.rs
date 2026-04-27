@@ -154,6 +154,7 @@ pub struct PrimitivePipeline {
     white_texture_view: wgpu::TextureView,
     resident_chunks: HashMap<PrimitiveChunkRef, ResidentPrimitiveChunk>,
     object_chunks: HashMap<PrimitiveObjectKey, PrimitiveChunkRef>,
+    texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
 }
 
 impl PrimitivePipeline {
@@ -466,7 +467,12 @@ impl PrimitivePipeline {
             white_texture_view,
             resident_chunks: HashMap::new(),
             object_chunks: HashMap::new(),
+            texture_bind_groups: HashMap::new(),
         }
+    }
+
+    pub fn clear_texture_bind_group_cache(&mut self) {
+        self.texture_bind_groups.clear();
     }
 
     pub fn set_camera_and_lights(
@@ -637,10 +643,7 @@ impl PrimitivePipeline {
         if draws.is_empty() && chunk_refs.is_empty() {
             return;
         }
-        let mut texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup> = HashMap::new();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.model_bind_group, &[0]);
-        pass.set_bind_group(2, &self.light_bind_group, &[]);
+        let mut batch_draws: Vec<PrimitiveBatchDraw> = Vec::new();
         if !draws.is_empty() {
             let mut batches: Vec<PrimitiveBatch> = Vec::new();
             let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
@@ -687,7 +690,7 @@ impl PrimitivePipeline {
             if instance_count > 0 {
                 self.ensure_instance_capacity(device, instance_count);
                 let mut instance_data = Vec::with_capacity(instance_count as usize);
-                let mut batch_draws = Vec::with_capacity(batches.len());
+                batch_draws = Vec::with_capacity(batches.len());
                 for batch in &batches {
                     let start = instance_data.len() as u32;
                     instance_data.extend_from_slice(&batch.instances);
@@ -702,61 +705,50 @@ impl PrimitivePipeline {
                     0,
                     bytemuck::cast_slice(&instance_data),
                 );
-
-                let instance_stride = std::mem::size_of::<PrimitiveInstanceGpu>() as u64;
-
-                for batch in &batch_draws {
-                    let Some(gpu_model) = models.get(batch.key.model_id) else {
-                        continue;
-                    };
-                    let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
-                        continue;
-                    };
-                    let texture_key = batch.key.textures;
-                    let texture_bind_group =
-                        texture_bind_groups.entry(texture_key).or_insert_with(|| {
-                            self.create_texture_bind_group(
-                                device,
-                                textures,
-                                texture_key,
-                                shadow_view,
-                            )
-                        });
-                    if texture_key.has_albedo() {
-                        pass.set_pipeline(&self.pipeline_textured);
-                    } else {
-                        pass.set_pipeline(&self.pipeline_untextured);
-                    }
-                    pass.set_bind_group(3, &*texture_bind_group, &[]);
-                    let start = batch.start as u64 * instance_stride;
-                    let end = start + batch.count as u64 * instance_stride;
-                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
-                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
-                }
             }
         }
-        self.draw_resident_chunks(
-            device,
-            pass,
-            chunk_refs,
-            models,
-            textures,
-            shadow_view,
-            &mut texture_bind_groups,
-        );
+        for batch in &batch_draws {
+            self.ensure_texture_bind_group(device, textures, batch.key.textures, shadow_view);
+        }
+        self.ensure_resident_chunk_texture_bind_groups(device, textures, shadow_view, chunk_refs);
+
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.model_bind_group, &[0]);
+        pass.set_bind_group(2, &self.light_bind_group, &[]);
+        let instance_stride = std::mem::size_of::<PrimitiveInstanceGpu>() as u64;
+        for batch in &batch_draws {
+            let Some(gpu_model) = models.get(batch.key.model_id) else {
+                continue;
+            };
+            let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
+                continue;
+            };
+            let texture_key = batch.key.textures;
+            let texture_bind_group = self
+                .texture_bind_groups
+                .get(&texture_key)
+                .expect("primitive texture bind group cache missing");
+            if texture_key.has_albedo() {
+                pass.set_pipeline(&self.pipeline_textured);
+            } else {
+                pass.set_pipeline(&self.pipeline_untextured);
+            }
+            pass.set_bind_group(3, texture_bind_group, &[]);
+            let start = batch.start as u64 * instance_stride;
+            let end = start + batch.count as u64 * instance_stride;
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
+        }
+        self.draw_resident_chunks(pass, chunk_refs, models);
     }
 
     fn draw_resident_chunks<'a>(
         &'a self,
-        device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'a>,
         chunk_refs: &[PrimitiveChunkRef],
         models: &'a ModelManager,
-        textures: &'a TextureManager,
-        shadow_view: &'a wgpu::TextureView,
-        texture_bind_groups: &mut HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
     ) {
         for chunk_ref in chunk_refs {
             let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
@@ -770,10 +762,10 @@ impl PrimitivePipeline {
                     continue;
                 };
                 let texture_key = batch.key.textures;
-                let texture_bind_group =
-                    texture_bind_groups.entry(texture_key).or_insert_with(|| {
-                        self.create_texture_bind_group(device, textures, texture_key, shadow_view)
-                    });
+                let texture_bind_group = self
+                    .texture_bind_groups
+                    .get(&texture_key)
+                    .expect("primitive resident texture bind group cache missing");
                 if texture_key.has_albedo() {
                     pass.set_pipeline(&self.pipeline_textured);
                 } else {
@@ -995,6 +987,41 @@ impl PrimitivePipeline {
             .get(texture_id)
             .map(|texture| &texture.view)
             .unwrap_or(&self.white_texture_view)
+    }
+
+    fn ensure_resident_chunk_texture_bind_groups(
+        &mut self,
+        device: &wgpu::Device,
+        textures: &TextureManager,
+        shadow_view: &wgpu::TextureView,
+        chunk_refs: &[PrimitiveChunkRef],
+    ) {
+        let mut keys = Vec::new();
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for batch in &chunk.batches {
+                keys.push(batch.key.textures);
+            }
+        }
+        for key in keys {
+            self.ensure_texture_bind_group(device, textures, key, shadow_view);
+        }
+    }
+
+    fn ensure_texture_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        textures: &TextureManager,
+        key: PrimitiveTextureKey,
+        shadow_view: &wgpu::TextureView,
+    ) {
+        if self.texture_bind_groups.contains_key(&key) {
+            return;
+        }
+        let bind_group = self.create_texture_bind_group(device, textures, key, shadow_view);
+        self.texture_bind_groups.insert(key, bind_group);
     }
 }
 

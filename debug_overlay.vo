@@ -10,43 +10,148 @@ package voplay
 
 import "strconv"
 
+const (
+	debugSlowFrameCacheSize = 8
+	debugSlowLogCooldownFrames = 120
+)
+
+type debugSlowFrame struct {
+	Frame int
+	Reason string
+	FrameMs float64
+	LogicMs float64
+	InputMs float64
+	AdvanceMs float64
+	DrawMs float64
+	OverlayMs float64
+	DrawBytes int
+	SubmitBytes int
+	FixedSteps int
+}
+
+type DebugOverlayStats struct {
+	Enabled bool
+	TargetFrameRate int
+	FrameBudgetMs float64
+	SlowFrameThresholdMs float64
+	SlowLogicThresholdMs float64
+	FPS float64
+	FrameMs float64
+	LogicMs float64
+	InputMs float64
+	AdvanceMs float64
+	DrawMs float64
+	OverlayMs float64
+	MaxFrameMs float64
+	MaxLogicMs float64
+	DrawBytes int
+	SubmitBytes int
+	FixedSteps int
+	SlowFrames int
+	SlowLogs int
+	LastSlowFrameMs float64
+	LastSlowLogicMs float64
+	LastSlowReason string
+}
+
 // DebugOverlay tracks per-frame performance metrics and renders a HUD.
 type DebugOverlay struct {
 	enabled bool
+	targetFrameRate int
+	frameBudgetMs float64
+	slowFrameThresholdMs float64
+	slowLogicThresholdMs float64
 
 	// Rolling window for FPS smoothing.
 	frameTimes [60]float64
 	frameIdx   int
 	frameCount int
+	frameSeq int
 
 	// Latest computed metrics.
 	fps       float64
 	frameMs   float64 // total frame-to-frame time (ms)
 	logicMs   float64 // logic processing time (ms): input + advance + draw
+	inputMs float64
+	advanceMs float64
+	drawMs float64
+	overlayMs float64
+	maxFrameMs float64
+	maxLogicMs float64
+	drawBytes int
+	submitBytes int
+	fixedSteps int
+	slowFrames int
+	slowLogs int
+	slowLogCooldown int
+	slowCache [8]debugSlowFrame
+	slowCacheNext int
+	slowCacheCount int
+	lastSlow debugSlowFrame
 
 	// Display strings (updated every N frames to avoid flicker).
 	dispFPS      string
 	dispFrameMs  string
 	dispLogicMs  string
 	dispLogicFPS string
+	dispBudget string
+	dispBytes string
+	dispFixed string
+	dispPhases string
+	dispSlow string
+	dispMax string
 	dispCounter  int
 }
 
-func newDebugOverlay() *DebugOverlay {
+func newDebugOverlay(targetFrameRate int) *DebugOverlay {
+	budgetMs := 16.6667
+	if targetFrameRate > 0 {
+		budgetMs = 1000.0 / float64(targetFrameRate)
+	}
+	slowFrameThresholdMs := budgetMs * 2.0
+	if slowFrameThresholdMs < 18 {
+		slowFrameThresholdMs = 18
+	}
+	slowLogicThresholdMs := budgetMs * 1.25
+	if slowLogicThresholdMs < 10 {
+		slowLogicThresholdMs = 10
+	}
 	return &DebugOverlay{
+		targetFrameRate: targetFrameRate,
+		frameBudgetMs: budgetMs,
+		slowFrameThresholdMs: slowFrameThresholdMs,
+		slowLogicThresholdMs: slowLogicThresholdMs,
 		dispFPS:     "-- fps",
 		dispFrameMs: "-- ms",
 		dispLogicMs: "-- ms",
 		dispLogicFPS: "-- hz",
+		dispBudget: "budget " + formatDebugMs(budgetMs),
+		dispBytes: "draw -- / submit --",
+		dispFixed: "fixed --",
+		dispPhases: "phase input/update/draw/overlay --",
+		dispSlow: "slow 0",
+		dispMax: "max -- / --",
 	}
 }
 
 // recordFrame updates metrics after a frame completes.
 // dt is the frame-to-frame interval in seconds.
 // logicNs is the logic processing time in nanoseconds.
-func (o *DebugOverlay) recordFrame(dt float64, logicNs int64) {
+func (o *DebugOverlay) recordFrame(dt float64, logicNs int64, fixedSteps int, drawBytes int, inputNs int64, advanceNs int64, drawNs int64) {
+	o.frameSeq++
 	o.frameMs = dt * 1000.0
 	o.logicMs = float64(logicNs) / 1e6
+	o.inputMs = float64(inputNs) / 1e6
+	o.advanceMs = float64(advanceNs) / 1e6
+	o.drawMs = float64(drawNs) / 1e6
+	o.fixedSteps = fixedSteps
+	o.drawBytes = drawBytes
+	if o.frameMs > o.maxFrameMs {
+		o.maxFrameMs = o.frameMs
+	}
+	if o.logicMs > o.maxLogicMs {
+		o.maxLogicMs = o.logicMs
+	}
 
 	// Rolling window.
 	o.frameTimes[o.frameIdx] = dt
@@ -75,7 +180,91 @@ func (o *DebugOverlay) recordFrame(dt float64, logicNs int64) {
 			logicFPS := 1000.0 / o.logicMs
 			o.dispLogicFPS = strconv.FormatFloat(logicFPS, 'f', 0, 64) + " hz"
 		}
+		o.dispBudget = "budget " + formatDebugMs(o.frameBudgetMs) + " slow>" + formatDebugMs(o.slowFrameThresholdMs)
+		o.dispBytes = "draw " + formatDebugBytes(o.drawBytes) + " / submit " + formatDebugBytes(o.submitBytes)
+		o.dispFixed = "fixed steps " + strconv.Itoa(o.fixedSteps)
+		o.dispPhases = "phase i/a/d/o " + formatDebugMs(o.inputMs) + "/" + formatDebugMs(o.advanceMs) + "/" + formatDebugMs(o.drawMs) + "/" + formatDebugMs(o.overlayMs)
+		o.dispSlow = "slow " + strconv.Itoa(o.slowFrames) + " logs " + strconv.Itoa(o.slowLogs)
+		if o.slowFrames > 0 {
+			o.dispSlow = o.dispSlow + " last " + o.lastSlow.Reason + " " + formatDebugMs(o.lastSlow.FrameMs)
+		}
+		o.dispMax = "max frame " + formatDebugMs(o.maxFrameMs) + " logic " + formatDebugMs(o.maxLogicMs)
 	}
+}
+
+func (o *DebugOverlay) recordOverlayTime(overlayNs int64) {
+	o.overlayMs = float64(overlayNs) / 1e6
+}
+
+func (o *DebugOverlay) recordSubmittedBytes(submitBytes int) {
+	o.submitBytes = submitBytes
+	o.recordSlowFrameIfNeeded()
+}
+
+func (o *DebugOverlay) snapshot() DebugOverlayStats {
+	return DebugOverlayStats{
+		Enabled: o.enabled,
+		TargetFrameRate: o.targetFrameRate,
+		FrameBudgetMs: o.frameBudgetMs,
+		SlowFrameThresholdMs: o.slowFrameThresholdMs,
+		SlowLogicThresholdMs: o.slowLogicThresholdMs,
+		FPS: o.fps,
+		FrameMs: o.frameMs,
+		LogicMs: o.logicMs,
+		InputMs: o.inputMs,
+		AdvanceMs: o.advanceMs,
+		DrawMs: o.drawMs,
+		OverlayMs: o.overlayMs,
+		MaxFrameMs: o.maxFrameMs,
+		MaxLogicMs: o.maxLogicMs,
+		DrawBytes: o.drawBytes,
+		SubmitBytes: o.submitBytes,
+		FixedSteps: o.fixedSteps,
+		SlowFrames: o.slowFrames,
+		SlowLogs: o.slowLogs,
+		LastSlowFrameMs: o.lastSlow.FrameMs,
+		LastSlowLogicMs: o.lastSlow.LogicMs,
+		LastSlowReason: o.lastSlow.Reason,
+	}
+}
+
+func (o *DebugOverlay) recordSlowFrameIfNeeded() {
+	if o.slowLogCooldown > 0 {
+		o.slowLogCooldown--
+	}
+	frameSlow := o.frameMs > o.slowFrameThresholdMs
+	logicSlow := o.logicMs > o.slowLogicThresholdMs
+	if !frameSlow && !logicSlow {
+		return
+	}
+	reason := "frame"
+	if logicSlow {
+		reason = "logic"
+	}
+	if frameSlow && logicSlow {
+		reason = "frame+logic"
+	}
+	slow := debugSlowFrame{Frame: o.frameSeq, Reason: reason, FrameMs: o.frameMs, LogicMs: o.logicMs, DrawBytes: o.drawBytes, SubmitBytes: o.submitBytes, FixedSteps: o.fixedSteps}
+	slow.InputMs = o.inputMs
+	slow.AdvanceMs = o.advanceMs
+	slow.DrawMs = o.drawMs
+	slow.OverlayMs = o.overlayMs
+	o.lastSlow = slow
+	o.slowCache[o.slowCacheNext] = slow
+	o.slowCacheNext = (o.slowCacheNext + 1) % debugSlowFrameCacheSize
+	if o.slowCacheCount < debugSlowFrameCacheSize {
+		o.slowCacheCount++
+	}
+	o.slowFrames++
+	severe := slow.FrameMs >= 50 || slow.LogicMs >= 30
+	if o.slowLogCooldown > 0 && !severe {
+		return
+	}
+	o.slowLogs++
+	if !severe {
+		o.slowLogCooldown = debugSlowLogCooldownFrames
+	}
+	println("voplay slow frame frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason + " frameMs=" + formatDebugMs(slow.FrameMs) + " logicMs=" + formatDebugMs(slow.LogicMs) + " inputMs=" + formatDebugMs(slow.InputMs) + " advanceMs=" + formatDebugMs(slow.AdvanceMs) + " drawMs=" + formatDebugMs(slow.DrawMs) + " overlayMs=" + formatDebugMs(slow.OverlayMs) + " drawBytes=" + strconv.Itoa(slow.DrawBytes) + " submitBytes=" + strconv.Itoa(slow.SubmitBytes) + " fixedSteps=" + strconv.Itoa(slow.FixedSteps) + " cached=" + strconv.Itoa(o.slowCacheCount))
 }
 
 // draw renders the overlay onto the DrawCtx.
@@ -92,8 +281,8 @@ func (o *DebugOverlay) draw(d *DrawCtx) {
 	// Background panel.
 	panelX := 12.0
 	panelY := 14.0
-	panelW := 210.0
-	panelH := 92.0
+	panelW := 320.0
+	panelH := 182.0
 	d.DrawRect(panelX, panelY, panelW, panelH, Color{R: 0, G: 0, B: 0, A: 0.65})
 
 	// Text layout.
@@ -105,9 +294,33 @@ func (o *DebugOverlay) draw(d *DrawCtx) {
 	y := panelY + 16.0
 	d.DrawText("present: "+o.dispFPS, textX, y, fontSize, textColor)
 	y += lineH
-	d.DrawText("frame: "+o.dispFrameMs, textX, y, fontSize, textColor)
+	d.DrawText("frame: "+o.dispFrameMs+"  "+o.dispBudget, textX, y, fontSize, textColor)
 	y += lineH
 	d.DrawText("logic: "+o.dispLogicMs, textX, y, fontSize, textColor)
 	y += lineH
 	d.DrawText("logic headroom: "+o.dispLogicFPS, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText(o.dispBytes, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText(o.dispFixed, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText(o.dispPhases, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText(o.dispMax, textX, y, fontSize, textColor)
+	y += lineH
+	d.DrawText(o.dispSlow, textX, y, fontSize, textColor)
+}
+
+func formatDebugMs(value float64) string {
+	return strconv.FormatFloat(value, 'f', 2, 64) + "ms"
+}
+
+func formatDebugBytes(value int) string {
+	if value >= 1024 * 1024 {
+		return strconv.FormatFloat(float64(value) / (1024.0 * 1024.0), 'f', 2, 64) + "MB"
+	}
+	if value >= 1024 {
+		return strconv.FormatFloat(float64(value) / 1024.0, 'f', 1, 64) + "KB"
+	}
+	return strconv.Itoa(value) + "B"
 }

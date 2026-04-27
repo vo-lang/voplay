@@ -158,12 +158,16 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		logicStart := time.Now()
 
 		// Apply input from render island.
+		inputStart := time.Now()
 		if len(inputBytes) > 0 {
 			ctx.Input.unpackEvents(inputBytes)
 		}
+		inputNs := time.Now().Sub(inputStart).Nanoseconds()
 
 		// Advance game logic with fixed-step simulation.
+		advanceStart := time.Now()
 		ctx.Advance(dt)
+		advanceNs := time.Now().Sub(advanceStart).Nanoseconds()
 
 		if ctx.closed {
 			ctx.Input.endFrame()
@@ -175,17 +179,23 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		}
 
 		// Generate draw commands.
+		drawStart := time.Now()
 		ctx.Draw.reset()
 		ctx.States.Draw()
+		drawNs := time.Now().Sub(drawStart).Nanoseconds()
 
 		// --- End logic processing ---
 		logicNs := time.Now().Sub(logicStart).Nanoseconds()
+		drawBytes := len(ctx.Draw.Bytes())
 
 		// Record metrics and draw debug overlay (if enabled).
-		ctx.overlay.recordFrame(dt, logicNs)
+		ctx.overlay.recordFrame(dt, logicNs, ctx.lastFixedSteps, drawBytes, inputNs, advanceNs, drawNs)
+		overlayStart := time.Now()
 		ctx.overlay.draw(ctx.Draw)
+		ctx.overlay.recordOverlayTime(time.Now().Sub(overlayStart).Nanoseconds())
 
 		cmds := ctx.Draw.Bytes()
+		ctx.overlay.recordSubmittedBytes(len(cmds))
 		frameReplyPort <- cmds
 
 		ctx.Input.endFrame()

@@ -468,6 +468,8 @@ pub struct Pipeline3D {
     material_clamp_sampler: wgpu::Sampler,
     // 1x1 white fallback texture for untextured meshes
     white_texture_view: wgpu::TextureView,
+    main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup>,
+    terrain_texture_bind_groups: HashMap<TerrainTextureKey, wgpu::BindGroup>,
 }
 
 impl Pipeline3D {
@@ -1042,7 +1044,14 @@ impl Pipeline3D {
             material_samplers,
             material_clamp_sampler,
             white_texture_view: white_view,
+            main_texture_bind_groups: HashMap::new(),
+            terrain_texture_bind_groups: HashMap::new(),
         }
+    }
+
+    pub fn clear_texture_bind_group_cache(&mut self) {
+        self.main_texture_bind_groups.clear();
+        self.terrain_texture_bind_groups.clear();
     }
 
     fn create_material_sampler(device: &wgpu::Device, key: MaterialSamplerKey) -> wgpu::Sampler {
@@ -1376,6 +1385,53 @@ impl Pipeline3D {
         })
     }
 
+    fn ensure_main_texture_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        textures: &TextureManager,
+        key: MainTextureKey,
+        shadow_view: &wgpu::TextureView,
+    ) {
+        if self.main_texture_bind_groups.contains_key(&key) {
+            return;
+        }
+        let bind_group = self.create_main_texture_bind_group(device, textures, key, shadow_view);
+        self.main_texture_bind_groups.insert(key, bind_group);
+    }
+
+    fn ensure_terrain_texture_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        textures: &TextureManager,
+        key: TerrainTextureKey,
+        shadow_view: &wgpu::TextureView,
+    ) {
+        if self.terrain_texture_bind_groups.contains_key(&key) {
+            return;
+        }
+        let control_view = self.texture_view_for_key(textures, key.control);
+        let albedo_layer_views = key
+            .albedo_layers
+            .map(|id| self.texture_view_for_key(textures, id));
+        let normal_layer_views = key
+            .normal_layers
+            .map(|id| self.texture_view_for_key(textures, id));
+        let metallic_roughness_layer_views = key
+            .metallic_roughness_layers
+            .map(|id| self.texture_view_for_key(textures, id));
+        let bind_group = self.create_terrain_texture_bind_group(
+            device,
+            control_view,
+            &self.material_clamp_sampler,
+            shadow_view,
+            albedo_layer_views,
+            normal_layer_views,
+            metallic_roughness_layer_views,
+            self.sampler_for_key(MaterialSamplerKey::REPEAT_LINEAR),
+        );
+        self.terrain_texture_bind_groups.insert(key, bind_group);
+    }
+
     /// Upload camera and light uniforms for this frame.
     pub fn set_camera_and_lights(
         &self,
@@ -1575,9 +1631,47 @@ impl Pipeline3D {
             }
         }
 
-        let mut main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup> = HashMap::new();
-        let mut terrain_texture_bind_groups: HashMap<TerrainTextureKey, wgpu::BindGroup> =
-            HashMap::new();
+        for draw in draws {
+            let gpu_model = match models.get(draw.model_id) {
+                Some(m) => m,
+                None => continue,
+            };
+            for mesh in &gpu_model.meshes {
+                if mesh.skinned {
+                    let texture_key =
+                        Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
+                    self.ensure_main_texture_bind_group(device, textures, texture_key, shadow_view);
+                    continue;
+                }
+                if let Some(control_id) = mesh.material.control_texture_id {
+                    let control = Self::valid_texture_id(textures, Some(control_id));
+                    let terrain_key = TerrainTextureKey {
+                        control,
+                        albedo_layers: Self::valid_layer_texture_ids(
+                            textures,
+                            &mesh.material.layer_texture_ids,
+                        ),
+                        normal_layers: Self::valid_layer_texture_ids(
+                            textures,
+                            &mesh.material.layer_normal_texture_ids,
+                        ),
+                        metallic_roughness_layers: Self::valid_layer_texture_ids(
+                            textures,
+                            &mesh.material.layer_metallic_roughness_texture_ids,
+                        ),
+                    };
+                    self.ensure_terrain_texture_bind_group(
+                        device,
+                        textures,
+                        terrain_key,
+                        shadow_view,
+                    );
+                }
+            }
+        }
+        for batch in &instance_batch_draws {
+            self.ensure_main_texture_bind_group(device, textures, batch.key.textures, shadow_view);
+        }
 
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(2, &self.light_bind_group, &[]);
@@ -1599,16 +1693,10 @@ impl Pipeline3D {
 
                     let texture_key =
                         Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                    let main_texture_bind_group = main_texture_bind_groups
-                        .entry(texture_key)
-                        .or_insert_with(|| {
-                            self.create_main_texture_bind_group(
-                                device,
-                                textures,
-                                texture_key,
-                                shadow_view,
-                            )
-                        });
+                    let main_texture_bind_group = self
+                        .main_texture_bind_groups
+                        .get(&texture_key)
+                        .expect("main texture bind group cache missing");
                     if texture_key.has_albedo() {
                         pass.set_pipeline(&self.pipeline_skinned_textured);
                     } else {
@@ -1626,7 +1714,6 @@ impl Pipeline3D {
                     if let Some(control_id) = mesh.material.control_texture_id {
                         pass.set_pipeline(&self.pipeline_terrain_splat);
                         let texture_key = Self::valid_texture_id(textures, Some(control_id));
-                        let texture_view = self.texture_view_for_key(textures, texture_key);
                         let layer_texture_ids = Self::valid_layer_texture_ids(
                             textures,
                             &mesh.material.layer_texture_ids,
@@ -1639,33 +1726,16 @@ impl Pipeline3D {
                             textures,
                             &mesh.material.layer_metallic_roughness_texture_ids,
                         );
-                        let layer_texture_views =
-                            layer_texture_ids.map(|id| self.texture_view_for_key(textures, id));
-                        let layer_normal_texture_views = layer_normal_texture_ids
-                            .map(|id| self.texture_view_for_key(textures, id));
-                        let layer_metallic_roughness_texture_views =
-                            layer_metallic_roughness_texture_ids
-                                .map(|id| self.texture_view_for_key(textures, id));
                         let terrain_key = TerrainTextureKey {
                             control: texture_key,
                             albedo_layers: layer_texture_ids,
                             normal_layers: layer_normal_texture_ids,
                             metallic_roughness_layers: layer_metallic_roughness_texture_ids,
                         };
-                        let terrain_texture_bind_group = terrain_texture_bind_groups
-                            .entry(terrain_key)
-                            .or_insert_with(|| {
-                                self.create_terrain_texture_bind_group(
-                                    device,
-                                    texture_view,
-                                    &self.material_clamp_sampler,
-                                    shadow_view,
-                                    layer_texture_views,
-                                    layer_normal_texture_views,
-                                    layer_metallic_roughness_texture_views,
-                                    self.sampler_for_key(MaterialSamplerKey::REPEAT_LINEAR),
-                                )
-                            });
+                        let terrain_texture_bind_group = self
+                            .terrain_texture_bind_groups
+                            .get(&terrain_key)
+                            .expect("terrain texture bind group cache missing");
                         pass.set_bind_group(3, &*terrain_texture_bind_group, &[]);
                     }
                 }
@@ -1692,11 +1762,10 @@ impl Pipeline3D {
                 continue;
             };
             let texture_key = batch.key.textures;
-            let main_texture_bind_group = main_texture_bind_groups
-                .entry(texture_key)
-                .or_insert_with(|| {
-                    self.create_main_texture_bind_group(device, textures, texture_key, shadow_view)
-                });
+            let main_texture_bind_group = self
+                .main_texture_bind_groups
+                .get(&texture_key)
+                .expect("instanced texture bind group cache missing");
             if texture_key.has_albedo() {
                 pass.set_pipeline(&self.pipeline_instanced_textured);
             } else {

@@ -120,9 +120,7 @@ export class RenderIsland {
                 }
             };
             if (ev.delayMs === DISPLAY_PULSE_DELAY_MS) {
-                const id = window.requestAnimationFrame(() => {
-                    window.setTimeout(() => wake(), 0);
-                });
+                const id = window.requestAnimationFrame(() => wake());
                 this.hostTimers.set(ev.token, { kind: "raf", id });
             }
             else {

@@ -3,7 +3,50 @@
 // frame requests to the logic island and submitting the returned draw commands.
 package voplay
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
+
+const (
+	renderSlowFrameCacheSize = 8
+	renderSlowLogCooldownFrames = 120
+)
+
+type renderSlowFrame struct {
+	Frame int
+	Reason string
+	LoopMs float64
+	SubmitMs float64
+	DrawBytes int
+}
+
+type renderSlowLogCache struct {
+	next int
+	count int
+	cooldown int
+	frames [8]renderSlowFrame
+}
+
+func (c *renderSlowLogCache) record(frame int, reason string, loopMs float64, submitMs float64, drawBytes int) {
+	if c.cooldown > 0 {
+		c.cooldown--
+	}
+	slow := renderSlowFrame{Frame: frame, Reason: reason, LoopMs: loopMs, SubmitMs: submitMs, DrawBytes: drawBytes}
+	c.frames[c.next] = slow
+	c.next = (c.next + 1) % renderSlowFrameCacheSize
+	if c.count < renderSlowFrameCacheSize {
+		c.count++
+	}
+	severe := slow.LoopMs >= 50 || slow.SubmitMs >= 30
+	if c.cooldown > 0 && !severe {
+		return
+	}
+	if !severe {
+		c.cooldown = renderSlowLogCooldownFrames
+	}
+	println("voplay render slow frame frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason + " loopMs=" + formatRenderSlowMs(slow.LoopMs) + " submitMs=" + formatRenderSlowMs(slow.SubmitMs) + " drawBytes=" + strconv.Itoa(slow.DrawBytes) + " cached=" + strconv.Itoa(c.count))
+}
 
 // renderWorkerPorts holds the port endpoints for the render worker.
 type renderWorkerPorts struct {
@@ -20,7 +63,10 @@ type renderWorkerPorts struct {
 // the loop to the display refresh rate.
 func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWorkerPorts) {
 	// Phase 1: Init surface (may be async on WASM).
-	initSurface(canvasRef, config.UncappedFrameRate || config.TargetFrameRate > 0)?
+	// Normal games pace on the display pulse. Only explicit uncapped runs opt
+	// out of vsync; a target frame rate is a budget/cap, not permission to use
+	// timer-driven presentation.
+	initSurface(canvasRef, config.UncappedFrameRate)?
 
 	// Wait for renderer async init without hammering the browser main thread.
 	waitFrames := 0
@@ -52,16 +98,25 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	// Present with AutoVsync blocks until the next display refresh,
 	// making the GPU vsync the natural frame pacer.
 	frameInterval := targetFrameInterval(config.TargetFrameRate)
-	nextFrameTime := time.Now()
+	lastFrameTime := time.Now()
+	frameSeq := 0
+	lastLoopTime := time.Now()
+	slowLog := &renderSlowLogCache{}
 	for {
-		// On wasm, normal games follow requestAnimationFrame. Performance debug
-		// runs can opt out to measure the engine's real CPU/GPU submission headroom.
+		// On wasm, normal games follow requestAnimationFrame. If a target frame
+		// rate is below the display refresh rate, skip pulses instead of using
+		// setTimeout; timer pacing causes visible long-tail stutters in browsers.
 		if config.UncappedFrameRate {
 			// Deliberately unpaced.
-		} else if frameInterval > 0 {
-			nextFrameTime = waitTargetFrame(nextFrameTime, frameInterval)
 		} else {
-			waitDisplayPulse()
+			lastFrameTime = waitPacedDisplayPulse(lastFrameTime, frameInterval)
+		}
+		frameSeq++
+		loopNow := time.Now()
+		loopMs := float64(loopNow.Sub(lastLoopTime).Nanoseconds()) / 1e6
+		lastLoopTime = loopNow
+		if loopMs >= 50 {
+			slowLog.record(frameSeq, "loop", loopMs, 0, 0)
 		}
 
 		// Sample latest input from the host (keyboard, pointer, scroll).
@@ -78,9 +133,18 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 
 		// Submit draw commands to GPU and present.
 		if len(drawCmds) > 0 {
+			submitStart := time.Now()
 			submitFrame(drawCmds)?
+			submitMs := float64(time.Now().Sub(submitStart).Nanoseconds()) / 1e6
+			if submitMs >= 16 {
+				slowLog.record(frameSeq, "submit", loopMs, submitMs, len(drawCmds))
+			}
 		}
 	}
+}
+
+func formatRenderSlowMs(value float64) string {
+	return strconv.FormatFloat(value, 'f', 2, 64) + "ms"
 }
 
 func targetFrameInterval(fps int) time.Duration {
@@ -93,17 +157,20 @@ func targetFrameInterval(fps int) time.Duration {
 	return time.Duration(int64(1000000000) / int64(fps))
 }
 
-func waitTargetFrame(next time.Time, interval time.Duration) time.Time {
-	now := time.Now()
-	if next.Before(now) {
-		late := now.Sub(next)
-		if late > interval * 4 {
-			next = now
+func waitPacedDisplayPulse(lastFrameTime time.Time, interval time.Duration) time.Time {
+	for {
+		waitDisplayPulse()
+		now := time.Now()
+		if interval <= 0 {
+			return now
 		}
-	} else {
-		time.Sleep(next.Sub(now))
+		// Browser rAF timestamps jitter by fractions of a millisecond. A small
+		// tolerance prevents a 120Hz display from accidentally skipping every
+		// other pulse because a frame arrived slightly early.
+		if now.Sub(lastFrameTime) + time.Millisecond >= interval {
+			return now
+		}
 	}
-	return next.Add(interval)
 }
 
 func serviceResourceRequestsLoop(reqPort, respPort port []byte) {

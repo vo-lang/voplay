@@ -32,22 +32,40 @@ type GameCtx struct {
 	gameInitialized  bool
 	closed           bool
 	accumulator      float64
+	lastFixedSteps   int
 	overlay          *DebugOverlay
 }
 
 // ShowDebugOverlay enables the engine performance HUD (FPS, frame time, logic time).
 func (g *GameCtx) ShowDebugOverlay() {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
 	g.overlay.enabled = true
 }
 
 // HideDebugOverlay disables the engine performance HUD.
 func (g *GameCtx) HideDebugOverlay() {
+	if g.overlay == nil {
+		return
+	}
 	g.overlay.enabled = false
 }
 
 // ToggleDebugOverlay toggles the engine performance HUD.
 func (g *GameCtx) ToggleDebugOverlay() {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
 	g.overlay.enabled = !g.overlay.enabled
+}
+
+// DebugOverlayStats returns cached F3 performance metrics from the last frame.
+func (g *GameCtx) DebugOverlayStats() DebugOverlayStats {
+	if g.overlay == nil {
+		return DebugOverlayStats{}
+	}
+	return g.overlay.snapshot()
 }
 
 func resolveFixedStep(step float64) float64 {
@@ -118,6 +136,7 @@ func (g *GameCtx) Advance(dt float64) {
 		g.accumulator -= fixedStep
 		steps++
 	}
+	g.lastFixedSteps = steps
 	if g.accumulator < 0 {
 		g.accumulator = 0
 	}
@@ -168,7 +187,7 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 		Height:          game.Height,
 		FixedStep:       resolveFixedStep(game.FixedStep),
 		MaxCatchUpSteps: game.MaxCatchUpSteps,
-		overlay:         newDebugOverlay(),
+		overlay:         newDebugOverlay(game.TargetFrameRate),
 	}
 	ctx.Actions = NewActionMap(ctx.Input)
 	ctx.Assets = NewAssetsWithLoaders(proxyAssetLoaders(resReqPort, resRespPort))

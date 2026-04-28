@@ -33,7 +33,7 @@
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "e762d01f977344eb2beb0c64271d84b9abe865a2",
+  "commit": "c724839853b4129d77ec1de5bf9db269eec9f79e",
   "extension": {
     "include": [
       "js/dist"
@@ -67,7 +67,7 @@
       "module": "github.com/vo-lang/vogui"
     },
     {
-      "constraint": "v0.1.1",
+      "constraint": "v0.1.2",
       "module": "github.com/vo-lang/vopack"
     }
   ],
@@ -794,12 +794,12 @@
       "size": 7060
     },
     {
-      "digest": "sha256:829e580d5908563327590a9e881ae1d756c99484c2f33b3af389d80491daa208",
+      "digest": "sha256:f151af9e6077d050cec645f8f55768c2f36af2267379dad823b6faafc9d50560",
       "path": "vo.lock",
       "size": 1551
     },
     {
-      "digest": "sha256:21d455e3c0f7ae5cb7f0fa7bc372fccbe488469c0bf751ea7bf97c9e0650a768",
+      "digest": "sha256:5e7f3062d32c8a7943763762e0ad37d8090f68b1052d16ffa53ed96159fcf27e",
       "path": "vo.mod",
       "size": 788
     },
@@ -809,8 +809,8 @@
       "size": 101164
     }
   ],
-  "source_digest": "sha256:d923449d75cd1ca3da5e9ed6a881395af8a3348643097e8b29a888ebf5a95cfd",
-  "version": "v0.1.21",
+  "source_digest": "sha256:ecda580782c4266da2b8d62c3af45884d62756627c9b563619fd6d39d55a0263",
+  "version": "v0.1.22",
   "vo": "^0.1.0",
   "web": null
 }

@@ -11,7 +11,7 @@ draw calls ~= render passes * visible(shape_id, material_id) groups
 steady CPU sync ~= changed primitive ranges, not total primitive instances
 ```
 
-This is the engine path for toy-scale racing scenery, procedural props, repeated barriers, rocks, trees, bridge blocks, signs, clouds, and primitive-composed vehicles. MarbleRush consumes this module; MarbleRush does not own it.
+This is the engine path for toy-scale racing scenery, procedural props, repeated barriers, rocks, trees, bridge blocks, signs, clouds, and primitive-composed vehicles. BlockKart consumes this module; BlockKart does not own it.
 
 ## Module Boundary
 
@@ -23,7 +23,7 @@ github.com/vo-lang/voplay/primitive3d
 
 The module imports only root `github.com/vo-lang/voplay` types such as `Vec3`, `Quat`, `Color`, `AABB`, `TextureID`, and `MaterialDesc`.
 
-`primitive3d` does not import `scene3d`, track, vehicle, terrain, physics, racing input, or MarbleRush code.
+`primitive3d` does not import `scene3d`, track, vehicle, terrain, physics, racing input, or BlockKart code.
 
 `scene3d` integrates it through a small adapter:
 
@@ -56,7 +56,7 @@ Therefore the implementation decision is:
 
 ## Non-Goals
 
-- No MarbleRush-specific vehicle, race, or track rule is encoded in `primitive3d`.
+- No BlockKart-specific vehicle, race, or track rule is encoded in `primitive3d`.
 - No physics ownership in primitive instances. Physics stays in `scene3d`.
 - No skeletal animation path. Animated characters and skinned models stay on `scene3d.Entity`.
 - No generic transparent sorting in P0. Opaque primitives are the production path first.
@@ -285,7 +285,7 @@ Rules:
 - `AddPart` deduplicates equal shape and material descriptions through the builder-owned registries.
 - Callers can pass explicit `ShapeID` and `MaterialID` when many parts share the same entries.
 - `Build` returns the underlying layer after rebuilding static chunks.
-- The builder remains in `primitive3d`; it does not depend on `scene3d` or MarbleRush.
+- The builder remains in `primitive3d`; it does not depend on `scene3d` or BlockKart.
 
 ## Scene Integration
 
@@ -478,9 +478,9 @@ Concept-art quality comes from:
 - controlled color palette
 - repeated primitives with small per-instance variation
 
-## MarbleRush Usage
+## BlockKart Usage
 
-MarbleRush should express repeated scenery and simple vehicle parts as primitive composition data.
+BlockKart should express repeated scenery and simple vehicle parts as primitive composition data.
 
 Use primitive layers for:
 
@@ -602,5 +602,5 @@ Rust tests:
 Integration tests:
 
 - a voplay demo renders 10000 primitive instances with a small number of draw groups.
-- MarbleRush migrates repeated scenery to `primitive3d`.
+- BlockKart migrates repeated scenery to `primitive3d`.
 - stats prove object count and draw call count are decoupled.

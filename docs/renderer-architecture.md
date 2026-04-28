@@ -52,7 +52,7 @@ The renderer builds render lists from retained objects and groups static meshes 
 
 ### Studio
 
-Studio remains framework-neutral. It does not know about game objects, MarbleRush, voplay scene internals, or asset-specific behavior.
+Studio remains framework-neutral. It does not know about game objects, BlockKart, voplay scene internals, or asset-specific behavior.
 
 ## Rendering path
 

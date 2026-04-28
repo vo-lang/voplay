@@ -2,9 +2,9 @@
 
 ## Goal
 
-Build the generic voplay engine capabilities required for MarbleRush to become a production-quality kart racing game.
+Build the generic voplay engine capabilities required for BlockKart to become a production-quality kart racing game.
 
-This document intentionally defines engine requirements, not MarbleRush game rules. voplay should know about racing tracks, vehicles, terrain, materials, asset loading, diagnostics, and runtime performance. MarbleRush should decide lap count, item behavior, boost balance, UI, characters, and level themes.
+This document intentionally defines engine requirements, not BlockKart game rules. voplay should know about racing tracks, vehicles, terrain, materials, asset loading, diagnostics, and runtime performance. BlockKart should decide lap count, item behavior, boost balance, UI, characters, and level themes.
 
 ## Boundaries
 
@@ -33,13 +33,13 @@ Every engine requirement is complete only when all of these are true:
 - The public API is documented in code comments or a `docs/` file.
 - Native and web runner behavior match for the required path.
 - A focused automated test covers the non-rendering behavior.
-- A MarbleRush or voplay demo exercises the feature end to end.
+- A BlockKart or voplay demo exercises the feature end to end.
 - Invalid input produces deterministic errors, not silent fallback or unrelated panics.
 - Resource ownership is clear: assets loaded through `Assets` are group-managed, manually loaded assets are explicitly released, and scene-owned resources are cleaned up by `Scene.Close`.
 
 ## Priority Levels
 
-- P0: Required before MarbleRush can become a real kart racing game.
+- P0: Required before BlockKart can become a real kart racing game.
 - P1: Required before the game can feel polished and content-scalable.
 - P2: Required for long-term production quality, larger content, or advanced modes.
 
@@ -121,7 +121,7 @@ Current coverage:
 
 - `scene3d.Track` exposes the required API: `Asset`, `Length`, `ClosestPoint`, `PoseAt`, `DistanceAlongTrack`, `SurfaceAt`, `IsOnRoad`, `NextGate`, `RespawnPoseNear`, and racing-line pose lookup.
 - `tests/main.vo::testScene3DTrackValidationAndQueries` covers closed-loop wrap, closest point distance and lateral sign, monotonic distance samples, overlapping surface priority, road/offroad checks, respawn pose selection, racing-line interpolation, missing line errors, and a 10,000-query correctness loop.
-- MarbleRush consumes the same runtime object in `map_demo.vo` for spawn, gate placement, respawn placement, kart controller binding, and debug overlay.
+- BlockKart consumes the same runtime object in `map_demo.vo` for spawn, gate placement, respawn placement, kart controller binding, and debug overlay.
 
 ### TRK-003: Track Validation Report
 
@@ -189,14 +189,14 @@ Acceptance criteria:
 - The validator samples at least every 1 meter on the reference track.
 - The validator reports the exact sample distance and world position for failures.
 - The validator catches an intentionally broken track with a gap.
-- MarbleRush can run the validator on its demo track without errors.
+- BlockKart can run the validator on its demo track without errors.
 
 Current coverage:
 
 - `scene3d.CheckTrackTraversability` samples the track by configurable meter step and reports structured issues with exact distance/path and world position in the message.
 - Checks cover long centerline segments, centerline offroad samples, height deltas, road boundary discontinuities, height-probe misses/deltas, closed-loop continuity, and gate reachability.
 - `tests/main.vo::testScene3DTrackSpawnAndTraversability` covers valid flat tracks plus intentionally broken height, boundary, offroad-centerline, unreachable-gate, missing-height-probe, and height-probe-delta cases.
-- MarbleRush `tools/validate_track.vo` and `tools/pack_assets.vo` run the same traversability validator on `assets/maps/demo_track/track.json`; the current demo track validates with `SampleStep: 1.0` and no errors.
+- BlockKart `tools/validate_track.vo` and `tools/pack_assets.vo` run the same traversability validator on `assets/maps/demo_track/track.json`; the current demo track validates with `SampleStep: 1.0` and no errors.
 
 ### VEH-001: Raycast Vehicle Telemetry
 
@@ -328,8 +328,8 @@ Current coverage:
 - `scene3d.SpawnVehicleDebugOverlay` draws wheel contact points and suspension rays.
 - `scene3d.SpawnRacingDebugOverlay` composes track, vehicle, and surface-under-vehicle markers and returns a `VehicleDebugSnapshot` containing speed, grounded state, surface hit, per-wheel contact, suspension, normal load, longitudinal slip, lateral slip, and surface id.
 - `tests/main.vo::testScene3DVehicleTelemetryAndKartController` covers racing debug overlay spawn/update/destroy and structured debug snapshot data.
-- MarbleRush wires F3 to toggle the composed racing debug overlay alongside the engine HUD.
-- Visual screenshot verification against the MarbleRush reference track remains the final manual acceptance step.
+- BlockKart wires F3 to toggle the composed racing debug overlay alongside the engine HUD.
+- Visual screenshot verification against the BlockKart reference track remains the final manual acceptance step.
 
 ## P1 Requirements
 
@@ -400,11 +400,11 @@ Current coverage:
 - `scene3d.LightingProfile.ShadowStrength`, `Scene.ShadowStrength`, and `DrawCtx.SetShadow3D` expose softened stylized shadow strength so contact shadows can read without crushing unlit material color.
 - `Scene.ApplyLightingProfile` applies a profile atomically and copies light slices so game-side edits cannot mutate scene state by aliasing.
 - The native/web mesh, skinned mesh, and terrain shaders apply color grading after fog. The kart racing profile keeps tone mapping off by default to preserve source texture color, while applying mild exposure, contrast, and saturation lift for bright stylized outdoor scenes.
-- MarbleRush now uses the voplay kart racing lighting profile and only overrides theme-specific ambient/fog colors and fog range.
+- BlockKart now uses the voplay kart racing lighting profile and only overrides theme-specific ambient/fog colors and fog range.
 - `tests/main.vo::testScene3DLightingProfile` covers profile defaults and application semantics.
 - `tests/main.vo::testScene3DColorGradingSemantics` covers DrawCtx validation and scene default normalization.
 - `voplay/rust/src/stream.rs` tests cover color-grading draw stream decoding.
-- `tools/check_render_exposure.mjs` provides a PNG-based screenshot exposure gate for web/native comparison: both screenshots must remain balanced, avoid excessive dark/bright clipping, and stay within a documented mean-luminance delta. Its self-test covers pass/fail behavior, and the current MarbleRush web reference crop passes as balanced.
+- `tools/check_render_exposure.mjs` provides a PNG-based screenshot exposure gate for web/native comparison: both screenshots must remain balanced, avoid excessive dark/bright clipping, and stay within a documented mean-luminance delta. Its self-test covers pass/fail behavior, and the current BlockKart web reference crop passes as balanced.
 
 ### RND-003: Decal and Road Marking Support
 
@@ -459,7 +459,7 @@ Current coverage:
 - `PackReader.Manifest` reads only the manifest metadata entry; public `Read`, `Has`, `List`, and `Len` treat the manifest as package metadata rather than a normal game resource.
 - `PackReader.VerifyManifestDependencies` and `MountSet.VerifyManifestDependencies` fail before payload load/spawn when a requester has missing dependencies, and errors include requester plus missing path.
 - `voplay.Assets.VerifyPackDependencies` is called by `scene3d.LoadTrackWithAssets` before reading and spawning a packed `TrackAsset`.
-- MarbleRush `tools/pack_assets.vo` declares track and road-mesh dependencies in the generated asset pack.
+- BlockKart `tools/pack_assets.vo` declares track and road-mesh dependencies in the generated asset pack.
 - Covered by `vopack/tests/main.vo::testManifest`, `testManifestDependencies`, and `voplay/tests/main.vo` packed-track load/failure cases.
 
 ### AST-002: Track Baking Tool Contract
@@ -489,8 +489,8 @@ Current coverage:
 - `scene3d.ValidateTrackBakeOutput` enforces `track.json`, terrain, visible visual track mesh, collision track mesh, surfaces, gates, respawns, generated manifest, and runtime resources.
 - `scene3d.MarshalBakedTrackAsset` emits deterministic indented JSON after `ValidateTrackAsset`.
 - `scene3d.TrackBakeDependencies` returns the manifest dependency list for the baked `track.json`.
-- MarbleRush `tools/pack_assets.vo` validates the demo track bake contract and uses it to populate the generated `vopack` dependency graph.
-- Covered by `tests/main.vo::testScene3DTrackBakeContract`, `testScene3DTrackSpawnAndTraversability`, and MarbleRush `tools/pack_assets.vo`.
+- BlockKart `tools/pack_assets.vo` validates the demo track bake contract and uses it to populate the generated `vopack` dependency graph.
+- Covered by `tests/main.vo::testScene3DTrackBakeContract`, `testScene3DTrackSpawnAndTraversability`, and BlockKart `tools/pack_assets.vo`.
 
 ### CAM-001: Racing Camera
 
@@ -642,7 +642,7 @@ Acceptance criteria:
 - Track asset can contain one or more racing lines.
 - `Track.PoseOnLine(lineName, distance)` returns pose and target speed hint.
 - Missing line names return deterministic errors.
-- MarbleRush can use the racing line data without hardcoding path points in game code.
+- BlockKart can use the racing line data without hardcoding path points in game code.
 
 Current coverage:
 
@@ -702,6 +702,6 @@ The command must print `VO:REFERENCE_DEMOS PASS all`. A failure must identify th
 
 ## Stop Conditions
 
-Do not continue building MarbleRush content on top of the old map-only path once TRK-001 starts. New racing content should use `TrackAsset`, even if early versions still wrap existing terrain and mesh files.
+Do not continue building BlockKart content on top of the old map-only path once TRK-001 starts. New racing content should use `TrackAsset`, even if early versions still wrap existing terrain and mesh files.
 
-Do not add MarbleRush-specific fields to voplay schemas unless the field is generic to racing games. Game-specific data should live under an extension field that voplay preserves but does not interpret.
+Do not add BlockKart-specific fields to voplay schemas unless the field is generic to racing games. Game-specific data should live under an extension field that voplay preserves but does not interpret.

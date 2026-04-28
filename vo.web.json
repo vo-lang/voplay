@@ -9,11 +9,11 @@
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:8202d06d97a3499308baa3950510bc5c0c04a51c7040c54264425c0af5876bf2",
+      "digest": "sha256:eaec9f3262a58a3953704afe4bacf9fe8050c941054ab1f48c9f2fcf8ad52dea",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10004976,
+      "size": 10006272,
       "target": "aarch64-apple-darwin"
     },
     {
@@ -810,7 +810,7 @@
     }
   ],
   "source_digest": "sha256:d923449d75cd1ca3da5e9ed6a881395af8a3348643097e8b29a888ebf5a95cfd",
-  "version": "v0.1.20",
+  "version": "v0.1.21",
   "vo": "^0.1.0",
   "web": null
 }

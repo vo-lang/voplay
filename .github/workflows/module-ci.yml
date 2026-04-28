@@ -162,8 +162,10 @@ jobs:
 
       - name: Stage release assets
         run: |
+          SOURCE_COMMIT="$(node -e "console.log(JSON.parse(require('fs').readFileSync('vo.web.json', 'utf8')).commit)")"
           vo release stage . \
             --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
+            --commit "$SOURCE_COMMIT" \
             --artifact extension-native aarch64-apple-darwin libvo_voplay.dylib "$RUNNER_TEMP/release-artifacts/libvo_voplay.dylib" \
             --artifact extension-native x86_64-unknown-linux-gnu libvo_voplay.so "$RUNNER_TEMP/release-artifacts/libvo_voplay.so" \
             --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js web-artifacts/voplay_island.js \

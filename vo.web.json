@@ -1,39 +1,39 @@
 {
   "artifacts": [
     {
-      "digest": "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d",
+      "digest": "sha256:49439914186dfcc31d824aa322ed3284c76ef65c726ba4feb309fa11596a8b44",
       "kind": "extension-js-glue",
       "name": "voplay_island.js",
       "path": "web-artifacts/voplay_island.js",
-      "size": 94795,
+      "size": 101164,
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:8cede378bc422b9ce74e6ad8cf16ef4af3a3de592586dd10e8a1811efa2ef4b3",
+      "digest": "sha256:8202d06d97a3499308baa3950510bc5c0c04a51c7040c54264425c0af5876bf2",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 9691216,
+      "size": 10004976,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:4c4288d7c773943ac406d066cb92869e0ecd06fdeb341fd69fe6c32480e679ee",
+      "digest": "sha256:862622935020826ca1aebbeb1b5803f06e74ec6c4e166020ba396cf122de4898",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 13243192,
+      "size": 13558320,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
-      "digest": "sha256:330ad83bb2847aa1632e4b847b239be9919b8941687bf2bc13f80e7500a46b3e",
+      "digest": "sha256:2ca59025ccb92c1830573bc3465c1cea9590f53d0dabda1507e32e22c1945d33",
       "kind": "extension-wasm",
       "name": "voplay_island_bg.wasm",
       "path": "web-artifacts/voplay_island_bg.wasm",
-      "size": 3158764,
+      "size": 3331731,
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "6782f69efdd677244184f9168c567fc76a692a3d",
+  "commit": "e762d01f977344eb2beb0c64271d84b9abe865a2",
   "extension": {
     "include": [
       "js/dist"
@@ -63,20 +63,20 @@
   "module_root": ".",
   "require": [
     {
-      "constraint": "v0.1.11",
+      "constraint": "v0.1.13",
       "module": "github.com/vo-lang/vogui"
     },
     {
-      "constraint": "v0.1.0",
+      "constraint": "v0.1.1",
       "module": "github.com/vo-lang/vopack"
     }
   ],
   "schema_version": 1,
   "source": [
     {
-      "digest": "sha256:07faa8890896a514cd122806782286066e5886478edfcc616dc1dfa689217ede",
+      "digest": "sha256:4b527031e24b1e49acdb440782071721e106fdfdee8f3b7aa556b8094d3eb2ba",
       "path": ".gitignore",
-      "size": 104
+      "size": 127
     },
     {
       "digest": "sha256:bdbababeab51b6a195cfe23baf0887664a9ca85869de6ee17d10ba1a914cf43c",
@@ -84,19 +84,19 @@
       "size": 4078
     },
     {
-      "digest": "sha256:92dd20b8cacb2a9b838e54f64014fc3c8ab5026a0696769d10383aba6f33528f",
+      "digest": "sha256:6f9ffff4fbdd71bed7b43b2b8dc599ecadc941aa3f245ce621639e667ae3655e",
       "path": "assets.vo",
-      "size": 14052
+      "size": 15212
     },
     {
-      "digest": "sha256:0e8355629db717768858db2e02836b6ecb7532787bfd7b4c1b107196a3c07131",
+      "digest": "sha256:fe7db790cca4ad8fee83ec78e8416a112bf48bf0acb6fd807aea8d3f9e7dabf9",
       "path": "audio.vo",
-      "size": 5304
+      "size": 5621
     },
     {
-      "digest": "sha256:5f7498c1497c21ca859e1b75e8b0eae129f5919eb160d9f61ddacfd4c22203d3",
+      "digest": "sha256:f68ae39f7e4e9e6fca7168f3a26bb06c40f72d2724d6d136fc972f508218f238",
       "path": "codec/codec.vo",
-      "size": 2828
+      "size": 4659
     },
     {
       "digest": "sha256:a1df134770434fff5f0a5fbc4dcb2110f523ef1b35299bf5debd567162f0fe7a",
@@ -109,29 +109,94 @@
       "size": 1599
     },
     {
-      "digest": "sha256:35bf6335e7f95548ba4cecc4500aa90c75644745bb4934683d7feb3d22c357d2",
+      "digest": "sha256:c7cb24e5a3784d8cd96f7b97f3e2ad87fab5884f34666c2f6062eb4bcfd1867f",
       "path": "debug_overlay.vo",
-      "size": 2786
+      "size": 9470
     },
     {
-      "digest": "sha256:eba89df448e1b79cc7a8738374ad9d5309d0a3747da220f2e55eddda942539d0",
+      "digest": "sha256:cdd4af842fc02e11546928c38c9108004fa56c1591329c6c5d241eadf1a43497",
+      "path": "docs/kart-racing-engine-plan.md",
+      "size": 39077
+    },
+    {
+      "digest": "sha256:8bb77e9c69827ac0fc723607d7eedd7c6a5384054cc32a3bca965ad424e219bf",
+      "path": "docs/primitive-rendering-architecture.md",
+      "size": 20212
+    },
+    {
+      "digest": "sha256:8abd4c861da0cf5482954898d5ada99af1fa8c6a4b9b091fdfc48e89707f6f03",
+      "path": "docs/renderer-architecture.md",
+      "size": 3032
+    },
+    {
+      "digest": "sha256:b3defd0aa444fa2b275d58ae100ab20a3ce98778f8eb4d7c0de968ad5af69450",
+      "path": "docs/track-asset-v1.md",
+      "size": 2078
+    },
+    {
+      "digest": "sha256:0e7b0f3aad6e26c1ffa15864d49f067e60585420c911eaac1cbf70c5dadd9522",
       "path": "draw.vo",
-      "size": 10873
+      "size": 20596
     },
     {
-      "digest": "sha256:46bc858d7b39bc05280aa47506ac962e7c2ef51cf210d9057e4a208163507a4e",
+      "digest": "sha256:6627a61a720590fdcb0513789a3a84bc2082c26e725a58dd2684af0263959ccb",
+      "path": "examples/empty_smoke/main.vo",
+      "size": 1183
+    },
+    {
+      "digest": "sha256:5386aaa2e8f6174352656f0ce761ef2413fced67916eb9379e13e9f160252237",
+      "path": "examples/empty_smoke/vo.lock",
+      "size": 2780
+    },
+    {
+      "digest": "sha256:e6de148540b72a81b929104eb29cd0d764951b9a7a12c6ed344486c6dcdd62be",
+      "path": "examples/empty_smoke/vo.mod",
+      "size": 108
+    },
+    {
+      "digest": "sha256:14018d0c39f0a3dd91f9cf82ef6ef6d30f6f998fbf820c21b65bdc8520b26a83",
+      "path": "examples/primitive_smoke/main.vo",
+      "size": 6994
+    },
+    {
+      "digest": "sha256:5ac34f2c5d113edfe93548a65dcc1a2246235949195d3bcccd5de9ec35b53001",
+      "path": "examples/primitive_smoke/vo.lock",
+      "size": 2784
+    },
+    {
+      "digest": "sha256:ceeac7002431d31a2aca34e412db6dd02460fc7b1753c963059e6e9bf5200420",
+      "path": "examples/primitive_smoke/vo.mod",
+      "size": 112
+    },
+    {
+      "digest": "sha256:09c3b22453efd887fbdca72cb874c50680e56bc452e4818227897ca50532bc01",
+      "path": "examples/primitive_stress/main.vo",
+      "size": 3779
+    },
+    {
+      "digest": "sha256:ee3208474110888cdd541a95b5927491e92977b1f3d92c49642368102f39766d",
+      "path": "examples/primitive_stress/vo.lock",
+      "size": 2785
+    },
+    {
+      "digest": "sha256:9ec7bc6394b31b30728a53e9a270471b0c9a7176450a3a987f64fe1964d74fbe",
+      "path": "examples/primitive_stress/vo.mod",
+      "size": 113
+    },
+    {
+      "digest": "sha256:80d9d0770acc52fd414cc7adfc6bd45afc16bb1866ac4119ec05361c576a936d",
       "path": "game.vo",
-      "size": 9118
+      "size": 10322
     },
     {
-      "digest": "sha256:20c1db139da8bab300dbc11e455d0aae4ca7f914d7c6092278b83bdea51dd53d",
+      "digest": "sha256:2d059bdea20708e5c0b241a21794931258d816ed7c33f641355520576ed47cd2",
       "path": "host.vo",
-      "size": 5036
+      "size": 5753
     },
     {
-      "digest": "sha256:a6fefca03d034fdc8ff6f58546c286d827ea4ce839a1b0f2f629359cf14d1d0f",
+      "digest": "sha256:5108cb2bf4abec1d79b20063cfeb9b6323e60937735aa1c4c1a53c65432fd6c2",
       "path": "input.vo",
-      "size": 9528
+      "size": 14976
     },
     {
       "digest": "sha256:db46fb2787d07295e3b90a3b85869a888b8f5e11f64cf3707afb17f5e18fd88c",
@@ -169,14 +234,14 @@
       "size": 2328
     },
     {
-      "digest": "sha256:e7ae4e6021eae913949714141970c870739bf4694e95ce31f43d7a2376471a71",
+      "digest": "sha256:5a80326f4334a3bd2c451b5f3b35b836fa0625e6032ab993f1dc53c593342844",
       "path": "js/dist/render_bootstrap.d.ts",
-      "size": 1443
+      "size": 1589
     },
     {
-      "digest": "sha256:8707cded46376954f7597a3e217d568cf4a0d5374a17050c90c8c7ff0287d5cc",
+      "digest": "sha256:7958156d5715adb50197aa25193a9f67904bc63cfd14dad051683ffbe34243ec",
       "path": "js/dist/render_bootstrap.js",
-      "size": 7082
+      "size": 8295
     },
     {
       "digest": "sha256:ce03e8c1b38c648aed68422311b323ccb2918fec77ebeb37fa08ab3563a17766",
@@ -184,9 +249,9 @@
       "size": 1340
     },
     {
-      "digest": "sha256:c6327172be0d8627defc1399911301cacb30b7cd8a5130966304827822da369d",
+      "digest": "sha256:6d7f9206b39c58bea8025345c8a8d0bda7b2b466d3d475e169dff7627c92d31d",
       "path": "js/dist/voplay-render-island.js",
-      "size": 7884
+      "size": 10081
     },
     {
       "digest": "sha256:43bb1b94f5aae9ed1a835d7c7b5808c590bdd64c7dc583c20444dd4fcbaca4bd",
@@ -209,9 +274,9 @@
       "size": 550
     },
     {
-      "digest": "sha256:22f1e063ef10f6085c6e4590e68b56b65c134567efab7a5321dea81851a115b4",
+      "digest": "sha256:df64cb5769766d128716cc56771a9c240a63187fb14afeacf2c85b89567cb56a",
       "path": "js/render_bootstrap.ts",
-      "size": 7746
+      "size": 8979
     },
     {
       "digest": "sha256:60d0c1614427a5087f2ed901b38fcdc9a863de029f62c2787b1cfa8ff5a51bd6",
@@ -219,9 +284,9 @@
       "size": 376
     },
     {
-      "digest": "sha256:1f5205aaee6c093a08a1022b825607b4e394fd5cf395ed88e815659b6ada6e4f",
+      "digest": "sha256:8895ff21b810a3baf1d1ed662defcc453fb9b67fbbfaa1f16f3e08a3cd705153",
       "path": "js/voplay-render-island.ts",
-      "size": 9212
+      "size": 11470
     },
     {
       "digest": "sha256:d846b0911dcded6934164319b7d9387cb7335dd64d7af3e4f88494ae800b7948",
@@ -229,44 +294,74 @@
       "size": 7551
     },
     {
-      "digest": "sha256:446642cc7ec90044c1288be7aa7f215d65706261d4d4f7f71e42146b94122259",
+      "digest": "sha256:4036819b4dfdb3bf752f4772b02ab3936791e2df919217abcd1fd0250711ccc2",
+      "path": "primitive3d/builder.vo",
+      "size": 4374
+    },
+    {
+      "digest": "sha256:c8454d4f4e128a4cc810837e60c5051e52b089b93c3278be09ade40811aa61f1",
+      "path": "primitive3d/layer.vo",
+      "size": 10732
+    },
+    {
+      "digest": "sha256:c8e29e6a141d3f000f6bf7ba0ec54ad4076f2cbd0b29729012ebd995b6f47115",
+      "path": "primitive3d/material_palette.vo",
+      "size": 5502
+    },
+    {
+      "digest": "sha256:4373196aafeae9f74d0de1af22147f4ba24fbe4c06b9ec3479cb627771427784",
+      "path": "primitive3d/shape_registry.vo",
+      "size": 4380
+    },
+    {
+      "digest": "sha256:86abf801afab11482dc904732bcbca1c2327b3b300d55b716a6dae62b55bbba1",
+      "path": "primitive3d/stress.vo",
+      "size": 4620
+    },
+    {
+      "digest": "sha256:0f39d0ba5d5ff6e751f4b0f5d6b0768e92e7e3d237db4630f6fc3d6f4bd5e1e8",
+      "path": "primitive3d/types.vo",
+      "size": 2194
+    },
+    {
+      "digest": "sha256:5b56dc3981da9dadc2f593a4b1c558a0c315827399905e5f525393fd1f984d4a",
       "path": "render_worker.vo",
-      "size": 4801
+      "size": 8123
     },
     {
-      "digest": "sha256:965e5e8bc9b422e1c28fb6fda93ff723e92184c4e16ee635fa99729e52e39fa6",
+      "digest": "sha256:ee063b2863211db3a790399a9af6894bb8b94f2aff4e5fb039b82f0bfc7b6ce6",
       "path": "res_proxy.vo",
-      "size": 22344
+      "size": 23728
     },
     {
-      "digest": "sha256:d52111f390c9212914a52b77d75b4d33b5e8cab5c48ef20e0b6c8a69d4d5885c",
+      "digest": "sha256:215d304f8eeb37a26cdba07587902c0d2f291a99b1f72cdc7fac7522b19ff2c3",
       "path": "resources.vo",
-      "size": 7090
+      "size": 9307
     },
     {
-      "digest": "sha256:99fd734711442b7e7b45b1204e60c2de3d19c5cd09d7e3dd55f1942b63f5d35e",
+      "digest": "sha256:8cb8725eb95ef057a31e7b9b9af98c8e7579f7f4a941a962f4e1ceae5fea1dea",
       "path": "rust/Cargo.lock",
-      "size": 94282
+      "size": 95623
     },
     {
-      "digest": "sha256:3afbebfc8fccc236c9837454466d02f553c664f0d7c5aed2033ec5f7384b004f",
+      "digest": "sha256:bdcb4991b0d8b2a92c7e675c14de6dd41a1bc1a91a5c42bcee64a097324bdeed",
       "path": "rust/Cargo.toml",
-      "size": 2386
+      "size": 2412
     },
     {
-      "digest": "sha256:69d93046588e0409392b70ec289d9883d0f6a403a48bf36c21eade423c25617f",
+      "digest": "sha256:7578584b43a8b516a2640cf9bbb7eb771e6c0c34f872fbb34caeeee44b3ab2b7",
       "path": "rust/src/animation.rs",
-      "size": 19682
+      "size": 20467
     },
     {
-      "digest": "sha256:9f5be7ba2f79c542cc8af0687ed2d2c8b0c858a9a24e175ba9c4fddba1788d36",
+      "digest": "sha256:0a50c26172087f94de507c03f74d9c6bc7ceb2ed7decafd13629a76fa5cf6846",
       "path": "rust/src/draw_list.rs",
-      "size": 10088
+      "size": 10254
     },
     {
-      "digest": "sha256:94e2ea30dff7c89cf5d3a4045db35e61e4b54791cc746eb9fc5352de8b8c3573",
+      "digest": "sha256:a6454b48df3be72e3186517c391c6a6865c3d19e4c39951a3d7dac19b4e8c113",
       "path": "rust/src/externs/animation.rs",
-      "size": 5052
+      "size": 5169
     },
     {
       "digest": "sha256:7fd73ac0fd15d7ab403d213eceb731749641ead9e3cab65f5e550b3ec0668a2b",
@@ -274,149 +369,169 @@
       "size": 734
     },
     {
-      "digest": "sha256:998d7c109b879e008c19c2be166df1c559065caa707b3eb9f96e8184bcf02937",
+      "digest": "sha256:75ba9d91fd2c0a779e8fb14cbff369ad7f921874d135634f0265725145f34a62",
       "path": "rust/src/externs/mod.rs",
-      "size": 5212
+      "size": 5406
     },
     {
-      "digest": "sha256:b42dcb04c836a23539e78d0fe89d6cf4e7a1f80e500123e07cc2164396ca1dcb",
+      "digest": "sha256:6eeb63d3b298cd80f13fd080fa3643f723ad9b0e10e920fa71ae6ad60a9ad409",
       "path": "rust/src/externs/physics2d.rs",
-      "size": 6741
+      "size": 6811
     },
     {
-      "digest": "sha256:0d1678c79e9c9dc5a970078ed910787d2850dea197b77c5268b2f1815f552a11",
+      "digest": "sha256:dc690aa75251fcf02c873d1d2a63cda9be58439ca9d90ebe68a3d5ef1e42433e",
       "path": "rust/src/externs/physics3d.rs",
-      "size": 13750
+      "size": 17980
     },
     {
-      "digest": "sha256:1e33a1bfd3a6d8d4efd275b1e188c82d410f8abaed7c73f885003991e5502796",
+      "digest": "sha256:3bf67a251f33af90ee0a837b548a5f697a6cee1beb122c64dc211f23cb2331c2",
       "path": "rust/src/externs/render.rs",
-      "size": 9858
+      "size": 12467
     },
     {
-      "digest": "sha256:2dcd6a3426844c024ee2ef211e3a54e5b2bf1791f434af732e8dea5de3a17048",
+      "digest": "sha256:071662840ba658e1209a0d7a2456a0bd884519eb09491ae0c220a5db38ce7b19",
       "path": "rust/src/externs/resource.rs",
-      "size": 16571
+      "size": 22571
     },
     {
-      "digest": "sha256:9e8ca206be5b51c6f27a41e0a136e031b6827bf16559d31f729e5358cf80bd38",
+      "digest": "sha256:b1b658c5dff3837db583749f0d93c7e1cb3528babd81cc4391df0b64b16ce358",
       "path": "rust/src/externs/util.rs",
-      "size": 2680
+      "size": 3111
     },
     {
-      "digest": "sha256:cc83d6aa18c61afc76abd908fd490c21fa45933df470627d586f0061c6114140",
+      "digest": "sha256:996be4933ed542c1251033ecb09aeed9ba25f296898f5efd3af594d874e57715",
       "path": "rust/src/file_io.rs",
-      "size": 1695
+      "size": 1693
     },
     {
-      "digest": "sha256:41652a5a7ca2d548df06059a7d46113cc7833729e8b876c7659b5777b4e0cf60",
+      "digest": "sha256:9ec079d0ff59965aeeeeaaf60bf294590c5d3a445db655063e4eea6c5a80033b",
       "path": "rust/src/font_manager.rs",
-      "size": 12023
+      "size": 12389
     },
     {
-      "digest": "sha256:4cfe2a5ee91f0018f79abc03b4c5f364fa051b650c11dd54381c2a198e7ee5ad",
+      "digest": "sha256:c47d9f0b365379a021694e8aa529ee83d45bf3add28428dd3f2170de9d9f822c",
       "path": "rust/src/host_api.rs",
-      "size": 3294
+      "size": 3328
     },
     {
-      "digest": "sha256:2f8d41c9ebd7a8f69be7ee6145e631a7fa178cc2455850537938b0e7b515c315",
+      "digest": "sha256:5a8e232a362661d37063ae5a421b4c11593853a3a50c34cbef9edb651b1945a4",
       "path": "rust/src/input.rs",
-      "size": 13758
+      "size": 10216
     },
     {
-      "digest": "sha256:5bb4c05317ab218c3ed7a2bd910c4d74aaf90ecf76357918a12cf7a627e5de22",
+      "digest": "sha256:dbb9006d249cc85e6d5804e2e90ae36058ec11b3c9e26acd6a7e3d04a5be7182",
       "path": "rust/src/island_bindgen.rs",
-      "size": 44609
+      "size": 51855
     },
     {
-      "digest": "sha256:cf4e45115063862475fc9af3e9c7753a57094a747d4f5a9f736f629a53dfaf9d",
+      "digest": "sha256:b3aac240c70fce5e56d1202e6e284d13fd56c97e3a0b4753bfc935f92f075721",
       "path": "rust/src/lib.rs",
-      "size": 2845
+      "size": 3105
     },
     {
-      "digest": "sha256:e2d55d47a62a78ea4e89ac90ca261b10ecda75bbd61f32fd74bd3c31432778b9",
+      "digest": "sha256:7dd0c526b6892603822fba4ebee8be91e977d824fd45d0198f244e3d5d3880cd",
+      "path": "rust/src/material.rs",
+      "size": 2388
+    },
+    {
+      "digest": "sha256:0b6f98982cd34091073748deee0596a7e1e8a9f5bdaa3dcf2c22a8c412491336",
       "path": "rust/src/math3d.rs",
-      "size": 16760
+      "size": 18590
     },
     {
-      "digest": "sha256:2398a6105f70a016805737b7423f9490328d73a949977a860464fb18cef7cccc",
+      "digest": "sha256:7512f283755e63c9239aa45445c0e839354694a1b5ab9fdf9d96eed54c44ad29",
       "path": "rust/src/model_loader.rs",
-      "size": 61331
+      "size": 82203
     },
     {
-      "digest": "sha256:fc290579ce21249e69f21e394609abce7c3d7642408d9a113b0ac7cdcecda4a3",
+      "digest": "sha256:c005b3cefbffd99e7e5cf2f887e143e2554da76b98878a1c31c6faf1a069d71c",
       "path": "rust/src/physics.rs",
-      "size": 14258
+      "size": 14619
     },
     {
-      "digest": "sha256:a4e8759d559e6c1205d63d30731851698eb91ce8baa45269a28d1f92dd412a7e",
+      "digest": "sha256:ea3bb19ebecbc8f6948d4b2d707e1b238f564389eb56eaf3cd97422f97cac2af",
       "path": "rust/src/physics3d.rs",
-      "size": 29329
+      "size": 38664
     },
     {
-      "digest": "sha256:0ad20ae33a6d8913e03a32e4ed6f6893d53bdd11a65038d9beaf1c28d4de7355",
+      "digest": "sha256:5cb6a289fe4a00b41720b3af746e5331144b2b84faf02e6273ba915941583e3b",
       "path": "rust/src/physics_registry.rs",
-      "size": 2583
+      "size": 2588
     },
     {
-      "digest": "sha256:896342401dd367dbeae84414103f9f03d9ef4d14b8e44e8521ecd038e12a67c5",
+      "digest": "sha256:c7b92ec660f002f8a4afed576389bed11dc94661e55498cc535ae8a8e81f58c7",
       "path": "rust/src/pipeline2d.rs",
-      "size": 9804
+      "size": 9881
     },
     {
-      "digest": "sha256:b8e343f3fb4d89321aec0b7d3bc5cae4cea69639d04c6748acf016b65b70ad69",
+      "digest": "sha256:94166951be2afefa132e1a9507eecee891cd63523640ac5dfda430ed3182841e",
       "path": "rust/src/pipeline3d.rs",
-      "size": 40192
+      "size": 69478
     },
     {
-      "digest": "sha256:94295e083daf8680c0c6277867fd85d04b1948c53f14038a8bc661f5861c2c34",
+      "digest": "sha256:3956458ab7c86beb64c4e89bb0edd4ac11abc70cdc548c5c03808aa20dba8baa",
       "path": "rust/src/pipeline_shadow.rs",
-      "size": 13815
+      "size": 15063
     },
     {
-      "digest": "sha256:dfc798607638641d51d73ce73a93ea81e768c626ea1dc003db73362ac9d98916",
+      "digest": "sha256:4b80912fda7a42aa9f030c517f857db4185b22ce56ee70e5f39016c441706a70",
       "path": "rust/src/pipeline_skybox.rs",
       "size": 4528
     },
     {
-      "digest": "sha256:56b89fd6677eab814769f9f6794a569e05b3d44f584dbdfa0bee6bf1360f4cfe",
+      "digest": "sha256:1b4feb0a39b312779c6fb2c087f0f67bacc5c4231830d3223fdcf378dc74883c",
       "path": "rust/src/pipeline_sprite.rs",
-      "size": 6855
+      "size": 6850
     },
     {
-      "digest": "sha256:8fb0dce4c3e7dfd5fb3f38b681742ba677ccff23c27af1c7f521f7cb7ea1a7a2",
+      "digest": "sha256:a09b7258e91fad86e6b0a04f692685d3604d6b20f0c0b044950d3864783e5c40",
+      "path": "rust/src/primitive_pipeline.rs",
+      "size": 47602
+    },
+    {
+      "digest": "sha256:166a366526b5dcee029d239e99fc7c84775f34ac96aaaff8c77f33670c917440",
+      "path": "rust/src/primitive_scene.rs",
+      "size": 22019
+    },
+    {
+      "digest": "sha256:d96f5b4b051a6e2ea38f68c76fd5ae57735a5dbd101f8d6c4fe7784a83dffc8c",
       "path": "rust/src/primitives.rs",
-      "size": 9682
+      "size": 19215
     },
     {
-      "digest": "sha256:8c8af1677597fb363ddf319be437d20dfae9a2e6ada89442223f1fe83e5da4b9",
+      "digest": "sha256:5aa78fb3aeacfc22b1a3a5317d69eb5046f02d244079c33b599e03b8d9c24faf",
+      "path": "rust/src/render_world.rs",
+      "size": 5125
+    },
+    {
+      "digest": "sha256:fef6b3003463d9f695f3094f0d36e6bca3d494d1c1a36553dfccc49e0ff5bad7",
       "path": "rust/src/renderer.rs",
-      "size": 36181
+      "size": 63090
     },
     {
-      "digest": "sha256:9fa64bdf16a1ea174e69f735abfa65a8a4170be3a3b8ac4f1af18135f2a7f098",
+      "digest": "sha256:41af78f8984550d1a254ba86be94d36b02fcaa4d322a1fe70704b9f38274965e",
       "path": "rust/src/renderer_runtime.rs",
-      "size": 4416
+      "size": 4444
     },
     {
-      "digest": "sha256:9adb5eecca92a4d3b6345910776f827705e0c3d6b43b91bcddfa39ad9bc85ca1",
+      "digest": "sha256:18abd3a3a8fc425ddbe26372f222b5817e5444a0df0bf6dacb99de9e678f433e",
       "path": "rust/src/shaders/mesh.wgsl",
-      "size": 5627
+      "size": 13547
     },
     {
-      "digest": "sha256:6989c9135439d098307fbe22075e4708670791e2ead28b67944ab8e17386e982",
+      "digest": "sha256:f524a81980d81fb327548df753c5ccb9fac1cb71db43e94982c78cad1143dbc1",
       "path": "rust/src/shaders/mesh_skinned.wgsl",
-      "size": 5908
+      "size": 11868
     },
     {
-      "digest": "sha256:19155879e26a5ea0519ad6bd519fc0e5d0718000ed5a83c83a14ca552231c5e5",
+      "digest": "sha256:5841fdf5437afedf994aa85a00fa65ef81b133f92324aa2ff88e02be44eaf055",
       "path": "rust/src/shaders/mesh_terrain.wgsl",
-      "size": 6219
+      "size": 12165
     },
     {
-      "digest": "sha256:cde844e06a30b1eac9c8b43c2c77fcef4575ec1ab71dff965e67d891536c5a02",
+      "digest": "sha256:5c2853d6cd95871c2163c7fb3625a9aee1333414d7d4365eb36b29e7cd185e89",
       "path": "rust/src/shaders/shadow.wgsl",
-      "size": 1345
+      "size": 1557
     },
     {
       "digest": "sha256:5cfe6e94cf4c943484e7991da785dcd577be211fd8a2eef30cc1a7e9d5c47dea",
@@ -434,19 +549,19 @@
       "size": 2398
     },
     {
-      "digest": "sha256:1af4431951d9ed19f18682a3bf5834711df8c7769d108cc4f3011d9b7848561b",
+      "digest": "sha256:72bdac70f31d55fce6b98812426b8351c15267c0946f36ed86ab5f31d233831b",
       "path": "rust/src/stream.rs",
-      "size": 13418
+      "size": 47494
     },
     {
-      "digest": "sha256:b776ca6383ad009eb2fb9846f21bbe714e38d7157746fab0d284d5dc003c8ebc",
+      "digest": "sha256:144df19215e00ab3a7cb10ed6b3268d19bc6082d5a94f400d761b9b053b96d44",
       "path": "rust/src/terrain.rs",
-      "size": 7431
+      "size": 7729
     },
     {
-      "digest": "sha256:2f664994b6fd8a42f68d6f53b51e377e8a8c7367e6649be28aaf5a73845bdb50",
+      "digest": "sha256:5a08334432b0f9981a215c025a6d5ff6ed2a8a1d5dcd8c1d2d88cfaa0ad75a7c",
       "path": "rust/src/texture.rs",
-      "size": 13930
+      "size": 14887
     },
     {
       "digest": "sha256:15a034bf683ac089b81a51b6ed3afb52f2eb41a63d270e1e5de662d121f4fd3d",
@@ -509,9 +624,19 @@
       "size": 1935
     },
     {
-      "digest": "sha256:ba4e0f5b61533b0b6318ea1728e3913891abba3212c5ac84be459e10917dc23d",
+      "digest": "sha256:e2c3ca47485622d4a6055d0c3217a9813456664a4a8a44b146e6036e895d5eed",
+      "path": "scene3d/decal.vo",
+      "size": 1940
+    },
+    {
+      "digest": "sha256:af964b6c3952d369d29feb15531f57d4fe9844c327e52ec786f6bd1e84ad5d4e",
       "path": "scene3d/draw.vo",
-      "size": 1478
+      "size": 6192
+    },
+    {
+      "digest": "sha256:a121b0c1ecade1c9968b54b781256de12b09b5650346587c8475a1fba32649d4",
+      "path": "scene3d/kart_controller.vo",
+      "size": 7578
     },
     {
       "digest": "sha256:622c0d6e57d17d10af02cbfca49943624b37169dbf27946caba501130278fad9",
@@ -519,14 +644,24 @@
       "size": 10131
     },
     {
+      "digest": "sha256:40d7bda217086afca7fb1a763dbc1c30b50f4040750676838d552fa2267ebe1e",
+      "path": "scene3d/lighting.vo",
+      "size": 2246
+    },
+    {
+      "digest": "sha256:7772b81d6e27bed8c84a207ae5f949e1412401fda5845318b8ac5165e58e2951",
+      "path": "scene3d/map.vo",
+      "size": 13132
+    },
+    {
       "digest": "sha256:d1438769e5516b6e442a96685c334a94ddebab711a08085999c1a343f43d74d9",
       "path": "scene3d/particles.vo",
       "size": 6648
     },
     {
-      "digest": "sha256:c7bc1673f7c2210b2a9d383b97b838d5919e2f28afdb076de18de2363280cdbf",
+      "digest": "sha256:5fee5996c81dbb9f5acf2555b101d49a5c77ecc4e227f2bef42dd5fae9e08ab3",
       "path": "scene3d/physics.vo",
-      "size": 10790
+      "size": 13062
     },
     {
       "digest": "sha256:38a12d46328711047ecd6135714cab30438b74be34c607a547b75592586173df",
@@ -534,24 +669,74 @@
       "size": 3363
     },
     {
-      "digest": "sha256:a28110e3551da281123cb7f10063f7159c49ba0416e0b12d0d2b7c12956807c2",
+      "digest": "sha256:b30056605e6e09fa41e628b8cce17fef619614ff8984cfd8642715ca6d1d64dd",
+      "path": "scene3d/primitive_layers.vo",
+      "size": 15064
+    },
+    {
+      "digest": "sha256:697d24ad19731e29ec2649bd7814dbbb773fa13f639c9473b3a29e254f9f4b15",
       "path": "scene3d/primitives.vo",
-      "size": 580
+      "size": 872
     },
     {
-      "digest": "sha256:863c279e2071fcf68dce3579884448335542898c8d62b92297671cc01ea950b6",
+      "digest": "sha256:18a61c00b1a0be226b5a64ad228c44706c00db7e040b2ab2cb1164a5a37d803e",
+      "path": "scene3d/racing_camera.vo",
+      "size": 6033
+    },
+    {
+      "digest": "sha256:ea444ff5a1b8fa913205d23fa7967d114e81c381dab15c50bb6f6bde46fbfcee",
+      "path": "scene3d/racing_input.vo",
+      "size": 2986
+    },
+    {
+      "digest": "sha256:86c89f92113b4356109c63f2e234e26e1045115f409e4de6870c2c4471767a0f",
+      "path": "scene3d/replay.vo",
+      "size": 6696
+    },
+    {
+      "digest": "sha256:0b1513b005c2a4e69037664c0122ea1572b61329a860a8c07e31973d07579845",
       "path": "scene3d/scene.vo",
-      "size": 19661
+      "size": 23530
     },
     {
-      "digest": "sha256:12e1ee928b9fd3c9993c7c206727245f71928c34964a726f3f8a06c9a7ffbcc5",
+      "digest": "sha256:a9684a3b79a5cc09c92124766158079ca95715a5366eb5a3d770218ea9efcefd",
       "path": "scene3d/terrain.vo",
-      "size": 8691
+      "size": 10448
     },
     {
       "digest": "sha256:b8493f4ef059a681a66111a6836e3e439c6c28ef7ef9fe48ad3ae470c44799b0",
       "path": "scene3d/third_person_camera.vo",
       "size": 4244
+    },
+    {
+      "digest": "sha256:64b5a65ad09a8103a607d4939ca9ade5651c2170cef6c08e4c1ae860d0ab07c3",
+      "path": "scene3d/track.vo",
+      "size": 56874
+    },
+    {
+      "digest": "sha256:a96e8e2ce168c2e6c2e8005f429da597ee5f70393577a4057cd82988a6a285be",
+      "path": "scene3d/track_bake.vo",
+      "size": 6951
+    },
+    {
+      "digest": "sha256:d3bd2485385a7aa60f1d764cfd3e69dd795a6f686a605b4de18feb4372668443",
+      "path": "scene3d/vehicle.vo",
+      "size": 15941
+    },
+    {
+      "digest": "sha256:2021ab0931f62a7de8e20d5cefec118d68b52ef8f9712da6d7db0828108933b8",
+      "path": "scene3d/vehicle_audio.vo",
+      "size": 6641
+    },
+    {
+      "digest": "sha256:8be92a739d8a8d76069d6c94850ce2fa5becef4c92f47cd0bde5ab636e0fd789",
+      "path": "scene3d/vehicle_debug.vo",
+      "size": 9060
+    },
+    {
+      "digest": "sha256:5d72f65ddf3f3733fe64da49d526a3f835d34e1270e1be99627bc31e51b12c92",
+      "path": "scene3d/vehicle_recovery.vo",
+      "size": 3485
     },
     {
       "digest": "sha256:4d58018c447e231076a473f8634ea89661675f74b94a4aa6c871fda16f4a0cab",
@@ -569,9 +754,9 @@
       "size": 1393
     },
     {
-      "digest": "sha256:ae9c626de0d97409b232eba15bebfb535e2992b506a5d1c7f9b2725d9f180292",
+      "digest": "sha256:1623a4d6a9055fc4d19722960a32ae9aa781277e1f9a2cecce8fcb93c4492266",
       "path": "tests/main.vo",
-      "size": 66380
+      "size": 147427
     },
     {
       "digest": "sha256:3db52b428a274e8ba1f54c322b77daa07e33e6d282b12d8c61d25c22ea8e4ab4",
@@ -579,28 +764,53 @@
       "size": 1481
     },
     {
+      "digest": "sha256:8abe5557c7378c1f075b3264ee72b44e6cd6d93211e69d41ec38dcf9fd0e5276",
+      "path": "tools/check_render_exposure.mjs",
+      "size": 8948
+    },
+    {
+      "digest": "sha256:a695e9bd077c2836c6ff24c3a86be647bceb87c78373d8526d8bf50f6cbe077e",
+      "path": "tools/check_vehicle_telemetry_parity.mjs",
+      "size": 14735
+    },
+    {
+      "digest": "sha256:3e6d35a9c147eb98dcdfdde32a1b606e7be920c0fbf5ae907932624ac092f1b0",
+      "path": "tools/primitive_stress.vo",
+      "size": 5503
+    },
+    {
+      "digest": "sha256:a62a425198590f200f981910e36ce63020b6987b5f5eabe14616a3578d88f463",
+      "path": "tools/racing_reference_demos.vo",
+      "size": 11232
+    },
+    {
+      "digest": "sha256:7e0b7d735249086024f6c58ac57e75e4180a85de916356e153dad26ec6035c74",
+      "path": "tools/vehicle_telemetry_parity.vo",
+      "size": 2174
+    },
+    {
       "digest": "sha256:bbbfc6169d62686808fa7d57cd25188454b93b6dcd84b2837f9e0a1d84e7006a",
       "path": "tween.vo",
       "size": 7060
     },
     {
-      "digest": "sha256:58f05abf00f73cdcd126e5dd3309decda58fdc59436ec47c74bf9b8ce1186236",
+      "digest": "sha256:829e580d5908563327590a9e881ae1d756c99484c2f33b3af389d80491daa208",
       "path": "vo.lock",
       "size": 1551
     },
     {
-      "digest": "sha256:a523816c325db882b3c67950b93dc52970d38ea162dc3094191951973797324a",
+      "digest": "sha256:21d455e3c0f7ae5cb7f0fa7bc372fccbe488469c0bf751ea7bf97c9e0650a768",
       "path": "vo.mod",
       "size": 788
     },
     {
-      "digest": "sha256:d5405bb7c77ef994f4fc843d9d095d8f035126539ef0942f5b8177779a09a08d",
+      "digest": "sha256:49439914186dfcc31d824aa322ed3284c76ef65c726ba4feb309fa11596a8b44",
       "path": "web-artifacts/voplay_island.js",
-      "size": 94795
+      "size": 101164
     }
   ],
-  "source_digest": "sha256:e8a7571816c9c84572e2f273cd9a127afeaf96edba7d4a962f28c90c72c32edc",
-  "version": "v0.1.18",
+  "source_digest": "sha256:d923449d75cd1ca3da5e9ed6a881395af8a3348643097e8b29a888ebf5a95cfd",
+  "version": "v0.1.20",
   "vo": "^0.1.0",
   "web": null
 }

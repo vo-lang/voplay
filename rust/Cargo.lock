@@ -238,9 +238,9 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cc"
-version = "1.2.60"
+version = "1.2.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43c5703da9466b66a946814e1adf53ea2c90f10063b86290cc9eb67ce3478a20"
+checksum = "d16d90359e986641506914ba71350897565610e87ce0ad9e6f28569db3dd5c6d"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1034,7 +1034,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -1141,9 +1141,9 @@ dependencies = [
 
 [[package]]
 name = "idna_adapter"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3acae9609540aa318d1bc588455225fb2085b9ed0c4f6bd0d9d5bcd86f1a0344"
+checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
@@ -1301,9 +1301,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.185"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libloading"
@@ -2224,9 +2224,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "log",
  "once_cell",
@@ -2239,9 +2239,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be040f8b0a225e40375822a563fa9524378b9d63112f53e19ffff34df5d33fdd"
+checksum = "30a7197ae7eb376e574fe940d068c30fe0462554a3ddbe4eca7838e049c937a9"
 dependencies = [
  "zeroize",
 ]
@@ -2793,7 +2793,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vo-common"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "codespan-reporting",
  "rustc-hash 1.1.0",
@@ -2808,7 +2808,7 @@ dependencies = [
 [[package]]
 name = "vo-common-core"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "hashbrown 0.15.5",
  "num_enum",
@@ -2818,7 +2818,7 @@ dependencies = [
 [[package]]
 name = "vo-ext"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "linkme",
  "vo-ffi-macro",
@@ -2828,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "vo-ffi-macro"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2841,7 +2841,7 @@ dependencies = [
 [[package]]
 name = "vo-module"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "flate2",
  "js-sys",
@@ -2861,7 +2861,7 @@ dependencies = [
 [[package]]
 name = "vo-runtime"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "dirs",
  "hashbrown 0.15.5",
@@ -2879,7 +2879,7 @@ dependencies = [
 [[package]]
 name = "vo-stdlib"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2907,7 +2907,7 @@ dependencies = [
 [[package]]
 name = "vo-syntax"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "logos",
  "num-bigint",
@@ -2920,7 +2920,7 @@ dependencies = [
 [[package]]
 name = "vo-vm"
 version = "0.1.1"
-source = "git+https://github.com/vo-lang/volang?rev=89d93f42839409aab0a9f781c1f78aff62176a6a#89d93f42839409aab0a9f781c1f78aff62176a6a"
+source = "git+https://github.com/vo-lang/volang?rev=6bf8cbe3562feedfb3a67554d97745edc3e8c262#6bf8cbe3562feedfb3a67554d97745edc3e8c262"
 dependencies = [
  "fastrand",
  "hashbrown 0.15.5",
@@ -2962,7 +2962,7 @@ dependencies = [
 [[package]]
 name = "vogui"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/vogui?rev=ce7a810d1873609298c7242610edd14f36159a83#ce7a810d1873609298c7242610edd14f36159a83"
+source = "git+https://github.com/vo-lang/vogui?rev=cf4d0163aed96f66747bdeb7d893f8efaccca1bb#cf4d0163aed96f66747bdeb7d893f8efaccca1bb"
 dependencies = [
  "linkme",
  "log",
@@ -3274,11 +3274,24 @@ version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ba6d44ec8c2591c134257ce647b7ea6b20335bf6379a27dac5f1641fcf59f99"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.58.0",
+ "windows-interface 0.58.0",
  "windows-result 0.2.0",
- "windows-strings",
+ "windows-strings 0.1.0",
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
+dependencies = [
+ "windows-implement 0.60.2",
+ "windows-interface 0.59.3",
+ "windows-link",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
 ]
 
 [[package]]
@@ -3293,10 +3306,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-implement"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "windows-interface"
 version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053c4c462dc91d3b1504c6fe5a726dd15e216ba718e84a0e46a88fbe5ded3515"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.59.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3328,6 +3363,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+dependencies = [
+ "windows-link",
+]
+
+[[package]]
 name = "windows-strings"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3335,6 +3379,15 @@ checksum = "4cd9b125c486025df0eabcb585e62173c6c9eddcec5d117d3b6e8c30e2ee4d10"
 dependencies = [
  "windows-result 0.2.0",
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]

@@ -22,7 +22,7 @@ permissions:
   contents: write
 
 env:
-  VOLANG_REF: 89d93f42839409aab0a9f781c1f78aff62176a6a
+  VOLANG_REF: 6bf8cbe3562feedfb3a67554d97745edc3e8c262
 
 jobs:
   validate:

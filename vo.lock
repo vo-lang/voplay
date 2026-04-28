@@ -7,46 +7,46 @@ vo = "^0.1.0"
 
 [[resolved]]
 path = "github.com/vo-lang/vogui"
-version = "v0.1.11"
+version = "v0.1.12"
 vo = "^0.1.0"
-commit = "e80b37be37050d96d2b55dbef5ce3b81091c3b5f"
-release_manifest = "sha256:2596c120decdf2a038c3dad51211d68952348b154d4f03bedce49f5bb28c8a0a"
-source = "sha256:7383997db3a7f93446e939f76fe37cc8f8b0182d0a7202beaec29c9a5598dbef"
+commit = "ce7a810d1873609298c7242610edd14f36159a83"
+release_manifest = "sha256:b63c32dd6d24fc20fe3bc5c6bb2414306587838c72f4f7659bea3044f941acca"
+source = "sha256:f5df8c277020a5ab54a59afcdf0f30bef1966bb1bdd60f12b6519142f6ceb5aa"
 deps = []
 
 [[resolved.artifact]]
 kind = "extension-native"
 target = "aarch64-apple-darwin"
 name = "libvo_vogui.dylib"
-size = 1590528
-digest = "sha256:5258a99650e30937390e178d11be8eff125fdfc8ff7ef3d8cbc9aec987230515"
+size = 1591040
+digest = "sha256:d28b9104f198e0f5868a6266c88c7cc193d10d21fd7f214c508b16ab65f6db98"
 
 [[resolved.artifact]]
 kind = "extension-native"
 target = "x86_64-pc-windows-msvc"
 name = "vo_vogui.dll"
-size = 1379328
-digest = "sha256:89eb200bbac2a1e2c822ffde97e1730b2ea8609c31278d631f98e746009e7247"
+size = 1381376
+digest = "sha256:558294290ec7e2742742cc65ee68ef7f9a69836c288d6f194f7d6b77b34e2d65"
 
 [[resolved.artifact]]
 kind = "extension-native"
 target = "x86_64-unknown-linux-gnu"
 name = "libvo_vogui.so"
-size = 2064856
-digest = "sha256:77b9f32987b0084f5a693df06d9f3f638ce1784227a22f52d02463b2ec9973f3"
+size = 2068168
+digest = "sha256:5bff50448b97a147503ce1e0c3bd135ff33bf3fab963c3ee649c792fe3be62cc"
 
 [[resolved.artifact]]
 kind = "extension-wasm"
 target = "wasm32-unknown-unknown"
 name = "vogui.wasm"
-size = 26031
-digest = "sha256:2e87a33cbcebef01bcb6ccd4e2a4feac0daf3591365c712ceab3ee5f1f82aa16"
+size = 29805
+digest = "sha256:a8cd94beffcec3d8d3d70940435a86fb2ad38e78268d691fb48433406d1bfd9c"
 
 [[resolved]]
 path = "github.com/vo-lang/vopack"
-version = "v0.1.0"
+version = "v0.1.1"
 vo = "^0.1.0"
-commit = "9b9ed084848c9621aacc5948b384e704ffdc6406"
-release_manifest = "sha256:f8d4c62e0435f92334bd2e480ba28bf6549c6556dbbd1ae7f262c52752210d9b"
-source = "sha256:66332c9bcae3d0c060d86de987a717bc3e5d86bcbf8439e0bea18cba339d0f72"
+commit = "d2063001e66405ad800bdabe0c7e7ff6343149de"
+release_manifest = "sha256:fcf7f0995945fe3b48e5319d6a15ab4da8173076098fc013196f8487334e249c"
+source = "sha256:afc9c48744d87b0608fdc31b54902bffde5f57f229f1da44c2dec410182e1b0e"
 deps = []

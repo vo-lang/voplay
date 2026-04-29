@@ -35,7 +35,7 @@ func normalizeKeyName(key string) string {
 	return key
 }
 
-// InputState holds the current state of keyboard and pointer input.
+// InputState holds the current state of keyboard, pointer, and gamepad input.
 type InputState struct {
 	// Keyboard state: key string → state
 	keysDown     map[string]bool // currently held
@@ -48,11 +48,24 @@ type InputState struct {
 	pointerButtons         int   // bitmask of held buttons
 	pointerPressed         int   // buttons pressed this frame
 	pointerReleased        int   // buttons released this frame
+	pointerContacts        map[int]*PointerContact
+	pointerOrder           []int
+	pointerSeen            bool
 
 	// Scroll wheel
 	scrollX, scrollY float64
 
 	gamepads map[int]*GamepadState
+}
+
+type PointerContact struct {
+	ID int
+	X, Y float64
+	PrevX, PrevY float64
+	Button int
+	Down bool
+	Pressed bool
+	Released bool
 }
 
 type InputBinding struct {
@@ -87,6 +100,7 @@ func NewInputState() *InputState {
 		keysDown:     map[string]bool{},
 		keysPressed:  map[string]bool{},
 		keysReleased: map[string]bool{},
+		pointerContacts: map[int]*PointerContact{},
 		gamepads:     map[int]*GamepadState{},
 	}
 }
@@ -323,28 +337,64 @@ func (inp *InputState) KeyUp(key string) {
 }
 
 func (inp *InputState) PointerDown(x, y float64, button int) {
+	inp.PointerDownID(0, x, y, button)
+}
+
+func (inp *InputState) PointerDownID(id int, x, y float64, button int) {
+	validatePointerID(id)
 	if button < 0 {
-		panic("PointerDown: button must be >= 0")
+		panic("PointerDownID: button must be >= 0")
 	}
+	inp.pointerSeen = true
 	inp.pointerX = x
 	inp.pointerY = y
-	inp.pointerButtons |= 1 << button
-	inp.pointerPressed |= 1 << button
+	contact := inp.pointerContact(id, x, y)
+	if !contact.Down {
+		contact.Pressed = true
+		inp.pointerPressed |= 1 << button
+	}
+	contact.X = x
+	contact.Y = y
+	contact.Button = button
+	contact.Down = true
+	contact.Released = false
+	inp.recomputePointerButtons()
 }
 
 func (inp *InputState) PointerUp(x, y float64, button int) {
+	inp.PointerUpID(0, x, y, button)
+}
+
+func (inp *InputState) PointerUpID(id int, x, y float64, button int) {
+	validatePointerID(id)
 	if button < 0 {
-		panic("PointerUp: button must be >= 0")
+		panic("PointerUpID: button must be >= 0")
 	}
+	inp.pointerSeen = true
 	inp.pointerX = x
 	inp.pointerY = y
-	inp.pointerButtons &^= 1 << button
+	contact := inp.pointerContact(id, x, y)
+	contact.X = x
+	contact.Y = y
+	contact.Button = button
+	contact.Down = false
+	contact.Released = true
 	inp.pointerReleased |= 1 << button
+	inp.recomputePointerButtons()
 }
 
 func (inp *InputState) PointerMove(x, y float64) {
+	inp.PointerMoveID(0, x, y)
+}
+
+func (inp *InputState) PointerMoveID(id int, x, y float64) {
+	validatePointerID(id)
+	inp.pointerSeen = true
 	inp.pointerX = x
 	inp.pointerY = y
+	contact := inp.pointerContact(id, x, y)
+	contact.X = x
+	contact.Y = y
 }
 
 func (inp *InputState) ScrollBy(dx, dy float64) {
@@ -365,19 +415,22 @@ func (inp *InputState) unpackEvents(data []byte) {
 			key := decodeKeyEvent(&r)
 			inp.KeyUp(key)
 		case inputPointerDown:
+			id := r.ReadU32()
 			x := r.ReadF64()
 			y := r.ReadF64()
 			btn := int(r.ReadByte())
-			inp.PointerDown(x, y, btn)
+			inp.PointerDownID(id, x, y, btn)
 		case inputPointerUp:
+			id := r.ReadU32()
 			x := r.ReadF64()
 			y := r.ReadF64()
 			btn := int(r.ReadByte())
-			inp.PointerUp(x, y, btn)
+			inp.PointerUpID(id, x, y, btn)
 		case inputPointerMove:
+			id := r.ReadU32()
 			x := r.ReadF64()
 			y := r.ReadF64()
-			inp.PointerMove(x, y)
+			inp.PointerMoveID(id, x, y)
 			_ = r.ReadByte() // button byte present in wire format but ignored for move events
 		case inputScroll:
 			inp.ScrollBy(r.ReadF64(), r.ReadF64())
@@ -399,6 +452,23 @@ func (inp *InputState) endFrame() {
 	inp.pointerReleased = 0
 	inp.prevPointerX = inp.pointerX
 	inp.prevPointerY = inp.pointerY
+	nextOrder := inp.pointerOrder[:0]
+	for _, id := range inp.pointerOrder {
+		contact := inp.pointerContacts[id]
+		if contact == nil {
+			continue
+		}
+		contact.Pressed = false
+		contact.Released = false
+		contact.PrevX = contact.X
+		contact.PrevY = contact.Y
+		if contact.Down {
+			nextOrder = append(nextOrder, id)
+		} else {
+			delete(inp.pointerContacts, id)
+		}
+	}
+	inp.pointerOrder = nextOrder
 	inp.scrollX = 0
 	inp.scrollY = 0
 	for _, gp := range inp.gamepads {
@@ -532,6 +602,89 @@ func (inp *InputState) IsPointerReleased(button int) bool {
 	return inp.pointerReleased&(1<<button) != 0
 }
 
+func (inp *InputState) HasPointerInput() bool {
+	return inp.pointerSeen
+}
+
+func (inp *InputState) PointerContactCount() int {
+	return len(inp.pointerContacts)
+}
+
+func (inp *InputState) PointerDownContactCount() int {
+	count := 0
+	for _, contact := range inp.pointerContacts {
+		if contact.Down {
+			count++
+		}
+	}
+	return count
+}
+
+func (inp *InputState) PointerContacts() []PointerContact {
+	result := make([]PointerContact, 0, len(inp.pointerContacts))
+	for _, id := range inp.pointerOrder {
+		contact := inp.pointerContacts[id]
+		if contact != nil {
+			result = append(result, *contact)
+		}
+	}
+	return result
+}
+
+func (inp *InputState) PointerContact(id int) (PointerContact, bool) {
+	validatePointerID(id)
+	contact := inp.pointerContacts[id]
+	if contact == nil {
+		return PointerContact{}, false
+	}
+	return *contact, true
+}
+
+func (inp *InputState) IsPointerContactDown(id int) bool {
+	validatePointerID(id)
+	contact := inp.pointerContacts[id]
+	return contact != nil && contact.Down
+}
+
+func (inp *InputState) IsPointerContactPressed(id int) bool {
+	validatePointerID(id)
+	contact := inp.pointerContacts[id]
+	return contact != nil && contact.Pressed
+}
+
+func (inp *InputState) IsPointerContactReleased(id int) bool {
+	validatePointerID(id)
+	contact := inp.pointerContacts[id]
+	return contact != nil && contact.Released
+}
+
+func (inp *InputState) AnyPointerDownInRect(rect Rect) bool {
+	for _, contact := range inp.pointerContacts {
+		if contact.Down && rect.Contains(contact.X, contact.Y) {
+			return true
+		}
+	}
+	return false
+}
+
+func (inp *InputState) AnyPointerPressedInRect(rect Rect) bool {
+	for _, contact := range inp.pointerContacts {
+		if contact.Pressed && rect.Contains(contact.X, contact.Y) {
+			return true
+		}
+	}
+	return false
+}
+
+func (inp *InputState) AnyPointerReleasedInRect(rect Rect) bool {
+	for _, contact := range inp.pointerContacts {
+		if contact.Released && rect.Contains(contact.X, contact.Y) {
+			return true
+		}
+	}
+	return false
+}
+
 // ScrollDelta returns the accumulated scroll wheel delta for this frame.
 // Positive Y = scroll up/forward, negative Y = scroll down/backward.
 func (inp *InputState) ScrollDelta() (float64, float64) {
@@ -558,6 +711,35 @@ func (inp *InputState) gamepad(gamepad int) *GamepadState {
 		inp.gamepads[gamepad] = gp
 	}
 	return gp
+}
+
+func (inp *InputState) pointerContact(id int, x, y float64) *PointerContact {
+	if inp.pointerContacts == nil {
+		inp.pointerContacts = map[int]*PointerContact{}
+	}
+	contact := inp.pointerContacts[id]
+	if contact == nil {
+		contact = &PointerContact{ID: id, X: x, Y: y, PrevX: x, PrevY: y}
+		inp.pointerContacts[id] = contact
+		inp.pointerOrder = append(inp.pointerOrder, id)
+	}
+	return contact
+}
+
+func (inp *InputState) recomputePointerButtons() {
+	buttons := 0
+	for _, contact := range inp.pointerContacts {
+		if contact.Down {
+			buttons |= 1 << contact.Button
+		}
+	}
+	inp.pointerButtons = buttons
+}
+
+func validatePointerID(id int) {
+	if id < 0 {
+		panic("InputState: pointer id must be >= 0")
+	}
 }
 
 func inputApplyDeadzone(v, deadzone float64) float64 {

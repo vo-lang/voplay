@@ -93,19 +93,19 @@ pub extern "C" fn vo_voplay_push_key_event(down: bool, key_ptr: *const u8, key_l
 #[cfg(feature = "native")]
 #[no_mangle]
 pub extern "C" fn vo_voplay_push_pointer_down(x: f64, y: f64, button: u8) {
-    crate::input::push_pointer_event(crate::input::POINTER_DOWN, x, y, button);
+    crate::input::push_pointer_event(crate::input::POINTER_DOWN, 0, x, y, button);
 }
 
 #[cfg(feature = "native")]
 #[no_mangle]
 pub extern "C" fn vo_voplay_push_pointer_up(x: f64, y: f64, button: u8) {
-    crate::input::push_pointer_event(crate::input::POINTER_UP, x, y, button);
+    crate::input::push_pointer_event(crate::input::POINTER_UP, 0, x, y, button);
 }
 
 #[cfg(feature = "native")]
 #[no_mangle]
 pub extern "C" fn vo_voplay_push_pointer_move(x: f64, y: f64) {
-    crate::input::push_pointer_event(crate::input::POINTER_MOVE, x, y, 0);
+    crate::input::push_pointer_event(crate::input::POINTER_MOVE, 0, x, y, 0);
 }
 
 #[cfg(feature = "native")]

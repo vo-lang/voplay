@@ -20,6 +20,7 @@ struct WasmInputHandlers {
     pointer_down: Closure<dyn FnMut(web_sys::PointerEvent)>,
     pointer_up: Closure<dyn FnMut(web_sys::PointerEvent)>,
     pointer_move: Closure<dyn FnMut(web_sys::PointerEvent)>,
+    pointer_cancel: Closure<dyn FnMut(web_sys::PointerEvent)>,
     wheel: Closure<dyn FnMut(web_sys::WheelEvent)>,
 }
 
@@ -39,6 +40,8 @@ const INPUT_SCROLL: u8 = 0x06;
 /// Global input buffer — events are appended by JS/native listeners,
 /// drained by pollInput each frame.
 static INPUT_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+#[cfg(feature = "wasm")]
+static ACTIVE_POINTER_IDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
 /// Append a key event to the buffer.
 pub fn push_key_event(down: bool, key_name: &str) {
@@ -52,9 +55,10 @@ pub fn push_key_event(down: bool, key_name: &str) {
 }
 
 /// Append a pointer event to the buffer.
-pub fn push_pointer_event(kind: u8, x: f64, y: f64, button: u8) {
+pub fn push_pointer_event(kind: u8, id: u32, x: f64, y: f64, button: u8) {
     let mut buf = INPUT_BUFFER.lock().unwrap();
     buf.push(kind);
+    buf.extend_from_slice(&id.to_le_bytes());
     buf.extend_from_slice(&x.to_le_bytes());
     buf.extend_from_slice(&y.to_le_bytes());
     buf.push(button);
@@ -78,6 +82,83 @@ pub fn drain_input() -> Vec<u8> {
 fn pointer_xy(canvas: &web_sys::HtmlCanvasElement, client_x: i32, client_y: i32) -> (f64, f64) {
     let rect = canvas.get_bounding_client_rect();
     (client_x as f64 - rect.left(), client_y as f64 - rect.top())
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_button(event: &web_sys::PointerEvent) -> u8 {
+    event.button().clamp(0, 255) as u8
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_id(event: &web_sys::PointerEvent) -> u32 {
+    event.pointer_id().max(0) as u32
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_id_raw(event: &web_sys::PointerEvent) -> i32 {
+    event.pointer_id()
+}
+
+#[cfg(feature = "wasm")]
+fn mark_pointer_active(id: i32) {
+    let mut ids = ACTIVE_POINTER_IDS.lock().unwrap();
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn clear_pointer_active(id: i32) {
+    let mut ids = ACTIVE_POINTER_IDS.lock().unwrap();
+    ids.retain(|active| *active != id);
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_active(id: i32) -> bool {
+    ACTIVE_POINTER_IDS.lock().unwrap().contains(&id)
+}
+
+#[cfg(feature = "wasm")]
+fn pointer_event_targets_canvas(
+    canvas: &web_sys::HtmlCanvasElement,
+    event: &web_sys::PointerEvent,
+) -> bool {
+    let Some(target) = event.target() else {
+        return false;
+    };
+    let Ok(element) = target.dyn_into::<web_sys::Element>() else {
+        return false;
+    };
+    let canvas_node: &web_sys::Node = canvas.unchecked_ref();
+    element.is_same_node(Some(canvas_node))
+}
+
+#[cfg(feature = "wasm")]
+fn install_canvas_input_style(canvas: &web_sys::HtmlCanvasElement) -> Result<(), String> {
+    let style = canvas.get_attribute("style").unwrap_or_default();
+    let lowered = style.to_ascii_lowercase();
+    let mut additions = Vec::new();
+    if !lowered.contains("touch-action") {
+        additions.push("touch-action:none");
+    }
+    if !lowered.contains("user-select") {
+        additions.push("user-select:none");
+    }
+    if !lowered.contains("-webkit-user-select") {
+        additions.push("-webkit-user-select:none");
+    }
+    if additions.is_empty() {
+        return Ok(());
+    }
+    let mut next = style;
+    if !next.trim().is_empty() && !next.trim_end().ends_with(';') {
+        next.push(';');
+    }
+    next.push_str(&additions.join(";"));
+    next.push(';');
+    canvas
+        .set_attribute("style", &next)
+        .map_err(|_| "voplay: failed to set canvas input style".to_string())
 }
 
 #[cfg(feature = "wasm")]
@@ -133,6 +214,7 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
     canvas
         .set_attribute("tabindex", "0")
         .map_err(|_| "voplay: failed to make canvas focusable".to_string())?;
+    install_canvas_input_style(canvas)?;
 
     let window = web_sys::window()
         .ok_or_else(|| "voplay: no global window for input handlers".to_string())?;
@@ -188,9 +270,11 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
 
     let pointer_canvas = canvas.clone();
     let pointer_down = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        event.prevent_default();
+        mark_pointer_active(pointer_id_raw(&event));
         let _ = pointer_canvas.focus();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_DOWN, x, y, event.button() as u8);
+        push_pointer_event(INPUT_POINTER_DOWN, pointer_id(&event), x, y, pointer_button(&event));
     }) as Box<dyn FnMut(_)>);
     canvas
         .add_event_listener_with_callback("pointerdown", pointer_down.as_ref().unchecked_ref())
@@ -198,23 +282,50 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
 
     let pointer_canvas = canvas.clone();
     let pointer_up = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let id = pointer_id_raw(&event);
+        if !pointer_active(id) && !pointer_event_targets_canvas(&pointer_canvas, &event) {
+            return;
+        }
+        event.prevent_default();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_UP, x, y, event.button() as u8);
+        push_pointer_event(INPUT_POINTER_UP, pointer_id(&event), x, y, pointer_button(&event));
+        clear_pointer_active(id);
     }) as Box<dyn FnMut(_)>);
-    canvas
+    document
         .add_event_listener_with_callback("pointerup", pointer_up.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register pointerup listener".to_string())?;
 
     let pointer_canvas = canvas.clone();
     let pointer_move = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let id = pointer_id_raw(&event);
+        if !pointer_active(id) && !pointer_event_targets_canvas(&pointer_canvas, &event) {
+            return;
+        }
+        event.prevent_default();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_MOVE, x, y, 0);
+        push_pointer_event(INPUT_POINTER_MOVE, pointer_id(&event), x, y, 0);
     }) as Box<dyn FnMut(_)>);
-    canvas
+    document
         .add_event_listener_with_callback("pointermove", pointer_move.as_ref().unchecked_ref())
         .map_err(|_| "voplay: failed to register pointermove listener".to_string())?;
 
+    let pointer_canvas = canvas.clone();
+    let pointer_cancel = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+        let id = pointer_id_raw(&event);
+        if !pointer_active(id) && !pointer_event_targets_canvas(&pointer_canvas, &event) {
+            return;
+        }
+        event.prevent_default();
+        let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
+        push_pointer_event(INPUT_POINTER_UP, pointer_id(&event), x, y, pointer_button(&event));
+        clear_pointer_active(id);
+    }) as Box<dyn FnMut(_)>);
+    document
+        .add_event_listener_with_callback("pointercancel", pointer_cancel.as_ref().unchecked_ref())
+        .map_err(|_| "voplay: failed to register pointercancel listener".to_string())?;
+
     let wheel = Closure::wrap(Box::new(move |event: web_sys::WheelEvent| {
+        event.prevent_default();
         push_scroll_event(event.delta_x(), event.delta_y());
     }) as Box<dyn FnMut(_)>);
     canvas
@@ -231,6 +342,7 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
             pointer_down,
             pointer_up,
             pointer_move,
+            pointer_cancel,
             wheel,
         });
     });
@@ -263,19 +375,24 @@ pub fn reset_wasm_input_handlers() {
             "pointerdown",
             handlers.pointer_down.as_ref().unchecked_ref(),
         );
-        let _ = handlers.canvas.remove_event_listener_with_callback(
+        let _ = handlers.document.remove_event_listener_with_callback(
             "pointerup",
             handlers.pointer_up.as_ref().unchecked_ref(),
         );
-        let _ = handlers.canvas.remove_event_listener_with_callback(
+        let _ = handlers.document.remove_event_listener_with_callback(
             "pointermove",
             handlers.pointer_move.as_ref().unchecked_ref(),
+        );
+        let _ = handlers.document.remove_event_listener_with_callback(
+            "pointercancel",
+            handlers.pointer_cancel.as_ref().unchecked_ref(),
         );
         let _ = handlers
             .canvas
             .remove_event_listener_with_callback("wheel", handlers.wheel.as_ref().unchecked_ref());
     });
     INPUT_BUFFER.lock().unwrap().clear();
+    ACTIVE_POINTER_IDS.lock().unwrap().clear();
 }
 
 /// Convenience constants for pointer events (re-exported for platform modules).

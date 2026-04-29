@@ -1,0 +1,158 @@
+package voplay
+
+import "math"
+
+const ScreenUILayer = 65000
+
+type TouchControlTheme struct {
+	Surface Color
+	SurfaceActive Color
+	Border Color
+	Text Color
+	Accent Color
+	Shadow Color
+}
+
+type TouchButtonState struct {
+	Rect Rect
+	Down bool
+	Pressed bool
+	Released bool
+}
+
+type TouchStickState struct {
+	Area Rect
+	ID int
+	Active bool
+	Base Vec2
+	Knob Vec2
+	Axis Vec2
+	Strength float64
+}
+
+func DefaultTouchControlTheme() TouchControlTheme {
+	return TouchControlTheme{
+		Surface: HexA(0x10233dcc),
+		SurfaceActive: HexA(0x3b7effe8),
+		Border: HexA(0xffffffb8),
+		Text: White,
+		Accent: Hex(0xffe032),
+		Shadow: HexA(0x06111f66),
+	}
+}
+
+func BeginScreenUI(d *DrawCtx) {
+	d.ResetCamera()
+	d.SetLayer(ScreenUILayer)
+}
+
+func IsCompactTouchLayout(width, height int) bool {
+	return width <= 840 || height <= 560
+}
+
+func ReadTouchButton(input *InputState, rect Rect) TouchButtonState {
+	if input == nil {
+		return TouchButtonState{Rect: rect}
+	}
+	return TouchButtonState{
+		Rect: rect,
+		Down: input.AnyPointerDownInRect(rect),
+		Pressed: input.AnyPointerPressedInRect(rect),
+		Released: input.AnyPointerReleasedInRect(rect),
+	}
+}
+
+func ReadTouchStick(input *InputState, area Rect, center Vec2, radius float64) TouchStickState {
+	state := TouchStickState{Area: area, ID: -1, Base: center, Knob: center}
+	if input == nil || radius <= 0 {
+		return state
+	}
+	for _, contact := range input.PointerContacts() {
+		if !contact.Down {
+			continue
+		}
+		if !area.Contains(contact.X, contact.Y) && !area.Contains(contact.PrevX, contact.PrevY) {
+			continue
+		}
+		dx := contact.X - center.X
+		dy := contact.Y - center.Y
+		dist := math.Sqrt(dx * dx + dy * dy)
+		axis := Vec2{}
+		knob := Vec2{X: contact.X, Y: contact.Y}
+		if dist > 0 {
+			scale := 1.0 / radius
+			axis = Vec2{X: dx * scale, Y: dy * scale}
+			if dist > radius {
+				clampScale := radius / dist
+				knob = Vec2{X: center.X + dx * clampScale, Y: center.Y + dy * clampScale}
+				axis = axis.Normalize()
+				dist = radius
+			}
+		}
+		state.ID = contact.ID
+		state.Active = true
+		state.Knob = knob
+		state.Axis = axis
+		state.Strength = clampUIFloat(dist / radius, 0, 1)
+		return state
+	}
+	return state
+}
+
+func DrawTouchButton(d *DrawCtx, state TouchButtonState, label string, theme TouchControlTheme) {
+	rect := state.Rect
+	fill := theme.Surface
+	if state.Down {
+		fill = theme.SurfaceActive
+	}
+	d.DrawCircle(rect.X + rect.W * 0.5 + 3, rect.Y + rect.H * 0.5 + 4, rect.W * 0.5, theme.Shadow)
+	d.DrawCircle(rect.X + rect.W * 0.5, rect.Y + rect.H * 0.5, rect.W * 0.5, fill)
+	d.DrawCircleOutline(rect.X + rect.W * 0.5, rect.Y + rect.H * 0.5, rect.W * 0.5 - 2, 3, 28, theme.Border)
+	size := touchLabelSize(rect.W, label)
+	x := rect.X + rect.W * 0.5 - float64(len(label)) * size * 0.28
+	y := rect.Y + rect.H * 0.5 + size * 0.34
+	d.DrawText(label, x, y, size, theme.Text)
+}
+
+func DrawTouchStick(d *DrawCtx, state TouchStickState, radius float64, theme TouchControlTheme) {
+	base := state.Base
+	knob := state.Knob
+	fill := theme.Surface
+	if state.Active {
+		fill = theme.SurfaceActive
+	}
+	d.DrawCircle(base.X + 4, base.Y + 5, radius, theme.Shadow)
+	d.DrawCircle(base.X, base.Y, radius, theme.Surface.WithAlpha(0.58))
+	d.DrawCircleOutline(base.X, base.Y, radius - 2, 3, 36, theme.Border.WithAlpha(0.72))
+	d.DrawCircle(knob.X, knob.Y, radius * 0.42, fill)
+	d.DrawCircleOutline(knob.X, knob.Y, radius * 0.42 - 2, 3, 24, theme.Border)
+}
+
+func touchLabelSize(width float64, label string) float64 {
+	size := 18.0
+	if width >= 78 {
+		size = 20
+	}
+	if width >= 96 {
+		size = 22
+	}
+	maxText := width * 0.66
+	estimate := float64(len(label)) * size * 0.56
+	if estimate > maxText && estimate > 0 {
+		size *= maxText / estimate
+	}
+	if size < 12 {
+		size = 12
+	}
+	return size
+}
+
+func clampUIFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

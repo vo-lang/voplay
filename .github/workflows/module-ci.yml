@@ -3,20 +3,19 @@ name: Module CI
 on:
   pull_request:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches:
+      - main
+      - "release/v*"
   workflow_dispatch:
     inputs:
       version:
         description: "Release tag (e.g. v0.1.0)"
-        required: false
+        required: true
         type: string
       source_ref:
         description: "Git ref to build from (defaults to the triggering ref)"
         required: false
         type: string
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -32,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
 
       - name: Install system deps
         run: sudo apt-get install -y libasound2-dev
@@ -68,7 +67,7 @@ jobs:
           fi
 
   build_native_release_artifacts:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/v')
     needs: validate
     runs-on: ${{ matrix.os }}
     strategy:
@@ -86,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
 
       - name: Install Linux system deps
         if: runner.os == 'Linux'
@@ -108,7 +107,7 @@ jobs:
           path: rust/target/${{ matrix.target }}/release/${{ matrix.library }}
 
   release_assets:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/v')
     needs:
       - validate
       - build_native_release_artifacts
@@ -118,7 +117,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: release
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#release/}"
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v6.0.2
         with:
@@ -154,6 +168,33 @@ jobs:
         run: |
           wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
 
+      - name: Install browser artifacts into source tree
+        run: |
+          cp rust/pkg-island/voplay_island.js web-artifacts/voplay_island.js
+          cp rust/pkg-island/voplay_island_bg.wasm web-artifacts/voplay_island_bg.wasm
+
+      - name: Configure release git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit browser artifacts
+        id: browser_artifacts
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          git fetch origin --tags
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "release tag already exists: $VERSION" >&2
+            exit 1
+          fi
+          git add web-artifacts/voplay_island.js web-artifacts/voplay_island_bg.wasm
+          if git diff --cached --quiet; then
+            echo "Browser artifacts already match source."
+          else
+            git commit -m "chore: build voplay web artifacts $VERSION"
+          fi
+          echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Download staged release artifacts
         uses: actions/download-artifact@v8.0.1
         with:
@@ -161,19 +202,34 @@ jobs:
           merge-multiple: true
 
       - name: Stage release assets
+        id: stage_release
         run: |
-          SOURCE_COMMIT="$(node -e "console.log(JSON.parse(require('fs').readFileSync('vo.web.json', 'utf8')).commit)")"
+          VERSION="${{ steps.release.outputs.version }}"
           vo release stage . \
-            --version "${{ inputs.version || github.event.release.tag_name || github.ref_name }}" \
-            --commit "$SOURCE_COMMIT" \
+            --version "$VERSION" \
+            --commit "${{ steps.browser_artifacts.outputs.source_commit }}" \
             --artifact extension-native aarch64-apple-darwin libvo_voplay.dylib "$RUNNER_TEMP/release-artifacts/libvo_voplay.dylib" \
             --artifact extension-native x86_64-unknown-linux-gnu libvo_voplay.so "$RUNNER_TEMP/release-artifacts/libvo_voplay.so" \
             --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js web-artifacts/voplay_island.js \
             --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm web-artifacts/voplay_island_bg.wasm \
             --out-dir release-dist
+          cp release-dist/vo.web.json vo.web.json
+          git add vo.web.json
+          git commit -m "chore: stage voplay web manifest $VERSION"
+          git tag -a "$VERSION" -m "$VERSION"
+          echo "stage_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release tag
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "refs/tags/$VERSION"
+          if [[ "$GITHUB_REF_NAME" == release/* ]]; then
+            git push origin --delete "$GITHUB_REF_NAME"
+          fi
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v3.0.0
         with:
-          tag_name: ${{ inputs.version || github.event.release.tag_name || github.ref_name }}
+          tag_name: ${{ steps.release.outputs.version }}
           files: release-dist/*

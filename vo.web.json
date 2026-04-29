@@ -1,39 +1,39 @@
 {
   "artifacts": [
     {
-      "digest": "sha256:49439914186dfcc31d824aa322ed3284c76ef65c726ba4feb309fa11596a8b44",
+      "digest": "sha256:144d465cd057545b81d091c67a9f234a40d6449431fc071eff7c347d92aa0559",
       "kind": "extension-js-glue",
       "name": "voplay_island.js",
       "path": "web-artifacts/voplay_island.js",
-      "size": 101164,
+      "size": 101455,
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:eaec9f3262a58a3953704afe4bacf9fe8050c941054ab1f48c9f2fcf8ad52dea",
+      "digest": "sha256:8adbb0c142a7708debff77bd088b402a1df4778b37aaf1a1261e349c72df9b5d",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10006272,
+      "size": 10007552,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:862622935020826ca1aebbeb1b5803f06e74ec6c4e166020ba396cf122de4898",
+      "digest": "sha256:aab94e2aaecb8ccb3fc52dcfdd3afd192ebf43088841cf382bb91357723a2e3d",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 13558320,
+      "size": 13558368,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
-      "digest": "sha256:2ca59025ccb92c1830573bc3465c1cea9590f53d0dabda1507e32e22c1945d33",
+      "digest": "sha256:5a00822b3df5c066196913068c0ccccaae9aa6c21f8ab213a3548a4a8902c082",
       "kind": "extension-wasm",
       "name": "voplay_island_bg.wasm",
       "path": "web-artifacts/voplay_island_bg.wasm",
-      "size": 3331731,
+      "size": 3368967,
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "44f62aee974e6803d4155297f6a33cc8499f81c2",
+  "commit": "083929bdc401fe3babbf9c52c1cfa6156d666abf",
   "extension": {
     "include": [
       "js/dist"
@@ -114,19 +114,19 @@
       "size": 9470
     },
     {
-      "digest": "sha256:cdd4af842fc02e11546928c38c9108004fa56c1591329c6c5d241eadf1a43497",
+      "digest": "sha256:d74fa7d9ac6e0c7000a4a56f245502ad5b52c1012c171411dbe3d87963192a20",
       "path": "docs/kart-racing-engine-plan.md",
-      "size": 39077
+      "size": 39059
     },
     {
-      "digest": "sha256:8bb77e9c69827ac0fc723607d7eedd7c6a5384054cc32a3bca965ad424e219bf",
+      "digest": "sha256:90fcdb1d2054020670589db4507e7049f7b320f9e40d63c0ad0ec5a6b6669d50",
       "path": "docs/primitive-rendering-architecture.md",
-      "size": 20212
+      "size": 20204
     },
     {
-      "digest": "sha256:8abd4c861da0cf5482954898d5ada99af1fa8c6a4b9b091fdfc48e89707f6f03",
+      "digest": "sha256:e67da08d918d537e7202a29d3bb26540cfe15d22f74d03baa9d2d6cbbc60a64d",
       "path": "docs/renderer-architecture.md",
-      "size": 3032
+      "size": 3031
     },
     {
       "digest": "sha256:b3defd0aa444fa2b275d58ae100ab20a3ce98778f8eb4d7c0de968ad5af69450",
@@ -194,9 +194,9 @@
       "size": 5753
     },
     {
-      "digest": "sha256:5108cb2bf4abec1d79b20063cfeb9b6323e60937735aa1c4c1a53c65432fd6c2",
+      "digest": "sha256:75fcf97cf68dddde055aa7ae5232a1682927618b2ddd182dae3c58f61c2a5083",
       "path": "input.vo",
-      "size": 14976
+      "size": 19258
     },
     {
       "digest": "sha256:db46fb2787d07295e3b90a3b85869a888b8f5e11f64cf3707afb17f5e18fd88c",
@@ -409,14 +409,14 @@
       "size": 12389
     },
     {
-      "digest": "sha256:c47d9f0b365379a021694e8aa529ee83d45bf3add28428dd3f2170de9d9f822c",
+      "digest": "sha256:5110a07d295092f75b7e527829bc0fd8d765a83fc8cc7b423024998d048ca867",
       "path": "rust/src/host_api.rs",
-      "size": 3328
+      "size": 3337
     },
     {
-      "digest": "sha256:5a8e232a362661d37063ae5a421b4c11593853a3a50c34cbef9edb651b1945a4",
+      "digest": "sha256:512808433e469578042f2b46d61a377c0418a886c436793b4487e312a70d8e80",
       "path": "rust/src/input.rs",
-      "size": 10216
+      "size": 14260
     },
     {
       "digest": "sha256:dbb9006d249cc85e6d5804e2e90ae36058ec11b3c9e26acd6a7e3d04a5be7182",
@@ -754,14 +754,19 @@
       "size": 1393
     },
     {
-      "digest": "sha256:1623a4d6a9055fc4d19722960a32ae9aa781277e1f9a2cecce8fcb93c4492266",
+      "digest": "sha256:64863d7d77d4b6dfb7b75b3039ce0e9e945a0daebaf3dcf72b07b0f940028bcc",
       "path": "tests/main.vo",
-      "size": 147427
+      "size": 147460
     },
     {
       "digest": "sha256:3db52b428a274e8ba1f54c322b77daa07e33e6d282b12d8c61d25c22ea8e4ab4",
       "path": "tests/third_person_camera_regression.vo",
       "size": 1481
+    },
+    {
+      "digest": "sha256:43c0c2ba637ba01866cdba1f7608943030ddef7d9162b66f22d9783d4dbd85eb",
+      "path": "tests/touch_input.vo",
+      "size": 2339
     },
     {
       "digest": "sha256:8abe5557c7378c1f075b3264ee72b44e6cd6d93211e69d41ec38dcf9fd0e5276",
@@ -794,6 +799,11 @@
       "size": 7060
     },
     {
+      "digest": "sha256:8cec35720e2f15f50cc1c7aadd19f7743b5f187588db90e333265ad022dd8766",
+      "path": "ui.vo",
+      "size": 3810
+    },
+    {
       "digest": "sha256:78586a39478560101c3503f98dd252008a910a0552a3d1ea8fc91baf1f1f659d",
       "path": "vo.lock",
       "size": 1551
@@ -804,13 +814,13 @@
       "size": 788
     },
     {
-      "digest": "sha256:49439914186dfcc31d824aa322ed3284c76ef65c726ba4feb309fa11596a8b44",
+      "digest": "sha256:144d465cd057545b81d091c67a9f234a40d6449431fc071eff7c347d92aa0559",
       "path": "web-artifacts/voplay_island.js",
-      "size": 101164
+      "size": 101455
     }
   ],
-  "source_digest": "sha256:80250c3edd1de2f7fb5f8d2bc77dab9eafbbb36f0c2224ccc5b8c2600e97ae97",
-  "version": "v0.1.23",
+  "source_digest": "sha256:f1a98c66ad8209d803dce7ac43d6d24a6a8294e110f625933849b57bf31d9ea4",
+  "version": "v0.1.24",
   "vo": "^0.1.0",
   "web": null
 }

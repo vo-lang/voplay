@@ -103,25 +103,26 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 		if attachment == nil || attachment.layer == nil {
 			continue
 		}
+		layer := attachment.layer
 		if attachment.visible == nil {
 			attachment.visible = map[int]bool{}
 		}
-		if attachment.shapeRevision != attachment.layer.ShapeRevision() {
-			shapes := primitiveLayerShapeDraws(attachment.layer)
+		if attachment.shapeRevision != layer.ShapeRevision() {
+			shapes := primitiveLayerShapeDraws(layer)
 			if len(shapes) > 0 {
 				d.UpsertPrimitive3DShapes(s.renderSceneID, int(attachment.handle), shapes)
 			}
-			attachment.shapeRevision = attachment.layer.ShapeRevision()
+			attachment.shapeRevision = layer.ShapeRevision()
 		}
-		if attachment.materialRevision != attachment.layer.MaterialRevision() {
-			materials := primitiveLayerMaterialDraws(attachment.layer)
+		if attachment.materialRevision != layer.MaterialRevision() {
+			materials := primitiveLayerMaterialDraws(layer)
 			if len(materials) > 0 {
 				d.UpsertPrimitive3DMaterials(s.renderSceneID, int(attachment.handle), materials)
 			}
-			attachment.materialRevision = attachment.layer.MaterialRevision()
+			attachment.materialRevision = layer.MaterialRevision()
 		}
-		changes := primitiveDrainLayerChanges(attachment.layer)
-		if primitiveCanReuseStaticFrame(attachment, changes) {
+		changes := primitiveDrainLayerChanges(layer)
+		if primitiveCanReuseStaticFrame(layer, attachment.cachedFrameValid, changes) {
 			total = addPrimitiveStats(total, attachment.cachedStats)
 			stats.BatchEligibleObjects += attachment.cachedStats.VisibleInstances
 			for _, key := range attachment.cachedBatchKeys {
@@ -129,19 +130,19 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			}
 			continue
 		}
-		if attachment.layer.Kind() == primitive3d.StaticLayer {
-			frame := s.flushStaticPrimitiveLayer(d, stats, batchGroups, attachment, changes)
+		if layer.Kind() == primitive3d.StaticLayer {
+			frame := s.flushStaticPrimitiveLayer(d, stats, batchGroups, attachment, layer, changes)
 			total = addPrimitiveStats(total, frame.stats)
 			continue
 		}
-		frame := s.collectPrimitiveLayerFrame(attachment.layer)
+		frame := s.collectPrimitiveLayerFrame(layer)
 		total = addPrimitiveStats(total, frame.stats)
-		attachment.cachedFrameValid = attachment.layer.Kind() == primitive3d.StaticLayer
+		attachment.cachedFrameValid = layer.Kind() == primitive3d.StaticLayer
 		attachment.cachedStats = frame.stats
 		attachment.cachedBatchKeys = frame.batchKeys
 		for _, instance := range frame.visible {
-			model := attachment.layer.Model(instance.Shape)
-			material := materialForPrimitiveInstance(attachment.layer, instance)
+			model := layer.Model(instance.Shape)
+			material := materialForPrimitiveInstance(layer, instance)
 			batchGroups[primitiveBatchKey(model, material)] = true
 			stats.BatchEligibleObjects++
 		}
@@ -164,8 +165,8 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 				attachment.visible[int(instance.Object)] = false
 				continue
 			}
-			model := attachment.layer.Model(instance.Shape)
-			material := materialForPrimitiveInstance(attachment.layer, instance)
+			model := layer.Model(instance.Shape)
+			material := materialForPrimitiveInstance(layer, instance)
 			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, visibleNow)
 			attachment.visible[int(instance.Object)] = visibleNow
 			stats.UpsertedObjects++
@@ -174,8 +175,8 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			if changed[objectKey] || attachment.visible[objectKey] {
 				continue
 			}
-			model := attachment.layer.Model(instance.Shape)
-			material := materialForPrimitiveInstance(attachment.layer, instance)
+			model := layer.Model(instance.Shape)
+			material := materialForPrimitiveInstance(layer, instance)
 			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, true)
 			attachment.visible[objectKey] = true
 			stats.UpsertedObjects++
@@ -187,13 +188,13 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			if _, stillVisible := frame.visible[objectKey]; stillVisible {
 				continue
 			}
-			instance, ok := attachment.layer.Instance(primitive3d.ObjectID(objectKey))
+			instance, ok := layer.Instance(primitive3d.ObjectID(objectKey))
 			if !ok {
 				delete(attachment.visible, objectKey)
 				continue
 			}
-			model := attachment.layer.Model(instance.Shape)
-			material := materialForPrimitiveInstance(attachment.layer, instance)
+			model := layer.Model(instance.Shape)
+			material := materialForPrimitiveInstance(layer, instance)
 			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, false)
 			attachment.visible[objectKey] = false
 			stats.UpsertedObjects++
@@ -208,18 +209,19 @@ func (s *Scene) aggregatePrimitiveStats() primitive3d.Stats {
 		if attachment == nil || attachment.layer == nil {
 			continue
 		}
-		total = addPrimitiveStats(total, attachment.layer.Stats())
+		layer := attachment.layer
+		total = addPrimitiveStats(total, layer.Stats())
 	}
 	return total
 }
 
-func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderStats, batchGroups map[string]bool, attachment *primitiveLayerAttachment, changes primitive3d.Changes) primitiveStaticFrame {
+func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderStats, batchGroups map[string]bool, attachment *primitiveLayerAttachment, layer *primitive3d.Layer, changes primitive3d.Changes) primitiveStaticFrame {
 	if attachment.uploadedChunks == nil {
 		attachment.uploadedChunks = map[int]bool{}
 	}
 	contentChanged := changes.All || len(changes.Upserts) > 0 || len(changes.Removes) > 0 || !attachment.cachedChunkFrameValid
 	if contentChanged {
-		attachment.rebuildStaticChunkCache()
+		attachment.rebuildStaticChunkCache(layer)
 		attachment.uploadedChunks = map[int]bool{}
 		attachment.cachedFrameValid = false
 	}
@@ -236,7 +238,7 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 			if len(chunk.objects) == 0 {
 				continue
 			}
-			primitiveWriteChunkKeys(d, s.renderSceneID, int(attachment.handle), chunk.id, attachment.layer, chunk.objects)
+			primitiveWriteChunkKeys(d, s.renderSceneID, int(attachment.handle), chunk.id, layer, chunk.objects)
 			attachment.uploadedChunks[chunk.id] = true
 			stats.UpsertedObjects += len(chunk.objects)
 		}
@@ -244,15 +246,15 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 	return frame
 }
 
-func (attachment *primitiveLayerAttachment) rebuildStaticChunkCache() {
+func (attachment *primitiveLayerAttachment) rebuildStaticChunkCache(layer *primitive3d.Layer) {
 	attachment.cachedChunks = nil
-	if attachment == nil || attachment.layer == nil {
+	if attachment == nil || layer == nil {
 		attachment.cachedChunkFrameValid = true
 		return
 	}
-	attachment.cachedLayerStats = attachment.layer.Stats()
-	for _, chunk := range attachment.layer.Chunks() {
-		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), batchKeys: primitiveChunkBatchKeys(attachment.layer, chunk.Objects)}
+	attachment.cachedLayerStats = layer.Stats()
+	for _, chunk := range layer.Chunks() {
+		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), batchKeys: primitiveChunkBatchKeys(layer, chunk.Objects)}
 		attachment.cachedChunks = append(attachment.cachedChunks, cached)
 	}
 	attachment.cachedChunkFrameValid = true
@@ -306,17 +308,20 @@ func (s *Scene) collectPrimitiveLayerFrame(layer *primitive3d.Layer) primitiveLa
 	return frame
 }
 
-func primitiveCanReuseStaticFrame(attachment *primitiveLayerAttachment, changes primitive3d.Changes) bool {
-	if attachment == nil || attachment.layer == nil {
+func primitiveCanReuseStaticFrame(layer *primitive3d.Layer, cachedFrameValid bool, changes primitive3d.Changes) bool {
+	if layer == nil {
 		return false
 	}
-	if attachment.layer.Kind() != primitive3d.StaticLayer || !attachment.cachedFrameValid {
+	if layer.Kind() != primitive3d.StaticLayer || !cachedFrameValid {
 		return false
 	}
 	return !changes.All && len(changes.Upserts) == 0 && len(changes.Removes) == 0
 }
 
 func primitiveDrainLayerChanges(layer *primitive3d.Layer) primitive3d.Changes {
+	if layer == nil {
+		return primitive3d.Changes{}
+	}
 	if layer.Kind() == primitive3d.StaticLayer {
 		return layer.DrainStaticChanges()
 	}

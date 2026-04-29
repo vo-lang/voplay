@@ -33,7 +33,7 @@
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "083929bdc401fe3babbf9c52c1cfa6156d666abf",
+  "commit": "786ae4250461cbf2b0f02d66f8ed6d52b3bb3b58",
   "extension": {
     "include": [
       "js/dist"
@@ -669,9 +669,9 @@
       "size": 3363
     },
     {
-      "digest": "sha256:b30056605e6e09fa41e628b8cce17fef619614ff8984cfd8642715ca6d1d64dd",
+      "digest": "sha256:69e03a9cd24e3eeb8bb373234485036dfbf9073d37e11d49d78f15bf13e228cc",
       "path": "scene3d/primitive_layers.vo",
-      "size": 15064
+      "size": 14941
     },
     {
       "digest": "sha256:697d24ad19731e29ec2649bd7814dbbb773fa13f639c9473b3a29e254f9f4b15",
@@ -819,8 +819,8 @@
       "size": 101455
     }
   ],
-  "source_digest": "sha256:f1a98c66ad8209d803dce7ac43d6d24a6a8294e110f625933849b57bf31d9ea4",
-  "version": "v0.1.24",
+  "source_digest": "sha256:67183bbe5f098ab09b411f0d54598360b81cb541fbd149982e96749cc0db66c5",
+  "version": "v0.1.25",
   "vo": "^0.1.0",
   "web": null
 }

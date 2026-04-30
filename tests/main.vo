@@ -109,7 +109,7 @@ func (s *testState) BlocksDrawBelow() bool {
 }
 
 func newTestCtx() *voplay.GameCtx {
-	ctx := &voplay.GameCtx{Input: voplay.NewInputState(), Draw: voplay.NewDrawCtx(), Width: 640, Height: 480, FixedStep: 1.0 / 60.0}
+	ctx := &voplay.GameCtx{Input: voplay.NewInputState(), Draw: voplay.NewDrawCtx(), Screen: voplay.NewScreenMetrics(640, 480), Width: 640, Height: 480, FixedStep: 1.0 / 60.0}
 	ctx.Actions = voplay.NewActionMap(ctx.Input)
 	ctx.Assets = voplay.NewAssetsWithLoaders(newMockAssetLoaders(&assetRuntimeStats{}))
 	ctx.States = voplay.NewStateStack(ctx)
@@ -1004,6 +1004,30 @@ func testMath() {
 	assert(neg3.X == -1, "Vec3.Negate X")
 	assert(neg3.Y == 2, "Vec3.Negate Y")
 	assert(neg3.Z == -3, "Vec3.Negate Z")
+}
+
+func testUILayoutAnchors() {
+	metrics := voplay.NewScreenMetricsWithPixels(400, 800, 800, 1600, 2)
+	assert(metrics.Width == 400 && metrics.Height == 800, "screen metrics logical size")
+	assert(metrics.PixelWidth == 800 && metrics.PixelHeight == 1600, "screen metrics backing size")
+	assertFloatNear(metrics.DevicePixelRatio, 2, 0.000001, "screen metrics DPR")
+	assert(metrics.Rect().W == 400 && metrics.Rect().H == 800, "screen metrics rect")
+	screen := voplay.ScreenRect(400, 800)
+	assert(screen.W == 400 && screen.H == 800, "screen rect uses logical size")
+	safe := voplay.InsetScreenRect(screen, voplay.ScreenInsets{Left: 10, Top: 20, Right: 30, Bottom: 40})
+	assert(safe.X == 10 && safe.Y == 20, "safe rect offset")
+	assert(safe.W == 360 && safe.H == 740, "safe rect size")
+	bottomRight := voplay.AnchorScreenRect(screen, voplay.AnchorBottomRight, 80, 60, voplay.ScreenInsets{Right: 12, Bottom: 18})
+	assert(bottomRight.X == 308 && bottomRight.Y == 722, "bottom-right anchor uses edge insets")
+	center := voplay.AnchorScreenRect(screen, voplay.AnchorCenter, 100, 50, voplay.ScreenInsets{})
+	assert(center.X == 150 && center.Y == 375, "center anchor")
+	top := voplay.AnchorScreenRectOffset(screen, voplay.AnchorTop, 120, 40, voplay.ScreenInsets{Top: 5}, voplay.Vec2{X: 10, Y: 3})
+	assert(top.X == 150 && top.Y == 8, "top anchor offset")
+	layout := metrics.LayoutWithInsets(voplay.ScreenInsetsAll(20))
+	placed := layout.AnchorRect(voplay.AnchorBottomLeft, 50, 50)
+	assert(placed.X == 20 && placed.Y == 730, "screen layout safe anchor")
+	scale := layout.ShortSideScale(400, 0.5, 2.0)
+	assertFloatNear(scale, 0.9, 0.000001, "screen layout short-side scale uses safe rect")
 }
 
 func testTilemapExtra() {
@@ -2978,6 +3002,7 @@ func main() {
 	testScheduler()
 	testTween()
 	testMath()
+	testUILayoutAnchors()
 	testTilemapExtra()
 	testAnimController()
 	testScene2DFindByID()

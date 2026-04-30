@@ -31,6 +31,8 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     depth_view: Option<wgpu::TextureView>,
+    screen_width: f32,
+    screen_height: f32,
     // Canvas element id (WASM only) for auto-resize on layout changes.
     canvas_id: Option<String>,
     // Camera (shared by all 2D pipelines, dynamic offset)
@@ -118,8 +120,8 @@ impl Renderer {
     ) -> Result<Self, String> {
         let depth_view =
             Self::create_depth_view(&device, surface_config.width, surface_config.height);
-        let w = surface_config.width as f32;
-        let h = surface_config.height as f32;
+        let screen_width = surface_config.width as f32;
+        let screen_height = surface_config.height as f32;
 
         let camera_bgl = Self::create_camera_bgl(&device);
         let camera_alignment = device.limits().min_uniform_buffer_offset_alignment;
@@ -152,13 +154,15 @@ impl Renderer {
         let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new()?;
         font_manager.ensure_atlas(&mut texture_manager, &device, &queue);
-        let draw_list = DrawList2D::new(w, h);
+        let draw_list = DrawList2D::new(screen_width, screen_height);
         Ok(Self {
             device,
             queue,
             surface,
             surface_config,
             depth_view: Some(depth_view),
+            screen_width,
+            screen_height,
             canvas_id,
             camera_bgl,
             camera_buffer,
@@ -280,6 +284,15 @@ impl Renderer {
     /// Set the canvas element id for automatic resize detection (WASM only).
     pub fn set_canvas_id(&mut self, id: String) {
         self.canvas_id = Some(id);
+        #[cfg(feature = "wasm")]
+        self.update_canvas_metrics();
+    }
+
+    fn set_logical_screen_size(&mut self, width: f32, height: f32) {
+        if width > 0.0 && height > 0.0 {
+            self.screen_width = width;
+            self.screen_height = height;
+        }
     }
 
     fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -305,6 +318,8 @@ impl Renderer {
         if width == 0 || height == 0 {
             return;
         }
+        #[cfg(not(feature = "wasm"))]
+        self.set_logical_screen_size(width as f32, height as f32);
         if self.surface_config.width == width && self.surface_config.height == height {
             return;
         }
@@ -611,12 +626,11 @@ impl Renderer {
     }
 
     /// Check if the canvas CSS size has changed and reconfigure the surface.
-    /// Standard WebGPU practice: the backing buffer must match the CSS layout size.
-    /// Also detects DOM reparenting (canvas backing buffer mismatch) and forces
-    /// a reconfigure even if the target size hasn't changed, because moving a
-    /// canvas in the DOM can invalidate the WebGPU surface.
+    /// The game/UI coordinate system stays in CSS pixels so input, HUD, and
+    /// touch controls share one logical screen. The backing buffer still uses
+    /// CSS size times devicePixelRatio for crisp rendering.
     #[cfg(feature = "wasm")]
-    fn auto_resize_from_canvas(&mut self) {
+    fn update_canvas_metrics(&mut self) {
         use wasm_bindgen::JsCast;
         let canvas_id = match self.canvas_id {
             Some(ref id) => id.clone(),
@@ -637,6 +651,7 @@ impl Renderer {
         let dpr = window.device_pixel_ratio();
         let css_w = canvas.client_width().max(1) as f64;
         let css_h = canvas.client_height().max(1) as f64;
+        self.set_logical_screen_size(css_w as f32, css_h as f32);
         let w = (css_w * dpr) as u32;
         let h = (css_h * dpr) as u32;
         // Detect backing buffer mismatch (happens after DOM reparent or external resize).
@@ -646,7 +661,7 @@ impl Renderer {
         let backing_dirty = backing_w != w || backing_h != h;
         if size_changed || backing_dirty {
             eprintln!(
-                "voplay: auto_resize_from_canvas {}x{} (was {}x{}, backing {}x{})",
+                "voplay: update_canvas_metrics backing {}x{} (was {}x{}, canvas {}x{})",
                 w, h, self.surface_config.width, self.surface_config.height, backing_w, backing_h
             );
             canvas.set_width(w);
@@ -663,7 +678,7 @@ impl Renderer {
         let debug_scope_frame = Self::debug_should_log_frame(debug_frame_count);
 
         #[cfg(feature = "wasm")]
-        self.auto_resize_from_canvas();
+        self.update_canvas_metrics();
         #[cfg(feature = "wasm")]
         if debug_scope_frame {
             self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -683,8 +698,8 @@ impl Renderer {
                 label: Some("voplay_frame"),
             });
 
-        let w = self.surface_config.width as f32;
-        let h = self.surface_config.height as f32;
+        let screen_w = self.screen_width;
+        let screen_h = self.screen_height;
 
         // Reset draw list for this frame
         let mut clear_color = wgpu::Color {
@@ -694,7 +709,7 @@ impl Renderer {
             a: 1.0,
         };
         self.draw_list.clear();
-        self.draw_list.set_screen_space(w, h);
+        self.draw_list.set_screen_space(screen_w, screen_h);
 
         // 3D state for this frame
         let mut camera3d_uniform: Option<Camera3DUniform> = None;
@@ -732,7 +747,7 @@ impl Renderer {
         let mut scene_upsert_count = 0u32;
         let mut scene_draw_count = 0u32;
         let mut skybox_count = 0u32;
-        let aspect = w / h;
+        let aspect = screen_w / screen_h;
 
         // Decode command stream into the unified draw list
         let mut reader = StreamReader::new(data);
@@ -753,7 +768,8 @@ impl Renderer {
                     zoom,
                     rotation,
                 } => {
-                    self.draw_list.set_camera_2d(w, h, x, y, zoom, rotation);
+                    self.draw_list
+                        .set_camera_2d(screen_w, screen_h, x, y, zoom, rotation);
                 }
                 DrawCommand::ResetCamera => {
                     self.draw_list.reset_camera();
@@ -1280,9 +1296,9 @@ impl Renderer {
                         if clip[3] > 0.0 {
                             let ndc_x = clip[0] / clip[3];
                             let ndc_y = clip[1] / clip[3];
-                            // NDC → screen: x = (ndc+1)/2 * w, y = (1-ndc)/2 * h
-                            let screen_x = (ndc_x + 1.0) * 0.5 * w - bw * 0.5;
-                            let screen_y = (1.0 - ndc_y) * 0.5 * h - bh * 0.5;
+                            // NDC -> logical screen coordinates.
+                            let screen_x = (ndc_x + 1.0) * 0.5 * screen_w - bw * 0.5;
+                            let screen_y = (1.0 - ndc_y) * 0.5 * screen_h - bh * 0.5;
 
                             let (u0, v0, u1, v1) =
                                 if let Some(tex) = self.texture_manager.get(tex_id) {

@@ -257,8 +257,11 @@ class RenderIslandWidgetInstance {
       this.debug(`[voplay] widget.event.skip type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
       return;
     }
-    this.debug(`[voplay] widget.event type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
-    this.onEvent(JSON.stringify({ type, width, height, canvasId: this.canvasId }));
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.round(width * devicePixelRatio));
+    const pixelHeight = Math.max(1, Math.round(height * devicePixelRatio));
+    this.debug(`[voplay] widget.event type=${type} canvasId=${this.canvasId} size=${width}x${height} pixels=${pixelWidth}x${pixelHeight} dpr=${devicePixelRatio}`);
+    this.onEvent(JSON.stringify({ type, width, height, pixelWidth, pixelHeight, devicePixelRatio, canvasId: this.canvasId }));
   }
 
   private debug(message: string): void {

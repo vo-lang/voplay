@@ -14,6 +14,49 @@ type Game struct {
 	OnClose         func(g *GameCtx) // optional; called when the game loop exits
 }
 
+type ScreenMetrics struct {
+	Width int
+	Height int
+	PixelWidth int
+	PixelHeight int
+	DevicePixelRatio float64
+}
+
+func NewScreenMetrics(width, height int) ScreenMetrics {
+	return NewScreenMetricsWithPixels(width, height, width, height, 1)
+}
+
+func NewScreenMetricsWithPixels(width, height, pixelWidth, pixelHeight int, devicePixelRatio float64) ScreenMetrics {
+	if width <= 0 {
+		width = 1
+	}
+	if height <= 0 {
+		height = 1
+	}
+	if pixelWidth <= 0 {
+		pixelWidth = width
+	}
+	if pixelHeight <= 0 {
+		pixelHeight = height
+	}
+	if devicePixelRatio <= 0 {
+		devicePixelRatio = 1
+	}
+	return ScreenMetrics{Width: width, Height: height, PixelWidth: pixelWidth, PixelHeight: pixelHeight, DevicePixelRatio: devicePixelRatio}
+}
+
+func (m ScreenMetrics) Rect() Rect {
+	return ScreenRect(m.Width, m.Height)
+}
+
+func (m ScreenMetrics) Layout() ScreenLayout {
+	return NewScreenLayout(m.Width, m.Height)
+}
+
+func (m ScreenMetrics) LayoutWithInsets(insets ScreenInsets) ScreenLayout {
+	return NewScreenLayoutWithInsets(m.Width, m.Height, insets)
+}
+
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
 	Input   *InputState
@@ -21,6 +64,7 @@ type GameCtx struct {
 	Assets  *Assets
 	Draw    *DrawCtx
 	States  *StateStack
+	Screen  ScreenMetrics
 	Width   int     // current viewport width (updated on resize)
 	Height  int     // current viewport height (updated on resize)
 	FixedStep float64
@@ -81,12 +125,17 @@ func resolveFixedStep(step float64) float64 {
 // handleResize checks for size change and updates GameCtx dimensions.
 // Returns true if a resize occurred.
 func (g *GameCtx) handleResize(w, h int) bool {
-	if w == g.Width && h == g.Height {
+	return g.handleScreenMetrics(NewScreenMetrics(w, h))
+}
+
+func (g *GameCtx) handleScreenMetrics(metrics ScreenMetrics) bool {
+	if metrics.Width == g.Width && metrics.Height == g.Height && metrics.PixelWidth == g.Screen.PixelWidth && metrics.PixelHeight == g.Screen.PixelHeight && metrics.DevicePixelRatio == g.Screen.DevicePixelRatio {
 		return false
 	}
-	g.Width = w
-	g.Height = h
-	g.States.Resize(w, h)
+	g.Screen = metrics
+	g.Width = metrics.Width
+	g.Height = metrics.Height
+	g.States.Resize(metrics.Width, metrics.Height)
 	return true
 }
 
@@ -180,11 +229,13 @@ func runSplitMode(game Game) {
 
 // newSplitGameCtx creates a GameCtx with proxy asset loaders for split-island mode.
 func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
+	screen := NewScreenMetrics(game.Width, game.Height)
 	ctx := &GameCtx{
 		Input:           NewInputState(),
 		Draw:            NewDrawCtx(),
-		Width:           game.Width,
-		Height:          game.Height,
+		Screen:          screen,
+		Width:           screen.Width,
+		Height:          screen.Height,
 		FixedStep:       resolveFixedStep(game.FixedStep),
 		MaxCatchUpSteps: game.MaxCatchUpSteps,
 		overlay:         newDebugOverlay(game.TargetFrameRate),

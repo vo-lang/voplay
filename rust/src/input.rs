@@ -81,7 +81,20 @@ pub fn drain_input() -> Vec<u8> {
 #[cfg(feature = "wasm")]
 fn pointer_xy(canvas: &web_sys::HtmlCanvasElement, client_x: i32, client_y: i32) -> (f64, f64) {
     let rect = canvas.get_bounding_client_rect();
-    (client_x as f64 - rect.left(), client_y as f64 - rect.top())
+    let scale_x = if rect.width() > 0.0 {
+        canvas.client_width().max(1) as f64 / rect.width()
+    } else {
+        1.0
+    };
+    let scale_y = if rect.height() > 0.0 {
+        canvas.client_height().max(1) as f64 / rect.height()
+    } else {
+        1.0
+    };
+    (
+        (client_x as f64 - rect.left()) * scale_x,
+        (client_y as f64 - rect.top()) * scale_y,
+    )
 }
 
 #[cfg(feature = "wasm")]
@@ -274,7 +287,13 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
         mark_pointer_active(pointer_id_raw(&event));
         let _ = pointer_canvas.focus();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_DOWN, pointer_id(&event), x, y, pointer_button(&event));
+        push_pointer_event(
+            INPUT_POINTER_DOWN,
+            pointer_id(&event),
+            x,
+            y,
+            pointer_button(&event),
+        );
     }) as Box<dyn FnMut(_)>);
     canvas
         .add_event_listener_with_callback("pointerdown", pointer_down.as_ref().unchecked_ref())
@@ -288,7 +307,13 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
         }
         event.prevent_default();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_UP, pointer_id(&event), x, y, pointer_button(&event));
+        push_pointer_event(
+            INPUT_POINTER_UP,
+            pointer_id(&event),
+            x,
+            y,
+            pointer_button(&event),
+        );
         clear_pointer_active(id);
     }) as Box<dyn FnMut(_)>);
     document
@@ -317,7 +342,13 @@ pub fn install_wasm_input_handlers(canvas: &web_sys::HtmlCanvasElement) -> Resul
         }
         event.prevent_default();
         let (x, y) = pointer_xy(&pointer_canvas, event.client_x(), event.client_y());
-        push_pointer_event(INPUT_POINTER_UP, pointer_id(&event), x, y, pointer_button(&event));
+        push_pointer_event(
+            INPUT_POINTER_UP,
+            pointer_id(&event),
+            x,
+            y,
+            pointer_button(&event),
+        );
         clear_pointer_active(id);
     }) as Box<dyn FnMut(_)>);
     document

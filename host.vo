@@ -27,6 +27,9 @@ type splitWidgetEvent struct {
 	Type   string `json:"type"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+	PixelWidth int `json:"pixelWidth"`
+	PixelHeight int `json:"pixelHeight"`
+	DevicePixelRatio float64 `json:"devicePixelRatio"`
 	CanvasId string `json:"canvasId"`
 }
 
@@ -94,7 +97,7 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 						return
 					}
 					if evt.Width > 0 && evt.Height > 0 {
-						ctx.handleResize(evt.Width, evt.Height)
+						ctx.handleScreenMetrics(NewScreenMetricsWithPixels(evt.Width, evt.Height, evt.PixelWidth, evt.PixelHeight, evt.DevicePixelRatio))
 					}
 					if evt.Type == "mount" {
 						startRenderIslandSplit(s, ctx, game, ports, evt.CanvasId)

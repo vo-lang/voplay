@@ -65,8 +65,6 @@ type GameCtx struct {
 	Draw    *DrawCtx
 	States  *StateStack
 	Screen  ScreenMetrics
-	Width   int     // current viewport width (updated on resize)
-	Height  int     // current viewport height (updated on resize)
 	FixedStep float64
 	Alpha     float64
 
@@ -129,12 +127,10 @@ func (g *GameCtx) handleResize(w, h int) bool {
 }
 
 func (g *GameCtx) handleScreenMetrics(metrics ScreenMetrics) bool {
-	if metrics.Width == g.Width && metrics.Height == g.Height && metrics.PixelWidth == g.Screen.PixelWidth && metrics.PixelHeight == g.Screen.PixelHeight && metrics.DevicePixelRatio == g.Screen.DevicePixelRatio {
+	if metrics.Width == g.Screen.Width && metrics.Height == g.Screen.Height && metrics.PixelWidth == g.Screen.PixelWidth && metrics.PixelHeight == g.Screen.PixelHeight && metrics.DevicePixelRatio == g.Screen.DevicePixelRatio {
 		return false
 	}
 	g.Screen = metrics
-	g.Width = metrics.Width
-	g.Height = metrics.Height
 	g.States.Resize(metrics.Width, metrics.Height)
 	return true
 }
@@ -234,8 +230,6 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 		Input:           NewInputState(),
 		Draw:            NewDrawCtx(),
 		Screen:          screen,
-		Width:           screen.Width,
-		Height:          screen.Height,
 		FixedStep:       resolveFixedStep(game.FixedStep),
 		MaxCatchUpSteps: game.MaxCatchUpSteps,
 		overlay:         newDebugOverlay(game.TargetFrameRate),

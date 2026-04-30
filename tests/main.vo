@@ -109,7 +109,7 @@ func (s *testState) BlocksDrawBelow() bool {
 }
 
 func newTestCtx() *voplay.GameCtx {
-	ctx := &voplay.GameCtx{Input: voplay.NewInputState(), Draw: voplay.NewDrawCtx(), Screen: voplay.NewScreenMetrics(640, 480), Width: 640, Height: 480, FixedStep: 1.0 / 60.0}
+	ctx := &voplay.GameCtx{Input: voplay.NewInputState(), Draw: voplay.NewDrawCtx(), Screen: voplay.NewScreenMetrics(640, 480), FixedStep: 1.0 / 60.0}
 	ctx.Actions = voplay.NewActionMap(ctx.Input)
 	ctx.Assets = voplay.NewAssetsWithLoaders(newMockAssetLoaders(&assetRuntimeStats{}))
 	ctx.States = voplay.NewStateStack(ctx)

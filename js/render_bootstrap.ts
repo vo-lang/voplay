@@ -47,6 +47,7 @@ const DISPLAY_PULSE_DELAY_MS = 0xFFFFFFFF;
 const DISPLAY_PULSE_VISIBLE_GUARD_MS = 34;
 const DISPLAY_PULSE_LOST_RAF_FALLBACK_MS = 34;
 const DISPLAY_PULSE_TIMER_TARGET_MS = 1000 / 60;
+const DISPLAY_PULSE_VISIBLE_BACKUP_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.08;
 const DISPLAY_PULSE_RAF_HEALTHY_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.05;
 const DISPLAY_PULSE_RAF_SLOW_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.1;
 const DISPLAY_PULSE_HEALTHY_RAF_FRAMES = 2;
@@ -837,6 +838,7 @@ export class RenderIsland {
       ...this.collectPerfLivenessMetrics(),
       displayPulseVisibleGuardMs: DISPLAY_PULSE_VISIBLE_GUARD_MS,
       displayPulseLostRafFallbackMs: DISPLAY_PULSE_LOST_RAF_FALLBACK_MS,
+      displayPulseVisibleBackupMs: DISPLAY_PULSE_VISIBLE_BACKUP_MS,
       displayPulseTimerTargetMs: DISPLAY_PULSE_TIMER_TARGET_MS,
     });
   }
@@ -981,8 +983,8 @@ export class RenderIsland {
   private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
     if (!visible) return true;
     if (this.displayPulseMode === "timer") return true;
-    // Hybrid mode keeps a lost-rAF watchdog, but rAF must own normal visible
-    // cadence. Letting timer race rAF makes WebGPU surface acquisition block.
+    // Hybrid mode keeps a late backup pulse, but rAF must own normal visible
+    // cadence. Letting timer wake early makes WebGPU surface acquisition block.
     return this.displayPulseMode === "hybrid";
   }
 
@@ -991,7 +993,7 @@ export class RenderIsland {
     if (this.displayPulseMode === "timer") {
       return this.displayPulseCadenceDelayMs(nowMs);
     }
-    return DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
+    return DISPLAY_PULSE_VISIBLE_BACKUP_MS;
   }
 
   private displayPulseCadenceDelayMs(nowMs: number): number {

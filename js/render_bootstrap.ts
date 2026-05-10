@@ -51,7 +51,6 @@ const DISPLAY_PULSE_RAF_HEALTHY_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.05;
 const DISPLAY_PULSE_RAF_SLOW_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.1;
 const DISPLAY_PULSE_HEALTHY_RAF_FRAMES = 2;
 const DISPLAY_PULSE_SLOW_RAF_FRAMES = 1;
-const DISPLAY_PULSE_HYBRID_KEEP_TIMER_CADENCE = true;
 const DISPLAY_PULSE_TIMER_LEAD_MAX_MS = 2.0;
 const DISPLAY_PULSE_TIMER_LEAD_GAIN = 0.125;
 const DISPLAY_PULSE_TIMER_LEAD_DEADBAND_MS = 0.15;
@@ -750,7 +749,7 @@ export class RenderIsland {
   private displayPulseTimerLeadMs = 0;
   private displayPulseHealthyRafFrames = 0;
   private displayPulseSlowRafFrames = 0;
-  private displayPulseTimerCadence = true;
+  private displayPulseTimerCadence = false;
   private displayPulseWaiters = new Map<string, DisplayPulseWaiter>();
   private displayPulseWaitWindow: number[] = [];
   private displayPulseRafWakeWindow = 0;
@@ -969,21 +968,30 @@ export class RenderIsland {
     if (this.displayPulseRafId !== null || this.displayPulseTimerId !== null || this.stopped || !this.vm) return;
     const scheduleId = ++this.displayPulseScheduleId;
     const nowMs = performance.now();
-    const fallbackMs = this.displayPulseFallbackDelayMs(nowMs);
-    if (this.displayPulseMode !== "timer" && document.visibilityState === "visible") {
+    const visible = document.visibilityState === "visible";
+    if (this.displayPulseMode !== "timer" && visible) {
       this.displayPulseRafId = window.requestAnimationFrame(() => this.handleDisplayPulse(scheduleId, "raf"));
     }
-    if (this.displayPulseMode !== "raf" || document.visibilityState !== "visible") {
+    if (this.shouldScheduleDisplayPulseTimer(visible)) {
+      const fallbackMs = this.displayPulseFallbackDelayMs(nowMs);
       this.displayPulseTimerId = window.setTimeout(() => this.handleDisplayPulse(scheduleId, "timer"), fallbackMs);
     }
   }
 
+  private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
+    if (!visible) return true;
+    if (this.displayPulseMode === "timer") return true;
+    // Hybrid mode keeps a lost-rAF watchdog, but rAF must own normal visible
+    // cadence. Letting timer race rAF makes WebGPU surface acquisition block.
+    return this.displayPulseMode === "hybrid";
+  }
+
   private displayPulseFallbackDelayMs(nowMs: number): number {
     if (document.visibilityState !== "visible") return DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
-    if (this.displayPulseMode === "hybrid") {
-      return this.displayPulseTimerCadence ? this.displayPulseCadenceDelayMs(nowMs) : DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
+    if (this.displayPulseMode === "timer") {
+      return this.displayPulseCadenceDelayMs(nowMs);
     }
-    return this.displayPulseCadenceDelayMs(nowMs);
+    return DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
   }
 
   private displayPulseCadenceDelayMs(nowMs: number): number {
@@ -1054,10 +1062,7 @@ export class RenderIsland {
       if (deltaMs <= DISPLAY_PULSE_RAF_HEALTHY_MS) {
         this.displayPulseHealthyRafFrames += 1;
         this.displayPulseSlowRafFrames = 0;
-        if (
-          !DISPLAY_PULSE_HYBRID_KEEP_TIMER_CADENCE
-          && this.displayPulseHealthyRafFrames >= DISPLAY_PULSE_HEALTHY_RAF_FRAMES
-        ) {
+        if (this.displayPulseHealthyRafFrames >= DISPLAY_PULSE_HEALTHY_RAF_FRAMES) {
           this.displayPulseTimerCadence = false;
         }
       } else if (deltaMs >= DISPLAY_PULSE_RAF_SLOW_MS) {
@@ -1072,6 +1077,7 @@ export class RenderIsland {
   }
 
   private recordTimerPulse(nowMs: number, previousWakeMs: number | null): void {
+    if (this.displayPulseMode !== "timer") return;
     if (previousWakeMs === null) return;
     const deltaMs = nowMs - previousWakeMs;
     if (deltaMs < 1 || deltaMs > DISPLAY_PULSE_LOST_RAF_FALLBACK_MS * 2) return;

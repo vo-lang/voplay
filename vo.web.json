@@ -9,19 +9,19 @@
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:55b4e2ab94fd81cd6192968808f6b800391a3fe7f2b3a1c5495c9304faabb2ce",
+      "digest": "sha256:a33e478626b427d3ac3ff0e97331cc24b00fec495504d46226ebbf9f6a581e21",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10342208,
+      "size": 10324816,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:908a7cf2165add8f01c22cc9aad7e6f8d10256b24813f62662f66654b36de149",
+      "digest": "sha256:059d2bd92a8cc3bc827f8c4db1199e22650819a4924be02fc0f9eb78ebc9c710",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 13930592,
+      "size": 10797048,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -33,7 +33,7 @@
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "f6d2066ca94d2f372e3a03edb1bbe590df846a44",
+  "commit": "42597b74b61079763a40ae3dee6a6fdd7889fba7",
   "extension": {
     "include": [
       "js/dist"
@@ -254,9 +254,9 @@
       "size": 3423
     },
     {
-      "digest": "sha256:b7c6b76ca2480fb959d3c77a379825a8a16de7b09b6c540fbad7aa4299584ced",
+      "digest": "sha256:882d61c570fefb30b2eb75afe627ce0405c122d1c416588623205e498a6a1f09",
       "path": "js/dist/render_bootstrap.js",
-      "size": 51518
+      "size": 51669
     },
     {
       "digest": "sha256:ce03e8c1b38c648aed68422311b323ccb2918fec77ebeb37fa08ab3563a17766",
@@ -289,9 +289,9 @@
       "size": 550
     },
     {
-      "digest": "sha256:f1c0e902ed845ef6fecf8039545d192232aa0baaa978254ce9d661c52704f2fa",
+      "digest": "sha256:a805ad371bbda06e30b4b8f04c428c364ce55a9a2e7f50c08f911822780e0e90",
       "path": "js/render_bootstrap.ts",
-      "size": 52762
+      "size": 52907
     },
     {
       "digest": "sha256:60d0c1614427a5087f2ed901b38fcdc9a863de029f62c2787b1cfa8ff5a51bd6",
@@ -944,8 +944,8 @@
       "size": 108533
     }
   ],
-  "source_digest": "sha256:8a8bf86ad886c07ff3e262d32f63c7138109472b5eea634a8067962916199ea1",
-  "version": "v0.1.27",
+  "source_digest": "sha256:c2d8bd135ca884e7ed3ad28ed0eeb86eaad517510107da94a30ade64b14ed743",
+  "version": "v0.1.28",
   "vo": "^0.1.0",
   "web": null
 }

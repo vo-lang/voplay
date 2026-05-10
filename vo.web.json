@@ -63,7 +63,7 @@
   "module_root": ".",
   "require": [
     {
-      "constraint": "v0.1.14",
+      "constraint": "v0.1.15",
       "module": "github.com/vo-lang/vogui"
     },
     {
@@ -809,12 +809,12 @@
       "size": 6807
     },
     {
-      "digest": "sha256:78586a39478560101c3503f98dd252008a910a0552a3d1ea8fc91baf1f1f659d",
+      "digest": "sha256:902519a1f21ec6ff30b2848ba32ac3c8c10e3e99c32c8a10c43dd354a20b19f1",
       "path": "vo.lock",
       "size": 1551
     },
     {
-      "digest": "sha256:fe61bef4268d69905454a198cb3aa03b347ed294dcc9fe270169d63b07e8b2a4",
+      "digest": "sha256:09cb7f9c035414a8aab2db1d4d88dc2cb68039e85273810ab8e67fe7891dd57e",
       "path": "vo.mod",
       "size": 788
     },
@@ -824,7 +824,7 @@
       "size": 108534
     }
   ],
-  "source_digest": "sha256:1906d6ab1fb6c6e254286f481052bd0914fa5ecbdcb43d72e18d0c8550ce0cfe",
+  "source_digest": "sha256:a5c77d68842ca573819882d06da48d1f366583eaf351e2f768728f6702e61f9c",
   "version": "v0.1.26",
   "vo": "^0.1.0",
   "web": null

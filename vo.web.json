@@ -9,19 +9,19 @@
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:a33e478626b427d3ac3ff0e97331cc24b00fec495504d46226ebbf9f6a581e21",
+      "digest": "sha256:55b4e2ab94fd81cd6192968808f6b800391a3fe7f2b3a1c5495c9304faabb2ce",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10324816,
+      "size": 10342208,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:059d2bd92a8cc3bc827f8c4db1199e22650819a4924be02fc0f9eb78ebc9c710",
+      "digest": "sha256:908a7cf2165add8f01c22cc9aad7e6f8d10256b24813f62662f66654b36de149",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 10797048,
+      "size": 13930592,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -33,7 +33,7 @@
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "42597b74b61079763a40ae3dee6a6fdd7889fba7",
+  "commit": "9d746a2b8628dae4218911177185f0f9231fad76",
   "extension": {
     "include": [
       "js/dist"

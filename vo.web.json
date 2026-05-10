@@ -9,19 +9,19 @@
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:82da19bd2f4dc55a1080d58b95c73141c31b580eea8e563e558331f37a5b01da",
+      "digest": "sha256:a33e478626b427d3ac3ff0e97331cc24b00fec495504d46226ebbf9f6a581e21",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10310320,
+      "size": 10324816,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:aab94e2aaecb8ccb3fc52dcfdd3afd192ebf43088841cf382bb91357723a2e3d",
+      "digest": "sha256:059d2bd92a8cc3bc827f8c4db1199e22650819a4924be02fc0f9eb78ebc9c710",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 13558368,
+      "size": 10797048,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -33,7 +33,7 @@
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "e68866c088086ac77a523aaf3f764fce11a6925a",
+  "commit": "c12c3179cd11942be48f2e916fa0d7b949e1c6cd",
   "extension": {
     "include": [
       "js/dist"
@@ -119,6 +119,11 @@
       "size": 39059
     },
     {
+      "digest": "sha256:afb17834d759850635b9589056f8dd7af7507f444277eddc842597c1b4ab672d",
+      "path": "docs/perf-diagnostics-final-design.md",
+      "size": 22345
+    },
+    {
       "digest": "sha256:90fcdb1d2054020670589db4507e7049f7b320f9e40d63c0ad0ec5a6b6669d50",
       "path": "docs/primitive-rendering-architecture.md",
       "size": 20204
@@ -132,6 +137,11 @@
       "digest": "sha256:b3defd0aa444fa2b275d58ae100ab20a3ce98778f8eb4d7c0de968ad5af69450",
       "path": "docs/track-asset-v1.md",
       "size": 2078
+    },
+    {
+      "digest": "sha256:32489485aa9515e6a264f44f41a1fb2b89a38f2350161943cd9360b3a4bbc6ad",
+      "path": "docs/voplay-final-rendering-capability-target.md",
+      "size": 15688
     },
     {
       "digest": "sha256:4d731e1fa208ccda7993b27d51c65f0af83daf1c31c9d97b55238eca6c9cb64c",
@@ -184,6 +194,11 @@
       "size": 113
     },
     {
+      "digest": "sha256:0281e509e99ab7fc751b8a694226f1328c85266e267bdfafcdff7150e0326dc2",
+      "path": "framewire/framewire.vo",
+      "size": 6610
+    },
+    {
       "digest": "sha256:aaca16bd2521ee417edb284baa451b411c651881f3d9833faf7fa8542fa7c593",
       "path": "game.vo",
       "size": 14106
@@ -234,14 +249,14 @@
       "size": 2328
     },
     {
-      "digest": "sha256:86f3ac2c2ba80b253fcc0e62797ed79d2223a4c047caeedf02e9b94b2ddda747",
+      "digest": "sha256:867307497cf172974f9af3c318b3804657da95c2bb171f7a16157a003825c049",
       "path": "js/dist/render_bootstrap.d.ts",
-      "size": 3378
+      "size": 3423
     },
     {
-      "digest": "sha256:73b5dbce1a6719a4aa6d9943f2a0ff737f7bf63632532ffe3d7e657d75eb6050",
+      "digest": "sha256:b7c6b76ca2480fb959d3c77a379825a8a16de7b09b6c540fbad7aa4299584ced",
       "path": "js/dist/render_bootstrap.js",
-      "size": 51245
+      "size": 51518
     },
     {
       "digest": "sha256:ce03e8c1b38c648aed68422311b323ccb2918fec77ebeb37fa08ab3563a17766",
@@ -274,9 +289,9 @@
       "size": 550
     },
     {
-      "digest": "sha256:b60872381aa81a2013b1fc9ed55c9e0023baccedf02b077653de6c92ddef22a5",
+      "digest": "sha256:f1c0e902ed845ef6fecf8039545d192232aa0baaa978254ce9d661c52704f2fa",
       "path": "js/render_bootstrap.ts",
-      "size": 52542
+      "size": 52762
     },
     {
       "digest": "sha256:60d0c1614427a5087f2ed901b38fcdc9a863de029f62c2787b1cfa8ff5a51bd6",
@@ -292,6 +307,11 @@
       "digest": "sha256:d846b0911dcded6934164319b7d9387cb7335dd64d7af3e4f88494ae800b7948",
       "path": "math.vo",
       "size": 7551
+    },
+    {
+      "digest": "sha256:cc06fd26c2a5ff7a1204eeaebe4d66b95c116a53e6377a46b0155cbc3caea69e",
+      "path": "perf_diagnostics.vo",
+      "size": 65810
     },
     {
       "digest": "sha256:fa17d87ad0e51b31abf9a6682182bb65e86648fca7ac9ff283318ff70bb4472b",
@@ -327,6 +347,11 @@
       "digest": "sha256:31cbf8ffdb3870bc283dc461e46a0c66806f954e7e447ef06c0a15fb22039630",
       "path": "render_worker.vo",
       "size": 12093
+    },
+    {
+      "digest": "sha256:33f6fe8621c05e55d89249700386f1e1cab74d1f98b094b1016ed62c6b39ce39",
+      "path": "renderclock/pacer.vo",
+      "size": 4063
     },
     {
       "digest": "sha256:e42952a0b7731cafd8a42543d5d3595758f4afcde8c983e9a2139e1ee1f78a8d",
@@ -414,6 +439,11 @@
       "size": 3337
     },
     {
+      "digest": "sha256:e98e32638b7a53a6dcab8a74d6bf4aa931819a434b577c1b8101008aebaabba9",
+      "path": "rust/src/impostor_baker.rs",
+      "size": 32263
+    },
+    {
       "digest": "sha256:88a0948d453fe307b4ca7323714c45f99ef87b4e0272f46ad3e331f0bb74880c",
       "path": "rust/src/input.rs",
       "size": 14789
@@ -444,11 +474,6 @@
       "size": 97500
     },
     {
-      "digest": "sha256:5cb6a289fe4a00b41720b3af746e5331144b2b84faf02e6273ba915941583e3b",
-      "path": "rust/src/physics_registry.rs",
-      "size": 2588
-    },
-    {
       "digest": "sha256:c005b3cefbffd99e7e5cf2f887e143e2554da76b98878a1c31c6faf1a069d71c",
       "path": "rust/src/physics.rs",
       "size": 14619
@@ -457,6 +482,31 @@
       "digest": "sha256:ea3bb19ebecbc8f6948d4b2d707e1b238f564389eb56eaf3cd97422f97cac2af",
       "path": "rust/src/physics3d.rs",
       "size": 38664
+    },
+    {
+      "digest": "sha256:5cb6a289fe4a00b41720b3af746e5331144b2b84faf02e6273ba915941583e3b",
+      "path": "rust/src/physics_registry.rs",
+      "size": 2588
+    },
+    {
+      "digest": "sha256:fbdabc2059654a329ff8d790c8cbc80774259333b357d02b4bff515c50c37bcd",
+      "path": "rust/src/pipeline2d.rs",
+      "size": 10960
+    },
+    {
+      "digest": "sha256:59302af6509f807870e1bf97ee5c0734044e1a2409149a31418fbdb3c7ca2012",
+      "path": "rust/src/pipeline3d.rs",
+      "size": 85574
+    },
+    {
+      "digest": "sha256:922f59dc9ffbf4c37e28457a976bd9a60bc61aca29b7ef5e6118a3fe99cdc509",
+      "path": "rust/src/pipeline_depth.rs",
+      "size": 24804
+    },
+    {
+      "digest": "sha256:65ad2a3314ec1743820dd1526739badd8861dd7e856e60b83bf1355d59326539",
+      "path": "rust/src/pipeline_post.rs",
+      "size": 32485
     },
     {
       "digest": "sha256:51bcb4e486756f85fc60f91ed73bcb56d2aa5ffe600c4ca35a4830587341a8f3",
@@ -472,16 +522,6 @@
       "digest": "sha256:3182a3a3122fce6802748b87cabb68f5656cc7f290ed912562cde41654e6e50c",
       "path": "rust/src/pipeline_sprite.rs",
       "size": 8125
-    },
-    {
-      "digest": "sha256:fbdabc2059654a329ff8d790c8cbc80774259333b357d02b4bff515c50c37bcd",
-      "path": "rust/src/pipeline2d.rs",
-      "size": 10960
-    },
-    {
-      "digest": "sha256:59302af6509f807870e1bf97ee5c0734044e1a2409149a31418fbdb3c7ca2012",
-      "path": "rust/src/pipeline3d.rs",
-      "size": 85574
     },
     {
       "digest": "sha256:a9d8466d05ee08f4add85bbd6cf3d2327e4ff7420fe185ad0996f5c80d289bd1",
@@ -504,14 +544,19 @@
       "size": 7179
     },
     {
+      "digest": "sha256:73be316c24cb526718f5ec694452852674957966cef32d1a390a7fff11704ca2",
+      "path": "rust/src/renderer.rs",
+      "size": 142147
+    },
+    {
       "digest": "sha256:593bc0a355231033a0f5c85fe191baadda8136469c5601efc700ce919b0031dc",
       "path": "rust/src/renderer_runtime.rs",
       "size": 4730
     },
     {
-      "digest": "sha256:73be316c24cb526718f5ec694452852674957966cef32d1a390a7fff11704ca2",
-      "path": "rust/src/renderer.rs",
-      "size": 142147
+      "digest": "sha256:9fe82e5974b36abed4d12122d2bd66be61641f6c63c9a3fcaddb4e02fcc317b4",
+      "path": "rust/src/shaders/mesh.wgsl",
+      "size": 28648
     },
     {
       "digest": "sha256:9c150179aa9a87ed3d0c10e45288c0ec79348ce6d507f552a1bc7a48526dfd6d",
@@ -522,11 +567,6 @@
       "digest": "sha256:371286ea6b8e1f9b2e9572fa20ed0bc6a3191c90a3f0e1a81e05343655c12ab8",
       "path": "rust/src/shaders/mesh_terrain.wgsl",
       "size": 27320
-    },
-    {
-      "digest": "sha256:9fe82e5974b36abed4d12122d2bd66be61641f6c63c9a3fcaddb4e02fcc317b4",
-      "path": "rust/src/shaders/mesh.wgsl",
-      "size": 28648
     },
     {
       "digest": "sha256:43dbdf9393ee0c89944d2de0c13bbbf0ae68b584b5329b4cd2debde66c39d954",
@@ -624,9 +664,19 @@
       "size": 7322
     },
     {
+      "digest": "sha256:5db7522605f5aebc9f9ce407299af1f5e8eec15f583fac332a399ce24a8b4ba7",
+      "path": "scene3d/baked_primitive_layer.vo",
+      "size": 5524
+    },
+    {
       "digest": "sha256:c94d81eb6d3aa05d7790183db341a8a24a50691f57a7d60b34418f4c139b0814",
       "path": "scene3d/camera.vo",
       "size": 1935
+    },
+    {
+      "digest": "sha256:de3787db80f51a1b6311dafdfa26f4e41dbe52e821f5e840906dbfc8a6e7012c",
+      "path": "scene3d/culling.vo",
+      "size": 1065
     },
     {
       "digest": "sha256:91d02fb7ebd3fe9de0ed214a770c4b63e1b8bcc2b00c034ccceeac21efd59a55",
@@ -634,9 +684,19 @@
       "size": 5450
     },
     {
+      "digest": "sha256:1bdfe9bdd32ae442079cb6903ce32284bef9ad61006ecec5c84649e16735893a",
+      "path": "scene3d/diagnostics.vo",
+      "size": 1557
+    },
+    {
       "digest": "sha256:752496aaaa736ca18d1a577debf88a27580150d123428ff34ef07d7ea1a2ba4c",
       "path": "scene3d/draw.vo",
       "size": 11018
+    },
+    {
+      "digest": "sha256:3b297429385c4cc63808e2de86c399a855898de03b216893348db493ce6def6b",
+      "path": "scene3d/impostor.vo",
+      "size": 18673
     },
     {
       "digest": "sha256:032cfe6cafe0ed36309358b4bc99aa5387ae8cc81f7e4a5dd5c00783e3efc19b",
@@ -659,6 +719,11 @@
       "size": 52483
     },
     {
+      "digest": "sha256:abecb5592845d154ed0270735a161400f14b2922ded8bd1cb458ae136f3df6ce",
+      "path": "scene3d/mesh_terrain.vo",
+      "size": 10381
+    },
+    {
       "digest": "sha256:d1438769e5516b6e442a96685c334a94ddebab711a08085999c1a343f43d74d9",
       "path": "scene3d/particles.vo",
       "size": 6648
@@ -674,6 +739,11 @@
       "size": 3538
     },
     {
+      "digest": "sha256:b56e218b0adfe6e4d9da1785207f4b8f10839286272cd0f30904e68388b8bdc1",
+      "path": "scene3d/presentation.vo",
+      "size": 4158
+    },
+    {
       "digest": "sha256:612b7c7ea58a4157fb039d12dde95bde4eada34ab9cf2aca532750dea6f4bd30",
       "path": "scene3d/primitive_layers.vo",
       "size": 24390
@@ -682,6 +752,11 @@
       "digest": "sha256:697d24ad19731e29ec2649bd7814dbbb773fa13f639c9473b3a29e254f9f4b15",
       "path": "scene3d/primitives.vo",
       "size": 872
+    },
+    {
+      "digest": "sha256:978dbac138381e91ea60850eb3421c7992ea3f487aea4d146722f95e718534de",
+      "path": "scene3d/quality.vo",
+      "size": 3840
     },
     {
       "digest": "sha256:18a61c00b1a0be226b5a64ad228c44706c00db7e040b2ab2cb1164a5a37d803e",
@@ -699,6 +774,11 @@
       "size": 6696
     },
     {
+      "digest": "sha256:cbc89b64280dbac9acd571f37730546aea16ea3b5b9b6fd4d47281318aa28801",
+      "path": "scene3d/scatter.vo",
+      "size": 20543
+    },
+    {
       "digest": "sha256:cb5c107b41ab485897759f4464940276e32e3417f8f0171efdbe2fe3938435be",
       "path": "scene3d/scene.vo",
       "size": 26626
@@ -714,14 +794,39 @@
       "size": 4244
     },
     {
+      "digest": "sha256:76aece319a978c2c9fdf5681806684c3bb7b8f7948c6eccc6235ce95fed5b7c6",
+      "path": "scene3d/track.vo",
+      "size": 67868
+    },
+    {
       "digest": "sha256:a96e8e2ce168c2e6c2e8005f429da597ee5f70393577a4057cd82988a6a285be",
       "path": "scene3d/track_bake.vo",
       "size": 6951
     },
     {
-      "digest": "sha256:76aece319a978c2c9fdf5681806684c3bb7b8f7948c6eccc6235ce95fed5b7c6",
-      "path": "scene3d/track.vo",
-      "size": 67868
+      "digest": "sha256:ee4f9bbafa3e039fcdd95c08646631e83d7cb3ef8bb66629582dff8f16f0533c",
+      "path": "scene3d/track_edge_transition.vo",
+      "size": 5002
+    },
+    {
+      "digest": "sha256:35c043f58323d40fd1b2c5ed11618cfc176d6d1d5c2df1f963a64bb676166d62",
+      "path": "scene3d/track_projected_decal.vo",
+      "size": 6384
+    },
+    {
+      "digest": "sha256:3b34c3b2df59c95c3641fe1d6e88965dabe5c84020b3444143c921a7f6fa7df5",
+      "path": "scene3d/track_surface_authoring.vo",
+      "size": 9437
+    },
+    {
+      "digest": "sha256:558e99a2f2907b0b4e694bf3a5d94a259716fd6bfc3e76bf5bbdb6ebec22d0a4",
+      "path": "scene3d/track_surface_details.vo",
+      "size": 4763
+    },
+    {
+      "digest": "sha256:16d3777da8457e27613964de15544b2293872536ae25660c5101104077c5a04a",
+      "path": "scene3d/vehicle.vo",
+      "size": 16138
     },
     {
       "digest": "sha256:2021ab0931f62a7de8e20d5cefec118d68b52ef8f9712da6d7db0828108933b8",
@@ -739,9 +844,9 @@
       "size": 3485
     },
     {
-      "digest": "sha256:16d3777da8457e27613964de15544b2293872536ae25660c5101104077c5a04a",
-      "path": "scene3d/vehicle.vo",
-      "size": 16138
+      "digest": "sha256:93d750f17a6693cb6beb97c5fb3154904bf45926a2e43a9da21dd37d28df9a94",
+      "path": "scene3d/visual_tools.vo",
+      "size": 9001
     },
     {
       "digest": "sha256:4d58018c447e231076a473f8634ea89661675f74b94a4aa6c871fda16f4a0cab",
@@ -754,6 +859,11 @@
       "size": 4346
     },
     {
+      "digest": "sha256:496369854a06517e4443f9473c7f915d31d795306e40e7d1e0820d9473c8ae40",
+      "path": "tests/framewire_contract.vo",
+      "size": 7237
+    },
+    {
       "digest": "sha256:7352b2b6b08515c1f620be628f05c6367d38f24979a8e2d781b06c3592523792",
       "path": "tests/input_normalization.vo",
       "size": 1393
@@ -762,6 +872,11 @@
       "digest": "sha256:63911da02e43102edaf5e295a4c826269556f5bf1ba3c9c53589b149c79ff66f",
       "path": "tests/main.vo",
       "size": 227665
+    },
+    {
+      "digest": "sha256:cd5286128c06130c97897590142e4a13f71a9bfdc6a5b28223ba19eff00a6b26",
+      "path": "tests/renderclock_contract.vo",
+      "size": 4883
     },
     {
       "digest": "sha256:3db52b428a274e8ba1f54c322b77daa07e33e6d282b12d8c61d25c22ea8e4ab4",
@@ -782,6 +897,11 @@
       "digest": "sha256:a695e9bd077c2836c6ff24c3a86be647bceb87c78373d8526d8bf50f6cbe077e",
       "path": "tools/check_vehicle_telemetry_parity.mjs",
       "size": 14735
+    },
+    {
+      "digest": "sha256:7690fcc4e551829bb73b4ffcaf9cca3939f2ff813c08de5c09e9e6d503c32adb",
+      "path": "tools/perf_gate.mjs",
+      "size": 7431
     },
     {
       "digest": "sha256:58be9e4261ff81d1e9a174d7bc6953a8fb662d821f23ee6623575366e05cca53",
@@ -824,8 +944,8 @@
       "size": 108534
     }
   ],
-  "source_digest": "sha256:a5c77d68842ca573819882d06da48d1f366583eaf351e2f768728f6702e61f9c",
-  "version": "v0.1.26",
+  "source_digest": "sha256:e43762b55957ef09e5009e3595e7776891d191fac9c35f89f3eb853ed56a2d7e",
+  "version": "v0.1.27",
   "vo": "^0.1.0",
   "web": null
 }

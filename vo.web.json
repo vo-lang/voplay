@@ -344,7 +344,7 @@
       "size": 94408
     },
     {
-      "digest": "sha256:36a57b9876050cf0dfa19cf5005517897a070f54516d1b7ed4b58afdc90ff2e0",
+      "digest": "sha256:00bed7c85ce4198a59adf3a019bb43f9f781afb02487b618d6b02857e43c7086",
       "path": "rust/Cargo.toml",
       "size": 3016
     },
@@ -824,7 +824,7 @@
       "size": 108534
     }
   ],
-  "source_digest": "sha256:2717fa3a0c6a6471b19db00fa4eab3012def82551328574618141ccded9b0fdd",
+  "source_digest": "sha256:1906d6ab1fb6c6e254286f481052bd0914fa5ecbdcb43d72e18d0c8550ce0cfe",
   "version": "v0.1.26",
   "vo": "^0.1.0",
   "web": null

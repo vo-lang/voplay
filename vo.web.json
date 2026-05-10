@@ -1,39 +1,39 @@
 {
   "artifacts": [
     {
-      "digest": "sha256:c047d3b524e9cf3acdbc440adc8f903dc05098f975a591ed2e66b1b1ec68bf02",
+      "digest": "sha256:8e5de169d3d33c06c03c4f115ad9ed6688de8832942244f062bf4dc8ea7ca2b2",
       "kind": "extension-js-glue",
       "name": "voplay_island.js",
       "path": "web-artifacts/voplay_island.js",
-      "size": 108534,
+      "size": 108533,
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:a33e478626b427d3ac3ff0e97331cc24b00fec495504d46226ebbf9f6a581e21",
+      "digest": "sha256:55b4e2ab94fd81cd6192968808f6b800391a3fe7f2b3a1c5495c9304faabb2ce",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10324816,
+      "size": 10342208,
       "target": "aarch64-apple-darwin"
     },
     {
-      "digest": "sha256:059d2bd92a8cc3bc827f8c4db1199e22650819a4924be02fc0f9eb78ebc9c710",
+      "digest": "sha256:908a7cf2165add8f01c22cc9aad7e6f8d10256b24813f62662f66654b36de149",
       "kind": "extension-native",
       "name": "libvo_voplay.so",
       "path": "libvo_voplay.so",
-      "size": 10797048,
+      "size": 13930592,
       "target": "x86_64-unknown-linux-gnu"
     },
     {
-      "digest": "sha256:a9dcb5940601c2c8e0ae3c5b279eff917d965c08caed009cbb4e73cf3af62665",
+      "digest": "sha256:c548aa0fc3d8444eef5df25c36a43de8e28407293f1cd75b64f8271a2e05006f",
       "kind": "extension-wasm",
       "name": "voplay_island_bg.wasm",
       "path": "web-artifacts/voplay_island_bg.wasm",
-      "size": 3558498,
+      "size": 3614081,
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "c12c3179cd11942be48f2e916fa0d7b949e1c6cd",
+  "commit": "f6d2066ca94d2f372e3a03edb1bbe590df846a44",
   "extension": {
     "include": [
       "js/dist"
@@ -939,12 +939,12 @@
       "size": 788
     },
     {
-      "digest": "sha256:c047d3b524e9cf3acdbc440adc8f903dc05098f975a591ed2e66b1b1ec68bf02",
+      "digest": "sha256:8e5de169d3d33c06c03c4f115ad9ed6688de8832942244f062bf4dc8ea7ca2b2",
       "path": "web-artifacts/voplay_island.js",
-      "size": 108534
+      "size": 108533
     }
   ],
-  "source_digest": "sha256:e43762b55957ef09e5009e3595e7776891d191fac9c35f89f3eb853ed56a2d7e",
+  "source_digest": "sha256:8a8bf86ad886c07ff3e262d32f63c7138109472b5eea634a8067962916199ea1",
   "version": "v0.1.27",
   "vo": "^0.1.0",
   "web": null

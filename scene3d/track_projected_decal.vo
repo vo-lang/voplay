@@ -1,0 +1,203 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+type TrackProjectedDecalDesc struct {
+	Name string
+	Side int
+	Seed int
+	Count int
+	Step float64
+	Density float64
+	StartDistance float64
+	EndDistance float64
+	LateralMin float64
+	LateralMax float64
+	EdgeRelative bool
+	WidthMin float64
+	WidthMax float64
+	LengthMin float64
+	LengthMax float64
+	YawJitter float64
+	AlongJitter float64
+	SurfaceOffset float64
+	Color voplay.Color
+	Roughness float64
+	Material voplay.MaterialDesc
+	HeightProbe TrackHeightProbe
+}
+
+type TrackProjectedDecalMesh struct {
+	Vertices []voplay.RawMeshVertex
+	Indices []int
+	Color voplay.Color
+	Roughness float64
+	VertexCount int
+	IndexCount int
+	DecalCount int
+	Min voplay.Vec3
+	Max voplay.Vec3
+}
+
+func BuildTrackProjectedDecalMesh(track *Track, desc TrackProjectedDecalDesc) (TrackProjectedDecalMesh, error) {
+	if track == nil {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: track must not be nil")
+	}
+	if track.Length() <= 0 {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: track length must be > 0")
+	}
+	desc = normalizeTrackProjectedDecalDesc(track, desc)
+	if desc.LateralMax < desc.LateralMin {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: lateral range is invalid")
+	}
+	if desc.WidthMax <= 0 || desc.LengthMax <= 0 {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: width and length must be > 0")
+	}
+	if desc.EndDistance <= desc.StartDistance {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: distance range is invalid")
+	}
+	count := trackProjectedDecalCount(desc.EndDistance-desc.StartDistance, desc)
+	if count <= 0 {
+		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: Count, Step, or Density must produce decals")
+	}
+	vertices := []trackEdgeVertex{}
+	indices := []int{}
+	decals := 0
+	for _, side := range trackScatterSides(desc.Side) {
+		for i := 0; i < count; i++ {
+			seed := desc.Seed + i*9151 + int(side)*1973
+			distance := desc.StartDistance + trackProjectedDecalDistance(desc.EndDistance-desc.StartDistance, count, i, seed)
+			pose := track.PoseAt(distance)
+			lateral := desc.LateralMin
+			if desc.LateralMax > desc.LateralMin {
+				lateral += trackScatterRand(seed, 1.9) * (desc.LateralMax - desc.LateralMin)
+			}
+			if desc.EdgeRelative {
+				lateral += pose.HalfWidth
+			}
+			along := 0.0
+			if desc.AlongJitter > 0 {
+				along = (trackScatterRand(seed, 2.5) - 0.5) * desc.AlongJitter
+			}
+			center := pose.Position.Add(pose.Right.Scale(side * lateral)).Add(pose.Forward.Scale(along))
+			width := desc.WidthMin + (desc.WidthMax-desc.WidthMin)*trackScatterRand(seed, 3.1)
+			length := desc.LengthMin + (desc.LengthMax-desc.LengthMin)*trackScatterRand(seed, 3.7)
+			yaw := (trackScatterRand(seed, 4.3) - 0.5) * desc.YawJitter
+			forward := pose.Forward.Scale(math.Cos(yaw)).Add(pose.Right.Scale(math.Sin(yaw))).Normalize()
+			if forward.LengthSq() <= 0.000001 {
+				forward = pose.Forward
+			}
+			right := forward.Cross(voplay.Vec3{Y: 1}).Normalize()
+			if right.LengthSq() <= 0.000001 {
+				right = pose.Right
+			}
+			vertices, indices = appendProjectedDecalQuad(vertices, indices, center, right, forward, width, length, desc.SurfaceOffset, desc.HeightProbe)
+			decals++
+		}
+	}
+	mesh := buildTrackRawSurfaceMesh(vertices, indices, desc.Color, desc.Roughness)
+	return TrackProjectedDecalMesh{Vertices: mesh.Vertices, Indices: mesh.Indices, Color: mesh.Color, Roughness: mesh.Roughness, VertexCount: mesh.VertexCount, IndexCount: mesh.IndexCount, DecalCount: decals, Min: mesh.Min, Max: mesh.Max}, nil
+}
+
+func normalizeTrackProjectedDecalDesc(track *Track, desc TrackProjectedDecalDesc) TrackProjectedDecalDesc {
+	if desc.Name == "" {
+		desc.Name = "track_projected_decal"
+	}
+	if desc.Seed == 0 {
+		desc.Seed = 110351
+	}
+	if desc.EndDistance <= 0 {
+		desc.EndDistance = track.Length()
+	}
+	if desc.EndDistance > track.Length() {
+		desc.EndDistance = track.Length()
+	}
+	if desc.StartDistance < 0 {
+		desc.StartDistance = 0
+	}
+	if desc.StartDistance > desc.EndDistance {
+		desc.StartDistance = desc.EndDistance
+	}
+	if desc.WidthMin <= 0 {
+		desc.WidthMin = 0.35
+	}
+	if desc.WidthMax <= 0 {
+		desc.WidthMax = desc.WidthMin
+	}
+	if desc.WidthMax < desc.WidthMin {
+		desc.WidthMax = desc.WidthMin
+	}
+	if desc.LengthMin <= 0 {
+		desc.LengthMin = 1.2
+	}
+	if desc.LengthMax <= 0 {
+		desc.LengthMax = desc.LengthMin
+	}
+	if desc.LengthMax < desc.LengthMin {
+		desc.LengthMax = desc.LengthMin
+	}
+	if desc.SurfaceOffset <= 0 {
+		desc.SurfaceOffset = 0.04
+	}
+	if desc.Color == (voplay.Color{}) {
+		desc.Color = voplay.Color{R: 0.08, G: 0.07, B: 0.055, A: 0.48}
+	}
+	if desc.Roughness <= 0 {
+		desc.Roughness = 0.96
+	}
+	return desc
+}
+
+func trackProjectedDecalCount(length float64, desc TrackProjectedDecalDesc) int {
+	if desc.Count > 0 {
+		return desc.Count
+	}
+	if desc.Step > 0 {
+		return int(math.Ceil(length / desc.Step))
+	}
+	if desc.Density > 0 {
+		return int(math.Ceil(length * desc.Density))
+	}
+	return 0
+}
+
+func trackProjectedDecalDistance(length float64, count, index, seed int) float64 {
+	if count <= 0 {
+		return 0
+	}
+	t := (float64(index) + trackScatterRand(seed, 5.1)) / float64(count)
+	return t * length
+}
+
+func appendProjectedDecalQuad(vertices []trackEdgeVertex, indices []int, center, right, forward voplay.Vec3, width, length, surfaceOffset float64, heightProbe TrackHeightProbe) ([]trackEdgeVertex, []int) {
+	base := len(vertices)
+	halfW := width * 0.5
+	halfL := length * 0.5
+	corners := []voplay.Vec3{
+		center.Sub(right.Scale(halfW)).Sub(forward.Scale(halfL)),
+		center.Add(right.Scale(halfW)).Sub(forward.Scale(halfL)),
+		center.Sub(right.Scale(halfW)).Add(forward.Scale(halfL)),
+		center.Add(right.Scale(halfW)).Add(forward.Scale(halfL)),
+	}
+	uvs := []voplay.Vec2{
+		voplay.Vec2{X: 0, Y: 0},
+		voplay.Vec2{X: 1, Y: 0},
+		voplay.Vec2{X: 0, Y: 1},
+		voplay.Vec2{X: 1, Y: 1},
+	}
+	for i, corner := range corners {
+		if heightProbe != nil {
+			if h, ok := heightProbe(corner); ok {
+				corner.Y = h
+			}
+		}
+		corner = corner.Add(voplay.Vec3{Y: surfaceOffset})
+		vertices = append(vertices, trackEdgeVertex{Position: corner, Normal: voplay.Vec3{Y: 1}, U: uvs[i].X, V: uvs[i].Y})
+	}
+	indices = append(indices, base, base + 1, base + 2, base + 1, base + 3, base + 2)
+	return vertices, indices
+}

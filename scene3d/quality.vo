@@ -1,0 +1,159 @@
+package scene3d
+
+const (
+	SceneQualityLow = 1
+	SceneQualityMedium = 2
+	SceneQualityHigh = 3
+	SceneQualityCinematic = 4
+)
+
+type RenderingQualityProfile struct {
+	Quality int
+	ShadowQuality int
+	ContactAOQuality int
+	ScatterDensityScale float64
+	ScatterLodScale float64
+	MaterialDetailScale float64
+	TerrainDetailScale float64
+	BloomThreshold float64
+	BloomStrength float64
+	SharpenStrength float64
+	FxaaStrength float64
+}
+
+type QualitySelectionDesc struct {
+	GPUTier int
+	TargetFPS int
+	MemoryMB int
+	DevicePixelRatio float64
+	BatterySaver bool
+	PreferQuality bool
+}
+
+func RenderingQualityConfig(quality int) RenderingQualityProfile {
+	q := normalizeSceneQuality(quality)
+	if q == SceneQualityLow {
+		return RenderingQualityProfile{
+			Quality: q,
+			ShadowQuality: ShadowQualityLow,
+			ContactAOQuality: ContactAOQualityLow,
+			ScatterDensityScale: 0.45,
+			ScatterLodScale: 0.62,
+			MaterialDetailScale: 0.7,
+			TerrainDetailScale: 0.7,
+			BloomThreshold: 0.82,
+			BloomStrength: 0.055,
+			SharpenStrength: 0.035,
+			FxaaStrength: 0.65,
+		}
+	}
+	if q == SceneQualityMedium {
+		return RenderingQualityProfile{
+			Quality: q,
+			ShadowQuality: ShadowQualityMedium,
+			ContactAOQuality: ContactAOQualityMedium,
+			ScatterDensityScale: 0.75,
+			ScatterLodScale: 0.84,
+			MaterialDetailScale: 0.88,
+			TerrainDetailScale: 0.88,
+			BloomThreshold: 0.76,
+			BloomStrength: 0.09,
+			SharpenStrength: 0.05,
+			FxaaStrength: 0.78,
+		}
+	}
+	if q == SceneQualityCinematic {
+		return RenderingQualityProfile{
+			Quality: q,
+			ShadowQuality: ShadowQualityCinematic,
+			ContactAOQuality: ContactAOQualityCinematic,
+			ScatterDensityScale: 1.35,
+			ScatterLodScale: 1.28,
+			MaterialDetailScale: 1.25,
+			TerrainDetailScale: 1.25,
+			BloomThreshold: 0.68,
+			BloomStrength: 0.16,
+			SharpenStrength: 0.08,
+			FxaaStrength: 1.0,
+		}
+	}
+	return RenderingQualityProfile{
+		Quality: SceneQualityHigh,
+		ShadowQuality: ShadowQualityHigh,
+		ContactAOQuality: ContactAOQualityHigh,
+		ScatterDensityScale: 1.0,
+		ScatterLodScale: 1.0,
+		MaterialDetailScale: 1.0,
+		TerrainDetailScale: 1.0,
+		BloomThreshold: 0.72,
+		BloomStrength: 0.12,
+		SharpenStrength: 0.065,
+		FxaaStrength: 0.9,
+	}
+}
+
+func SelectRenderingQuality(desc QualitySelectionDesc) int {
+	if desc.BatterySaver {
+		return SceneQualityLow
+	}
+	tier := desc.GPUTier
+	if tier <= 0 {
+		tier = SceneQualityHigh
+	}
+	if desc.MemoryMB > 0 && desc.MemoryMB < 2048 {
+		return SceneQualityLow
+	}
+	if tier <= 1 {
+		return SceneQualityLow
+	}
+	if desc.TargetFPS >= 90 && tier <= 2 && !desc.PreferQuality {
+		return SceneQualityMedium
+	}
+	if desc.MemoryMB > 0 && desc.MemoryMB < 4096 {
+		return SceneQualityMedium
+	}
+	if tier == 2 {
+		return SceneQualityMedium
+	}
+	if desc.PreferQuality && tier >= 4 {
+		return SceneQualityCinematic
+	}
+	if tier >= 4 && desc.MemoryMB >= 8192 && desc.DevicePixelRatio >= 1.5 {
+		return SceneQualityCinematic
+	}
+	return SceneQualityHigh
+}
+
+func (s *Scene) SetRenderingQuality(quality int) RenderingQualityProfile {
+	profile := RenderingQualityConfig(quality)
+	if s == nil {
+		return profile
+	}
+	s.RenderingQuality = profile.Quality
+	s.SetShadowQuality(profile.ShadowQuality)
+	s.SetContactAOQuality(profile.ContactAOQuality)
+	post := normalizePostProcess(s.PostProcess)
+	post.BloomThreshold = profile.BloomThreshold
+	post.BloomStrength = profile.BloomStrength
+	post.SharpenStrength = profile.SharpenStrength
+	post.FxaaStrength = profile.FxaaStrength
+	s.PostProcess = post
+	return profile
+}
+
+func (s *Scene) AutoRenderingQuality(desc QualitySelectionDesc) RenderingQualityProfile {
+	return s.SetRenderingQuality(SelectRenderingQuality(desc))
+}
+
+func normalizeSceneQuality(quality int) int {
+	if quality <= 0 {
+		return SceneQualityHigh
+	}
+	if quality < SceneQualityLow {
+		return SceneQualityLow
+	}
+	if quality > SceneQualityCinematic {
+		return SceneQualityCinematic
+	}
+	return quality
+}

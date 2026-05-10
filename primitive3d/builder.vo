@@ -20,6 +20,10 @@ type PartDesc struct {
 	Scale      voplay.Vec3
 	Tint       voplay.Color
 	Flags      InstanceFlags
+	LodNear    float64
+	LodFar     float64
+	WindStrength float64
+	AtlasUV    voplay.Rect
 	Object     ObjectID
 }
 
@@ -91,6 +95,10 @@ func (b *Builder) AddPart(desc PartDesc) ObjectID {
 		Scale: desc.Scale,
 		Tint: desc.Tint,
 		Flags: desc.Flags,
+		LodNear: desc.LodNear,
+		LodFar: desc.LodFar,
+		WindStrength: desc.WindStrength,
+		AtlasUV: desc.AtlasUV,
 		Object: desc.Object,
 	})
 }

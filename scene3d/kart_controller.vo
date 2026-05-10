@@ -30,6 +30,7 @@ type KartControllerConfig struct {
 type KartControllerState struct {
 	SurfaceID          string
 	SurfaceFriction    float64
+	SurfaceOnRoad      bool
 	Boosting           bool
 	Drifting           bool
 	DriftCharge        float64
@@ -50,6 +51,7 @@ type KartController struct {
 	DriftCharge float64
 	wasDrifting bool
 	state KartControllerState
+	adjustedWheels []VehicleWheelConfig
 }
 
 func DefaultKartControllerConfig() KartControllerConfig {
@@ -95,6 +97,15 @@ func (k *KartController) Update(input KartInput, dt float64) KartControllerState
 	if k == nil || k.Vehicle == nil || dt <= 0 {
 		return KartControllerState{}
 	}
+	k.Vehicle.syncState()
+	return k.UpdateFromSyncedState(input, dt)
+}
+
+// UpdateFromSyncedState applies kart input when Scene.StepAndSyncPhysics already refreshed vehicle telemetry.
+func (k *KartController) UpdateFromSyncedState(input KartInput, dt float64) KartControllerState {
+	if k == nil || k.Vehicle == nil || dt <= 0 {
+		return KartControllerState{}
+	}
 	k.Vehicle.BindTrack(k.Track)
 	surface := k.currentSurface()
 	adjusted := k.adjustedVehicleConfig(surface)
@@ -103,12 +114,13 @@ func (k *KartController) Update(input KartInput, dt float64) KartControllerState
 		k.ActivateBoost(k.Config.BoostDuration)
 	}
 	boosting := k.BoostTimer > 0
-	k.Vehicle.Update(VehicleInput{Throttle: input.Throttle, Steer: input.Steer, Drift: input.Drift, Boost: boosting}, dt)
+	k.Vehicle.applyControls(VehicleInput{Throttle: input.Throttle, Steer: input.Steer, Drift: input.Drift, Boost: boosting}, dt)
 	k.updateDrift(input, dt)
 	recovery := k.updateRecovery(input, dt)
 	k.BoostTimer = vehicleMoveTowards(k.BoostTimer, 0, dt)
 	k.state.SurfaceID = surface.Name
 	k.state.SurfaceFriction = surface.Friction
+	k.state.SurfaceOnRoad = surface.OnRoad
 	k.state.Boosting = boosting
 	k.state.Drifting = k.Vehicle.Drifting
 	k.state.DriftCharge = k.DriftCharge
@@ -164,7 +176,18 @@ func (k *KartController) currentSurface() TrackSurfaceHit {
 }
 
 func (k *KartController) adjustedVehicleConfig(surface TrackSurfaceHit) VehicleConfig {
-	cfg := cloneVehicleConfig(k.Config.Vehicle)
+	cfg := k.Config.Vehicle
+	if len(cfg.Wheels) > 0 {
+		if cap(k.adjustedWheels) < len(cfg.Wheels) {
+			k.adjustedWheels = make([]VehicleWheelConfig, len(cfg.Wheels))
+		} else {
+			k.adjustedWheels = k.adjustedWheels[:len(cfg.Wheels)]
+		}
+		for i := range cfg.Wheels {
+			k.adjustedWheels[i] = cfg.Wheels[i]
+		}
+		cfg.Wheels = k.adjustedWheels
+	}
 	friction := surface.Friction
 	if friction <= 0 {
 		friction = 1

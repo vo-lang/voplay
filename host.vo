@@ -7,15 +7,21 @@ package voplay
 import (
 	"encoding/json"
 	"time"
+	"github.com/vo-lang/voplay/codec"
+	"github.com/vo-lang/voplay/framewire"
 	"github.com/vo-lang/vogui"
 )
 
 // splitPorts bundles all inter-island ports.
 type splitPorts struct {
-	frameReq   port []byte
-	frameReply port []byte
+	frameSetup port renderFramePorts
 	resReq     port []byte
 	resResp    port []byte
+}
+
+type renderFramePorts struct {
+	frameReq   port []byte
+	frameReply port []byte
 }
 
 type splitHostState struct {
@@ -39,7 +45,7 @@ type renderWorkerConfig struct {
 }
 
 func useRenderIslandHost() bool {
-	return vogui.HasHostCapability("render_island_host")
+	return true
 }
 
 func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts, canvasId string) {
@@ -52,8 +58,7 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 		UncappedFrameRate: game.UncappedFrameRate,
 		TargetFrameRate: game.TargetFrameRate,
 	}, renderWorkerPorts{
-		frameReq:   ports.frameReq,
-		frameReply: ports.frameReply,
+		frameSetup: ports.frameSetup,
 		resReq:     ports.resReq,
 		resResp:    ports.resResp,
 	})
@@ -67,7 +72,7 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 }
 
 func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, ports splitPorts) {
-	_, ok := <-ports.frameReq
+	framePorts, ok := <-ports.frameSetup
 	if !ok {
 		state.Starting = false
 		return
@@ -75,7 +80,7 @@ func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, port
 	state.Started = true
 	state.Starting = false
 	ctx.start(game.InitialState)
-	go runFrameDrivenGameLoop(ctx, game, ports.frameReq, ports.frameReply)
+	go runFrameDrivenGameLoop(ctx, game, framePorts.frameReq, framePorts.frameReply)
 }
 
 func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
@@ -126,10 +131,11 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPort port []byte) {
 	lastTime := time.Now()
 	firstFrame := true
+	frameReplyWriter := codec.NewByteWriter(framewire.ReplyHeaderSize + 256)
 
 	for {
 		// Block until render island sends next frame request.
-		inputBytes, ok := <-frameReqPort
+		reqBytes, ok := <-frameReqPort
 		if !ok {
 			// Render island closed (surface lost or shutdown).
 			ctx.closed = true
@@ -138,12 +144,38 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 			}
 			return
 		}
+		req := framewire.DecodeRequest(reqBytes)
+		if req.HasRenderTiming && ctx.overlay.enabled {
+			ctx.overlay.recordRenderFrame(req.RenderTiming)
+		}
+		if req.HasPerfPackets && ctx.overlay.enabled {
+			ctx.overlay.recordPerfPackets(req.PerfPackets)
+		}
 
-		// Compute dt from logic island clock.
+		// Compute wall-frame dt from the render worker. The render loop interval
+		// is still recorded for diagnostics, but simulation advances from the
+		// display pulse interval so submit/present backpressure does not turn
+		// into a large gameplay time jump on the next frame.
 		now := time.Now()
-		dt := 0.0
+		frameDt := 0.0
+		advanceDt := 0.0
 		if !firstFrame {
-			dt = float64(now.Sub(lastTime).Nanoseconds()) / 1e9
+			if req.HasRenderTiming {
+				frameDt = req.RenderTiming.LoopMs / 1000.0
+				advanceDt = frameDt
+				if game.TargetFrameRate > 0 {
+					targetDt := 1.0 / float64(game.TargetFrameRate)
+					advanceDt = targetDt
+					if frameDt > advanceDt {
+						advanceDt = frameDt
+					}
+				} else if req.RenderTiming.DisplayPulseMs > 0 {
+					advanceDt = req.RenderTiming.DisplayPulseMs / 1000.0
+				}
+			} else {
+				frameDt = float64(now.Sub(lastTime).Nanoseconds()) / 1e9
+				advanceDt = frameDt
+			}
 		}
 		firstFrame = false
 		lastTime = now
@@ -162,14 +194,14 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 
 		// Apply input from render island.
 		inputStart := time.Now()
-		if len(inputBytes) > 0 {
-			ctx.Input.unpackEvents(inputBytes)
+		if len(req.InputBytes) > 0 {
+			ctx.Input.unpackEvents(req.InputBytes)
 		}
 		inputNs := time.Now().Sub(inputStart).Nanoseconds()
 
 		// Advance game logic with fixed-step simulation.
 		advanceStart := time.Now()
-		ctx.Advance(dt)
+		ctx.Advance(advanceDt)
 		advanceNs := time.Now().Sub(advanceStart).Nanoseconds()
 
 		if ctx.closed {
@@ -186,22 +218,28 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		ctx.Draw.reset()
 		ctx.States.Draw()
 		drawNs := time.Now().Sub(drawStart).Nanoseconds()
+		drawStats := ctx.Draw.Stats()
 
 		// --- End logic processing ---
 		logicNs := time.Now().Sub(logicStart).Nanoseconds()
 		drawBytes := len(ctx.Draw.Bytes())
 
-		// Record metrics and draw debug overlay (if enabled).
-		ctx.overlay.recordFrame(dt, logicNs, ctx.lastFixedSteps, drawBytes, inputNs, advanceNs, drawNs)
-		overlayStart := time.Now()
-		ctx.overlay.draw(ctx.Draw)
-		ctx.overlay.recordOverlayTime(time.Now().Sub(overlayStart).Nanoseconds())
-
 		cmds := ctx.Draw.Bytes()
-		ctx.overlay.recordSubmittedBytes(len(cmds))
-		frameReplyPort <- cmds
-
-		ctx.Input.endFrame()
+		if ctx.overlay != nil && ctx.overlay.enabled {
+			// Record metrics and draw the engine perf HUD only when diagnostics are enabled.
+			ctx.overlay.recordFrame(frameDt, logicNs, ctx.lastFixedSteps, drawBytes, inputNs, advanceNs, drawNs, drawStats)
+			overlayStart := time.Now()
+			ctx.overlay.draw(ctx.Draw)
+			submitStats := ctx.Draw.Stats()
+			ctx.overlay.recordOverlayTime(time.Now().Sub(overlayStart).Nanoseconds(), DrawStatsDelta(submitStats, drawStats))
+			cmds = ctx.Draw.Bytes()
+			ctx.overlay.recordSubmittedBytes(len(cmds), submitStats)
+			frameReplyPort <- framewire.EncodeReply(&frameReplyWriter, true, cmds)
+			ctx.Input.endFrame()
+		} else {
+			frameReplyPort <- cmds
+			ctx.Input.endFrame()
+		}
 	}
 }
 
@@ -211,6 +249,9 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 // Surface
 func initSurface(canvasRef string, uncappedFrameRate bool) error
 func submitFrame(cmds []byte) error
+func setRendererPerfStatsEnabled(enabled bool) error
+func lastRendererPerfPacket() []byte
+func lastWebGpuPerfPacket() []byte
 func waitDisplayPulse()
  
 // Input

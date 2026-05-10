@@ -27,10 +27,17 @@ func (r pickResultsByDistance) Swap(i, j int) {
 }
 
 func (e *Entity) WorldAABB() (voplay.AABB, bool) {
-	if e.Model == 0 {
+	if e == nil {
 		return voplay.AABB{}, false
 	}
-	bounds, ok := voplay.ModelAABB(e.Model)
+	return e.worldAABBForModel(e.Model)
+}
+
+func (e *Entity) worldAABBForModel(model voplay.ModelID) (voplay.AABB, bool) {
+	if e == nil || model == 0 {
+		return voplay.AABB{}, false
+	}
+	bounds, ok := voplay.ModelAABB(model)
 	if !ok {
 		return voplay.AABB{}, false
 	}

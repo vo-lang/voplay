@@ -1,7 +1,7 @@
 package scene3d
 
 import (
-	"strconv"
+	"math"
 	"github.com/vo-lang/voplay"
 	"github.com/vo-lang/voplay/primitive3d"
 )
@@ -14,17 +14,29 @@ type primitiveLayerAttachment struct {
 	materialRevision int
 	cachedFrameValid bool
 	cachedStats primitive3d.Stats
-	cachedBatchKeys []string
+	cachedBatchKeys []primitiveBatchGroupKey
+	cachedCullView primitiveCullView
 	cachedChunkFrameValid bool
 	cachedLayerStats primitive3d.Stats
 	cachedChunks []primitiveCachedChunk
 	uploadedChunks map[int]bool
+	chunkVisible map[int]bool
+	chunkHideDeadline map[int]int
+	visibleChunkScratch map[int]bool
+	visibleGroupScratch map[primitiveBatchGroupKey]bool
+	dynamicVisibleScratch map[int]primitive3d.Instance
+	dynamicGroupScratch map[primitiveBatchGroupKey]bool
+	changedScratch map[int]bool
+	staticFrameChunkScratch []primitiveCachedChunk
+	staticFrameBatchScratch []primitiveBatchGroupKey
+	staticPreloadCursor int
+	staticVisibilityFrame int
 }
 
 type primitiveLayerFrame struct {
 	stats primitive3d.Stats
 	visible map[int]primitive3d.Instance
-	batchKeys []string
+	batchKeys []primitiveBatchGroupKey
 }
 
 type primitiveCachedChunk struct {
@@ -32,14 +44,35 @@ type primitiveCachedChunk struct {
 	bounds voplay.AABB
 	objects []primitive3d.ObjectID
 	instanceCount int
-	batchKeys []string
+	batchKeys []primitiveBatchGroupKey
+	minLodNear float64
+	maxLodFar float64
+	allHaveFarLod bool
 }
 
 type primitiveStaticFrame struct {
 	stats primitive3d.Stats
 	chunks []primitiveCachedChunk
-	batchKeys []string
+	batchKeys []primitiveBatchGroupKey
 }
+
+type primitiveCullView struct {
+	Position voplay.Vec3
+	Target voplay.Vec3
+	Fov float64
+	Far float64
+}
+
+type primitiveBatchGroupKey struct {
+	Shape int
+	Material int
+}
+
+const (
+	primitiveStaticPreloadMaxChunksPerFrame = 24
+	primitiveStaticPreloadMaxInstancesPerFrame = 512
+	primitiveStaticChunkHideDelayFrames = 8
+)
 
 func (s *Scene) AddPrimitiveLayer(layer *primitive3d.Layer) primitive3d.LayerHandle {
 	if layer == nil {
@@ -56,7 +89,7 @@ func (s *Scene) AddPrimitiveLayer(layer *primitive3d.Layer) primitive3d.LayerHan
 	handle := primitive3d.LayerHandle(s.nextPrimitiveLayerHandle)
 	s.nextPrimitiveLayerHandle++
 	layer.Invalidate()
-	s.primitiveLayers = append(s.primitiveLayers, &primitiveLayerAttachment{handle: handle, layer: layer, visible: map[int]bool{}, uploadedChunks: map[int]bool{}})
+	s.primitiveLayers = append(s.primitiveLayers, &primitiveLayerAttachment{handle: handle, layer: layer, visible: map[int]bool{}, uploadedChunks: map[int]bool{}, chunkVisible: map[int]bool{}})
 	return handle
 }
 
@@ -93,7 +126,7 @@ func (s *Scene) invalidatePrimitiveLayers() {
 	s.primitiveStats = s.aggregatePrimitiveStats()
 }
 
-func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats, batchGroups map[string]bool) {
+func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats) {
 	total := primitive3d.Stats{}
 	for _, handle := range s.primitiveDestroyedLayerHandles {
 		d.DestroyPrimitive3DLayer(s.renderSceneID, int(handle))
@@ -106,6 +139,19 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 		layer := attachment.layer
 		if attachment.visible == nil {
 			attachment.visible = map[int]bool{}
+		}
+		if attachment.uploadedChunks == nil {
+			attachment.uploadedChunks = map[int]bool{}
+		}
+		if attachment.chunkVisible == nil {
+			attachment.chunkVisible = map[int]bool{}
+		}
+		changes := primitiveDrainLayerChanges(layer)
+		staticContentChanged := layer.Kind() == primitive3d.StaticLayer && primitiveStaticLayerContentChanged(attachment, changes)
+		if staticContentChanged && len(attachment.uploadedChunks) > 0 {
+			d.ClearPrimitive3DLayer(s.renderSceneID, int(attachment.handle))
+			attachment.shapeRevision = -1
+			attachment.materialRevision = -1
 		}
 		if attachment.shapeRevision != layer.ShapeRevision() {
 			shapes := primitiveLayerShapeDraws(layer)
@@ -121,29 +167,18 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			}
 			attachment.materialRevision = layer.MaterialRevision()
 		}
-		changes := primitiveDrainLayerChanges(layer)
-		if primitiveCanReuseStaticFrame(layer, attachment.cachedFrameValid, changes) {
-			total = addPrimitiveStats(total, attachment.cachedStats)
-			stats.BatchEligibleObjects += attachment.cachedStats.VisibleInstances
-			for _, key := range attachment.cachedBatchKeys {
-				batchGroups[key] = true
-			}
-			continue
-		}
 		if layer.Kind() == primitive3d.StaticLayer {
-			frame := s.flushStaticPrimitiveLayer(d, stats, batchGroups, attachment, layer, changes)
+			frame := s.flushStaticPrimitiveLayer(d, stats, attachment, layer, changes, staticContentChanged)
 			total = addPrimitiveStats(total, frame.stats)
 			continue
 		}
-		frame := s.collectPrimitiveLayerFrame(layer)
+		frame := s.collectPrimitiveLayerFrame(attachment, layer)
 		total = addPrimitiveStats(total, frame.stats)
 		attachment.cachedFrameValid = layer.Kind() == primitive3d.StaticLayer
 		attachment.cachedStats = frame.stats
 		attachment.cachedBatchKeys = frame.batchKeys
-		for _, instance := range frame.visible {
-			model := layer.Model(instance.Shape)
-			material := materialForPrimitiveInstance(layer, instance)
-			batchGroups[primitiveBatchKey(model, material)] = true
+		stats.BatchGroups += frame.stats.ShapeMaterialGroups
+		for range frame.visible {
 			stats.BatchEligibleObjects++
 		}
 		for _, objectID := range changes.Removes {
@@ -151,7 +186,13 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			delete(attachment.visible, int(objectID))
 			stats.DestroyedObjects++
 		}
-		changed := map[int]bool{}
+		changed := attachment.changedScratch
+		if changed == nil {
+			changed = map[int]bool{}
+			attachment.changedScratch = changed
+		} else {
+			primitiveClearIntBoolMap(changed)
+		}
 		for _, instance := range changes.Upserts {
 			changed[int(instance.Object)] = true
 		}
@@ -167,7 +208,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, visibleNow)
+			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, visibleNow, primitiveRenderParams(instance))
 			attachment.visible[int(instance.Object)] = visibleNow
 			stats.UpsertedObjects++
 		}
@@ -177,7 +218,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, true)
+			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, true, primitiveRenderParams(instance))
 			attachment.visible[objectKey] = true
 			stats.UpsertedObjects++
 		}
@@ -195,7 +236,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats,
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, false)
+			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, false, primitiveRenderParams(instance))
 			attachment.visible[objectKey] = false
 			stats.UpsertedObjects++
 		}
@@ -215,35 +256,123 @@ func (s *Scene) aggregatePrimitiveStats() primitive3d.Stats {
 	return total
 }
 
-func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderStats, batchGroups map[string]bool, attachment *primitiveLayerAttachment, layer *primitive3d.Layer, changes primitive3d.Changes) primitiveStaticFrame {
+func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderStats, attachment *primitiveLayerAttachment, layer *primitive3d.Layer, changes primitive3d.Changes, contentChanged bool) primitiveStaticFrame {
 	if attachment.uploadedChunks == nil {
 		attachment.uploadedChunks = map[int]bool{}
 	}
-	contentChanged := changes.All || len(changes.Upserts) > 0 || len(changes.Removes) > 0 || !attachment.cachedChunkFrameValid
+	if attachment.chunkVisible == nil {
+		attachment.chunkVisible = map[int]bool{}
+	}
+	if attachment.chunkHideDeadline == nil {
+		attachment.chunkHideDeadline = map[int]int{}
+	}
+	if attachment.visibleChunkScratch == nil {
+		attachment.visibleChunkScratch = map[int]bool{}
+	}
+	attachment.staticVisibilityFrame++
 	if contentChanged {
 		attachment.rebuildStaticChunkCache(layer)
 		attachment.uploadedChunks = map[int]bool{}
+		attachment.chunkVisible = map[int]bool{}
+		attachment.chunkHideDeadline = map[int]int{}
 		attachment.cachedFrameValid = false
+		attachment.staticPreloadCursor = 0
+		attachment.staticVisibilityFrame = 1
 	}
 	frame := s.collectStaticPrimitiveFrame(attachment)
 	attachment.cachedFrameValid = true
 	attachment.cachedStats = frame.stats
 	attachment.cachedBatchKeys = frame.batchKeys
 	stats.BatchEligibleObjects += frame.stats.VisibleInstances
-	for _, key := range frame.batchKeys {
-		batchGroups[key] = true
+	stats.BatchGroups += frame.stats.ShapeMaterialGroups
+	primitiveClearIntBoolMap(attachment.visibleChunkScratch)
+	for _, chunk := range frame.chunks {
+		attachment.visibleChunkScratch[chunk.id] = true
 	}
 	for _, chunk := range frame.chunks {
 		if !attachment.uploadedChunks[chunk.id] {
 			if len(chunk.objects) == 0 {
 				continue
 			}
-			primitiveWriteChunkKeys(d, s.renderSceneID, int(attachment.handle), chunk.id, layer, chunk.objects)
+			primitiveWriteChunkKeys(d, s.renderSceneID, int(attachment.handle), chunk.id, layer, chunk.objects, true)
 			attachment.uploadedChunks[chunk.id] = true
+			attachment.chunkVisible[chunk.id] = true
+			delete(attachment.chunkHideDeadline, chunk.id)
 			stats.UpsertedObjects += len(chunk.objects)
+			continue
 		}
+		if !attachment.chunkVisible[chunk.id] {
+			d.SetPrimitive3DChunkVisible(s.renderSceneID, int(attachment.handle), chunk.id, true)
+			attachment.chunkVisible[chunk.id] = true
+		}
+		delete(attachment.chunkHideDeadline, chunk.id)
+	}
+	for chunkID, wasVisible := range attachment.chunkVisible {
+		if !wasVisible {
+			continue
+		}
+		if attachment.visibleChunkScratch[chunkID] {
+			delete(attachment.chunkHideDeadline, chunkID)
+			continue
+		}
+		if s.primitiveStaticChunkHideCanWait(attachment, chunkID) {
+			deadline := attachment.chunkHideDeadline[chunkID]
+			if deadline <= 0 {
+				attachment.chunkHideDeadline[chunkID] = attachment.staticVisibilityFrame + primitiveStaticChunkHideDelayFrames
+				continue
+			}
+			if attachment.staticVisibilityFrame < deadline {
+				continue
+			}
+		}
+		d.SetPrimitive3DChunkVisible(s.renderSceneID, int(attachment.handle), chunkID, false)
+		attachment.chunkVisible[chunkID] = false
+		delete(attachment.chunkHideDeadline, chunkID)
+	}
+	if layer.PreloadChunks() {
+		preloadStaticPrimitiveChunks(d, stats, s.renderSceneID, attachment, layer)
 	}
 	return frame
+}
+
+func preloadStaticPrimitiveChunks(d *voplay.DrawCtx, stats *SceneRenderStats, sceneID int, attachment *primitiveLayerAttachment, layer *primitive3d.Layer) {
+	chunkCount := len(attachment.cachedChunks)
+	if chunkCount == 0 {
+		attachment.staticPreloadCursor = 0
+		return
+	}
+	if attachment.staticPreloadCursor < 0 || attachment.staticPreloadCursor >= chunkCount {
+		attachment.staticPreloadCursor = 0
+	}
+	start := attachment.staticPreloadCursor
+	nextCursor := start
+	uploadedChunks := 0
+	uploadedInstances := 0
+	for scanned := 0; scanned < chunkCount; scanned++ {
+		index := (start + scanned) % chunkCount
+		nextCursor = (index + 1) % chunkCount
+		chunk := attachment.cachedChunks[index]
+		if attachment.uploadedChunks[chunk.id] || len(chunk.objects) == 0 {
+			continue
+		}
+		if attachment.visibleChunkScratch[chunk.id] {
+			continue
+		}
+		if uploadedChunks >= primitiveStaticPreloadMaxChunksPerFrame {
+			break
+		}
+		if uploadedChunks > 0 && uploadedInstances + len(chunk.objects) > primitiveStaticPreloadMaxInstancesPerFrame {
+			break
+		}
+		primitiveWriteChunkKeys(d, sceneID, int(attachment.handle), chunk.id, layer, chunk.objects, false)
+		attachment.uploadedChunks[chunk.id] = true
+		attachment.chunkVisible[chunk.id] = false
+		delete(attachment.chunkHideDeadline, chunk.id)
+		stats.UpsertedObjects += len(chunk.objects)
+		uploadedChunks++
+		uploadedInstances += len(chunk.objects)
+	}
+	attachment.staticPreloadCursor = nextCursor
 }
 
 func (attachment *primitiveLayerAttachment) rebuildStaticChunkCache(layer *primitive3d.Layer) {
@@ -253,51 +382,118 @@ func (attachment *primitiveLayerAttachment) rebuildStaticChunkCache(layer *primi
 		return
 	}
 	attachment.cachedLayerStats = layer.Stats()
-	for _, chunk := range layer.Chunks() {
-		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), batchKeys: primitiveChunkBatchKeys(layer, chunk.Objects)}
+	for _, chunk := range layer.ChunkView() {
+		minLodNear, maxLodFar, allHaveFarLod := primitiveChunkLodMetadata(layer, chunk.Objects)
+		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), batchKeys: primitiveChunkBatchKeys(layer, chunk.Objects), minLodNear: minLodNear, maxLodFar: maxLodFar, allHaveFarLod: allHaveFarLod}
 		attachment.cachedChunks = append(attachment.cachedChunks, cached)
 	}
 	attachment.cachedChunkFrameValid = true
 }
 
 func (s *Scene) collectStaticPrimitiveFrame(attachment *primitiveLayerAttachment) primitiveStaticFrame {
+	view := s.primitiveCullView()
+	if attachment.cachedFrameValid && primitiveCullViewReusable(attachment.cachedCullView, view) {
+		return primitiveStaticFrame{stats: attachment.cachedStats, chunks: attachment.staticFrameChunkScratch, batchKeys: attachment.cachedBatchKeys}
+	}
 	base := attachment.cachedLayerStats
 	frame := primitiveStaticFrame{stats: base}
 	frame.stats.VisibleChunks = 0
 	frame.stats.VisibleInstances = 0
-	visibleGroups := map[string]bool{}
+	attachment.staticFrameChunkScratch = attachment.staticFrameChunkScratch[:0]
+	attachment.staticFrameBatchScratch = attachment.staticFrameBatchScratch[:0]
+	if attachment.visibleGroupScratch == nil {
+		attachment.visibleGroupScratch = map[primitiveBatchGroupKey]bool{}
+	} else {
+		primitiveClearBatchBoolMap(attachment.visibleGroupScratch)
+	}
 	for _, chunk := range attachment.cachedChunks {
-		frame.chunks = append(frame.chunks, chunk)
+		if !s.primitiveChunkVisible(chunk) {
+			continue
+		}
+		attachment.staticFrameChunkScratch = append(attachment.staticFrameChunkScratch, chunk)
 		frame.stats.VisibleChunks++
 		frame.stats.VisibleInstances += chunk.instanceCount
 		for _, key := range chunk.batchKeys {
-			visibleGroups[key] = true
+			attachment.visibleGroupScratch[key] = true
 		}
 	}
-	frame.stats.ShapeMaterialGroups = len(visibleGroups)
+	frame.stats.ShapeMaterialGroups = len(attachment.visibleGroupScratch)
 	frame.stats.DrawCalls = frame.stats.ShapeMaterialGroups
-	for key := range visibleGroups {
-		frame.batchKeys = append(frame.batchKeys, key)
+	for key := range attachment.visibleGroupScratch {
+		attachment.staticFrameBatchScratch = append(attachment.staticFrameBatchScratch, key)
 	}
+	frame.chunks = attachment.staticFrameChunkScratch
+	frame.batchKeys = attachment.staticFrameBatchScratch
+	attachment.cachedCullView = view
 	return frame
 }
 
-func (s *Scene) collectPrimitiveLayerFrame(layer *primitive3d.Layer) primitiveLayerFrame {
+func (s *Scene) primitiveStaticChunkHideCanWait(attachment *primitiveLayerAttachment, chunkID int) bool {
+	for _, chunk := range attachment.cachedChunks {
+		if chunk.id != chunkID {
+			continue
+		}
+		return s.primitiveChunkLodVisible(chunk)
+	}
+	return false
+}
+
+func (s *Scene) primitiveCullView() primitiveCullView {
+	return primitiveCullView{Position: s.Camera.Position, Target: s.Camera.Target, Fov: s.Camera.Fov, Far: s.Camera.Far}
+}
+
+func primitiveCullViewReusable(a, b primitiveCullView) bool {
+	if a.Position.Sub(b.Position).LengthSq() > 0.36 {
+		return false
+	}
+	if a.Target.Sub(b.Target).LengthSq() > 0.36 {
+		return false
+	}
+	if math.Abs(a.Fov - b.Fov) > 0.10 {
+		return false
+	}
+	if math.Abs(a.Far - b.Far) > 1.0 {
+		return false
+	}
+	return true
+}
+
+func (s *Scene) collectPrimitiveLayerFrame(attachment *primitiveLayerAttachment, layer *primitive3d.Layer) primitiveLayerFrame {
 	base := layer.Stats()
-	frame := primitiveLayerFrame{stats: base, visible: map[int]primitive3d.Instance{}}
+	if attachment.dynamicVisibleScratch == nil {
+		attachment.dynamicVisibleScratch = map[int]primitive3d.Instance{}
+	} else {
+		primitiveClearIntInstanceMap(attachment.dynamicVisibleScratch)
+	}
+	if attachment.dynamicGroupScratch == nil {
+		attachment.dynamicGroupScratch = map[primitiveBatchGroupKey]bool{}
+	} else {
+		primitiveClearBatchBoolMap(attachment.dynamicGroupScratch)
+	}
+	frame := primitiveLayerFrame{stats: base, visible: attachment.dynamicVisibleScratch}
 	frame.stats.VisibleChunks = 0
 	frame.stats.VisibleInstances = 0
-	visibleGroups := map[string]bool{}
-	for _, chunk := range layer.Chunks() {
-		frame.stats.VisibleChunks++
+	visibleGroups := attachment.dynamicGroupScratch
+	for _, chunk := range layer.ChunkView() {
+		if !s.primitiveAABBVisible(chunk.Bounds) {
+			continue
+		}
+		chunkVisible := false
 		for _, objectID := range chunk.Objects {
 			instance, ok := layer.Instance(objectID)
 			if !ok {
 				continue
 			}
+			if !s.primitiveInstanceVisible(instance) {
+				continue
+			}
 			frame.visible[int(objectID)] = instance
 			frame.stats.VisibleInstances++
-			visibleGroups[primitiveBatchKey(layer.Model(instance.Shape), materialForPrimitiveInstance(layer, instance))] = true
+			chunkVisible = true
+			visibleGroups[primitiveInstanceBatchKey(instance)] = true
+		}
+		if chunkVisible {
+			frame.stats.VisibleChunks++
 		}
 	}
 	frame.stats.ShapeMaterialGroups = len(visibleGroups)
@@ -308,14 +504,11 @@ func (s *Scene) collectPrimitiveLayerFrame(layer *primitive3d.Layer) primitiveLa
 	return frame
 }
 
-func primitiveCanReuseStaticFrame(layer *primitive3d.Layer, cachedFrameValid bool, changes primitive3d.Changes) bool {
-	if layer == nil {
-		return false
+func primitiveStaticLayerContentChanged(attachment *primitiveLayerAttachment, changes primitive3d.Changes) bool {
+	if attachment == nil {
+		return true
 	}
-	if layer.Kind() != primitive3d.StaticLayer || !cachedFrameValid {
-		return false
-	}
-	return !changes.All && len(changes.Upserts) == 0 && len(changes.Removes) == 0
+	return changes.All || len(changes.Upserts) > 0 || len(changes.Removes) > 0 || !attachment.cachedChunkFrameValid
 }
 
 func primitiveDrainLayerChanges(layer *primitive3d.Layer) primitive3d.Changes {
@@ -328,35 +521,152 @@ func primitiveDrainLayerChanges(layer *primitive3d.Layer) primitive3d.Changes {
 	return layer.DrainChanges()
 }
 
-func primitiveWriteChunkKeys(d *voplay.DrawCtx, sceneID, layerID, chunkID int, layer *primitive3d.Layer, objects []primitive3d.ObjectID) {
+func primitiveClearIntBoolMap(values map[int]bool) {
+	for key := range values {
+		delete(values, key)
+	}
+}
+
+func primitiveClearStringBoolMap(values map[string]bool) {
+	for key := range values {
+		delete(values, key)
+	}
+}
+
+func primitiveClearBatchBoolMap(values map[primitiveBatchGroupKey]bool) {
+	for key := range values {
+		delete(values, key)
+	}
+}
+
+func primitiveClearIntInstanceMap(values map[int]primitive3d.Instance) {
+	for key := range values {
+		delete(values, key)
+	}
+}
+
+func primitiveWriteChunkKeys(d *voplay.DrawCtx, sceneID, layerID, chunkID int, layer *primitive3d.Layer, objects []primitive3d.ObjectID, visible bool) {
 	d.BeginPrimitive3DChunkKeys(sceneID, layerID, chunkID, len(objects))
 	for _, objectID := range objects {
 		instance, ok := layer.Instance(objectID)
 		if !ok {
 			continue
 		}
-		d.WritePrimitive3DChunkKey(int(instance.Object), int(instance.Shape), instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), int(instance.Material), instance.Tint, true)
+		d.WritePrimitive3DChunkKey(int(instance.Object), int(instance.Shape), instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), int(instance.Material), instance.Tint, visible, primitiveRenderParams(instance))
 	}
 }
 
-func primitiveChunkBatchKeys(layer *primitive3d.Layer, objects []primitive3d.ObjectID) []string {
-	keys := map[string]bool{}
+func primitiveRenderParams(instance primitive3d.Instance) voplay.Primitive3DRenderParams {
+	return voplay.Primitive3DRenderParams{Flags: int(instance.Flags), LodNear: instance.LodNear, LodFar: instance.LodFar, WindStrength: instance.WindStrength, AtlasUV: instance.AtlasUV}
+}
+
+func primitiveChunkBatchKeys(layer *primitive3d.Layer, objects []primitive3d.ObjectID) []primitiveBatchGroupKey {
+	keys := map[primitiveBatchGroupKey]bool{}
 	for _, objectID := range objects {
 		instance, ok := layer.Instance(objectID)
 		if !ok {
 			continue
 		}
-		keys[primitiveStaticBatchKey(instance)] = true
+		keys[primitiveInstanceBatchKey(instance)] = true
 	}
-	out := []string{}
+	out := []primitiveBatchGroupKey{}
 	for key := range keys {
 		out = append(out, key)
 	}
 	return out
 }
 
-func primitiveStaticBatchKey(instance primitive3d.Instance) string {
-	return strconv.Itoa(int(instance.Shape)) + ":" + strconv.Itoa(int(instance.Material))
+func primitiveChunkLodMetadata(layer *primitive3d.Layer, objects []primitive3d.ObjectID) (float64, float64, bool) {
+	minLodNear := math.MaxFloat64
+	maxLodFar := 0.0
+	allHaveFarLod := len(objects) > 0
+	seen := false
+	for _, objectID := range objects {
+		instance, ok := layer.Instance(objectID)
+		if !ok {
+			continue
+		}
+		seen = true
+		if instance.LodNear > 0 && minLodNear > 0 {
+			minLodNear = math.Min(minLodNear, instance.LodNear)
+		} else {
+			minLodNear = 0
+		}
+		if instance.LodFar > 0 {
+			maxLodFar = math.Max(maxLodFar, instance.LodFar)
+		} else {
+			allHaveFarLod = false
+		}
+	}
+	if !seen {
+		return 0, 0, false
+	}
+	if minLodNear == math.MaxFloat64 {
+		minLodNear = 0
+	}
+	return minLodNear, maxLodFar, allHaveFarLod
+}
+
+func (s *Scene) primitiveChunkVisible(chunk primitiveCachedChunk) bool {
+	if !s.primitiveChunkLodVisible(chunk) {
+		return false
+	}
+	return s.primitiveAABBVisible(chunk.bounds)
+}
+
+func (s *Scene) primitiveChunkLodVisible(chunk primitiveCachedChunk) bool {
+	cameraPos := s.Camera.Position
+	if chunk.allHaveFarLod && chunk.maxLodFar > 0 {
+		far := chunk.maxLodFar
+		if sceneDistanceToAABBSq(cameraPos, chunk.bounds) > far * far {
+			return false
+		}
+	}
+	if chunk.minLodNear > 0 {
+		near := chunk.minLodNear
+		if sceneMaxDistanceToAABBSq(cameraPos, chunk.bounds) < near * near {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Scene) primitiveInstanceVisible(instance primitive3d.Instance) bool {
+	if !s.primitiveInstanceLodVisible(instance) {
+		return false
+	}
+	return s.primitiveAABBVisible(primitiveInstanceBounds(instance))
+}
+
+func (s *Scene) primitiveInstanceLodVisible(instance primitive3d.Instance) bool {
+	offset := instance.Position.Sub(s.Camera.Position)
+	distSq := offset.LengthSq()
+	if instance.LodNear > 0 && distSq < instance.LodNear * instance.LodNear {
+		return false
+	}
+	if instance.LodFar > 0 && distSq > instance.LodFar * instance.LodFar {
+		return false
+	}
+	return true
+}
+
+func (s *Scene) primitiveAABBVisible(bounds voplay.AABB) bool {
+	return s.cameraSeesAABB(bounds)
+}
+
+func primitiveInstanceBounds(instance primitive3d.Instance) voplay.AABB {
+	scale := normalizePrimitiveScale(instance.Scale)
+	half := voplay.Vec3{X: math.Abs(scale.X) * 0.5, Y: math.Abs(scale.Y) * 0.5, Z: math.Abs(scale.Z) * 0.5}
+	if half.X <= 0 {
+		half.X = 0.5
+	}
+	if half.Y <= 0 {
+		half.Y = 0.5
+	}
+	if half.Z <= 0 {
+		half.Z = 0.5
+	}
+	return voplay.AABB{Min: instance.Position.Sub(half), Max: instance.Position.Add(half)}
 }
 
 func primitiveLayerShapeDraws(layer *primitive3d.Layer) []voplay.Primitive3DShapeDraw {
@@ -404,6 +714,6 @@ func normalizePrimitiveScale(scale voplay.Vec3) voplay.Vec3 {
 	return scale
 }
 
-func primitiveBatchKey(model voplay.ModelID, material voplay.MaterialDesc) string {
-	return strconv.Itoa(int(model)) + ":" + strconv.Itoa(int(material.ID)) + ":" + strconv.Itoa(int(material.Albedo)) + ":" + strconv.Itoa(int(material.Normal)) + ":" + strconv.Itoa(int(material.MetallicRoughness)) + ":" + strconv.Itoa(int(material.Emissive)) + ":" + strconv.Itoa(int(material.ToonRamp)) + ":" + strconv.FormatFloat(material.NormalScale, 'f', 3, 64) + ":" + strconv.Itoa(material.ShadingMode) + ":" + strconv.Itoa(material.WrapMode) + ":" + strconv.Itoa(material.FilterMode)
+func primitiveInstanceBatchKey(instance primitive3d.Instance) primitiveBatchGroupKey {
+	return primitiveBatchGroupKey{Shape: int(instance.Shape), Material: int(instance.Material)}
 }

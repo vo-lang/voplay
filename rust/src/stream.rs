@@ -21,12 +21,20 @@ pub enum Opcode {
     DrawText = 0x14,
     DrawModel = 0x20,
     DrawBillboard = 0x21,
+    DrawProjectedDecal3D = 0x22,
     SetLights3D = 0x23,
     SetFog3D = 0x24,
     DrawSkybox = 0x25,
     SetColorGrading3D = 0x26,
     SetShadow3D = 0x27,
     SetRenderDebug3D = 0x28,
+    SetPostProcess3D = 0x29,
+    SetContactAO3D = 0x2A,
+    SetProjectedDecalAtlas3D = 0x2B,
+    DrawProjectedDecal3DUV = 0x2C,
+    SetProjectedDecalDistanceFade3D = 0x2D,
+    SetProjectedDecalReceiverMask3D = 0x2E,
+    SetProjectedDecalSurfaceResponse3D = 0x2F,
     Scene3DUpsertObject = 0x30,
     Scene3DDestroyObject = 0x31,
     Scene3DClear = 0x32,
@@ -41,6 +49,10 @@ pub enum Opcode {
     Primitive3DUpsertShapes = 0x3B,
     Primitive3DReplaceChunkKeys = 0x3C,
     Primitive3DSetChunkVisible = 0x3D,
+    SetProjectedDecalNormalAtlas3D = 0x40,
+    SetProjectedDecalRoughnessAtlas3D = 0x41,
+    SetProjectedDecalMaskAtlas3D = 0x42,
+    SetProjectedDecalAngleFade3D = 0x43,
 }
 
 impl Opcode {
@@ -59,12 +71,20 @@ impl Opcode {
             0x14 => Some(Opcode::DrawText),
             0x20 => Some(Opcode::DrawModel),
             0x21 => Some(Opcode::DrawBillboard),
+            0x22 => Some(Opcode::DrawProjectedDecal3D),
             0x23 => Some(Opcode::SetLights3D),
             0x24 => Some(Opcode::SetFog3D),
             0x25 => Some(Opcode::DrawSkybox),
             0x26 => Some(Opcode::SetColorGrading3D),
             0x27 => Some(Opcode::SetShadow3D),
             0x28 => Some(Opcode::SetRenderDebug3D),
+            0x29 => Some(Opcode::SetPostProcess3D),
+            0x2A => Some(Opcode::SetContactAO3D),
+            0x2B => Some(Opcode::SetProjectedDecalAtlas3D),
+            0x2C => Some(Opcode::DrawProjectedDecal3DUV),
+            0x2D => Some(Opcode::SetProjectedDecalDistanceFade3D),
+            0x2E => Some(Opcode::SetProjectedDecalReceiverMask3D),
+            0x2F => Some(Opcode::SetProjectedDecalSurfaceResponse3D),
             0x30 => Some(Opcode::Scene3DUpsertObject),
             0x31 => Some(Opcode::Scene3DDestroyObject),
             0x32 => Some(Opcode::Scene3DClear),
@@ -79,6 +99,10 @@ impl Opcode {
             0x3B => Some(Opcode::Primitive3DUpsertShapes),
             0x3C => Some(Opcode::Primitive3DReplaceChunkKeys),
             0x3D => Some(Opcode::Primitive3DSetChunkVisible),
+            0x40 => Some(Opcode::SetProjectedDecalNormalAtlas3D),
+            0x41 => Some(Opcode::SetProjectedDecalRoughnessAtlas3D),
+            0x42 => Some(Opcode::SetProjectedDecalMaskAtlas3D),
+            0x43 => Some(Opcode::SetProjectedDecalAngleFade3D),
             _ => None,
         }
     }
@@ -103,6 +127,11 @@ pub struct Primitive3DInstanceCommand {
     pub scale: Vec3,
     pub material: MaterialOverride,
     pub visible: bool,
+    pub flags: u32,
+    pub lod_near: f32,
+    pub lod_far: f32,
+    pub wind_strength: f32,
+    pub atlas_uv: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +143,11 @@ pub struct Primitive3DInstanceRefCommand {
     pub scale: Vec3,
     pub material_id: u32,
     pub visible: bool,
+    pub flags: u32,
+    pub lod_near: f32,
+    pub lod_far: f32,
+    pub wind_strength: f32,
+    pub atlas_uv: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +160,11 @@ pub struct Primitive3DInstanceKeyCommand {
     pub material_id: u32,
     pub tint: [f32; 4],
     pub visible: bool,
+    pub flags: u32,
+    pub lod_near: f32,
+    pub lod_far: f32,
+    pub wind_strength: f32,
+    pub atlas_uv: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -237,12 +276,76 @@ pub enum DrawCommand {
         enabled: bool,
         resolution: u32,
         strength: f32,
+        softness: f32,
+        distance: f32,
+        fade: f32,
+        quality: u32,
     },
     SetRenderDebug3D {
         mode: u8,
     },
+    SetPostProcess3D {
+        bloom_threshold: f32,
+        bloom_strength: f32,
+        sharpen_strength: f32,
+        fxaa_strength: f32,
+    },
+    SetContactAO3D {
+        strength: f32,
+        radius: f32,
+        depth_scale: f32,
+        detail_strength: f32,
+        detail_radius: f32,
+        normal_bias: f32,
+        quality: u32,
+    },
     DrawSkybox {
         cubemap_id: u32,
+    },
+    DrawProjectedDecal3D {
+        position: Vec3,
+        yaw: f32,
+        width: f32,
+        length: f32,
+        depth: f32,
+        color: [f32; 4],
+    },
+    SetProjectedDecalAtlas3D {
+        atlas_id: u32,
+    },
+    SetProjectedDecalNormalAtlas3D {
+        atlas_id: u32,
+    },
+    SetProjectedDecalRoughnessAtlas3D {
+        atlas_id: u32,
+    },
+    SetProjectedDecalMaskAtlas3D {
+        atlas_id: u32,
+    },
+    SetProjectedDecalDistanceFade3D {
+        start: f32,
+        end: f32,
+    },
+    SetProjectedDecalAngleFade3D {
+        start: f32,
+        end: f32,
+    },
+    SetProjectedDecalReceiverMask3D {
+        mask: u32,
+    },
+    SetProjectedDecalSurfaceResponse3D {
+        normal_strength: f32,
+        roughness: f32,
+        roughness_strength: f32,
+    },
+    DrawProjectedDecal3DUV {
+        position: Vec3,
+        yaw: f32,
+        width: f32,
+        length: f32,
+        depth: f32,
+        color: [f32; 4],
+        uv_rect: [f32; 4],
     },
     DrawModel {
         model_id: u32,
@@ -285,6 +388,11 @@ pub enum DrawCommand {
         scale: Vec3,
         material: MaterialOverride,
         visible: bool,
+        flags: u32,
+        lod_near: f32,
+        lod_far: f32,
+        wind_strength: f32,
+        atlas_uv: [f32; 4],
     },
     Primitive3DDestroyInstance {
         scene_id: u32,
@@ -388,6 +496,7 @@ impl<'a> StreamReader<'a> {
             normal_texture_id: self.read_u32(),
             metallic_roughness_texture_id: self.read_u32(),
             emissive_texture_id: self.read_u32(),
+            mask_texture_id: self.read_u32(),
             emissive_color: [
                 self.read_f32(),
                 self.read_f32(),
@@ -399,6 +508,10 @@ impl<'a> StreamReader<'a> {
             normal_scale: self.read_f32(),
             uv_scale: self.read_f32(),
             toon_ramp_texture_id: self.read_u32(),
+            detail_strength: self.read_f32(),
+            macro_blend: self.read_f32(),
+            roughness_response: self.read_f32(),
+            toon_ramp_response: self.read_f32(),
             shading_mode: self.read_u32(),
             wrap_mode: self.read_u32(),
             filter_mode: self.read_u32(),
@@ -418,6 +531,16 @@ impl<'a> StreamReader<'a> {
         let scale = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
         let material = self.read_material();
         let visible = self.read_u8() != 0;
+        let flags = self.read_u32();
+        let lod_near = self.read_f32();
+        let lod_far = self.read_f32();
+        let wind_strength = self.read_f32();
+        let atlas_uv = [
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+        ];
         Primitive3DInstanceCommand {
             object_id,
             model_id,
@@ -426,6 +549,11 @@ impl<'a> StreamReader<'a> {
             scale,
             material,
             visible,
+            flags,
+            lod_near,
+            lod_far,
+            wind_strength,
+            atlas_uv,
         }
     }
 
@@ -442,6 +570,16 @@ impl<'a> StreamReader<'a> {
         let scale = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
         let material_id = self.read_u32();
         let visible = self.read_u8() != 0;
+        let flags = self.read_u32();
+        let lod_near = self.read_f32();
+        let lod_far = self.read_f32();
+        let wind_strength = self.read_f32();
+        let atlas_uv = [
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+        ];
         Primitive3DInstanceRefCommand {
             object_id,
             model_id,
@@ -450,6 +588,11 @@ impl<'a> StreamReader<'a> {
             scale,
             material_id,
             visible,
+            flags,
+            lod_near,
+            lod_far,
+            wind_strength,
+            atlas_uv,
         }
     }
 
@@ -472,6 +615,16 @@ impl<'a> StreamReader<'a> {
             self.read_f32(),
         ];
         let visible = self.read_u8() != 0;
+        let flags = self.read_u32();
+        let lod_near = self.read_f32();
+        let lod_far = self.read_f32();
+        let wind_strength = self.read_f32();
+        let atlas_uv = [
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+            self.read_f32(),
+        ];
         Primitive3DInstanceKeyCommand {
             object_id,
             shape_id,
@@ -481,6 +634,11 @@ impl<'a> StreamReader<'a> {
             material_id,
             tint,
             visible,
+            flags,
+            lod_near,
+            lod_far,
+            wind_strength,
+            atlas_uv,
         }
     }
 
@@ -773,19 +931,146 @@ impl<'a> StreamReader<'a> {
                 let enabled = self.read_u8() != 0;
                 let resolution = self.read_u32();
                 let strength = self.read_f32();
+                let softness = self.read_f32();
+                let distance = self.read_f32();
+                let fade = self.read_f32();
+                let quality = self.read_u32();
                 Some(DrawCommand::SetShadow3D {
                     enabled,
                     resolution,
                     strength,
+                    softness,
+                    distance,
+                    fade,
+                    quality,
                 })
             }
             Opcode::SetRenderDebug3D => {
                 let mode = self.read_u8();
                 Some(DrawCommand::SetRenderDebug3D { mode })
             }
+            Opcode::SetPostProcess3D => {
+                let bloom_threshold = self.read_f32();
+                let bloom_strength = self.read_f32();
+                let sharpen_strength = self.read_f32();
+                let fxaa_strength = self.read_f32();
+                Some(DrawCommand::SetPostProcess3D {
+                    bloom_threshold,
+                    bloom_strength,
+                    sharpen_strength,
+                    fxaa_strength,
+                })
+            }
+            Opcode::SetContactAO3D => {
+                let strength = self.read_f32();
+                let radius = self.read_f32();
+                let depth_scale = self.read_f32();
+                let detail_strength = self.read_f32();
+                let detail_radius = self.read_f32();
+                let normal_bias = self.read_f32();
+                let quality = self.read_u32();
+                Some(DrawCommand::SetContactAO3D {
+                    strength,
+                    radius,
+                    depth_scale,
+                    detail_strength,
+                    detail_radius,
+                    normal_bias,
+                    quality,
+                })
+            }
             Opcode::DrawSkybox => {
                 let cubemap_id = self.read_u32();
                 Some(DrawCommand::DrawSkybox { cubemap_id })
+            }
+            Opcode::DrawProjectedDecal3D => {
+                let position = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let yaw = self.read_f32();
+                let width = self.read_f32();
+                let length = self.read_f32();
+                let depth = self.read_f32();
+                let color = [
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                ];
+                Some(DrawCommand::DrawProjectedDecal3D {
+                    position,
+                    yaw,
+                    width,
+                    length,
+                    depth,
+                    color,
+                })
+            }
+            Opcode::SetProjectedDecalAtlas3D => {
+                let atlas_id = self.read_u32();
+                Some(DrawCommand::SetProjectedDecalAtlas3D { atlas_id })
+            }
+            Opcode::SetProjectedDecalNormalAtlas3D => {
+                let atlas_id = self.read_u32();
+                Some(DrawCommand::SetProjectedDecalNormalAtlas3D { atlas_id })
+            }
+            Opcode::SetProjectedDecalRoughnessAtlas3D => {
+                let atlas_id = self.read_u32();
+                Some(DrawCommand::SetProjectedDecalRoughnessAtlas3D { atlas_id })
+            }
+            Opcode::SetProjectedDecalMaskAtlas3D => {
+                let atlas_id = self.read_u32();
+                Some(DrawCommand::SetProjectedDecalMaskAtlas3D { atlas_id })
+            }
+            Opcode::SetProjectedDecalDistanceFade3D => {
+                let start = self.read_f32();
+                let end = self.read_f32();
+                Some(DrawCommand::SetProjectedDecalDistanceFade3D { start, end })
+            }
+            Opcode::SetProjectedDecalAngleFade3D => {
+                let start = self.read_f32();
+                let end = self.read_f32();
+                Some(DrawCommand::SetProjectedDecalAngleFade3D { start, end })
+            }
+            Opcode::SetProjectedDecalReceiverMask3D => {
+                let mask = self.read_u32();
+                Some(DrawCommand::SetProjectedDecalReceiverMask3D { mask })
+            }
+            Opcode::SetProjectedDecalSurfaceResponse3D => {
+                let normal_strength = self.read_f32();
+                let roughness = self.read_f32();
+                let roughness_strength = self.read_f32();
+                Some(DrawCommand::SetProjectedDecalSurfaceResponse3D {
+                    normal_strength,
+                    roughness,
+                    roughness_strength,
+                })
+            }
+            Opcode::DrawProjectedDecal3DUV => {
+                let position = Vec3::new(self.read_f32(), self.read_f32(), self.read_f32());
+                let yaw = self.read_f32();
+                let width = self.read_f32();
+                let length = self.read_f32();
+                let depth = self.read_f32();
+                let color = [
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                ];
+                let uv_rect = [
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                    self.read_f32(),
+                ];
+                Some(DrawCommand::DrawProjectedDecal3DUV {
+                    position,
+                    yaw,
+                    width,
+                    length,
+                    depth,
+                    color,
+                    uv_rect,
+                })
             }
             Opcode::DrawModel => {
                 let model_id = self.read_u32();
@@ -869,6 +1154,11 @@ impl<'a> StreamReader<'a> {
                     scale: instance.scale,
                     material: instance.material,
                     visible: instance.visible,
+                    flags: instance.flags,
+                    lod_near: instance.lod_near,
+                    lod_far: instance.lod_far,
+                    wind_strength: instance.wind_strength,
+                    atlas_uv: instance.atlas_uv,
                 })
             }
             Opcode::Primitive3DDestroyInstance => {
@@ -1038,7 +1328,7 @@ mod tests {
         for value in [1.0f32, 1.0, 1.0, 1.0] {
             data.extend_from_slice(&value.to_le_bytes());
         }
-        for value in [0u32, 0, 0, 0] {
+        for value in [0u32, 0, 0, 0, 0] {
             data.extend_from_slice(&value.to_le_bytes());
         }
         for value in [0.0f32, 0.0, 0.0, 0.0] {
@@ -1047,7 +1337,11 @@ mod tests {
         for value in [0.55f32, 0.0, 0.0, 1.0] {
             data.extend_from_slice(&value.to_le_bytes());
         }
-        for value in [0u32, 0, 0, 0] {
+        data.extend_from_slice(&0u32.to_le_bytes());
+        for value in [1.0f32, 0.0, 1.0, 1.0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [0u32, 0, 0] {
             data.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -1066,6 +1360,7 @@ mod tests {
         }
         push_default_material(data);
         data.push(if visible { 1 } else { 0 });
+        push_primitive_render_params(data);
     }
 
     fn push_primitive_instance_ref(
@@ -1088,6 +1383,7 @@ mod tests {
         }
         data.extend_from_slice(&material_id.to_le_bytes());
         data.push(if visible { 1 } else { 0 });
+        push_primitive_render_params(data);
     }
 
     fn push_primitive_instance_key(
@@ -1113,6 +1409,17 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
         data.push(if visible { 1 } else { 0 });
+        push_primitive_render_params(data);
+    }
+
+    fn push_primitive_render_params(data: &mut Vec<u8>) {
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(&12.0f32.to_le_bytes());
+        data.extend_from_slice(&96.0f32.to_le_bytes());
+        data.extend_from_slice(&0.35f32.to_le_bytes());
+        for value in [0.25f32, 0.5, 0.125, 0.25] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
     }
 
     #[test]
@@ -1187,12 +1494,207 @@ mod tests {
     }
 
     #[test]
+    fn decodes_post_process_command() {
+        let mut data = Vec::new();
+        data.push(0x29);
+        data.extend_from_slice(&0.72f32.to_le_bytes());
+        data.extend_from_slice(&0.18f32.to_le_bytes());
+        data.extend_from_slice(&0.06f32.to_le_bytes());
+        data.extend_from_slice(&0.95f32.to_le_bytes());
+        let commands = decode_all(&data);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            DrawCommand::SetPostProcess3D {
+                bloom_threshold,
+                bloom_strength,
+                sharpen_strength,
+                fxaa_strength,
+            } => {
+                assert!((*bloom_threshold - 0.72).abs() < 0.0001);
+                assert!((*bloom_strength - 0.18).abs() < 0.0001);
+                assert!((*sharpen_strength - 0.06).abs() < 0.0001);
+                assert!((*fxaa_strength - 0.95).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decodes_contact_ao_command() {
+        let mut data = Vec::new();
+        data.push(0x2A);
+        data.extend_from_slice(&0.38f32.to_le_bytes());
+        data.extend_from_slice(&2.75f32.to_le_bytes());
+        data.extend_from_slice(&84.0f32.to_le_bytes());
+        data.extend_from_slice(&0.22f32.to_le_bytes());
+        data.extend_from_slice(&1.15f32.to_le_bytes());
+        data.extend_from_slice(&0.018f32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        let commands = decode_all(&data);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            DrawCommand::SetContactAO3D {
+                strength,
+                radius,
+                depth_scale,
+                detail_strength,
+                detail_radius,
+                normal_bias,
+                quality,
+            } => {
+                assert!((*strength - 0.38).abs() < 0.0001);
+                assert!((*radius - 2.75).abs() < 0.0001);
+                assert!((*depth_scale - 84.0).abs() < 0.0001);
+                assert!((*detail_strength - 0.22).abs() < 0.0001);
+                assert!((*detail_radius - 1.15).abs() < 0.0001);
+                assert!((*normal_bias - 0.018).abs() < 0.0001);
+                assert_eq!(*quality, 3);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decodes_projected_decal_command() {
+        let mut data = Vec::new();
+        data.push(0x22);
+        for value in [1.0f32, 2.0, 3.0, 0.75, 4.0, 5.0, 1.5, 0.2, 0.3, 0.4, 0.65] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let commands = decode_all(&data);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            DrawCommand::DrawProjectedDecal3D {
+                position,
+                yaw,
+                width,
+                length,
+                depth,
+                color,
+            } => {
+                assert!((position.x - 1.0).abs() < 0.0001);
+                assert!((position.y - 2.0).abs() < 0.0001);
+                assert!((position.z - 3.0).abs() < 0.0001);
+                assert!((*yaw - 0.75).abs() < 0.0001);
+                assert!((*width - 4.0).abs() < 0.0001);
+                assert!((*length - 5.0).abs() < 0.0001);
+                assert!((*depth - 1.5).abs() < 0.0001);
+                assert!((color[3] - 0.65).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decodes_projected_decal_atlas_commands() {
+        let mut data = Vec::new();
+        data.push(0x2B);
+        data.extend_from_slice(&77u32.to_le_bytes());
+        data.push(0x40);
+        data.extend_from_slice(&88u32.to_le_bytes());
+        data.push(0x41);
+        data.extend_from_slice(&99u32.to_le_bytes());
+        data.push(0x42);
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.push(0x2D);
+        data.extend_from_slice(&18.0f32.to_le_bytes());
+        data.extend_from_slice(&34.0f32.to_le_bytes());
+        data.push(0x43);
+        data.extend_from_slice(&0.35f32.to_le_bytes());
+        data.extend_from_slice(&0.7f32.to_le_bytes());
+        data.push(0x2E);
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.push(0x2F);
+        data.extend_from_slice(&0.8f32.to_le_bytes());
+        data.extend_from_slice(&0.38f32.to_le_bytes());
+        data.extend_from_slice(&0.7f32.to_le_bytes());
+        data.push(0x2C);
+        for value in [
+            1.0f32, 2.0, 3.0, 0.75, 4.0, 5.0, 1.5, 0.2, 0.3, 0.4, 0.65, 0.1, 0.2, 0.25, 0.5,
+        ] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let commands = decode_all(&data);
+        assert_eq!(commands.len(), 9);
+        match &commands[0] {
+            DrawCommand::SetProjectedDecalAtlas3D { atlas_id } => assert_eq!(*atlas_id, 77),
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[1] {
+            DrawCommand::SetProjectedDecalNormalAtlas3D { atlas_id } => {
+                assert_eq!(*atlas_id, 88)
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[2] {
+            DrawCommand::SetProjectedDecalRoughnessAtlas3D { atlas_id } => {
+                assert_eq!(*atlas_id, 99)
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[3] {
+            DrawCommand::SetProjectedDecalMaskAtlas3D { atlas_id } => {
+                assert_eq!(*atlas_id, 100)
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[4] {
+            DrawCommand::SetProjectedDecalDistanceFade3D { start, end } => {
+                assert!((*start - 18.0).abs() < 0.0001);
+                assert!((*end - 34.0).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[5] {
+            DrawCommand::SetProjectedDecalAngleFade3D { start, end } => {
+                assert!((*start - 0.35).abs() < 0.0001);
+                assert!((*end - 0.7).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[6] {
+            DrawCommand::SetProjectedDecalReceiverMask3D { mask } => assert_eq!(*mask, 1),
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[7] {
+            DrawCommand::SetProjectedDecalSurfaceResponse3D {
+                normal_strength,
+                roughness,
+                roughness_strength,
+            } => {
+                assert!((*normal_strength - 0.8).abs() < 0.0001);
+                assert!((*roughness - 0.38).abs() < 0.0001);
+                assert!((*roughness_strength - 0.7).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match &commands[8] {
+            DrawCommand::DrawProjectedDecal3DUV {
+                position,
+                uv_rect,
+                color,
+                ..
+            } => {
+                assert!((position.x - 1.0).abs() < 0.0001);
+                assert!((color[3] - 0.65).abs() < 0.0001);
+                assert!((uv_rect[0] - 0.1).abs() < 0.0001);
+                assert!((uv_rect[3] - 0.5).abs() < 0.0001);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
     fn decodes_shadow_strength_command() {
         let mut data = Vec::new();
         data.push(0x27);
         data.push(1);
         data.extend_from_slice(&2048u32.to_le_bytes());
         data.extend_from_slice(&0.58f32.to_le_bytes());
+        data.extend_from_slice(&1.75f32.to_le_bytes());
+        data.extend_from_slice(&260.0f32.to_le_bytes());
+        data.extend_from_slice(&70.0f32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
         let commands = decode_all(&data);
         assert_eq!(commands.len(), 1);
         match &commands[0] {
@@ -1200,10 +1702,18 @@ mod tests {
                 enabled,
                 resolution,
                 strength,
+                softness,
+                distance,
+                fade,
+                quality,
             } => {
                 assert!(*enabled);
                 assert_eq!(*resolution, 2048);
                 assert!((*strength - 0.58).abs() < 0.0001);
+                assert!((*softness - 1.75).abs() < 0.0001);
+                assert!((*distance - 260.0).abs() < 0.0001);
+                assert!((*fade - 70.0).abs() < 0.0001);
+                assert_eq!(*quality, 3);
             }
             other => panic!("unexpected command: {:?}", other),
         }
@@ -1235,6 +1745,11 @@ mod tests {
                 assert_eq!(instances[0].object_id, 11);
                 assert_eq!(instances[0].model_id, 21);
                 assert!(instances[0].visible);
+                assert_eq!(instances[0].flags, 2);
+                assert!((instances[0].lod_near - 12.0).abs() < 0.0001);
+                assert!((instances[0].lod_far - 96.0).abs() < 0.0001);
+                assert!((instances[0].wind_strength - 0.35).abs() < 0.0001);
+                assert_eq!(instances[0].atlas_uv, [0.25, 0.5, 0.125, 0.25]);
                 assert!(!instances[1].visible);
             }
             other => panic!("unexpected command: {:?}", other),
@@ -1284,6 +1799,9 @@ mod tests {
                 assert_eq!(instances.len(), 1);
                 assert_eq!(instances[0].material_id, 33);
                 assert!(instances[0].visible);
+                assert_eq!(instances[0].flags, 2);
+                assert!((instances[0].wind_strength - 0.35).abs() < 0.0001);
+                assert_eq!(instances[0].atlas_uv, [0.25, 0.5, 0.125, 0.25]);
             }
             other => panic!("unexpected command: {:?}", other),
         }
@@ -1346,6 +1864,9 @@ mod tests {
                 assert_eq!(instances[0].material_id, 33);
                 assert_eq!(instances[0].tint, [0.0, 0.0, 0.0, 0.0]);
                 assert!(instances[0].visible);
+                assert_eq!(instances[0].flags, 2);
+                assert!((instances[0].lod_far - 96.0).abs() < 0.0001);
+                assert_eq!(instances[0].atlas_uv, [0.25, 0.5, 0.125, 0.25]);
             }
             other => panic!("unexpected command: {:?}", other),
         }
@@ -1387,6 +1908,7 @@ mod tests {
         data.extend_from_slice(&12u32.to_le_bytes());
         data.extend_from_slice(&13u32.to_le_bytes());
         data.extend_from_slice(&14u32.to_le_bytes());
+        data.extend_from_slice(&16u32.to_le_bytes());
         for value in [0.1f32, 0.2, 0.3, 1.1] {
             data.extend_from_slice(&value.to_le_bytes());
         }
@@ -1395,6 +1917,10 @@ mod tests {
         data.extend_from_slice(&0.66f32.to_le_bytes());
         data.extend_from_slice(&3.5f32.to_le_bytes());
         data.extend_from_slice(&15u32.to_le_bytes());
+        data.extend_from_slice(&1.25f32.to_le_bytes());
+        data.extend_from_slice(&0.45f32.to_le_bytes());
+        data.extend_from_slice(&0.8f32.to_le_bytes());
+        data.extend_from_slice(&0.6f32.to_le_bytes());
         data.extend_from_slice(&1u32.to_le_bytes());
         data.extend_from_slice(&2u32.to_le_bytes());
         data.extend_from_slice(&1u32.to_le_bytes());
@@ -1416,11 +1942,16 @@ mod tests {
                 assert_eq!(material.normal_texture_id, 12);
                 assert_eq!(material.metallic_roughness_texture_id, 13);
                 assert_eq!(material.emissive_texture_id, 14);
+                assert_eq!(material.mask_texture_id, 16);
                 assert!((material.roughness - 0.72).abs() < 0.0001);
                 assert!((material.metallic - 0.28).abs() < 0.0001);
                 assert!((material.normal_scale - 0.66).abs() < 0.0001);
                 assert!((material.uv_scale - 3.5).abs() < 0.0001);
                 assert_eq!(material.toon_ramp_texture_id, 15);
+                assert!((material.detail_strength - 1.25).abs() < 0.0001);
+                assert!((material.macro_blend - 0.45).abs() < 0.0001);
+                assert!((material.roughness_response - 0.8).abs() < 0.0001);
+                assert!((material.toon_ramp_response - 0.6).abs() < 0.0001);
                 assert_eq!(material.shading_mode, 1);
                 assert_eq!(material.wrap_mode, 2);
                 assert_eq!(material.filter_mode, 1);

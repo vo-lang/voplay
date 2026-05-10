@@ -95,7 +95,7 @@ pub fn generate_terrain(
 
     let img = image::load_from_memory(image_data)
         .map_err(|e| format!("terrain heightmap decode: {}", e))?;
-    let gray = img.to_luma8();
+    let gray = img.to_luma16();
     let (cols, rows) = gray.dimensions();
     if rows < 2 || cols < 2 {
         return Err(format!(
@@ -106,7 +106,7 @@ pub fn generate_terrain(
 
     let heights: Vec<f32> = gray
         .pixels()
-        .map(|pixel| pixel.0[0] as f32 / 255.0)
+        .map(|pixel| pixel.0[0] as f32 / 65535.0)
         .collect();
     let cell_x = scale_x / (cols - 1) as f32;
     let cell_z = scale_z / (rows - 1) as f32;

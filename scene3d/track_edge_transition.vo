@@ -1,0 +1,159 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+type TrackEdgeTransitionDesc struct {
+	Name string
+	Side int
+	SampleCount int
+	StartDistance float64
+	EndDistance float64
+	InnerOffset float64
+	OuterOffset float64
+	InnerHeightOffset float64
+	OuterHeightOffset float64
+	UVScale float64
+	Color voplay.Color
+	Roughness float64
+	Material voplay.MaterialDesc
+	HeightProbe TrackHeightProbe
+}
+
+type TrackEdgeTransitionMesh struct {
+	Vertices []voplay.RawMeshVertex
+	Indices []int
+	Color voplay.Color
+	Roughness float64
+	VertexCount int
+	IndexCount int
+	Min voplay.Vec3
+	Max voplay.Vec3
+}
+
+type trackEdgeVertex struct {
+	Position voplay.Vec3
+	Normal voplay.Vec3
+	U float64
+	V float64
+}
+
+func BuildTrackEdgeTransitionMesh(track *Track, desc TrackEdgeTransitionDesc) (TrackEdgeTransitionMesh, error) {
+	if track == nil {
+		return TrackEdgeTransitionMesh{}, errors.New("scene3d.BuildTrackEdgeTransitionMesh: track must not be nil")
+	}
+	if track.Length() <= 0 {
+		return TrackEdgeTransitionMesh{}, errors.New("scene3d.BuildTrackEdgeTransitionMesh: track length must be > 0")
+	}
+	desc = normalizeTrackEdgeTransitionDesc(track, desc)
+	if desc.EndDistance <= desc.StartDistance {
+		return TrackEdgeTransitionMesh{}, errors.New("scene3d.BuildTrackEdgeTransitionMesh: distance range is invalid")
+	}
+	vertices := []trackEdgeVertex{}
+	indices := []int{}
+	length := desc.EndDistance - desc.StartDistance
+	for _, side := range trackScatterSides(desc.Side) {
+		start := len(vertices)
+		for i := 0; i <= desc.SampleCount; i++ {
+			d := desc.StartDistance + float64(i) / float64(desc.SampleCount) * length
+			if track.closed && desc.StartDistance == 0 && desc.EndDistance >= track.Length() && i == desc.SampleCount {
+				d = 0
+			}
+			pose := track.PoseAt(d)
+			inner := pose.Position.Add(pose.Right.Scale(side * (pose.HalfWidth + desc.InnerOffset)))
+			outer := pose.Position.Add(pose.Right.Scale(side * (pose.HalfWidth + desc.OuterOffset)))
+			if desc.HeightProbe != nil {
+				if h, ok := desc.HeightProbe(inner); ok {
+					inner.Y = h
+				}
+				if h, ok := desc.HeightProbe(outer); ok {
+					outer.Y = h
+				}
+			}
+			inner = inner.Add(voplay.Vec3{Y: desc.InnerHeightOffset})
+			outer = outer.Add(voplay.Vec3{Y: desc.OuterHeightOffset})
+			v := d / desc.UVScale
+			vertices = append(vertices, trackEdgeVertex{Position: inner, Normal: voplay.Vec3{Y: 1}, U: 0, V: v})
+			vertices = append(vertices, trackEdgeVertex{Position: outer, Normal: voplay.Vec3{Y: 1}, U: 1, V: v})
+		}
+		for i := 0; i < desc.SampleCount; i++ {
+			base := start + i * 2
+			indices = append(indices, base, base + 1, base + 2, base + 1, base + 3, base + 2)
+		}
+	}
+	return buildTrackRawSurfaceMesh(vertices, indices, desc.Color, desc.Roughness), nil
+}
+
+func normalizeTrackEdgeTransitionDesc(track *Track, desc TrackEdgeTransitionDesc) TrackEdgeTransitionDesc {
+	if desc.Name == "" {
+		desc.Name = "track_edge_transition"
+	}
+	if desc.SampleCount <= 0 {
+		desc.SampleCount = int(math.Ceil(track.Length() / 5.0))
+	}
+	if desc.SampleCount < 8 {
+		desc.SampleCount = 8
+	}
+	if desc.EndDistance <= 0 {
+		desc.EndDistance = track.Length()
+	}
+	if desc.EndDistance > track.Length() {
+		desc.EndDistance = track.Length()
+	}
+	if desc.StartDistance < 0 {
+		desc.StartDistance = 0
+	}
+	if desc.StartDistance > desc.EndDistance {
+		desc.StartDistance = desc.EndDistance
+	}
+	if desc.OuterOffset <= 0 {
+		desc.OuterOffset = 3.5
+	}
+	if desc.OuterOffset < desc.InnerOffset {
+		desc.OuterOffset = desc.InnerOffset
+	}
+	if desc.InnerHeightOffset <= 0 {
+		desc.InnerHeightOffset = 0.075
+	}
+	if desc.OuterHeightOffset <= 0 {
+		desc.OuterHeightOffset = 0.055
+	}
+	if desc.UVScale <= 0 {
+		desc.UVScale = 18
+	}
+	if desc.Color == (voplay.Color{}) {
+		desc.Color = voplay.Color{R: 0.57, G: 0.37, B: 0.18, A: 0.82}
+	}
+	if desc.Roughness <= 0 {
+		desc.Roughness = 0.92
+	}
+	return desc
+}
+
+func buildTrackRawSurfaceMesh(vertices []trackEdgeVertex, indices []int, color voplay.Color, roughness float64) TrackEdgeTransitionMesh {
+	if len(vertices) == 0 || len(indices) == 0 {
+		return TrackEdgeTransitionMesh{}
+	}
+	min := vertices[0].Position
+	max := vertices[0].Position
+	rawVertices := make([]voplay.RawMeshVertex, 0, len(vertices))
+	for _, vertex := range vertices {
+		min = trackEdgeMinVec(min, vertex.Position)
+		max = trackEdgeMaxVec(max, vertex.Position)
+		rawVertices = append(rawVertices, voplay.RawMeshVertex{Position: vertex.Position, Normal: vertex.Normal, U: vertex.U, V: vertex.V, Color: voplay.White})
+	}
+	rawIndices := make([]int, len(indices))
+	copy(rawIndices, indices)
+	return TrackEdgeTransitionMesh{Vertices: rawVertices, Indices: rawIndices, Color: color, Roughness: roughness, VertexCount: len(vertices), IndexCount: len(indices), Min: min, Max: max}
+}
+
+func trackEdgeMinVec(a, b voplay.Vec3) voplay.Vec3 {
+	return voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)}
+}
+
+func trackEdgeMaxVec(a, b voplay.Vec3) voplay.Vec3 {
+	return voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)}
+}

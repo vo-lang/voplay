@@ -1,0 +1,253 @@
+package framewire
+
+import "github.com/vo-lang/voplay/codec"
+
+const (
+	RequestHeaderSize = 106
+	ReplyHeaderSize = 8
+	PerfPacketHeaderSize = 50
+	requestMagic = 0xf7
+	requestVersion = 1
+	replyMagic = 0xf8
+	replyVersion = 1
+	perfPacketMagic = 0xf9
+	perfPacketVersion = 1
+	PerfPacketSchemaVersion = 1
+	PerfPacketSourceRenderWorker = 1
+	PerfPacketSourceRenderer = 2
+	PerfPacketSourceWebGpu = 3
+)
+
+type Timing struct {
+	Frame int
+	LoopMs float64
+	PaceWaitMs float64
+	ReplyWaitMs float64
+	SubmitMs float64
+	WorkMs float64
+	InputPollMs float64
+	RequestSendMs float64
+	RequestEncodeMs float64
+	RequestPortSendMs float64
+	PerfPacketMs float64
+	DisplayPulseMs float64
+	DrawBytes int
+	FrameDivisor int
+}
+
+type Request struct {
+	InputBytes []byte
+	RenderTiming Timing
+	HasRenderTiming bool
+	PerfPackets []PerfPacket
+	HasPerfPackets bool
+}
+
+type Reply struct {
+	DrawBytes []byte
+	WantRenderTiming bool
+}
+
+type PerfPacket struct {
+	Valid bool
+	SchemaVersion int
+	Frame int
+	DisplayTick int
+	Source int
+	Payload []byte
+	RendererSubmitMs float64
+	GpuSubmittedWorkDoneMs float64
+	GpuInFlightSubmits int
+	UploadBytes int
+	AsyncWindow bool
+}
+
+func EncodeRequest(w *codec.ByteWriter, timing Timing, inputBytes []byte) []byte {
+	w.Reset()
+	w.WriteByte(requestMagic)
+	w.WriteByte(requestVersion)
+	w.WriteU32(timing.Frame)
+	w.WriteF64(timing.LoopMs)
+	w.WriteF64(timing.PaceWaitMs)
+	w.WriteF64(timing.ReplyWaitMs)
+	w.WriteF64(timing.SubmitMs)
+	w.WriteF64(timing.WorkMs)
+	w.WriteF64(timing.InputPollMs)
+	w.WriteF64(timing.RequestSendMs)
+	w.WriteF64(timing.RequestEncodeMs)
+	w.WriteF64(timing.RequestPortSendMs)
+	w.WriteF64(timing.PerfPacketMs)
+	w.WriteF64(timing.DisplayPulseMs)
+	w.WriteU32(timing.DrawBytes)
+	w.WriteU32(timing.FrameDivisor)
+	w.WriteU32(len(inputBytes))
+	w.WriteRawBytes(inputBytes)
+	return w.Bytes()
+}
+
+func EncodeRequestWithPerfPacket(w *codec.ByteWriter, timing Timing, inputBytes []byte, perfPacket []byte) []byte {
+	return EncodeRequestWithPerfPackets(w, timing, inputBytes, perfPacket, []byte{})
+}
+
+func EncodeRequestWithPerfPackets(w *codec.ByteWriter, timing Timing, inputBytes []byte, firstPerfPacket []byte, secondPerfPacket []byte) []byte {
+	EncodeRequest(w, timing, inputBytes)
+	count := 0
+	if len(firstPerfPacket) > 0 {
+		count++
+	}
+	if len(secondPerfPacket) > 0 {
+		count++
+	}
+	if count == 0 {
+		return w.Bytes()
+	}
+	w.WriteU32(count)
+	if len(firstPerfPacket) > 0 {
+		w.WriteU32(len(firstPerfPacket))
+		w.WriteRawBytes(firstPerfPacket)
+	}
+	if len(secondPerfPacket) > 0 {
+		w.WriteU32(len(secondPerfPacket))
+		w.WriteRawBytes(secondPerfPacket)
+	}
+	return w.Bytes()
+}
+
+func DecodeRequest(data []byte) Request {
+	if len(data) < RequestHeaderSize || data[0] != requestMagic || data[1] != requestVersion {
+		return Request{InputBytes: data}
+	}
+	r := codec.NewByteReader(data[2:RequestHeaderSize])
+	timing := Timing{}
+	timing.Frame = r.ReadU32()
+	timing.LoopMs = r.ReadF64()
+	timing.PaceWaitMs = r.ReadF64()
+	timing.ReplyWaitMs = r.ReadF64()
+	timing.SubmitMs = r.ReadF64()
+	timing.WorkMs = r.ReadF64()
+	timing.InputPollMs = r.ReadF64()
+	timing.RequestSendMs = r.ReadF64()
+	timing.RequestEncodeMs = r.ReadF64()
+	timing.RequestPortSendMs = r.ReadF64()
+	timing.PerfPacketMs = r.ReadF64()
+	timing.DisplayPulseMs = r.ReadF64()
+	timing.DrawBytes = r.ReadU32()
+	timing.FrameDivisor = r.ReadU32()
+	inputLen := r.ReadU32()
+	inputStart := RequestHeaderSize
+	inputEnd := inputStart + inputLen
+	if inputLen < 0 || inputEnd > len(data) {
+		return Request{InputBytes: data}
+	}
+	req := Request{InputBytes: data[inputStart:inputEnd], RenderTiming: timing, HasRenderTiming: true}
+	req.PerfPackets = decodeRequestPerfPackets(data[inputEnd:])
+	req.HasPerfPackets = len(req.PerfPackets) > 0
+	return req
+}
+
+func decodeRequestPerfPackets(data []byte) []PerfPacket {
+	if len(data) < 4 {
+		return nil
+	}
+	r := codec.NewByteReader(data)
+	count := r.ReadU32()
+	if count <= 0 || count > 8 {
+		return nil
+	}
+	packets := make([]PerfPacket, 0, count)
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 4 {
+			return packets
+		}
+		packetLen := r.ReadU32()
+		if packetLen <= 0 || packetLen > r.Remaining() {
+			return packets
+		}
+		packetBytes := r.ReadBytes(packetLen)
+		packet := DecodePerfPacket(packetBytes)
+		if packet.Valid {
+			packets = append(packets, packet)
+		}
+	}
+	return packets
+}
+
+func EncodeReply(w *codec.ByteWriter, wantRenderTiming bool, drawBytes []byte) []byte {
+	w.Reset()
+	w.WriteByte(replyMagic)
+	w.WriteByte(replyVersion)
+	w.WriteBool(wantRenderTiming)
+	w.WriteByte(0)
+	w.WriteU32(len(drawBytes))
+	w.WriteRawBytes(drawBytes)
+	return w.Bytes()
+}
+
+func DecodeReply(data []byte) Reply {
+	if len(data) < ReplyHeaderSize || data[0] != replyMagic || data[1] != replyVersion {
+		return Reply{DrawBytes: data}
+	}
+	r := codec.NewByteReader(data[2:ReplyHeaderSize])
+	wantTiming := r.ReadBool()
+	_ = r.ReadByte()
+	drawLen := r.ReadU32()
+	drawStart := ReplyHeaderSize
+	drawEnd := drawStart + drawLen
+	if drawLen < 0 || drawEnd > len(data) {
+		return Reply{DrawBytes: data}
+	}
+	return Reply{DrawBytes: data[drawStart:drawEnd], WantRenderTiming: wantTiming}
+}
+
+func EncodePerfPacket(w *codec.ByteWriter, packet PerfPacket) []byte {
+	w.Reset()
+	w.WriteByte(perfPacketMagic)
+	w.WriteByte(perfPacketVersion)
+	schemaVersion := packet.SchemaVersion
+	if schemaVersion <= 0 {
+		schemaVersion = PerfPacketSchemaVersion
+	}
+	w.WriteU32(schemaVersion)
+	w.WriteU32(packet.Frame)
+	w.WriteU32(packet.DisplayTick)
+	w.WriteU32(packet.Source)
+	w.WriteU32(len(packet.Payload))
+	w.WriteF64(packet.RendererSubmitMs)
+	w.WriteF64(packet.GpuSubmittedWorkDoneMs)
+	w.WriteU32(packet.GpuInFlightSubmits)
+	w.WriteU32(packet.UploadBytes)
+	flags := 0
+	if packet.AsyncWindow {
+		flags = flags | 1
+	}
+	w.WriteU32(flags)
+	w.WriteRawBytes(packet.Payload)
+	return w.Bytes()
+}
+
+func DecodePerfPacket(data []byte) PerfPacket {
+	if len(data) < PerfPacketHeaderSize || data[0] != perfPacketMagic || data[1] != perfPacketVersion {
+		return PerfPacket{Payload: data}
+	}
+	r := codec.NewByteReader(data[2:PerfPacketHeaderSize])
+	packet := PerfPacket{}
+	packet.Valid = true
+	packet.SchemaVersion = r.ReadU32()
+	packet.Frame = r.ReadU32()
+	packet.DisplayTick = r.ReadU32()
+	packet.Source = r.ReadU32()
+	payloadLen := r.ReadU32()
+	packet.RendererSubmitMs = r.ReadF64()
+	packet.GpuSubmittedWorkDoneMs = r.ReadF64()
+	packet.GpuInFlightSubmits = r.ReadU32()
+	packet.UploadBytes = r.ReadU32()
+	flags := r.ReadU32()
+	packet.AsyncWindow = (flags & 1) != 0
+	payloadStart := PerfPacketHeaderSize
+	payloadEnd := payloadStart + payloadLen
+	if payloadLen < 0 || payloadEnd > len(data) {
+		return PerfPacket{Payload: data}
+	}
+	packet.Payload = data[payloadStart:payloadEnd]
+	return packet
+}

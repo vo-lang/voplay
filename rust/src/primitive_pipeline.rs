@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
@@ -5,7 +6,10 @@ use bytemuck::{Pod, Zeroable};
 use crate::material::{MaterialSamplerKey, MATERIAL_SAMPLER_KEYS};
 use crate::model_loader::{MeshMaterial, MeshVertex, ModelId, ModelManager};
 use crate::pipeline3d::{Camera3DUniform, LightUniform, MaterialOverride, ModelUniform};
-use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
+use crate::primitive_scene::{
+    PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate, PRIMITIVE_FLAG_ATLAS_UV,
+    PRIMITIVE_FLAG_BILLBOARD, PRIMITIVE_FLAG_NO_SHADOW, PRIMITIVE_FLAG_Y_BILLBOARD,
+};
 use crate::texture::TextureManager;
 
 #[repr(C)]
@@ -15,17 +19,16 @@ struct PrimitiveInstanceGpu {
     model_1: [f32; 4],
     model_2: [f32; 4],
     model_3: [f32; 4],
-    normal_0: [f32; 4],
-    normal_1: [f32; 4],
-    normal_2: [f32; 4],
     base_color: [f32; 4],
     material_params: [f32; 4],
     emissive_color: [f32; 4],
     texture_flags: [f32; 4],
+    instance_params: [f32; 4],
+    instance_params2: [f32; 4],
 }
 
 impl PrimitiveInstanceGpu {
-    const ATTRIBS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
         5 => Float32x4,
         6 => Float32x4,
         7 => Float32x4,
@@ -36,7 +39,6 @@ impl PrimitiveInstanceGpu {
         12 => Float32x4,
         13 => Float32x4,
         14 => Float32x4,
-        15 => Float32x4,
     ];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -47,19 +49,18 @@ impl PrimitiveInstanceGpu {
         }
     }
 
-    fn from_uniform(uniform: &ModelUniform) -> Self {
+    fn from_draw(draw: &PrimitiveDraw, uniform: &ModelUniform) -> Self {
         Self {
             model_0: uniform.model[0],
             model_1: uniform.model[1],
             model_2: uniform.model[2],
             model_3: uniform.model[3],
-            normal_0: uniform.normal_matrix[0],
-            normal_1: uniform.normal_matrix[1],
-            normal_2: uniform.normal_matrix[2],
             base_color: uniform.base_color,
             material_params: uniform.material_params,
             emissive_color: uniform.emissive_color,
             texture_flags: uniform.texture_flags,
+            instance_params: draw.instance_params,
+            instance_params2: draw.instance_params2,
         }
     }
 }
@@ -97,11 +98,19 @@ impl PrimitiveTextureKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum PrimitiveRenderMode {
+    Opaque,
+    Cutout,
+    Translucent,
+}
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct PrimitiveBatchKey {
     model_id: ModelId,
     mesh_index: usize,
     textures: PrimitiveTextureKey,
+    mode: PrimitiveRenderMode,
 }
 
 struct PrimitiveBatch {
@@ -113,6 +122,32 @@ struct PrimitiveBatchDraw {
     key: PrimitiveBatchKey,
     start: u32,
     count: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct PrimitivePassInstanceGpu {
+    model_0: [f32; 4],
+    model_1: [f32; 4],
+    model_2: [f32; 4],
+    model_3: [f32; 4],
+}
+
+impl PrimitivePassInstanceGpu {
+    fn from_model(model: [[f32; 4]; 4]) -> Self {
+        Self {
+            model_0: model[0],
+            model_1: model[1],
+            model_2: model[2],
+            model_3: model[3],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct PrimitivePassBatchKey {
+    pub model_id: ModelId,
+    pub mesh_index: usize,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -130,18 +165,151 @@ struct ResidentPrimitiveInstance {
 
 struct ResidentPrimitiveChunk {
     instances: Vec<ResidentPrimitiveInstance>,
-    batches: Vec<ResidentPrimitiveBatch>,
+    depth_batches: Vec<ResidentPrimitivePassBatch>,
+    shadow_batches: Vec<ResidentPrimitivePassBatch>,
 }
 
-struct ResidentPrimitiveBatch {
-    key: PrimitiveBatchKey,
+struct ResidentPrimitivePassBatch {
+    key: PrimitivePassBatchKey,
     buffer: wgpu::Buffer,
     count: u32,
 }
 
+struct ResidentPrimitivePassBatchRef<'a> {
+    batch: &'a ResidentPrimitivePassBatch,
+}
+
+fn color_targets(
+    surface_format: wgpu::TextureFormat,
+    receiver_mask_format: wgpu::TextureFormat,
+    surface_props_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: receiver_mask_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: surface_props_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ]
+}
+
+fn color_only_targets(
+    surface_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        None,
+        None,
+    ]
+}
+
+fn primitive_state_for_mode(mode: PrimitiveRenderMode) -> wgpu::PrimitiveState {
+    wgpu::PrimitiveState {
+        topology: wgpu::PrimitiveTopology::TriangleList,
+        strip_index_format: None,
+        front_face: wgpu::FrontFace::Ccw,
+        cull_mode: if mode == PrimitiveRenderMode::Opaque {
+            Some(wgpu::Face::Back)
+        } else {
+            None
+        },
+        polygon_mode: wgpu::PolygonMode::Fill,
+        unclipped_depth: false,
+        conservative: false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_primitive_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    vertex: wgpu::VertexState<'_>,
+    surface_format: wgpu::TextureFormat,
+    receiver_mask_format: wgpu::TextureFormat,
+    surface_props_format: wgpu::TextureFormat,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+    multisample: wgpu::MultisampleState,
+    mode: PrimitiveRenderMode,
+    textured: bool,
+    aux_targets_enabled: bool,
+) -> wgpu::RenderPipeline {
+    let blend = if mode == PrimitiveRenderMode::Translucent {
+        Some(wgpu::BlendState::ALPHA_BLENDING)
+    } else {
+        None
+    };
+    let targets = if aux_targets_enabled {
+        color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            blend,
+        )
+    } else {
+        color_only_targets(surface_format, blend)
+    };
+    let texture_suffix = if textured { "textured" } else { "untextured" };
+    let mode_suffix = match mode {
+        PrimitiveRenderMode::Opaque => "opaque",
+        PrimitiveRenderMode::Cutout => "cutout",
+        PrimitiveRenderMode::Translucent => "translucent",
+    };
+    let target_suffix = if aux_targets_enabled { "full" } else { "color" };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&format!(
+            "voplay_primitive_instanced_{texture_suffix}_{mode_suffix}_{target_suffix}"
+        )),
+        layout: Some(layout),
+        vertex,
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(match (textured, aux_targets_enabled) {
+                (true, true) => "fs_instanced",
+                (true, false) => "fs_instanced_color",
+                (false, true) => "fs_instanced_no_tex",
+                (false, false) => "fs_instanced_no_tex_color",
+            }),
+            targets: &targets,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: primitive_state_for_mode(mode),
+        depth_stencil,
+        multisample,
+        multiview: None,
+        cache: None,
+    })
+}
+
 pub struct PrimitivePipeline {
-    pipeline_textured: wgpu::RenderPipeline,
-    pipeline_untextured: wgpu::RenderPipeline,
+    pipeline_textured_opaque: wgpu::RenderPipeline,
+    pipeline_textured_opaque_color: wgpu::RenderPipeline,
+    pipeline_untextured_opaque: wgpu::RenderPipeline,
+    pipeline_untextured_opaque_color: wgpu::RenderPipeline,
+    pipeline_textured_cutout: wgpu::RenderPipeline,
+    pipeline_textured_cutout_color: wgpu::RenderPipeline,
+    pipeline_untextured_cutout: wgpu::RenderPipeline,
+    pipeline_untextured_cutout_color: wgpu::RenderPipeline,
+    pipeline_textured_translucent: wgpu::RenderPipeline,
+    pipeline_textured_translucent_color: wgpu::RenderPipeline,
+    pipeline_untextured_translucent: wgpu::RenderPipeline,
+    pipeline_untextured_translucent_color: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     model_bind_group: wgpu::BindGroup,
@@ -155,6 +323,9 @@ pub struct PrimitivePipeline {
     resident_chunks: HashMap<PrimitiveChunkRef, ResidentPrimitiveChunk>,
     object_chunks: HashMap<PrimitiveObjectKey, PrimitiveChunkRef>,
     texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
+    last_main_batch_count: u32,
+    last_main_instance_count: u32,
+    last_main_triangle_count: u32,
 }
 
 impl PrimitivePipeline {
@@ -162,6 +333,9 @@ impl PrimitivePipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
+        receiver_mask_format: wgpu::TextureFormat,
+        surface_props_format: wgpu::TextureFormat,
+        sample_count: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_primitive_mesh"),
@@ -197,7 +371,7 @@ impl PrimitivePipeline {
             label: Some("voplay_primitive_light_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -276,6 +450,16 @@ impl PrimitivePipeline {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -289,67 +473,190 @@ impl PrimitivePipeline {
             push_constant_ranges: &[],
         });
         let depth_stencil = Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24Plus,
+            format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });
+        let multisample = wgpu::MultisampleState {
+            count: sample_count,
+            ..wgpu::MultisampleState::default()
+        };
         let vertex = wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_instanced"),
+            entry_point: Some("vs_instanced_primitive"),
             buffers: &[MeshVertex::layout(), PrimitiveInstanceGpu::layout()],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         };
-        let primitive = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            polygon_mode: wgpu::PolygonMode::Fill,
-            unclipped_depth: false,
-            conservative: false,
-        };
-        let pipeline_textured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_primitive_instanced_textured"),
-            layout: Some(&pipeline_layout),
-            vertex: vertex.clone(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_instanced"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        let pipeline_untextured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_primitive_instanced_untextured"),
-            layout: Some(&pipeline_layout),
+        let pipeline_textured_opaque = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Opaque,
+            true,
+            true,
+        );
+        let pipeline_textured_opaque_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Opaque,
+            true,
+            false,
+        );
+        let pipeline_untextured_opaque = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Opaque,
+            false,
+            true,
+        );
+        let pipeline_untextured_opaque_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Opaque,
+            false,
+            false,
+        );
+        let pipeline_textured_cutout = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Cutout,
+            true,
+            true,
+        );
+        let pipeline_textured_cutout_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Cutout,
+            true,
+            false,
+        );
+        let pipeline_untextured_cutout = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Cutout,
+            false,
+            true,
+        );
+        let pipeline_untextured_cutout_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Cutout,
+            false,
+            false,
+        );
+        let pipeline_textured_translucent = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Translucent,
+            true,
+            true,
+        );
+        let pipeline_textured_translucent_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Translucent,
+            true,
+            false,
+        );
+        let pipeline_untextured_translucent = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            vertex.clone(),
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            depth_stencil.clone(),
+            multisample,
+            PrimitiveRenderMode::Translucent,
+            false,
+            true,
+        );
+        let pipeline_untextured_translucent_color = create_primitive_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
             vertex,
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_instanced_no_tex"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
             depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+            multisample,
+            PrimitiveRenderMode::Translucent,
+            false,
+            false,
+        );
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_primitive_camera_ub"),
@@ -453,8 +760,18 @@ impl PrimitivePipeline {
         );
         let white_texture_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
-            pipeline_textured,
-            pipeline_untextured,
+            pipeline_textured_opaque,
+            pipeline_textured_opaque_color,
+            pipeline_untextured_opaque,
+            pipeline_untextured_opaque_color,
+            pipeline_textured_cutout,
+            pipeline_textured_cutout_color,
+            pipeline_untextured_cutout,
+            pipeline_untextured_cutout_color,
+            pipeline_textured_translucent,
+            pipeline_textured_translucent_color,
+            pipeline_untextured_translucent,
+            pipeline_untextured_translucent_color,
             camera_buffer,
             camera_bind_group,
             model_bind_group,
@@ -468,6 +785,9 @@ impl PrimitivePipeline {
             resident_chunks: HashMap::new(),
             object_chunks: HashMap::new(),
             texture_bind_groups: HashMap::new(),
+            last_main_batch_count: 0,
+            last_main_instance_count: 0,
+            last_main_triangle_count: 0,
         }
     }
 
@@ -485,6 +805,52 @@ impl PrimitivePipeline {
         queue.write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(lights));
     }
 
+    pub fn last_main_batch_count(&self) -> u32 {
+        self.last_main_batch_count
+    }
+
+    pub fn last_main_instance_count(&self) -> u32 {
+        self.last_main_instance_count
+    }
+
+    pub fn last_main_triangle_count(&self) -> u32 {
+        self.last_main_triangle_count
+    }
+
+    pub fn append_resident_depth_draws(
+        &self,
+        chunk_refs: &[PrimitiveChunkRef],
+        out: &mut Vec<PrimitiveDraw>,
+    ) {
+        self.append_resident_pass_draws(chunk_refs, out, false);
+    }
+
+    pub fn append_resident_shadow_draws(
+        &self,
+        chunk_refs: &[PrimitiveChunkRef],
+        out: &mut Vec<PrimitiveDraw>,
+    ) {
+        self.append_resident_pass_draws(chunk_refs, out, true);
+    }
+
+    fn append_resident_pass_draws(
+        &self,
+        chunk_refs: &[PrimitiveChunkRef],
+        out: &mut Vec<PrimitiveDraw>,
+        shadow_only: bool,
+    ) {
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for instance in &chunk.instances {
+                if primitive_participates_in_depth_pass(&instance.draw, shadow_only) {
+                    out.push(instance.draw);
+                }
+            }
+        }
+    }
+
     pub fn replace_chunk(
         &mut self,
         device: &wgpu::Device,
@@ -494,7 +860,7 @@ impl PrimitivePipeline {
         chunk_id: u32,
         updates: &[PrimitiveObjectUpdate],
         models: &ModelManager,
-        textures: &TextureManager,
+        _textures: &TextureManager,
     ) {
         let chunk_ref = PrimitiveChunkRef {
             scene_id,
@@ -524,7 +890,6 @@ impl PrimitivePipeline {
                         object_key,
                         previous_chunk,
                         models,
-                        textures,
                     );
                 }
             }
@@ -547,9 +912,18 @@ impl PrimitivePipeline {
                 chunk_ref,
             );
         }
-        let batches = self.build_resident_batches(device, queue, &instances, models, textures);
-        self.resident_chunks
-            .insert(chunk_ref, ResidentPrimitiveChunk { instances, batches });
+        let depth_batches =
+            self.build_resident_pass_batches(device, queue, &instances, models, false);
+        let shadow_batches =
+            self.build_resident_pass_batches(device, queue, &instances, models, true);
+        self.resident_chunks.insert(
+            chunk_ref,
+            ResidentPrimitiveChunk {
+                instances,
+                depth_batches,
+                shadow_batches,
+            },
+        );
     }
 
     pub fn upsert_instance(
@@ -558,7 +932,7 @@ impl PrimitivePipeline {
         queue: &wgpu::Queue,
         update: PrimitiveObjectUpdate,
         models: &ModelManager,
-        textures: &TextureManager,
+        _textures: &TextureManager,
     ) {
         let object_key = PrimitiveObjectKey {
             scene_id: update.scene_id,
@@ -587,7 +961,7 @@ impl PrimitivePipeline {
                 draw: PrimitiveDraw::from_update(update),
             });
         }
-        self.rebuild_resident_chunk(device, queue, chunk_ref, models, textures);
+        self.rebuild_resident_chunk(device, queue, chunk_ref, models);
     }
 
     pub fn destroy_instance(
@@ -598,7 +972,7 @@ impl PrimitivePipeline {
         layer_id: u32,
         object_id: u32,
         models: &ModelManager,
-        textures: &TextureManager,
+        _textures: &TextureManager,
     ) {
         let object_key = PrimitiveObjectKey {
             scene_id,
@@ -608,9 +982,7 @@ impl PrimitivePipeline {
         let Some(chunk_ref) = self.object_chunks.get(&object_key).copied() else {
             return;
         };
-        self.remove_object_from_resident_chunk(
-            device, queue, object_key, chunk_ref, models, textures,
-        );
+        self.remove_object_from_resident_chunk(device, queue, object_key, chunk_ref, models);
     }
 
     pub fn clear_layer(&mut self, scene_id: u32, layer_id: u32) {
@@ -639,78 +1011,62 @@ impl PrimitivePipeline {
         models: &'a ModelManager,
         textures: &'a TextureManager,
         shadow_view: &'a wgpu::TextureView,
+        aux_targets_enabled: bool,
     ) {
+        self.last_main_batch_count = 0;
+        self.last_main_instance_count = 0;
+        self.last_main_triangle_count = 0;
         if draws.is_empty() && chunk_refs.is_empty() {
             return;
         }
         let mut batch_draws: Vec<PrimitiveBatchDraw> = Vec::new();
-        if !draws.is_empty() {
-            let mut batches: Vec<PrimitiveBatch> = Vec::new();
-            let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
-            let mut instance_count = 0u32;
-            for draw in draws {
-                let Some(gpu_model) = models.get(draw.model_id) else {
-                    continue;
-                };
-                for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
-                    if mesh.skinned || mesh.material.control_texture_id.is_some() {
-                        continue;
-                    }
-                    let texture_key = resolve_texture_key(&draw.material, &mesh.material, textures);
-                    let key = PrimitiveBatchKey {
-                        model_id: draw.model_id,
-                        mesh_index,
-                        textures: texture_key,
-                    };
-                    let index = if let Some(index) = batch_index.get(&key) {
-                        *index
-                    } else {
-                        let index = batches.len();
-                        batches.push(PrimitiveBatch {
-                            key,
-                            instances: Vec::new(),
-                        });
-                        batch_index.insert(key, index);
-                        index
-                    };
-                    let mut uniform = draw.model_uniform;
-                    uniform.base_color =
-                        combined_base_color(&draw.material, &mesh.material.base_color);
-                    let (material_params, emissive_color, texture_flags) =
-                        mesh_uniform_values(&draw.material, &mesh.material, texture_key);
-                    uniform.material_params = material_params;
-                    uniform.emissive_color = emissive_color;
-                    uniform.texture_flags = texture_flags;
-                    batches[index]
-                        .instances
-                        .push(PrimitiveInstanceGpu::from_uniform(&uniform));
-                    instance_count += 1;
-                }
-            }
-            if instance_count > 0 {
-                self.ensure_instance_capacity(device, instance_count);
-                let mut instance_data = Vec::with_capacity(instance_count as usize);
-                batch_draws = Vec::with_capacity(batches.len());
-                for batch in &batches {
-                    let start = instance_data.len() as u32;
-                    instance_data.extend_from_slice(&batch.instances);
-                    batch_draws.push(PrimitiveBatchDraw {
-                        key: batch.key,
-                        start,
-                        count: batch.instances.len() as u32,
-                    });
-                }
-                queue.write_buffer(
-                    &self.instance_buffer,
-                    0,
-                    bytemuck::cast_slice(&instance_data),
+        let mut batches: Vec<PrimitiveBatch> = Vec::new();
+        let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
+        let mut instance_count = 0u32;
+        for draw in draws {
+            instance_count +=
+                self.push_draw_batches(draw, models, textures, &mut batches, &mut batch_index);
+        }
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for instance in &chunk.instances {
+                instance_count += self.push_draw_batches(
+                    &instance.draw,
+                    models,
+                    textures,
+                    &mut batches,
+                    &mut batch_index,
                 );
             }
+        }
+        if instance_count > 0 {
+            self.ensure_instance_capacity(device, instance_count);
+            let mut instance_data = Vec::with_capacity(instance_count as usize);
+            batch_draws = Vec::with_capacity(batches.len());
+            sort_primitive_batches(&mut batches);
+            for batch in &batches {
+                let start = instance_data.len() as u32;
+                instance_data.extend_from_slice(&batch.instances);
+                batch_draws.push(PrimitiveBatchDraw {
+                    key: batch.key,
+                    start,
+                    count: batch.instances.len() as u32,
+                });
+            }
+            self.last_main_batch_count = batch_draws.len() as u32;
+            self.last_main_instance_count = instance_count;
+            self.last_main_triangle_count = primitive_batch_triangle_count(&batch_draws, models);
+            queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
         }
         for batch in &batch_draws {
             self.ensure_texture_bind_group(device, textures, batch.key.textures, shadow_view);
         }
-        self.ensure_resident_chunk_texture_bind_groups(device, textures, shadow_view, chunk_refs);
 
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.model_bind_group, &[0]);
@@ -728,11 +1084,7 @@ impl PrimitivePipeline {
                 .texture_bind_groups
                 .get(&texture_key)
                 .expect("primitive texture bind group cache missing");
-            if texture_key.has_albedo() {
-                pass.set_pipeline(&self.pipeline_textured);
-            } else {
-                pass.set_pipeline(&self.pipeline_untextured);
-            }
+            pass.set_pipeline(self.pipeline_for_batch(batch.key, aux_targets_enabled));
             pass.set_bind_group(3, texture_bind_group, &[]);
             let start = batch.start as u64 * instance_stride;
             let end = start + batch.count as u64 * instance_stride;
@@ -741,41 +1093,31 @@ impl PrimitivePipeline {
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
         }
-        self.draw_resident_chunks(pass, chunk_refs, models);
     }
 
-    fn draw_resident_chunks<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        chunk_refs: &[PrimitiveChunkRef],
-        models: &'a ModelManager,
-    ) {
-        for chunk_ref in chunk_refs {
-            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
-                continue;
-            };
-            for batch in &chunk.batches {
-                let Some(gpu_model) = models.get(batch.key.model_id) else {
-                    continue;
-                };
-                let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
-                    continue;
-                };
-                let texture_key = batch.key.textures;
-                let texture_bind_group = self
-                    .texture_bind_groups
-                    .get(&texture_key)
-                    .expect("primitive resident texture bind group cache missing");
-                if texture_key.has_albedo() {
-                    pass.set_pipeline(&self.pipeline_textured);
-                } else {
-                    pass.set_pipeline(&self.pipeline_untextured);
-                }
-                pass.set_bind_group(3, &*texture_bind_group, &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, batch.buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
+    fn pipeline_for_batch(
+        &self,
+        key: PrimitiveBatchKey,
+        aux_targets_enabled: bool,
+    ) -> &wgpu::RenderPipeline {
+        match (key.textures.has_albedo(), key.mode, aux_targets_enabled) {
+            (true, PrimitiveRenderMode::Opaque, true) => &self.pipeline_textured_opaque,
+            (true, PrimitiveRenderMode::Opaque, false) => &self.pipeline_textured_opaque_color,
+            (false, PrimitiveRenderMode::Opaque, true) => &self.pipeline_untextured_opaque,
+            (false, PrimitiveRenderMode::Opaque, false) => &self.pipeline_untextured_opaque_color,
+            (true, PrimitiveRenderMode::Cutout, true) => &self.pipeline_textured_cutout,
+            (true, PrimitiveRenderMode::Cutout, false) => &self.pipeline_textured_cutout_color,
+            (false, PrimitiveRenderMode::Cutout, true) => &self.pipeline_untextured_cutout,
+            (false, PrimitiveRenderMode::Cutout, false) => &self.pipeline_untextured_cutout_color,
+            (true, PrimitiveRenderMode::Translucent, true) => &self.pipeline_textured_translucent,
+            (true, PrimitiveRenderMode::Translucent, false) => {
+                &self.pipeline_textured_translucent_color
+            }
+            (false, PrimitiveRenderMode::Translucent, true) => {
+                &self.pipeline_untextured_translucent
+            }
+            (false, PrimitiveRenderMode::Translucent, false) => {
+                &self.pipeline_untextured_translucent_color
             }
         }
     }
@@ -787,19 +1129,28 @@ impl PrimitivePipeline {
         textures: &TextureManager,
         batches: &mut Vec<PrimitiveBatch>,
         batch_index: &mut HashMap<PrimitiveBatchKey, usize>,
-    ) {
+    ) -> u32 {
         let Some(gpu_model) = models.get(draw.model_id) else {
-            return;
+            return 0;
         };
+        let mut pushed = 0u32;
         for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
             if mesh.skinned || mesh.material.control_texture_id.is_some() {
                 continue;
             }
             let texture_key = resolve_texture_key(&draw.material, &mesh.material, textures);
+            let mut uniform = draw.model_uniform;
+            uniform.base_color = combined_base_color(&draw.material, &mesh.material.base_color);
+            let (material_params, emissive_color, texture_flags) =
+                mesh_uniform_values(&draw.material, &mesh.material, texture_key);
+            uniform.material_params = material_params;
+            uniform.emissive_color = emissive_color;
+            uniform.texture_flags = texture_flags;
             let key = PrimitiveBatchKey {
                 model_id: draw.model_id,
                 mesh_index,
                 textures: texture_key,
+                mode: primitive_render_mode(draw, uniform.base_color),
             };
             let index = if let Some(index) = batch_index.get(&key) {
                 *index
@@ -812,17 +1163,12 @@ impl PrimitivePipeline {
                 batch_index.insert(key, index);
                 index
             };
-            let mut uniform = draw.model_uniform;
-            uniform.base_color = combined_base_color(&draw.material, &mesh.material.base_color);
-            let (material_params, emissive_color, texture_flags) =
-                mesh_uniform_values(&draw.material, &mesh.material, texture_key);
-            uniform.material_params = material_params;
-            uniform.emissive_color = emissive_color;
-            uniform.texture_flags = texture_flags;
             batches[index]
                 .instances
-                .push(PrimitiveInstanceGpu::from_uniform(&uniform));
+                .push(PrimitiveInstanceGpu::from_draw(draw, &uniform));
+            pushed += 1;
         }
+        pushed
     }
 
     fn remove_object_from_resident_chunk(
@@ -832,7 +1178,6 @@ impl PrimitivePipeline {
         object_key: PrimitiveObjectKey,
         chunk_ref: PrimitiveChunkRef,
         models: &ModelManager,
-        textures: &TextureManager,
     ) {
         self.object_chunks.remove(&object_key);
         let Some(chunk) = self.resident_chunks.get_mut(&chunk_ref) else {
@@ -841,7 +1186,7 @@ impl PrimitivePipeline {
         chunk
             .instances
             .retain(|instance| instance.object_id != object_key.object_id);
-        self.rebuild_resident_chunk(device, queue, chunk_ref, models, textures);
+        self.rebuild_resident_chunk(device, queue, chunk_ref, models);
     }
 
     fn rebuild_resident_chunk(
@@ -850,7 +1195,6 @@ impl PrimitivePipeline {
         queue: &wgpu::Queue,
         chunk_ref: PrimitiveChunkRef,
         models: &ModelManager,
-        textures: &TextureManager,
     ) {
         let Some(instances) = self.resident_chunks.get(&chunk_ref).map(|chunk| {
             chunk
@@ -864,54 +1208,118 @@ impl PrimitivePipeline {
         }) else {
             return;
         };
-        let batches = self.build_resident_batches(device, queue, &instances, models, textures);
+        let depth_batches =
+            self.build_resident_pass_batches(device, queue, &instances, models, false);
+        let shadow_batches =
+            self.build_resident_pass_batches(device, queue, &instances, models, true);
         if instances.is_empty() {
             self.resident_chunks.remove(&chunk_ref);
         } else if let Some(chunk) = self.resident_chunks.get_mut(&chunk_ref) {
-            chunk.batches = batches;
+            chunk.depth_batches = depth_batches;
+            chunk.shadow_batches = shadow_batches;
         }
     }
 
-    fn build_resident_batches(
+    fn build_resident_pass_batches(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instances: &[ResidentPrimitiveInstance],
         models: &ModelManager,
-        textures: &TextureManager,
-    ) -> Vec<ResidentPrimitiveBatch> {
-        let mut batches: Vec<PrimitiveBatch> = Vec::new();
-        let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
+        shadow_only: bool,
+    ) -> Vec<ResidentPrimitivePassBatch> {
+        let mut batches: HashMap<PrimitivePassBatchKey, Vec<PrimitivePassInstanceGpu>> =
+            HashMap::new();
         for instance in instances {
-            self.push_draw_batches(
-                &instance.draw,
-                models,
-                textures,
-                &mut batches,
-                &mut batch_index,
-            );
+            if !primitive_participates_in_depth_pass(&instance.draw, shadow_only) {
+                continue;
+            }
+            let Some(gpu_model) = models.get(instance.draw.model_id) else {
+                continue;
+            };
+            for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
+                if mesh.skinned {
+                    continue;
+                }
+                let key = PrimitivePassBatchKey {
+                    model_id: instance.draw.model_id,
+                    mesh_index,
+                };
+                batches
+                    .entry(key)
+                    .or_default()
+                    .push(PrimitivePassInstanceGpu::from_model(
+                        instance.draw.model_uniform.model,
+                    ));
+            }
         }
         batches
             .into_iter()
-            .filter_map(|batch| {
-                if batch.instances.is_empty() {
+            .filter_map(|(key, instances)| {
+                if instances.is_empty() {
                     return None;
                 }
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("voplay_primitive_chunk_instance_vb"),
-                    size: std::mem::size_of::<PrimitiveInstanceGpu>() as u64
-                        * batch.instances.len() as u64,
+                    label: Some("voplay_primitive_chunk_pass_instance_vb"),
+                    size: std::mem::size_of::<PrimitivePassInstanceGpu>() as u64
+                        * instances.len() as u64,
                     usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&batch.instances));
-                Some(ResidentPrimitiveBatch {
-                    key: batch.key,
+                queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&instances));
+                Some(ResidentPrimitivePassBatch {
+                    key,
                     buffer,
-                    count: batch.instances.len() as u32,
+                    count: instances.len() as u32,
                 })
             })
             .collect()
+    }
+
+    pub fn for_each_resident_depth_batch<'a, F>(
+        &'a self,
+        chunk_refs: &[PrimitiveChunkRef],
+        mut f: F,
+    ) where
+        F: FnMut(PrimitivePassBatchKey, &'a wgpu::Buffer, u32),
+    {
+        let mut visible_batches = Vec::new();
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for batch in &chunk.depth_batches {
+                visible_batches.push(ResidentPrimitivePassBatchRef { batch });
+            }
+        }
+        visible_batches.sort_by(compare_resident_primitive_pass_batch_refs);
+        for batch_ref in visible_batches {
+            let batch = batch_ref.batch;
+            f(batch.key, &batch.buffer, batch.count);
+        }
+    }
+
+    pub fn for_each_resident_shadow_batch<'a, F>(
+        &'a self,
+        chunk_refs: &[PrimitiveChunkRef],
+        mut f: F,
+    ) where
+        F: FnMut(PrimitivePassBatchKey, &'a wgpu::Buffer, u32),
+    {
+        let mut visible_batches = Vec::new();
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for batch in &chunk.shadow_batches {
+                visible_batches.push(ResidentPrimitivePassBatchRef { batch });
+            }
+        }
+        visible_batches.sort_by(compare_resident_primitive_pass_batch_refs);
+        for batch_ref in visible_batches {
+            let batch = batch_ref.batch;
+            f(batch.key, &batch.buffer, batch.count);
+        }
     }
 
     fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: u32) {
@@ -974,6 +1382,10 @@ impl PrimitivePipeline {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(toon_ramp_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&self.white_texture_view),
+                },
             ],
         })
     }
@@ -987,27 +1399,6 @@ impl PrimitivePipeline {
             .get(texture_id)
             .map(|texture| &texture.view)
             .unwrap_or(&self.white_texture_view)
-    }
-
-    fn ensure_resident_chunk_texture_bind_groups(
-        &mut self,
-        device: &wgpu::Device,
-        textures: &TextureManager,
-        shadow_view: &wgpu::TextureView,
-        chunk_refs: &[PrimitiveChunkRef],
-    ) {
-        let mut keys = Vec::new();
-        for chunk_ref in chunk_refs {
-            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
-                continue;
-            };
-            for batch in &chunk.batches {
-                keys.push(batch.key.textures);
-            }
-        }
-        for key in keys {
-            self.ensure_texture_bind_group(device, textures, key, shadow_view);
-        }
     }
 
     fn ensure_texture_bind_group(
@@ -1039,6 +1430,11 @@ fn create_material_sampler(device: &wgpu::Device, key: MaterialSamplerKey) -> wg
         crate::material::MATERIAL_FILTER_NEAREST => wgpu::FilterMode::Nearest,
         _ => wgpu::FilterMode::Linear,
     };
+    let anisotropy_clamp = if filter == wgpu::FilterMode::Linear {
+        8
+    } else {
+        1
+    };
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("voplay_primitive_material_sampler"),
         address_mode_u: address_mode,
@@ -1047,6 +1443,7 @@ fn create_material_sampler(device: &wgpu::Device, key: MaterialSamplerKey) -> wg
         mag_filter: filter,
         min_filter: filter,
         mipmap_filter: filter,
+        anisotropy_clamp,
         ..Default::default()
     })
 }
@@ -1174,6 +1571,102 @@ fn normal_scale_value(material: &MaterialOverride, fallback: f32) -> f32 {
     }
 }
 
+fn primitive_participates_in_depth_pass(draw: &PrimitiveDraw, shadow_only: bool) -> bool {
+    let flags = primitive_draw_flags(draw);
+    if (flags & (PRIMITIVE_FLAG_BILLBOARD | PRIMITIVE_FLAG_Y_BILLBOARD | PRIMITIVE_FLAG_ATLAS_UV))
+        != 0
+    {
+        return false;
+    }
+    if shadow_only && (flags & PRIMITIVE_FLAG_NO_SHADOW) != 0 {
+        return false;
+    }
+    true
+}
+
+fn primitive_render_mode(draw: &PrimitiveDraw, base_color: [f32; 4]) -> PrimitiveRenderMode {
+    let flags = primitive_draw_flags(draw);
+    if (flags & (PRIMITIVE_FLAG_BILLBOARD | PRIMITIVE_FLAG_Y_BILLBOARD | PRIMITIVE_FLAG_ATLAS_UV))
+        != 0
+    {
+        return PrimitiveRenderMode::Cutout;
+    }
+    if base_color[3] < 0.999 {
+        return PrimitiveRenderMode::Translucent;
+    }
+    PrimitiveRenderMode::Opaque
+}
+
+fn sort_primitive_batches(batches: &mut [PrimitiveBatch]) {
+    batches.sort_by(|a, b| compare_primitive_batch_key(a.key, b.key));
+}
+
+fn primitive_batch_triangle_count(batches: &[PrimitiveBatchDraw], models: &ModelManager) -> u32 {
+    let mut triangles = 0u32;
+    for batch in batches {
+        let Some(gpu_model) = models.get(batch.key.model_id) else {
+            continue;
+        };
+        let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
+            continue;
+        };
+        triangles = triangles.saturating_add((mesh.index_count / 3).saturating_mul(batch.count));
+    }
+    triangles
+}
+
+fn compare_resident_primitive_pass_batch_refs(
+    a: &ResidentPrimitivePassBatchRef<'_>,
+    b: &ResidentPrimitivePassBatchRef<'_>,
+) -> Ordering {
+    compare_primitive_pass_batch_key(a.batch.key, b.batch.key)
+}
+
+fn compare_primitive_batch_key(a: PrimitiveBatchKey, b: PrimitiveBatchKey) -> Ordering {
+    (
+        primitive_render_mode_order(a.mode),
+        a.model_id,
+        a.mesh_index,
+        primitive_texture_sort_key(a.textures),
+    )
+        .cmp(&(
+            primitive_render_mode_order(b.mode),
+            b.model_id,
+            b.mesh_index,
+            primitive_texture_sort_key(b.textures),
+        ))
+}
+
+fn compare_primitive_pass_batch_key(
+    a: PrimitivePassBatchKey,
+    b: PrimitivePassBatchKey,
+) -> Ordering {
+    (a.model_id, a.mesh_index).cmp(&(b.model_id, b.mesh_index))
+}
+
+fn primitive_texture_sort_key(key: PrimitiveTextureKey) -> (u32, u32, u32, u32, u32, usize) {
+    (
+        key.albedo,
+        key.normal,
+        key.metallic_roughness,
+        key.emissive,
+        key.toon_ramp,
+        key.sampler.sampler_index(),
+    )
+}
+
+fn primitive_render_mode_order(mode: PrimitiveRenderMode) -> u8 {
+    match mode {
+        PrimitiveRenderMode::Opaque => 0,
+        PrimitiveRenderMode::Cutout => 1,
+        PrimitiveRenderMode::Translucent => 2,
+    }
+}
+
+fn primitive_draw_flags(draw: &PrimitiveDraw) -> u32 {
+    (draw.instance_params[0].max(0.0) + 0.5) as u32
+}
+
 fn emissive_color_value(
     material: &MaterialOverride,
     source_factor: [f32; 3],
@@ -1195,12 +1688,19 @@ fn emissive_color_value(
 
 #[cfg(test)]
 mod tests {
-    use super::PrimitivePipeline;
+    use super::{
+        primitive_render_mode, sort_primitive_batches, PrimitiveBatch, PrimitiveBatchKey,
+        PrimitivePipeline, PrimitiveRenderMode, PrimitiveTextureKey,
+    };
+    use crate::material::MaterialSamplerKey;
     use crate::math3d::{Quat, Vec3};
     use crate::model_loader::ModelManager;
-    use crate::pipeline3d::MaterialOverride;
-    use crate::primitive_scene::PrimitiveObjectUpdate;
+    use crate::pipeline3d::{MaterialOverride, ModelUniform};
+    use crate::primitive_scene::{
+        PrimitiveDraw, PrimitiveObjectUpdate, PRIMITIVE_FLAG_ATLAS_UV, PRIMITIVE_FLAG_BILLBOARD,
+    };
     use crate::texture::TextureManager;
+    use bytemuck::Zeroable;
 
     #[test]
     fn primitive_pipeline_creates_with_current_shader_layouts() {
@@ -1225,8 +1725,14 @@ mod tests {
         ))
         .expect("request device");
 
-        let _pipeline =
-            PrimitivePipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let _pipeline = PrimitivePipeline::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+        );
     }
 
     #[test]
@@ -1251,8 +1757,14 @@ mod tests {
             None,
         ))
         .expect("request device");
-        let mut pipeline =
-            PrimitivePipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let mut pipeline = PrimitivePipeline::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+        );
         let models = ModelManager::new();
         let textures = TextureManager::new(&device);
         let update = PrimitiveObjectUpdate {
@@ -1265,6 +1777,11 @@ mod tests {
             scale: Vec3::ONE,
             material: MaterialOverride::default(),
             visible: true,
+            flags: 0,
+            lod_near: 0.0,
+            lod_far: 0.0,
+            wind_strength: 0.0,
+            atlas_uv: [0.0, 0.0, 1.0, 1.0],
         };
         pipeline.replace_chunk(&device, &queue, 1, 2, 5, &[update], &models, &textures);
         assert_eq!(pipeline.resident_chunks.len(), 1);
@@ -1273,5 +1790,82 @@ mod tests {
         pipeline.destroy_instance(&device, &queue, 1, 2, 3, &models, &textures);
         assert!(pipeline.resident_chunks.is_empty());
         assert!(pipeline.object_chunks.is_empty());
+    }
+
+    #[test]
+    fn primitive_pipeline_classifies_render_modes() {
+        let mut draw = PrimitiveDraw {
+            model_id: 1,
+            model_uniform: ModelUniform::zeroed(),
+            material: MaterialOverride::default(),
+            instance_params: [0.0; 4],
+            instance_params2: [0.0, 0.0, 1.0, 1.0],
+        };
+        assert_eq!(
+            primitive_render_mode(&draw, [1.0, 1.0, 1.0, 1.0]),
+            PrimitiveRenderMode::Opaque
+        );
+        assert_eq!(
+            primitive_render_mode(&draw, [1.0, 1.0, 1.0, 0.5]),
+            PrimitiveRenderMode::Translucent
+        );
+        draw.instance_params[0] = PRIMITIVE_FLAG_ATLAS_UV as f32;
+        assert_eq!(
+            primitive_render_mode(&draw, [1.0, 1.0, 1.0, 1.0]),
+            PrimitiveRenderMode::Cutout
+        );
+        draw.instance_params[0] = PRIMITIVE_FLAG_BILLBOARD as f32;
+        assert_eq!(
+            primitive_render_mode(&draw, [1.0, 1.0, 1.0, 0.5]),
+            PrimitiveRenderMode::Cutout
+        );
+    }
+
+    #[test]
+    fn primitive_pipeline_sorts_batches_by_state_then_model() {
+        let texture = PrimitiveTextureKey {
+            albedo: 0,
+            normal: 0,
+            metallic_roughness: 0,
+            emissive: 0,
+            toon_ramp: 0,
+            sampler: MaterialSamplerKey::REPEAT_LINEAR,
+        };
+        let mut batches = vec![
+            PrimitiveBatch {
+                key: PrimitiveBatchKey {
+                    model_id: 8,
+                    mesh_index: 0,
+                    textures: texture,
+                    mode: PrimitiveRenderMode::Translucent,
+                },
+                instances: Vec::new(),
+            },
+            PrimitiveBatch {
+                key: PrimitiveBatchKey {
+                    model_id: 4,
+                    mesh_index: 0,
+                    textures: texture,
+                    mode: PrimitiveRenderMode::Cutout,
+                },
+                instances: Vec::new(),
+            },
+            PrimitiveBatch {
+                key: PrimitiveBatchKey {
+                    model_id: 2,
+                    mesh_index: 0,
+                    textures: texture,
+                    mode: PrimitiveRenderMode::Opaque,
+                },
+                instances: Vec::new(),
+            },
+        ];
+        sort_primitive_batches(&mut batches);
+        assert_eq!(batches[0].key.mode, PrimitiveRenderMode::Opaque);
+        assert_eq!(batches[0].key.model_id, 2);
+        assert_eq!(batches[1].key.mode, PrimitiveRenderMode::Cutout);
+        assert_eq!(batches[1].key.model_id, 4);
+        assert_eq!(batches[2].key.mode, PrimitiveRenderMode::Translucent);
+        assert_eq!(batches[2].key.model_id, 8);
     }
 }

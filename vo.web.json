@@ -1,19 +1,19 @@
 {
   "artifacts": [
     {
-      "digest": "sha256:144d465cd057545b81d091c67a9f234a40d6449431fc071eff7c347d92aa0559",
+      "digest": "sha256:c047d3b524e9cf3acdbc440adc8f903dc05098f975a591ed2e66b1b1ec68bf02",
       "kind": "extension-js-glue",
       "name": "voplay_island.js",
       "path": "web-artifacts/voplay_island.js",
-      "size": 101455,
+      "size": 108534,
       "target": "wasm32-unknown-unknown"
     },
     {
-      "digest": "sha256:8adbb0c142a7708debff77bd088b402a1df4778b37aaf1a1261e349c72df9b5d",
+      "digest": "sha256:82da19bd2f4dc55a1080d58b95c73141c31b580eea8e563e558331f37a5b01da",
       "kind": "extension-native",
       "name": "libvo_voplay.dylib",
       "path": "libvo_voplay.dylib",
-      "size": 10007552,
+      "size": 10310320,
       "target": "aarch64-apple-darwin"
     },
     {
@@ -25,15 +25,15 @@
       "target": "x86_64-unknown-linux-gnu"
     },
     {
-      "digest": "sha256:5a00822b3df5c066196913068c0ccccaae9aa6c21f8ab213a3548a4a8902c082",
+      "digest": "sha256:a9dcb5940601c2c8e0ae3c5b279eff917d965c08caed009cbb4e73cf3af62665",
       "kind": "extension-wasm",
       "name": "voplay_island_bg.wasm",
       "path": "web-artifacts/voplay_island_bg.wasm",
-      "size": 3368967,
+      "size": 3558498,
       "target": "wasm32-unknown-unknown"
     }
   ],
-  "commit": "786ae4250461cbf2b0f02d66f8ed6d52b3bb3b58",
+  "commit": "e68866c088086ac77a523aaf3f764fce11a6925a",
   "extension": {
     "include": [
       "js/dist"
@@ -74,9 +74,9 @@
   "schema_version": 1,
   "source": [
     {
-      "digest": "sha256:4b527031e24b1e49acdb440782071721e106fdfdee8f3b7aa556b8094d3eb2ba",
+      "digest": "sha256:31d7e8898e521e9f2feb03790b9b0c2df17848b48acb6934aa7cf3e5e5f442e4",
       "path": ".gitignore",
-      "size": 127
+      "size": 149
     },
     {
       "digest": "sha256:bdbababeab51b6a195cfe23baf0887664a9ca85869de6ee17d10ba1a914cf43c",
@@ -84,9 +84,9 @@
       "size": 4078
     },
     {
-      "digest": "sha256:6f9ffff4fbdd71bed7b43b2b8dc599ecadc941aa3f245ce621639e667ae3655e",
+      "digest": "sha256:e6d8fae55f36ff2327cbdef4dd906f84efa1cc3c85a7566c76948fb4df4a3cec",
       "path": "assets.vo",
-      "size": 15212
+      "size": 16579
     },
     {
       "digest": "sha256:fe7db790cca4ad8fee83ec78e8416a112bf48bf0acb6fd807aea8d3f9e7dabf9",
@@ -94,9 +94,9 @@
       "size": 5621
     },
     {
-      "digest": "sha256:f68ae39f7e4e9e6fca7168f3a26bb06c40f72d2724d6d136fc972f508218f238",
+      "digest": "sha256:5198552646450cf44578acac83c5b002ecf7b8fdc54e144e0bc77ece9736997b",
       "path": "codec/codec.vo",
-      "size": 4659
+      "size": 5681
     },
     {
       "digest": "sha256:a1df134770434fff5f0a5fbc4dcb2110f523ef1b35299bf5debd567162f0fe7a",
@@ -109,9 +109,9 @@
       "size": 1599
     },
     {
-      "digest": "sha256:c7cb24e5a3784d8cd96f7b97f3e2ad87fab5884f34666c2f6062eb4bcfd1867f",
+      "digest": "sha256:14e680522a5bfeec07ff4ba9dc7b85ac1e39e473bf020db6c9fdf2f34eb1b514",
       "path": "debug_overlay.vo",
-      "size": 9470
+      "size": 27741
     },
     {
       "digest": "sha256:d74fa7d9ac6e0c7000a4a56f245502ad5b52c1012c171411dbe3d87963192a20",
@@ -134,9 +134,9 @@
       "size": 2078
     },
     {
-      "digest": "sha256:0e7b0f3aad6e26c1ffa15864d49f067e60585420c911eaac1cbf70c5dadd9522",
+      "digest": "sha256:4d731e1fa208ccda7993b27d51c65f0af83daf1c31c9d97b55238eca6c9cb64c",
       "path": "draw.vo",
-      "size": 20596
+      "size": 36806
     },
     {
       "digest": "sha256:6627a61a720590fdcb0513789a3a84bc2082c26e725a58dd2684af0263959ccb",
@@ -184,14 +184,14 @@
       "size": 113
     },
     {
-      "digest": "sha256:80d9d0770acc52fd414cc7adfc6bd45afc16bb1866ac4119ec05361c576a936d",
+      "digest": "sha256:aaca16bd2521ee417edb284baa451b411c651881f3d9833faf7fa8542fa7c593",
       "path": "game.vo",
-      "size": 10322
+      "size": 14106
     },
     {
-      "digest": "sha256:2d059bdea20708e5c0b241a21794931258d816ed7c33f641355520576ed47cd2",
+      "digest": "sha256:efcfd013e1cc03915a8dfef039ab44c02272bed925230497ed13952b4267082f",
       "path": "host.vo",
-      "size": 5753
+      "size": 7581
     },
     {
       "digest": "sha256:75fcf97cf68dddde055aa7ae5232a1682927618b2ddd182dae3c58f61c2a5083",
@@ -234,14 +234,14 @@
       "size": 2328
     },
     {
-      "digest": "sha256:5a80326f4334a3bd2c451b5f3b35b836fa0625e6032ab993f1dc53c593342844",
+      "digest": "sha256:86f3ac2c2ba80b253fcc0e62797ed79d2223a4c047caeedf02e9b94b2ddda747",
       "path": "js/dist/render_bootstrap.d.ts",
-      "size": 1589
+      "size": 3378
     },
     {
-      "digest": "sha256:7958156d5715adb50197aa25193a9f67904bc63cfd14dad051683ffbe34243ec",
+      "digest": "sha256:73b5dbce1a6719a4aa6d9943f2a0ff737f7bf63632532ffe3d7e657d75eb6050",
       "path": "js/dist/render_bootstrap.js",
-      "size": 8295
+      "size": 51245
     },
     {
       "digest": "sha256:ce03e8c1b38c648aed68422311b323ccb2918fec77ebeb37fa08ab3563a17766",
@@ -249,9 +249,9 @@
       "size": 1340
     },
     {
-      "digest": "sha256:6d7f9206b39c58bea8025345c8a8d0bda7b2b466d3d475e169dff7627c92d31d",
+      "digest": "sha256:c8541c429d33694d6bafd66bd66676aea654cdf465a41259743809e47db945c9",
       "path": "js/dist/voplay-render-island.js",
-      "size": 10081
+      "size": 13148
     },
     {
       "digest": "sha256:43bb1b94f5aae9ed1a835d7c7b5808c590bdd64c7dc583c20444dd4fcbaca4bd",
@@ -274,9 +274,9 @@
       "size": 550
     },
     {
-      "digest": "sha256:df64cb5769766d128716cc56771a9c240a63187fb14afeacf2c85b89567cb56a",
+      "digest": "sha256:b60872381aa81a2013b1fc9ed55c9e0023baccedf02b077653de6c92ddef22a5",
       "path": "js/render_bootstrap.ts",
-      "size": 8979
+      "size": 52542
     },
     {
       "digest": "sha256:60d0c1614427a5087f2ed901b38fcdc9a863de029f62c2787b1cfa8ff5a51bd6",
@@ -284,9 +284,9 @@
       "size": 376
     },
     {
-      "digest": "sha256:8895ff21b810a3baf1d1ed662defcc453fb9b67fbbfaa1f16f3e08a3cd705153",
+      "digest": "sha256:bbdf959e2da095e00d1c292395f8a4f47bc12eda4de797ad64f69bcaa5e21be2",
       "path": "js/voplay-render-island.ts",
-      "size": 11470
+      "size": 14770
     },
     {
       "digest": "sha256:d846b0911dcded6934164319b7d9387cb7335dd64d7af3e4f88494ae800b7948",
@@ -294,19 +294,19 @@
       "size": 7551
     },
     {
-      "digest": "sha256:4036819b4dfdb3bf752f4772b02ab3936791e2df919217abcd1fd0250711ccc2",
+      "digest": "sha256:fa17d87ad0e51b31abf9a6682182bb65e86648fca7ac9ff283318ff70bb4472b",
       "path": "primitive3d/builder.vo",
-      "size": 4374
+      "size": 4568
     },
     {
-      "digest": "sha256:c8454d4f4e128a4cc810837e60c5051e52b089b93c3278be09ade40811aa61f1",
+      "digest": "sha256:b38394a25634fa0722b0c68f3db72e3d145eb4da71f0ff577e7d6c99f9cfd36e",
       "path": "primitive3d/layer.vo",
-      "size": 10732
+      "size": 14849
     },
     {
-      "digest": "sha256:c8e29e6a141d3f000f6bf7ba0ec54ad4076f2cbd0b29729012ebd995b6f47115",
+      "digest": "sha256:383940e6813675b59898afc33613039ba6622191d60e187a1dc0c7e79ded2be4",
       "path": "primitive3d/material_palette.vo",
-      "size": 5502
+      "size": 6778
     },
     {
       "digest": "sha256:4373196aafeae9f74d0de1af22147f4ba24fbe4c06b9ec3479cb627771427784",
@@ -319,34 +319,34 @@
       "size": 4620
     },
     {
-      "digest": "sha256:0f39d0ba5d5ff6e751f4b0f5d6b0768e92e7e3d237db4630f6fc3d6f4bd5e1e8",
+      "digest": "sha256:8300ec1291eed6b583c78a47bad8965f449ea31a7ef0075361d87a456091bc3f",
       "path": "primitive3d/types.vo",
-      "size": 2194
+      "size": 2406
     },
     {
-      "digest": "sha256:5b56dc3981da9dadc2f593a4b1c558a0c315827399905e5f525393fd1f984d4a",
+      "digest": "sha256:31cbf8ffdb3870bc283dc461e46a0c66806f954e7e447ef06c0a15fb22039630",
       "path": "render_worker.vo",
-      "size": 8123
+      "size": 12093
     },
     {
-      "digest": "sha256:ee063b2863211db3a790399a9af6894bb8b94f2aff4e5fb039b82f0bfc7b6ce6",
+      "digest": "sha256:e42952a0b7731cafd8a42543d5d3595758f4afcde8c983e9a2139e1ee1f78a8d",
       "path": "res_proxy.vo",
-      "size": 23728
+      "size": 27039
     },
     {
-      "digest": "sha256:215d304f8eeb37a26cdba07587902c0d2f291a99b1f72cdc7fac7522b19ff2c3",
+      "digest": "sha256:fc3f897bf1bb0a72f25685d5f86213f957cab83834d404eb0d3260d526e6f3e4",
       "path": "resources.vo",
-      "size": 9307
+      "size": 14418
     },
     {
-      "digest": "sha256:8cb8725eb95ef057a31e7b9b9af98c8e7579f7f4a941a962f4e1ceae5fea1dea",
+      "digest": "sha256:085eedc2bfbf73c46a8958d339cf1e2a8dd107da9cf8309e740a819e594dd2a1",
       "path": "rust/Cargo.lock",
-      "size": 95623
+      "size": 94408
     },
     {
-      "digest": "sha256:bdcb4991b0d8b2a92c7e675c14de6dd41a1bc1a91a5c42bcee64a097324bdeed",
+      "digest": "sha256:36a57b9876050cf0dfa19cf5005517897a070f54516d1b7ed4b58afdc90ff2e0",
       "path": "rust/Cargo.toml",
-      "size": 2412
+      "size": 3016
     },
     {
       "digest": "sha256:7578584b43a8b516a2640cf9bbb7eb771e6c0c34f872fbb34caeeee44b3ab2b7",
@@ -369,9 +369,9 @@
       "size": 734
     },
     {
-      "digest": "sha256:75ba9d91fd2c0a779e8fb14cbff369ad7f921874d135634f0265725145f34a62",
+      "digest": "sha256:914679ff227ce941cff7d4d65821829642be3ff4970f426225b7a186d1613894",
       "path": "rust/src/externs/mod.rs",
-      "size": 5406
+      "size": 6234
     },
     {
       "digest": "sha256:6eeb63d3b298cd80f13fd080fa3643f723ad9b0e10e920fa71ae6ad60a9ad409",
@@ -379,19 +379,19 @@
       "size": 6811
     },
     {
-      "digest": "sha256:dc690aa75251fcf02c873d1d2a63cda9be58439ca9d90ebe68a3d5ef1e42433e",
+      "digest": "sha256:4e2b1e9c7ca4bf2f5754a6acf041ca54180742e686c9838bf2d1327f09df9bb5",
       "path": "rust/src/externs/physics3d.rs",
-      "size": 17980
+      "size": 18453
     },
     {
-      "digest": "sha256:3bf67a251f33af90ee0a837b548a5f697a6cee1beb122c64dc211f23cb2331c2",
+      "digest": "sha256:21efbb4d4516ab9a1a856909aeb1d606b91a487efc6eaff8645ffd367f09d6fe",
       "path": "rust/src/externs/render.rs",
-      "size": 12467
+      "size": 15978
     },
     {
-      "digest": "sha256:071662840ba658e1209a0d7a2456a0bd884519eb09491ae0c220a5db38ce7b19",
+      "digest": "sha256:657a0c37e2930f031de4f365e2009b9ec3611a275e3fbe2e9dcd5c59bd0b3a1f",
       "path": "rust/src/externs/resource.rs",
-      "size": 22571
+      "size": 31364
     },
     {
       "digest": "sha256:b1b658c5dff3837db583749f0d93c7e1cb3528babd81cc4391df0b64b16ce358",
@@ -414,19 +414,19 @@
       "size": 3337
     },
     {
-      "digest": "sha256:512808433e469578042f2b46d61a377c0418a886c436793b4487e312a70d8e80",
+      "digest": "sha256:88a0948d453fe307b4ca7323714c45f99ef87b4e0272f46ad3e331f0bb74880c",
       "path": "rust/src/input.rs",
-      "size": 14260
+      "size": 14789
     },
     {
-      "digest": "sha256:dbb9006d249cc85e6d5804e2e90ae36058ec11b3c9e26acd6a7e3d04a5be7182",
+      "digest": "sha256:9d4d910038930ebb5dda6e6f670bee53c8f19c7e56c3342b8df433e5e1b5155b",
       "path": "rust/src/island_bindgen.rs",
-      "size": 51855
+      "size": 58077
     },
     {
-      "digest": "sha256:b3aac240c70fce5e56d1202e6e284d13fd56c97e3a0b4753bfc935f92f075721",
+      "digest": "sha256:e30031e021309c07cd034e2e908ea17d04b1add26bbdf277fc3b2a3ce2415c72",
       "path": "rust/src/lib.rs",
-      "size": 3105
+      "size": 3314
     },
     {
       "digest": "sha256:7dd0c526b6892603822fba4ebee8be91e977d824fd45d0198f244e3d5d3880cd",
@@ -434,14 +434,19 @@
       "size": 2388
     },
     {
-      "digest": "sha256:0b6f98982cd34091073748deee0596a7e1e8a9f5bdaa3dcf2c22a8c412491336",
+      "digest": "sha256:6b65213b64e44bc4b8f7b9e0e27cae160797b1fe94eaf19402b8dedb163c81ba",
       "path": "rust/src/math3d.rs",
-      "size": 18590
+      "size": 22445
     },
     {
-      "digest": "sha256:7512f283755e63c9239aa45445c0e839354694a1b5ab9fdf9d96eed54c44ad29",
+      "digest": "sha256:aae729c4ab4d16fcd1c462a4ca77333576816d2fc5f19ff31944f11178b0dd66",
       "path": "rust/src/model_loader.rs",
-      "size": 82203
+      "size": 97500
+    },
+    {
+      "digest": "sha256:5cb6a289fe4a00b41720b3af746e5331144b2b84faf02e6273ba915941583e3b",
+      "path": "rust/src/physics_registry.rs",
+      "size": 2588
     },
     {
       "digest": "sha256:c005b3cefbffd99e7e5cf2f887e143e2554da76b98878a1c31c6faf1a069d71c",
@@ -454,84 +459,84 @@
       "size": 38664
     },
     {
-      "digest": "sha256:5cb6a289fe4a00b41720b3af746e5331144b2b84faf02e6273ba915941583e3b",
-      "path": "rust/src/physics_registry.rs",
-      "size": 2588
-    },
-    {
-      "digest": "sha256:c7b92ec660f002f8a4afed576389bed11dc94661e55498cc535ae8a8e81f58c7",
-      "path": "rust/src/pipeline2d.rs",
-      "size": 9881
-    },
-    {
-      "digest": "sha256:94166951be2afefa132e1a9507eecee891cd63523640ac5dfda430ed3182841e",
-      "path": "rust/src/pipeline3d.rs",
-      "size": 69478
-    },
-    {
-      "digest": "sha256:3956458ab7c86beb64c4e89bb0edd4ac11abc70cdc548c5c03808aa20dba8baa",
+      "digest": "sha256:51bcb4e486756f85fc60f91ed73bcb56d2aa5ffe600c4ca35a4830587341a8f3",
       "path": "rust/src/pipeline_shadow.rs",
-      "size": 15063
+      "size": 35076
     },
     {
-      "digest": "sha256:4b80912fda7a42aa9f030c517f857db4185b22ce56ee70e5f39016c441706a70",
+      "digest": "sha256:49b71d31517c2d158d19a058009b974468d5e2230853846e8ce7494c918e9a87",
       "path": "rust/src/pipeline_skybox.rs",
-      "size": 4528
+      "size": 7315
     },
     {
-      "digest": "sha256:1b4feb0a39b312779c6fb2c087f0f67bacc5c4231830d3223fdcf378dc74883c",
+      "digest": "sha256:3182a3a3122fce6802748b87cabb68f5656cc7f290ed912562cde41654e6e50c",
       "path": "rust/src/pipeline_sprite.rs",
-      "size": 6850
+      "size": 8125
     },
     {
-      "digest": "sha256:a09b7258e91fad86e6b0a04f692685d3604d6b20f0c0b044950d3864783e5c40",
+      "digest": "sha256:fbdabc2059654a329ff8d790c8cbc80774259333b357d02b4bff515c50c37bcd",
+      "path": "rust/src/pipeline2d.rs",
+      "size": 10960
+    },
+    {
+      "digest": "sha256:59302af6509f807870e1bf97ee5c0734044e1a2409149a31418fbdb3c7ca2012",
+      "path": "rust/src/pipeline3d.rs",
+      "size": 85574
+    },
+    {
+      "digest": "sha256:a9d8466d05ee08f4add85bbd6cf3d2327e4ff7420fe185ad0996f5c80d289bd1",
       "path": "rust/src/primitive_pipeline.rs",
-      "size": 47602
+      "size": 65905
     },
     {
-      "digest": "sha256:166a366526b5dcee029d239e99fc7c84775f34ac96aaaff8c77f33670c917440",
+      "digest": "sha256:3b744ea2c4021a65ee97f967e7df6b53030e2d41063abc3bb0dd42dc17d761e5",
       "path": "rust/src/primitive_scene.rs",
-      "size": 22019
+      "size": 44878
     },
     {
-      "digest": "sha256:d96f5b4b051a6e2ea38f68c76fd5ae57735a5dbd101f8d6c4fe7784a83dffc8c",
+      "digest": "sha256:10113b8538079277bd67e2de708b80c04f9fc8df59fba1e0c857e60cd5fb8078",
       "path": "rust/src/primitives.rs",
-      "size": 19215
+      "size": 19354
     },
     {
-      "digest": "sha256:5aa78fb3aeacfc22b1a3a5317d69eb5046f02d244079c33b599e03b8d9c24faf",
+      "digest": "sha256:41642b0e66e81585d5cca66a0ebe09d0abaf64375011d7f5c8edbdeef0aeef60",
       "path": "rust/src/render_world.rs",
-      "size": 5125
+      "size": 7179
     },
     {
-      "digest": "sha256:fef6b3003463d9f695f3094f0d36e6bca3d494d1c1a36553dfccc49e0ff5bad7",
-      "path": "rust/src/renderer.rs",
-      "size": 63090
-    },
-    {
-      "digest": "sha256:41af78f8984550d1a254ba86be94d36b02fcaa4d322a1fe70704b9f38274965e",
+      "digest": "sha256:593bc0a355231033a0f5c85fe191baadda8136469c5601efc700ce919b0031dc",
       "path": "rust/src/renderer_runtime.rs",
-      "size": 4444
+      "size": 4730
     },
     {
-      "digest": "sha256:18abd3a3a8fc425ddbe26372f222b5817e5444a0df0bf6dacb99de9e678f433e",
-      "path": "rust/src/shaders/mesh.wgsl",
-      "size": 13547
+      "digest": "sha256:73be316c24cb526718f5ec694452852674957966cef32d1a390a7fff11704ca2",
+      "path": "rust/src/renderer.rs",
+      "size": 142147
     },
     {
-      "digest": "sha256:f524a81980d81fb327548df753c5ccb9fac1cb71db43e94982c78cad1143dbc1",
+      "digest": "sha256:9c150179aa9a87ed3d0c10e45288c0ec79348ce6d507f552a1bc7a48526dfd6d",
       "path": "rust/src/shaders/mesh_skinned.wgsl",
-      "size": 11868
+      "size": 17271
     },
     {
-      "digest": "sha256:5841fdf5437afedf994aa85a00fa65ef81b133f92324aa2ff88e02be44eaf055",
+      "digest": "sha256:371286ea6b8e1f9b2e9572fa20ed0bc6a3191c90a3f0e1a81e05343655c12ab8",
       "path": "rust/src/shaders/mesh_terrain.wgsl",
-      "size": 12165
+      "size": 27320
     },
     {
-      "digest": "sha256:5c2853d6cd95871c2163c7fb3625a9aee1333414d7d4365eb36b29e7cd185e89",
+      "digest": "sha256:9fe82e5974b36abed4d12122d2bd66be61641f6c63c9a3fcaddb4e02fcc317b4",
+      "path": "rust/src/shaders/mesh.wgsl",
+      "size": 28648
+    },
+    {
+      "digest": "sha256:43dbdf9393ee0c89944d2de0c13bbbf0ae68b584b5329b4cd2debde66c39d954",
+      "path": "rust/src/shaders/post.wgsl",
+      "size": 21362
+    },
+    {
+      "digest": "sha256:8934f61558d3936cf655bb4adbe18196c1a7c7dbd471ae6372ec32ee72fda39d",
       "path": "rust/src/shaders/shadow.wgsl",
-      "size": 1557
+      "size": 2028
     },
     {
       "digest": "sha256:5cfe6e94cf4c943484e7991da785dcd577be211fd8a2eef30cc1a7e9d5c47dea",
@@ -539,9 +544,9 @@
       "size": 3277
     },
     {
-      "digest": "sha256:3f261f4c7fc53a13afa3426adeef41fdf84ea74c3ceca29eabce80da5cc69a20",
+      "digest": "sha256:5dc888e6cc85f8746b8c92ff35866192aaf1cc8ae344b11b8583cb1fd7ab81b5",
       "path": "rust/src/shaders/skybox.wgsl",
-      "size": 928
+      "size": 1373
     },
     {
       "digest": "sha256:2ad540853f06d781d88cc077dcebcb064b372872e214229a192c126c30813c3a",
@@ -549,19 +554,19 @@
       "size": 2398
     },
     {
-      "digest": "sha256:72bdac70f31d55fce6b98812426b8351c15267c0946f36ed86ab5f31d233831b",
+      "digest": "sha256:7d25ebe6fa2e5d56156a9f57674ce662d398658241ad950e40756ed92cc92955",
       "path": "rust/src/stream.rs",
-      "size": 47494
+      "size": 67624
     },
     {
-      "digest": "sha256:144df19215e00ab3a7cb10ed6b3268d19bc6082d5a94f400d761b9b053b96d44",
+      "digest": "sha256:898201d30873a36ea92fa52f8cdae6e021b6394e64fba5c7d73962df5c3fb3bc",
       "path": "rust/src/terrain.rs",
-      "size": 7729
+      "size": 7732
     },
     {
-      "digest": "sha256:5a08334432b0f9981a215c025a6d5ff6ed2a8a1d5dcd8c1d2d88cfaa0ad75a7c",
+      "digest": "sha256:19b9054523ad64ea3c3836f26ac4d261f467db6bbb1d0482cbcf4da0281165a9",
       "path": "rust/src/texture.rs",
-      "size": 14887
+      "size": 18932
     },
     {
       "digest": "sha256:15a034bf683ac089b81a51b6ed3afb52f2eb41a63d270e1e5de662d121f4fd3d",
@@ -624,34 +629,34 @@
       "size": 1935
     },
     {
-      "digest": "sha256:e2c3ca47485622d4a6055d0c3217a9813456664a4a8a44b146e6036e895d5eed",
+      "digest": "sha256:91d02fb7ebd3fe9de0ed214a770c4b63e1b8bcc2b00c034ccceeac21efd59a55",
       "path": "scene3d/decal.vo",
-      "size": 1940
+      "size": 5450
     },
     {
-      "digest": "sha256:af964b6c3952d369d29feb15531f57d4fe9844c327e52ec786f6bd1e84ad5d4e",
+      "digest": "sha256:752496aaaa736ca18d1a577debf88a27580150d123428ff34ef07d7ea1a2ba4c",
       "path": "scene3d/draw.vo",
-      "size": 6192
+      "size": 11018
     },
     {
-      "digest": "sha256:a121b0c1ecade1c9968b54b781256de12b09b5650346587c8475a1fba32649d4",
+      "digest": "sha256:032cfe6cafe0ed36309358b4bc99aa5387ae8cc81f7e4a5dd5c00783e3efc19b",
       "path": "scene3d/kart_controller.vo",
-      "size": 7578
+      "size": 8344
     },
     {
-      "digest": "sha256:622c0d6e57d17d10af02cbfca49943624b37169dbf27946caba501130278fad9",
+      "digest": "sha256:5be5b531e6305be9e52ccba838608cf0194bea67b756f3daba7ff6df99c98455",
       "path": "scene3d/level.vo",
-      "size": 10131
+      "size": 10126
     },
     {
-      "digest": "sha256:40d7bda217086afca7fb1a763dbc1c30b50f4040750676838d552fa2267ebe1e",
+      "digest": "sha256:a9c1f2a0eda9e1b2ab9d51d1e64bd33e93b309325578461104ed353d31b62daa",
       "path": "scene3d/lighting.vo",
-      "size": 2246
+      "size": 8437
     },
     {
-      "digest": "sha256:7772b81d6e27bed8c84a207ae5f949e1412401fda5845318b8ac5165e58e2951",
+      "digest": "sha256:5986ac70dbbd989cb8d6269a7da22c70cadccc239bd2e8ef475ca824c04c7eaa",
       "path": "scene3d/map.vo",
-      "size": 13132
+      "size": 52483
     },
     {
       "digest": "sha256:d1438769e5516b6e442a96685c334a94ddebab711a08085999c1a343f43d74d9",
@@ -659,19 +664,19 @@
       "size": 6648
     },
     {
-      "digest": "sha256:5fee5996c81dbb9f5acf2555b101d49a5c77ecc4e227f2bef42dd5fae9e08ab3",
+      "digest": "sha256:f872487a0a3da2003ddb5a0cf916dbadf9ad1cd1df4bf3af4bed6da15f04dcaf",
       "path": "scene3d/physics.vo",
-      "size": 13062
+      "size": 13070
     },
     {
-      "digest": "sha256:38a12d46328711047ecd6135714cab30438b74be34c607a547b75592586173df",
+      "digest": "sha256:7a5ad63e91b8838b5ff368cd6882412502b118f4a0219f321f1529b3becb0db0",
       "path": "scene3d/pick.vo",
-      "size": 3363
+      "size": 3538
     },
     {
-      "digest": "sha256:69e03a9cd24e3eeb8bb373234485036dfbf9073d37e11d49d78f15bf13e228cc",
+      "digest": "sha256:612b7c7ea58a4157fb039d12dde95bde4eada34ab9cf2aca532750dea6f4bd30",
       "path": "scene3d/primitive_layers.vo",
-      "size": 14941
+      "size": 24390
     },
     {
       "digest": "sha256:697d24ad19731e29ec2649bd7814dbbb773fa13f639c9473b3a29e254f9f4b15",
@@ -694,14 +699,14 @@
       "size": 6696
     },
     {
-      "digest": "sha256:0b1513b005c2a4e69037664c0122ea1572b61329a860a8c07e31973d07579845",
+      "digest": "sha256:cb5c107b41ab485897759f4464940276e32e3417f8f0171efdbe2fe3938435be",
       "path": "scene3d/scene.vo",
-      "size": 23530
+      "size": 26626
     },
     {
-      "digest": "sha256:a9684a3b79a5cc09c92124766158079ca95715a5366eb5a3d770218ea9efcefd",
+      "digest": "sha256:bcbc57bf8816164d6c2f44d2d43ab6f7ca8872303e9765a20b426e795ddefeff",
       "path": "scene3d/terrain.vo",
-      "size": 10448
+      "size": 21022
     },
     {
       "digest": "sha256:b8493f4ef059a681a66111a6836e3e439c6c28ef7ef9fe48ad3ae470c44799b0",
@@ -709,19 +714,14 @@
       "size": 4244
     },
     {
-      "digest": "sha256:64b5a65ad09a8103a607d4939ca9ade5651c2170cef6c08e4c1ae860d0ab07c3",
-      "path": "scene3d/track.vo",
-      "size": 56874
-    },
-    {
       "digest": "sha256:a96e8e2ce168c2e6c2e8005f429da597ee5f70393577a4057cd82988a6a285be",
       "path": "scene3d/track_bake.vo",
       "size": 6951
     },
     {
-      "digest": "sha256:d3bd2485385a7aa60f1d764cfd3e69dd795a6f686a605b4de18feb4372668443",
-      "path": "scene3d/vehicle.vo",
-      "size": 15941
+      "digest": "sha256:76aece319a978c2c9fdf5681806684c3bb7b8f7948c6eccc6235ce95fed5b7c6",
+      "path": "scene3d/track.vo",
+      "size": 67868
     },
     {
       "digest": "sha256:2021ab0931f62a7de8e20d5cefec118d68b52ef8f9712da6d7db0828108933b8",
@@ -739,6 +739,11 @@
       "size": 3485
     },
     {
+      "digest": "sha256:16d3777da8457e27613964de15544b2293872536ae25660c5101104077c5a04a",
+      "path": "scene3d/vehicle.vo",
+      "size": 16138
+    },
+    {
       "digest": "sha256:4d58018c447e231076a473f8634ea89661675f74b94a4aa6c871fda16f4a0cab",
       "path": "scheduler.vo",
       "size": 4109
@@ -754,9 +759,9 @@
       "size": 1393
     },
     {
-      "digest": "sha256:64863d7d77d4b6dfb7b75b3039ce0e9e945a0daebaf3dcf72b07b0f940028bcc",
+      "digest": "sha256:63911da02e43102edaf5e295a4c826269556f5bf1ba3c9c53589b149c79ff66f",
       "path": "tests/main.vo",
-      "size": 147460
+      "size": 227665
     },
     {
       "digest": "sha256:3db52b428a274e8ba1f54c322b77daa07e33e6d282b12d8c61d25c22ea8e4ab4",
@@ -779,9 +784,9 @@
       "size": 14735
     },
     {
-      "digest": "sha256:3e6d35a9c147eb98dcdfdde32a1b606e7be920c0fbf5ae907932624ac092f1b0",
+      "digest": "sha256:58be9e4261ff81d1e9a174d7bc6953a8fb662d821f23ee6623575366e05cca53",
       "path": "tools/primitive_stress.vo",
-      "size": 5503
+      "size": 5657
     },
     {
       "digest": "sha256:a62a425198590f200f981910e36ce63020b6987b5f5eabe14616a3578d88f463",
@@ -799,9 +804,9 @@
       "size": 7060
     },
     {
-      "digest": "sha256:8cec35720e2f15f50cc1c7aadd19f7743b5f187588db90e333265ad022dd8766",
+      "digest": "sha256:3c5f1019afdbe6b7e817b7b69c7ced64fac5791fba57d0ba60f6f6d47e92f5a0",
       "path": "ui.vo",
-      "size": 3810
+      "size": 6807
     },
     {
       "digest": "sha256:78586a39478560101c3503f98dd252008a910a0552a3d1ea8fc91baf1f1f659d",
@@ -814,13 +819,13 @@
       "size": 788
     },
     {
-      "digest": "sha256:144d465cd057545b81d091c67a9f234a40d6449431fc071eff7c347d92aa0559",
+      "digest": "sha256:c047d3b524e9cf3acdbc440adc8f903dc05098f975a591ed2e66b1b1ec68bf02",
       "path": "web-artifacts/voplay_island.js",
-      "size": 101455
+      "size": 108534
     }
   ],
-  "source_digest": "sha256:67183bbe5f098ab09b411f0d54598360b81cb541fbd149982e96749cc0db66c5",
-  "version": "v0.1.25",
+  "source_digest": "sha256:2717fa3a0c6a6471b19db00fa4eab3012def82551328574618141ccded9b0fdd",
+  "version": "v0.1.26",
   "vo": "^0.1.0",
   "web": null
 }

@@ -1,34 +1,59 @@
 package primitive3d
 
-import "math"
-import "strconv"
-import "github.com/vo-lang/voplay"
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
 
-const primitiveInstanceUploadBytes = 160
+const primitiveInstanceUploadBytes = 196
 
 type Layer struct {
-	kind      LayerKind
-	shapes    *ShapeRegistry
+	kind LayerKind
+	shapes *ShapeRegistry
 	materials *MaterialPalette
-	chunking  ChunkingDesc
-	name      string
+	chunking ChunkingDesc
+	preloadChunks bool
+	name string
 	nextObjectID int
 	instances map[int]Instance
-	order     []ObjectID
-	dirty     map[int]bool
-	removed   []ObjectID
-	dirtyAll  bool
-	built     bool
-	chunks    []Chunk
+	order []ObjectID
+	dirty map[int]bool
+	removed []ObjectID
+	dirtyAll bool
+	built bool
+	chunks []Chunk
 	chunksDirty bool
 	shapeMaterialGroups int
 	shapeMaterialGroupsDirty bool
+	changeUpserts []Instance
+	changeRemoves []ObjectID
+	groupScratch map[layerShapeMaterialKey]bool
+	chunkIndexScratch map[layerChunkKey]int
+}
+
+type layerShapeMaterialKey struct {
+	Shape ShapeID
+	Material MaterialID
+}
+
+type layerChunkKey struct {
+	X int
+	Y int
+	Z int
 }
 
 type Changes struct {
-	All     bool
+	All bool
 	Upserts []Instance
 	Removes []ObjectID
+}
+
+type LayerBulkAdd struct {
+	layer *Layer
+	active bool
+	added int
+	validShapes map[int]bool
+	validMaterials map[int]bool
 }
 
 func NewLayer(desc LayerDesc) *Layer {
@@ -44,19 +69,7 @@ func NewLayer(desc LayerDesc) *Layer {
 	if materials == nil {
 		materials = NewMaterialPalette()
 	}
-	return &Layer{
-		kind: kind,
-		shapes: shapes,
-		materials: materials,
-		chunking: desc.Chunking,
-		name: desc.Name,
-		nextObjectID: 1,
-		instances: map[int]Instance{},
-		order: []ObjectID{},
-		dirty: map[int]bool{},
-		chunksDirty: true,
-		shapeMaterialGroupsDirty: true,
-	}
+	return &Layer{kind: kind, shapes: shapes, materials: materials, chunking: desc.Chunking, preloadChunks: desc.PreloadChunks, name: desc.Name, nextObjectID: 1, instances: map[int]Instance{}, order: []ObjectID{}, dirty: map[int]bool{}, chunksDirty: true, shapeMaterialGroupsDirty: true}
 }
 
 func (l *Layer) Kind() LayerKind {
@@ -67,6 +80,16 @@ func (l *Layer) Kind() LayerKind {
 func (l *Layer) Name() string {
 	l.ensureReady()
 	return l.name
+}
+
+func (l *Layer) PreloadChunks() bool {
+	l.ensureReady()
+	return l.preloadChunks
+}
+
+func (l *Layer) SetPreloadChunks(enabled bool) {
+	l.ensureReady()
+	l.preloadChunks = enabled
 }
 
 func (l *Layer) Add(instance Instance) ObjectID {
@@ -91,20 +114,92 @@ func (l *Layer) Add(instance Instance) ObjectID {
 	return id
 }
 
+func (l *Layer) AddMany(instances []Instance) int {
+	l.ensureReady()
+	if len(instances) == 0 {
+		return 0
+	}
+	batch := l.BeginBulkAdd()
+	for _, instance := range instances {
+		batch.Add(instance)
+	}
+	return batch.End()
+}
+
+func (l *Layer) BeginBulkAdd() *LayerBulkAdd {
+	l.ensureReady()
+	return &LayerBulkAdd{layer: l, active: true, validShapes: map[int]bool{}, validMaterials: map[int]bool{}}
+}
+
+func (b *LayerBulkAdd) Add(instance Instance) ObjectID {
+	if b == nil || b.layer == nil || !b.active {
+		panic("primitive3d.LayerBulkAdd.Add: batch is not active")
+	}
+	l := b.layer
+	l.validateInstanceShapeMaterial(instance)
+	shapeKey := int(instance.Shape)
+	if !b.validShapes[shapeKey] {
+		l.shapes.Desc(instance.Shape)
+		b.validShapes[shapeKey] = true
+	}
+	materialKey := int(instance.Material)
+	if !b.validMaterials[materialKey] {
+		l.materials.Desc(instance.Material)
+		b.validMaterials[materialKey] = true
+	}
+	id := instance.Object
+	if id == 0 {
+		id = ObjectID(l.nextObjectID)
+		l.nextObjectID++
+	} else if int(id) >= l.nextObjectID {
+		l.nextObjectID = int(id) + 1
+	}
+	if _, exists := l.instances[int(id)]; exists {
+		panic("primitive3d.LayerBulkAdd.Add: duplicate object id")
+	}
+	instance.Object = id
+	l.instances[int(id)] = instance
+	l.order = append(l.order, id)
+	b.added++
+	return id
+}
+
+func (b *LayerBulkAdd) End() int {
+	if b == nil || b.layer == nil || !b.active {
+		panic("primitive3d.LayerBulkAdd.End: batch is not active")
+	}
+	l := b.layer
+	if b.added > 0 {
+		l.dirtyAll = true
+		l.dirty = map[int]bool{}
+		l.chunksDirty = true
+		l.shapeMaterialGroupsDirty = true
+	}
+	added := b.added
+	b.active = false
+	b.layer = nil
+	return added
+}
+
 func (l *Layer) Set(id ObjectID, instance Instance) {
 	l.ensureReady()
 	if id == 0 {
 		panic("primitive3d.Layer.Set: object id must not be zero")
 	}
-	if _, exists := l.instances[int(id)]; !exists {
+	previous, exists := l.instances[int(id)]
+	if !exists {
 		panic("primitive3d.Layer.Set: unknown object id")
 	}
 	l.validateInstance(instance)
 	instance.Object = id
 	l.instances[int(id)] = instance
 	l.dirty[int(id)] = true
-	l.chunksDirty = true
-	l.shapeMaterialGroupsDirty = true
+	if previous.Position != instance.Position || previous.Scale != instance.Scale {
+		l.chunksDirty = true
+	}
+	if previous.Shape != instance.Shape || previous.Material != instance.Material {
+		l.shapeMaterialGroupsDirty = true
+	}
 }
 
 func (l *Layer) Remove(id ObjectID) {
@@ -156,18 +251,20 @@ func (l *Layer) Invalidate() {
 
 func (l *Layer) DrainChanges() Changes {
 	l.ensureReady()
-	changes := Changes{Upserts: []Instance{}, Removes: []ObjectID{}}
+	l.changeUpserts = l.changeUpserts[:0]
+	l.changeRemoves = l.changeRemoves[:0]
+	changes := Changes{Upserts: l.changeUpserts, Removes: l.changeRemoves}
 	if !l.dirtyAll && len(l.dirty) == 0 && len(l.removed) == 0 {
 		return changes
 	}
 	for _, id := range l.removed {
-		changes.Removes = append(changes.Removes, id)
+		l.changeRemoves = append(l.changeRemoves, id)
 	}
 	if l.dirtyAll {
 		changes.All = true
 		for _, id := range l.order {
 			if instance, ok := l.instances[int(id)]; ok {
-				changes.Upserts = append(changes.Upserts, instance)
+				l.changeUpserts = append(l.changeUpserts, instance)
 			}
 		}
 	} else {
@@ -176,30 +273,42 @@ func (l *Layer) DrainChanges() Changes {
 				continue
 			}
 			if instance, ok := l.instances[int(id)]; ok {
-				changes.Upserts = append(changes.Upserts, instance)
+				l.changeUpserts = append(l.changeUpserts, instance)
 			}
 		}
 	}
 	l.removed = nil
-	l.dirty = map[int]bool{}
+	clearLayerDirtyMap(l.dirty)
 	l.dirtyAll = false
+	changes.Upserts = l.changeUpserts
+	changes.Removes = l.changeRemoves
 	return changes
 }
 
 func (l *Layer) DrainStaticChanges() Changes {
 	l.ensureReady()
-	changes := Changes{Upserts: []Instance{}, Removes: []ObjectID{}}
+	l.changeUpserts = l.changeUpserts[:0]
+	l.changeRemoves = l.changeRemoves[:0]
+	changes := Changes{Upserts: l.changeUpserts, Removes: l.changeRemoves}
 	if !l.dirtyAll && len(l.dirty) == 0 && len(l.removed) == 0 {
 		return changes
 	}
 	for _, id := range l.removed {
-		changes.Removes = append(changes.Removes, id)
+		l.changeRemoves = append(l.changeRemoves, id)
 	}
 	changes.All = l.dirtyAll || len(l.dirty) > 0 || len(l.removed) > 0
 	l.removed = nil
-	l.dirty = map[int]bool{}
+	clearLayerDirtyMap(l.dirty)
 	l.dirtyAll = false
+	changes.Upserts = l.changeUpserts
+	changes.Removes = l.changeRemoves
 	return changes
+}
+
+func clearLayerDirtyMap(values map[int]bool) {
+	for key := range values {
+		delete(values, key)
+	}
 }
 
 func (l *Layer) Instances() []Instance {
@@ -231,6 +340,14 @@ func (l *Layer) Chunks() []Chunk {
 	return chunks
 }
 
+// ChunkView returns the layer's cached chunks for read-only frame traversal.
+// Callers must not mutate the returned chunks or object slices.
+func (l *Layer) ChunkView() []Chunk {
+	l.ensureReady()
+	l.ensureChunks()
+	return l.chunks
+}
+
 func (l *Layer) Stats() Stats {
 	l.ensureReady()
 	l.ensureChunks()
@@ -241,16 +358,7 @@ func (l *Layer) Stats() Stats {
 		dirtyRanges = chunkCount + len(l.removed)
 	}
 	groups := l.shapeMaterialGroupCount()
-	return Stats{
-		TotalInstances: total,
-		VisibleInstances: total,
-		TotalChunks: chunkCount,
-		VisibleChunks: chunkCount,
-		DirtyRanges: dirtyRanges,
-		ShapeMaterialGroups: groups,
-		DrawCalls: groups,
-		UploadBytes: dirtyRanges * primitiveInstanceUploadBytes,
-	}
+	return Stats{TotalInstances: total, VisibleInstances: total, TotalChunks: chunkCount, VisibleChunks: chunkCount, DirtyRanges: dirtyRanges, ShapeMaterialGroups: groups, DrawCalls: groups, UploadBytes: dirtyRanges * primitiveInstanceUploadBytes}
 }
 
 func (l *Layer) Model(shape ShapeID) voplay.ModelID {
@@ -314,14 +422,18 @@ func (l *Layer) ensureReady() {
 }
 
 func (l *Layer) validateInstance(instance Instance) {
+	l.validateInstanceShapeMaterial(instance)
+	l.shapes.Desc(instance.Shape)
+	l.materials.Desc(instance.Material)
+}
+
+func (l *Layer) validateInstanceShapeMaterial(instance Instance) {
 	if instance.Shape == 0 {
 		panic("primitive3d.Layer: instance shape must not be zero")
 	}
 	if instance.Material == 0 {
 		panic("primitive3d.Layer: instance material must not be zero")
 	}
-	l.shapes.Desc(instance.Shape)
-	l.materials.Desc(instance.Material)
 }
 
 func (l *Layer) removeFromOrder(id ObjectID) {
@@ -341,14 +453,13 @@ func (l *Layer) shapeMaterialGroupCount() int {
 	if !l.shapeMaterialGroupsDirty {
 		return l.shapeMaterialGroups
 	}
-	groups := map[string]bool{}
+	groups := l.beginGroupScratch()
 	for _, id := range l.order {
 		instance, ok := l.instances[int(id)]
 		if !ok {
 			continue
 		}
-		key := strconv.Itoa(int(instance.Shape)) + ":" + strconv.Itoa(int(instance.Material))
-		groups[key] = true
+		groups[shapeMaterialKey(instance)] = true
 	}
 	l.shapeMaterialGroups = len(groups)
 	l.shapeMaterialGroupsDirty = false
@@ -362,52 +473,73 @@ func (l *Layer) ensureChunks() {
 }
 
 func (l *Layer) rebuildChunks() {
-	l.chunks = nil
 	if len(l.order) == 0 {
+		l.chunks = l.chunks[:0]
 		l.shapeMaterialGroups = 0
 		l.shapeMaterialGroupsDirty = false
 		l.chunksDirty = false
 		return
 	}
 	cellSize := l.chunking.CellSize
-	groups := map[string]bool{}
+	recomputeGroups := l.shapeMaterialGroupsDirty
+	groups := l.groupScratch
+	if recomputeGroups {
+		groups = l.beginGroupScratch()
+	}
 	if l.kind != StaticLayer || cellSize <= 0 {
-		chunk := Chunk{ID: 1, Objects: []ObjectID{}}
+		if len(l.chunks) == 0 {
+			l.chunks = append(l.chunks, Chunk{ID: 1})
+		} else {
+			l.chunks = l.chunks[:1]
+			l.chunks[0].ID = 1
+		}
+		l.chunks[0].Bounds = voplay.AABB{}
+		l.chunks[0].Objects = l.chunks[0].Objects[:0]
 		for _, id := range l.order {
 			instance, ok := l.instances[int(id)]
 			if !ok {
 				continue
 			}
-			groups[shapeMaterialKey(instance)] = true
-			bounds := instanceBounds(instance)
-			if len(chunk.Objects) == 0 {
-				chunk.Bounds = bounds
-			} else {
-				chunk.Bounds = mergeBounds(chunk.Bounds, bounds)
+			if recomputeGroups {
+				groups[shapeMaterialKey(instance)] = true
 			}
-			chunk.Objects = append(chunk.Objects, id)
+			bounds := instanceBounds(instance)
+			if len(l.chunks[0].Objects) == 0 {
+				l.chunks[0].Bounds = bounds
+			} else {
+				l.chunks[0].Bounds = mergeBounds(l.chunks[0].Bounds, bounds)
+			}
+			l.chunks[0].Objects = append(l.chunks[0].Objects, id)
 		}
-		if len(chunk.Objects) > 0 {
-			l.chunks = append(l.chunks, chunk)
+		if len(l.chunks[0].Objects) == 0 {
+			l.chunks = l.chunks[:0]
 		}
-		l.shapeMaterialGroups = len(groups)
-		l.shapeMaterialGroupsDirty = false
+		if recomputeGroups {
+			l.shapeMaterialGroups = len(groups)
+			l.shapeMaterialGroupsDirty = false
+		}
 		l.chunksDirty = false
 		return
 	}
-	indexByKey := map[string]int{}
+	l.chunks = l.chunks[:0]
+	indexByKey := l.beginChunkIndexScratch()
 	for _, id := range l.order {
 		instance, ok := l.instances[int(id)]
 		if !ok {
 			continue
 		}
-		groups[shapeMaterialKey(instance)] = true
+		if recomputeGroups {
+			groups[shapeMaterialKey(instance)] = true
+		}
 		key := chunkKey(instance.Position, cellSize)
 		index, exists := indexByKey[key]
 		if !exists {
 			index = len(l.chunks)
 			indexByKey[key] = index
-			l.chunks = append(l.chunks, Chunk{ID: index + 1, Objects: []ObjectID{}})
+			l.chunks = append(l.chunks, Chunk{ID: index + 1})
+			l.chunks[index].ID = index + 1
+			l.chunks[index].Bounds = voplay.AABB{}
+			l.chunks[index].Objects = l.chunks[index].Objects[:0]
 		}
 		bounds := instanceBounds(instance)
 		if len(l.chunks[index].Objects) == 0 {
@@ -417,20 +549,45 @@ func (l *Layer) rebuildChunks() {
 		}
 		l.chunks[index].Objects = append(l.chunks[index].Objects, id)
 	}
-	l.shapeMaterialGroups = len(groups)
-	l.shapeMaterialGroupsDirty = false
+	if recomputeGroups {
+		l.shapeMaterialGroups = len(groups)
+		l.shapeMaterialGroupsDirty = false
+	}
 	l.chunksDirty = false
 }
 
-func shapeMaterialKey(instance Instance) string {
-	return strconv.Itoa(int(instance.Shape)) + ":" + strconv.Itoa(int(instance.Material))
+func (l *Layer) beginGroupScratch() map[layerShapeMaterialKey]bool {
+	if l.groupScratch == nil {
+		l.groupScratch = map[layerShapeMaterialKey]bool{}
+		return l.groupScratch
+	}
+	for key := range l.groupScratch {
+		delete(l.groupScratch, key)
+	}
+	return l.groupScratch
 }
 
-func chunkKey(pos voplay.Vec3, cellSize float64) string {
-	x := int(math.Floor(pos.X / cellSize))
-	y := int(math.Floor(pos.Y / cellSize))
-	z := int(math.Floor(pos.Z / cellSize))
-	return strconv.Itoa(x) + ":" + strconv.Itoa(y) + ":" + strconv.Itoa(z)
+func (l *Layer) beginChunkIndexScratch() map[layerChunkKey]int {
+	if l.chunkIndexScratch == nil {
+		l.chunkIndexScratch = map[layerChunkKey]int{}
+		return l.chunkIndexScratch
+	}
+	for key := range l.chunkIndexScratch {
+		delete(l.chunkIndexScratch, key)
+	}
+	return l.chunkIndexScratch
+}
+
+func shapeMaterialKey(instance Instance) layerShapeMaterialKey {
+	return layerShapeMaterialKey{Shape: instance.Shape, Material: instance.Material}
+}
+
+func chunkKey(pos voplay.Vec3, cellSize float64) layerChunkKey {
+	return layerChunkKey{
+		X: int(math.Floor(pos.X / cellSize)),
+		Y: int(math.Floor(pos.Y / cellSize)),
+		Z: int(math.Floor(pos.Z / cellSize)),
+	}
 }
 
 func instanceBounds(instance Instance) voplay.AABB {
@@ -452,16 +609,5 @@ func instanceBounds(instance Instance) voplay.AABB {
 }
 
 func mergeBounds(a, b voplay.AABB) voplay.AABB {
-	return voplay.AABB{
-		Min: voplay.Vec3{
-			X: math.Min(a.Min.X, b.Min.X),
-			Y: math.Min(a.Min.Y, b.Min.Y),
-			Z: math.Min(a.Min.Z, b.Min.Z),
-		},
-		Max: voplay.Vec3{
-			X: math.Max(a.Max.X, b.Max.X),
-			Y: math.Max(a.Max.Y, b.Max.Y),
-			Z: math.Max(a.Max.Z, b.Max.Z),
-		},
-	}
+	return voplay.AABB{Min: voplay.Vec3{X: math.Min(a.Min.X, b.Min.X), Y: math.Min(a.Min.Y, b.Min.Y), Z: math.Min(a.Min.Z, b.Min.Z)}, Max: voplay.Vec3{X: math.Max(a.Max.X, b.Max.X), Y: math.Max(a.Max.Y, b.Max.Y), Z: math.Max(a.Max.Z, b.Max.Z)}}
 }

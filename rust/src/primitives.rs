@@ -447,7 +447,9 @@ pub fn generate_rounded_box(bevel_radius: f32, segments: u32) -> (Vec<MeshVertex
     if radius <= 0.0001 {
         return generate_cube();
     }
-    let grid = segments.max(2);
+    // Rounded boxes are common stylized primitives; dense face grids add many
+    // interior triangles with little silhouette gain.
+    let grid = segments.clamp(2, 6);
     let mut vertices = Vec::with_capacity((6 * (grid + 1) * (grid + 1)) as usize);
     let mut indices = Vec::with_capacity((6 * grid * grid * 6) as usize);
 

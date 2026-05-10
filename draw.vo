@@ -24,12 +24,20 @@ const (
 	opDrawText      = 0x14
 	opDrawModel     = 0x20
 	opDrawBillboard = 0x21
+	opDrawProjectedDecal3D = 0x22
 	opSetLights3D   = 0x23
 	opSetFog3D      = 0x24
 	opDrawSkybox    = 0x25
 	opSetColorGrading3D = 0x26
 	opSetShadow3D   = 0x27
 	opSetRenderDebug3D = 0x28
+	opSetPostProcess3D = 0x29
+	opSetContactAO3D = 0x2A
+	opSetProjectedDecalAtlas3D = 0x2B
+	opDrawProjectedDecal3DUV = 0x2C
+	opSetProjectedDecalDistanceFade3D = 0x2D
+	opSetProjectedDecalReceiverMask3D = 0x2E
+	opSetProjectedDecalSurfaceResponse3D = 0x2F
 	opScene3DUpsertObject  = 0x30
 	opScene3DDestroyObject = 0x31
 	opScene3DClear         = 0x32
@@ -44,11 +52,55 @@ const (
 	opPrimitive3DUpsertShapes = 0x3B
 	opPrimitive3DReplaceChunkKeys = 0x3C
 	opPrimitive3DSetChunkVisible = 0x3D
+	opSetProjectedDecalNormalAtlas3D = 0x40
+	opSetProjectedDecalRoughnessAtlas3D = 0x41
+	opSetProjectedDecalMaskAtlas3D = 0x42
+	opSetProjectedDecalAngleFade3D = 0x43
+)
+
+type ProjectedDecalReceiverMask int
+
+const (
+	ProjectedDecalReceiverTerrain ProjectedDecalReceiverMask = 1
+	ProjectedDecalReceiverMesh ProjectedDecalReceiverMask = 2
+	ProjectedDecalReceiverAll ProjectedDecalReceiverMask = ProjectedDecalReceiverTerrain | ProjectedDecalReceiverMesh
+)
+
+const (
+	ShadowQualityOff = 0
+	ShadowQualityLow = 1
+	ShadowQualityMedium = 2
+	ShadowQualityHigh = 3
+	ShadowQualityCinematic = 4
 )
 
 // DrawCtx buffers binary draw commands for the current frame.
 type DrawCtx struct {
 	w codec.ByteWriter
+	stats DrawStats
+}
+
+type DrawStats struct {
+	DrawCalls int
+	RectDraws int
+	CircleDraws int
+	LineDraws int
+	SpriteDraws int
+	TextDraws int
+	ModelDraws int
+	SkinnedDraws int
+	BillboardDraws int
+	SkyboxDraws int
+	ProjectedDecals int
+	SceneDraws int
+	SceneUpserts int
+	SceneRemovals int
+	PrimitiveDraws int
+	PrimitiveChunkRebuilds int
+	PrimitiveChunks int
+	PrimitiveMaterialUpserts int
+	PrimitiveShapeUpserts int
+	PrimitiveVisibilityChanges int
 }
 
 type Primitive3DInstanceDraw struct {
@@ -59,6 +111,7 @@ type Primitive3DInstanceDraw struct {
 	Scale    Vec3
 	Material MaterialDesc
 	Visible  bool
+	Render   Primitive3DRenderParams
 }
 
 type Primitive3DMaterialDraw struct {
@@ -79,6 +132,7 @@ type Primitive3DInstanceRefDraw struct {
 	Scale      Vec3
 	MaterialID int
 	Visible    bool
+	Render     Primitive3DRenderParams
 }
 
 type Primitive3DInstanceKeyDraw struct {
@@ -90,7 +144,24 @@ type Primitive3DInstanceKeyDraw struct {
 	MaterialID int
 	Tint       Color
 	Visible    bool
+	Render     Primitive3DRenderParams
 }
+
+type Primitive3DRenderParams struct {
+	Flags int
+	LodNear float64
+	LodFar float64
+	WindStrength float64
+	AtlasUV Rect
+}
+
+const (
+	Primitive3DFlagNoShadow = 1
+	Primitive3DFlagWind = 2
+	Primitive3DFlagBillboard = 4
+	Primitive3DFlagYBillboard = 8
+	Primitive3DFlagAtlasUV = 16
+)
 
 // NewDrawCtx creates a new draw command context.
 func NewDrawCtx() *DrawCtx {
@@ -101,11 +172,49 @@ func NewDrawCtx() *DrawCtx {
 
 func (d *DrawCtx) reset() {
 	d.w.Reset()
+	d.stats = DrawStats{}
 }
 
 // Bytes returns the encoded command buffer.
 func (d *DrawCtx) Bytes() []byte {
 	return d.w.Bytes()
+}
+
+// Stats returns command-level workload counters for the current frame.
+func (d *DrawCtx) Stats() DrawStats {
+	return d.stats
+}
+
+func DrawStatsDelta(after DrawStats, before DrawStats) DrawStats {
+	return DrawStats{
+		DrawCalls: drawStatsClamp(after.DrawCalls - before.DrawCalls),
+		RectDraws: drawStatsClamp(after.RectDraws - before.RectDraws),
+		CircleDraws: drawStatsClamp(after.CircleDraws - before.CircleDraws),
+		LineDraws: drawStatsClamp(after.LineDraws - before.LineDraws),
+		SpriteDraws: drawStatsClamp(after.SpriteDraws - before.SpriteDraws),
+		TextDraws: drawStatsClamp(after.TextDraws - before.TextDraws),
+		ModelDraws: drawStatsClamp(after.ModelDraws - before.ModelDraws),
+		SkinnedDraws: drawStatsClamp(after.SkinnedDraws - before.SkinnedDraws),
+		BillboardDraws: drawStatsClamp(after.BillboardDraws - before.BillboardDraws),
+		SkyboxDraws: drawStatsClamp(after.SkyboxDraws - before.SkyboxDraws),
+		ProjectedDecals: drawStatsClamp(after.ProjectedDecals - before.ProjectedDecals),
+		SceneDraws: drawStatsClamp(after.SceneDraws - before.SceneDraws),
+		SceneUpserts: drawStatsClamp(after.SceneUpserts - before.SceneUpserts),
+		SceneRemovals: drawStatsClamp(after.SceneRemovals - before.SceneRemovals),
+		PrimitiveDraws: drawStatsClamp(after.PrimitiveDraws - before.PrimitiveDraws),
+		PrimitiveChunkRebuilds: drawStatsClamp(after.PrimitiveChunkRebuilds - before.PrimitiveChunkRebuilds),
+		PrimitiveChunks: drawStatsClamp(after.PrimitiveChunks - before.PrimitiveChunks),
+		PrimitiveMaterialUpserts: drawStatsClamp(after.PrimitiveMaterialUpserts - before.PrimitiveMaterialUpserts),
+		PrimitiveShapeUpserts: drawStatsClamp(after.PrimitiveShapeUpserts - before.PrimitiveShapeUpserts),
+		PrimitiveVisibilityChanges: drawStatsClamp(after.PrimitiveVisibilityChanges - before.PrimitiveVisibilityChanges),
+	}
+}
+
+func drawStatsClamp(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 // --- Public draw commands ---
@@ -156,6 +265,8 @@ func (d *DrawCtx) SetFont(id FontID) {
 
 // DrawRect draws a filled rectangle.
 func (d *DrawCtx) DrawRect(x, y, w, h float64, c Color) {
+	d.stats.DrawCalls++
+	d.stats.RectDraws++
 	d.w.WriteByte(opDrawRect)
 	d.w.WriteF32(x)
 	d.w.WriteF32(y)
@@ -169,6 +280,8 @@ func (d *DrawCtx) DrawRect(x, y, w, h float64, c Color) {
 
 // DrawCircle draws a filled circle.
 func (d *DrawCtx) DrawCircle(cx, cy, radius float64, c Color) {
+	d.stats.DrawCalls++
+	d.stats.CircleDraws++
 	d.w.WriteByte(opDrawCircle)
 	d.w.WriteF32(cx)
 	d.w.WriteF32(cy)
@@ -181,6 +294,8 @@ func (d *DrawCtx) DrawCircle(cx, cy, radius float64, c Color) {
 
 // DrawLine draws a line segment.
 func (d *DrawCtx) DrawLine(x1, y1, x2, y2, thickness float64, c Color) {
+	d.stats.DrawCalls++
+	d.stats.LineDraws++
 	d.w.WriteByte(opDrawLine)
 	d.w.WriteF32(x1)
 	d.w.WriteF32(y1)
@@ -225,6 +340,8 @@ func (d *DrawCtx) DrawCircleOutline(cx, cy, radius, thickness float64, segments 
 
 // DrawText draws text at the given position.
 func (d *DrawCtx) DrawText(text string, x, y, size float64, c Color) {
+	d.stats.DrawCalls++
+	d.stats.TextDraws++
 	d.w.WriteByte(opDrawText)
 	d.w.WriteF32(x)
 	d.w.WriteF32(y)
@@ -259,6 +376,8 @@ func (d *DrawCtx) DrawSprite(p SpriteParams) {
 
 // writeSprite encodes a sprite draw command into the binary buffer.
 func (d *DrawCtx) writeSprite(tex TextureID, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH float64, flipX, flipY bool, rotation float64, tint Color) {
+	d.stats.DrawCalls++
+	d.stats.SpriteDraws++
 	d.w.WriteByte(opDrawSprite)
 	d.w.WriteU32(int(tex))
 	d.w.WriteF32(srcX)
@@ -288,6 +407,8 @@ type BillboardParams struct {
 }
 
 func (d *DrawCtx) writeBillboard(tex TextureID, srcX, srcY, srcW, srcH float64, worldPos Vec3, w, h float64, tint Color) {
+	d.stats.DrawCalls++
+	d.stats.BillboardDraws++
 	d.w.WriteByte(opDrawBillboard)
 	d.w.WriteU32(int(tex))
 	d.w.WriteF32(srcX)
@@ -360,6 +481,11 @@ const (
 	RenderDebugShadow = 5
 	RenderDebugDirect = 6
 	RenderDebugAmbient = 7
+	RenderDebugTerrainControl = 8
+	RenderDebugTerrainSlope = 9
+	RenderDebugTerrainHeight = 10
+	RenderDebugTerrainCurvature = 11
+	RenderDebugTerrainMacro = 12
 )
 
 // LightDesc describes a light for the SetLights3D draw command.
@@ -435,25 +561,111 @@ func (d *DrawCtx) SetColorGrading3D(toneMap int, exposure, contrast, saturation 
 }
 
 func (d *DrawCtx) SetShadow3D(enabled bool, resolution int, strength float64) {
-	if enabled && resolution <= 0 {
+	d.SetShadow3DEx(enabled, resolution, strength, 1)
+}
+
+func (d *DrawCtx) SetShadow3DEx(enabled bool, resolution int, strength, softness float64) {
+	d.SetShadow3DQuality(enabled, resolution, strength, softness, 0, 0, ShadowQualityHigh)
+}
+
+func (d *DrawCtx) SetShadow3DQuality(enabled bool, resolution int, strength, softness, distance, fade float64, quality int) {
+	if quality < ShadowQualityOff || quality > ShadowQualityCinematic {
+		panic("SetShadow3D: quality must be in range 0..4")
+	}
+	if enabled && quality > ShadowQualityOff && resolution <= 0 {
 		panic("SetShadow3D: resolution must be > 0")
 	}
 	if strength < 0 || strength > 1 {
 		panic("SetShadow3D: strength must be in range 0..1")
 	}
+	if softness < 0 {
+		panic("SetShadow3D: softness must be >= 0")
+	}
+	if distance < 0 {
+		panic("SetShadow3D: distance must be >= 0")
+	}
+	if fade < 0 {
+		panic("SetShadow3D: fade must be >= 0")
+	}
 	if resolution <= 0 {
 		resolution = 1
+	}
+	if softness == 0 {
+		softness = 1
+	}
+	if quality == ShadowQualityOff {
+		enabled = false
 	}
 	d.w.WriteByte(opSetShadow3D)
 	d.w.WriteBool(enabled)
 	d.w.WriteU32(resolution)
 	d.w.WriteF32(strength)
+	d.w.WriteF32(softness)
+	d.w.WriteF32(distance)
+	d.w.WriteF32(fade)
+	d.w.WriteU32(quality)
+}
+
+// SetPostProcess3D controls the final frame presentation pass.
+// Bloom is thresholded by luminance; sharpen and FXAA are screen-space strengths.
+func (d *DrawCtx) SetPostProcess3D(bloomThreshold, bloomStrength, sharpenStrength, fxaaStrength float64) {
+	if bloomThreshold < 0 || bloomThreshold > 1 {
+		panic("SetPostProcess3D: bloomThreshold must be in range 0..1")
+	}
+	if bloomStrength < 0 || bloomStrength > 2 {
+		panic("SetPostProcess3D: bloomStrength must be in range 0..2")
+	}
+	if sharpenStrength < 0 || sharpenStrength > 1 {
+		panic("SetPostProcess3D: sharpenStrength must be in range 0..1")
+	}
+	if fxaaStrength < 0 || fxaaStrength > 1.5 {
+		panic("SetPostProcess3D: fxaaStrength must be in range 0..1.5")
+	}
+	d.w.WriteByte(opSetPostProcess3D)
+	d.w.WriteF32(bloomThreshold)
+	d.w.WriteF32(bloomStrength)
+	d.w.WriteF32(sharpenStrength)
+	d.w.WriteF32(fxaaStrength)
+}
+
+// SetContactAO3D controls dual-scale depth-based contact ambient occlusion in
+// the final presentation pass.
+func (d *DrawCtx) SetContactAO3D(strength, radius, depthScale, detailStrength, detailRadius, normalBias float64, quality int) {
+	if strength < 0 || strength > 1.5 {
+		panic("SetContactAO3D: strength must be in range 0..1.5")
+	}
+	if radius < 0.5 || radius > 8 {
+		panic("SetContactAO3D: radius must be in range 0.5..8")
+	}
+	if depthScale < 1 || depthScale > 400 {
+		panic("SetContactAO3D: depthScale must be in range 1..400")
+	}
+	if detailStrength < 0 || detailStrength > 1 {
+		panic("SetContactAO3D: detailStrength must be in range 0..1")
+	}
+	if detailRadius < 0.35 || detailRadius > 3 {
+		panic("SetContactAO3D: detailRadius must be in range 0.35..3")
+	}
+	if normalBias < 0 || normalBias > 0.08 {
+		panic("SetContactAO3D: normalBias must be in range 0..0.08")
+	}
+	if quality < 0 || quality > 4 {
+		panic("SetContactAO3D: quality must be in range 0..4")
+	}
+	d.w.WriteByte(opSetContactAO3D)
+	d.w.WriteF32(strength)
+	d.w.WriteF32(radius)
+	d.w.WriteF32(depthScale)
+	d.w.WriteF32(detailStrength)
+	d.w.WriteF32(detailRadius)
+	d.w.WriteF32(normalBias)
+	d.w.WriteU32(quality)
 }
 
 // SetRenderDebug3D selects a renderer debug output for subsequent 3D mesh draws.
 // It is meant for material and lighting validation, not gameplay presentation.
 func (d *DrawCtx) SetRenderDebug3D(mode int) {
-	if mode < RenderDebugLit || mode > RenderDebugAmbient {
+	if mode < RenderDebugLit || mode > RenderDebugTerrainMacro {
 		panic("SetRenderDebug3D: unsupported mode")
 	}
 	d.w.WriteByte(opSetRenderDebug3D)
@@ -461,8 +673,208 @@ func (d *DrawCtx) SetRenderDebug3D(mode int) {
 }
 
 func (d *DrawCtx) DrawSkybox(cubemap CubemapID) {
+	d.stats.DrawCalls++
+	d.stats.SkyboxDraws++
 	d.w.WriteByte(opDrawSkybox)
 	d.w.WriteU32(int(cubemap))
+}
+
+// DrawProjectedDecal3D projects a color decal into the current 3D camera using
+// the camera depth buffer. Position is the decal center, yaw rotates it around
+// world Y, width/length are horizontal extents, and depth is vertical tolerance.
+func (d *DrawCtx) DrawProjectedDecal3D(position Vec3, yaw, width, length, depth float64, color Color) {
+	if width <= 0 {
+		panic("DrawProjectedDecal3D: width must be > 0")
+	}
+	if length <= 0 {
+		panic("DrawProjectedDecal3D: length must be > 0")
+	}
+	if depth <= 0 {
+		panic("DrawProjectedDecal3D: depth must be > 0")
+	}
+	if color.A <= 0 {
+		return
+	}
+	if color.A > 1 {
+		color.A = 1
+	}
+	d.stats.DrawCalls++
+	d.stats.ProjectedDecals++
+	d.w.WriteByte(opDrawProjectedDecal3D)
+	d.w.WriteF32(position.X)
+	d.w.WriteF32(position.Y)
+	d.w.WriteF32(position.Z)
+	d.w.WriteF32(yaw)
+	d.w.WriteF32(width)
+	d.w.WriteF32(length)
+	d.w.WriteF32(depth)
+	d.w.WriteF32(color.R)
+	d.w.WriteF32(color.G)
+	d.w.WriteF32(color.B)
+	d.w.WriteF32(color.A)
+}
+
+// SetProjectedDecalAtlas3D selects the texture atlas sampled by subsequent
+// DrawProjectedDecal3DUV calls. The renderer batches a small fixed number of
+// projected decal atlases per frame and falls back to color-only projection
+// when a texture is missing or the atlas budget is exhausted.
+func (d *DrawCtx) SetProjectedDecalAtlas3D(atlas TextureID) {
+	d.w.WriteByte(opSetProjectedDecalAtlas3D)
+	d.w.WriteU32(int(atlas))
+}
+
+// SetProjectedDecalNormalAtlas3D selects a tangent-space normal atlas sampled
+// by subsequent DrawProjectedDecal3DUV calls. Passing 0 clears the normal atlas.
+func (d *DrawCtx) SetProjectedDecalNormalAtlas3D(atlas TextureID) {
+	d.w.WriteByte(opSetProjectedDecalNormalAtlas3D)
+	d.w.WriteU32(int(atlas))
+}
+
+// SetProjectedDecalRoughnessAtlas3D selects a single-channel roughness atlas
+// sampled from the red channel by subsequent DrawProjectedDecal3DUV calls.
+// Passing 0 clears the roughness atlas.
+func (d *DrawCtx) SetProjectedDecalRoughnessAtlas3D(atlas TextureID) {
+	d.w.WriteByte(opSetProjectedDecalRoughnessAtlas3D)
+	d.w.WriteU32(int(atlas))
+}
+
+// SetProjectedDecalMaskAtlas3D selects a single-channel opacity/mask atlas
+// sampled from the red channel by subsequent DrawProjectedDecal3DUV calls.
+// Passing 0 clears the mask atlas.
+func (d *DrawCtx) SetProjectedDecalMaskAtlas3D(atlas TextureID) {
+	d.w.WriteByte(opSetProjectedDecalMaskAtlas3D)
+	d.w.WriteU32(int(atlas))
+}
+
+// SetProjectedDecalDistanceFade3D sets camera-distance fade for subsequent
+// projected decals. Passing non-positive values disables distance fade.
+func (d *DrawCtx) SetProjectedDecalDistanceFade3D(start, end float64) {
+	if start <= 0 && end <= 0 {
+		d.w.WriteByte(opSetProjectedDecalDistanceFade3D)
+		d.w.WriteF32(0)
+		d.w.WriteF32(0)
+		return
+	}
+	if start < 0 {
+		panic("SetProjectedDecalDistanceFade3D: start must be >= 0")
+	}
+	if end <= start {
+		panic("SetProjectedDecalDistanceFade3D: end must be > start")
+	}
+	d.w.WriteByte(opSetProjectedDecalDistanceFade3D)
+	d.w.WriteF32(start)
+	d.w.WriteF32(end)
+}
+
+// SetProjectedDecalAngleFade3D fades subsequent projected decals by receiver
+// normal alignment with the projection plane. start/end are dot thresholds in
+// 0..1; passing non-positive values disables angle fade.
+func (d *DrawCtx) SetProjectedDecalAngleFade3D(start, end float64) {
+	if start <= 0 && end <= 0 {
+		d.w.WriteByte(opSetProjectedDecalAngleFade3D)
+		d.w.WriteF32(0)
+		d.w.WriteF32(0)
+		return
+	}
+	if start < 0 {
+		panic("SetProjectedDecalAngleFade3D: start must be >= 0")
+	}
+	if start > 1 {
+		start = 1
+	}
+	if end > 1 {
+		end = 1
+	}
+	if end <= start {
+		panic("SetProjectedDecalAngleFade3D: end must be > start")
+	}
+	d.w.WriteByte(opSetProjectedDecalAngleFade3D)
+	d.w.WriteF32(start)
+	d.w.WriteF32(end)
+}
+
+// SetProjectedDecalReceiverMask3D limits subsequent projected decals to
+// terrain, mesh/primitive receivers, or both. Passing 0 resets to all receivers.
+func (d *DrawCtx) SetProjectedDecalReceiverMask3D(mask ProjectedDecalReceiverMask) {
+	if mask == 0 {
+		mask = ProjectedDecalReceiverAll
+	}
+	if int(mask) < 0 || int(mask) > int(ProjectedDecalReceiverAll) {
+		panic("SetProjectedDecalReceiverMask3D: unsupported receiver mask")
+	}
+	d.w.WriteByte(opSetProjectedDecalReceiverMask3D)
+	d.w.WriteU32(int(mask))
+}
+
+// SetProjectedDecalSurfaceResponse3D sets first-pass normal and roughness
+// response for subsequent projected decals.
+func (d *DrawCtx) SetProjectedDecalSurfaceResponse3D(normalStrength, roughness, roughnessStrength float64) {
+	if normalStrength < 0 || roughnessStrength < 0 {
+		panic("SetProjectedDecalSurfaceResponse3D: strengths must be >= 0")
+	}
+	if roughness < 0 {
+		panic("SetProjectedDecalSurfaceResponse3D: roughness must be >= 0")
+	}
+	if normalStrength > 2 {
+		normalStrength = 2
+	}
+	if roughness <= 0 {
+		roughness = 0.72
+	}
+	if roughness > 1 {
+		roughness = 1
+	}
+	if roughnessStrength > 1 {
+		roughnessStrength = 1
+	}
+	d.w.WriteByte(opSetProjectedDecalSurfaceResponse3D)
+	d.w.WriteF32(normalStrength)
+	d.w.WriteF32(roughness)
+	d.w.WriteF32(roughnessStrength)
+}
+
+// DrawProjectedDecal3DUV projects a decal like DrawProjectedDecal3D, but uses a
+// normalized atlas UV rectangle from the current projected decal atlas.
+func (d *DrawCtx) DrawProjectedDecal3DUV(position Vec3, yaw, width, length, depth float64, color Color, uv Rect) {
+	if uv.W <= 0 || uv.H <= 0 {
+		panic("DrawProjectedDecal3DUV: uv width and height must be > 0")
+	}
+	if uv.X < 0 || uv.Y < 0 || uv.X + uv.W > 1 || uv.Y + uv.H > 1 {
+		panic("DrawProjectedDecal3DUV: uv rect must be normalized inside 0..1")
+	}
+	if width <= 0 {
+		panic("DrawProjectedDecal3DUV: width must be > 0")
+	}
+	if length <= 0 {
+		panic("DrawProjectedDecal3DUV: length must be > 0")
+	}
+	if depth <= 0 {
+		panic("DrawProjectedDecal3DUV: depth must be > 0")
+	}
+	if color.A <= 0 {
+		return
+	}
+	if color.A > 1 {
+		color.A = 1
+	}
+	d.stats.DrawCalls++
+	d.stats.ProjectedDecals++
+	d.w.WriteByte(opDrawProjectedDecal3DUV)
+	d.w.WriteF32(position.X)
+	d.w.WriteF32(position.Y)
+	d.w.WriteF32(position.Z)
+	d.w.WriteF32(yaw)
+	d.w.WriteF32(width)
+	d.w.WriteF32(length)
+	d.w.WriteF32(depth)
+	d.w.WriteF32(color.R)
+	d.w.WriteF32(color.G)
+	d.w.WriteF32(color.B)
+	d.w.WriteF32(color.A)
+	d.w.WriteF32(uv.X)
+	d.w.WriteF32(uv.Y)
+	d.w.WriteF32(uv.W)
+	d.w.WriteF32(uv.H)
 }
 
 // DrawModel draws a 3D model at the given transform.
@@ -476,6 +888,11 @@ func (d *DrawCtx) DrawSkinnedModel(model ModelID, pos Vec3, rot Quat, scale Vec3
 
 func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, animationWorldID, animationTargetID int) {
 	material = NormalizeMaterial(material)
+	d.stats.DrawCalls++
+	d.stats.ModelDraws++
+	if animationWorldID != 0 || animationTargetID != 0 {
+		d.stats.SkinnedDraws++
+	}
 	d.w.WriteByte(opDrawModel)
 	d.w.WriteU32(int(model))
 	d.w.WriteF32(pos.X)
@@ -495,6 +912,7 @@ func (d *DrawCtx) writeModel(model ModelID, pos Vec3, rot Quat, scale Vec3, mate
 
 func (d *DrawCtx) UpsertScene3DObject(sceneID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, visible bool, animationWorldID, animationTargetID int) {
 	material = NormalizeMaterial(material)
+	d.stats.SceneUpserts++
 	d.w.WriteByte(opScene3DUpsertObject)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(objectID)
@@ -525,6 +943,7 @@ func (d *DrawCtx) writeMaterial(material MaterialDesc) {
 	d.w.WriteU32(int(material.Normal))
 	d.w.WriteU32(int(material.MetallicRoughness))
 	d.w.WriteU32(int(material.Emissive))
+	d.w.WriteU32(int(material.Mask))
 	d.w.WriteF32(material.EmissiveColor.R)
 	d.w.WriteF32(material.EmissiveColor.G)
 	d.w.WriteF32(material.EmissiveColor.B)
@@ -534,19 +953,25 @@ func (d *DrawCtx) writeMaterial(material MaterialDesc) {
 	d.w.WriteF32(material.NormalScale)
 	d.w.WriteF32(material.UVScale)
 	d.w.WriteU32(int(material.ToonRamp))
+	d.w.WriteF32(material.DetailStrength)
+	d.w.WriteF32(material.MacroBlend)
+	d.w.WriteF32(material.RoughnessResponse)
+	d.w.WriteF32(material.ToonRampResponse)
 	d.w.WriteU32(material.ShadingMode)
 	d.w.WriteU32(material.WrapMode)
 	d.w.WriteU32(material.FilterMode)
 }
 
 func (d *DrawCtx) DestroyScene3DObject(sceneID, objectID int) {
+	d.stats.SceneRemovals++
 	d.w.WriteByte(opScene3DDestroyObject)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(objectID)
 }
 
-func (d *DrawCtx) UpsertPrimitive3DInstance(sceneID, layerID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, visible bool) {
+func (d *DrawCtx) UpsertPrimitive3DInstance(sceneID, layerID, objectID int, model ModelID, pos Vec3, rot Quat, scale Vec3, material MaterialDesc, visible bool, render Primitive3DRenderParams) {
 	material = NormalizeMaterial(material)
+	d.stats.PrimitiveDraws++
 	d.w.WriteByte(opPrimitive3DUpsertInstance)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -564,9 +989,13 @@ func (d *DrawCtx) UpsertPrimitive3DInstance(sceneID, layerID, objectID int, mode
 	d.w.WriteF32(scale.Z)
 	d.writeMaterial(material)
 	d.w.WriteBool(visible)
+	d.writePrimitive3DRenderParams(render)
 }
 
 func (d *DrawCtx) ReplacePrimitive3DChunk(sceneID, layerID, chunkID int, instances []Primitive3DInstanceDraw) {
+	d.stats.PrimitiveChunkRebuilds++
+	d.stats.PrimitiveChunks++
+	d.stats.PrimitiveDraws += len(instances)
 	d.w.WriteByte(opPrimitive3DReplaceChunk)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -578,6 +1007,7 @@ func (d *DrawCtx) ReplacePrimitive3DChunk(sceneID, layerID, chunkID int, instanc
 }
 
 func (d *DrawCtx) UpsertPrimitive3DMaterials(sceneID, layerID int, materials []Primitive3DMaterialDraw) {
+	d.stats.PrimitiveMaterialUpserts += len(materials)
 	d.w.WriteByte(opPrimitive3DUpsertMaterials)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -589,6 +1019,7 @@ func (d *DrawCtx) UpsertPrimitive3DMaterials(sceneID, layerID int, materials []P
 }
 
 func (d *DrawCtx) UpsertPrimitive3DShapes(sceneID, layerID int, shapes []Primitive3DShapeDraw) {
+	d.stats.PrimitiveShapeUpserts += len(shapes)
 	d.w.WriteByte(opPrimitive3DUpsertShapes)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -600,6 +1031,9 @@ func (d *DrawCtx) UpsertPrimitive3DShapes(sceneID, layerID int, shapes []Primiti
 }
 
 func (d *DrawCtx) ReplacePrimitive3DChunkRefs(sceneID, layerID, chunkID int, instances []Primitive3DInstanceRefDraw) {
+	d.stats.PrimitiveChunkRebuilds++
+	d.stats.PrimitiveChunks++
+	d.stats.PrimitiveDraws += len(instances)
 	d.w.WriteByte(opPrimitive3DReplaceChunkRefs)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -611,6 +1045,9 @@ func (d *DrawCtx) ReplacePrimitive3DChunkRefs(sceneID, layerID, chunkID int, ins
 }
 
 func (d *DrawCtx) ReplacePrimitive3DChunkKeys(sceneID, layerID, chunkID int, instances []Primitive3DInstanceKeyDraw) {
+	d.stats.PrimitiveChunkRebuilds++
+	d.stats.PrimitiveChunks++
+	d.stats.PrimitiveDraws += len(instances)
 	d.w.WriteByte(opPrimitive3DReplaceChunkKeys)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -622,6 +1059,8 @@ func (d *DrawCtx) ReplacePrimitive3DChunkKeys(sceneID, layerID, chunkID int, ins
 }
 
 func (d *DrawCtx) BeginPrimitive3DChunkKeys(sceneID, layerID, chunkID, count int) {
+	d.stats.PrimitiveChunkRebuilds++
+	d.stats.PrimitiveChunks++
 	d.w.WriteByte(opPrimitive3DReplaceChunkKeys)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -629,7 +1068,9 @@ func (d *DrawCtx) BeginPrimitive3DChunkKeys(sceneID, layerID, chunkID, count int
 	d.w.WriteU32(count)
 }
 
-func (d *DrawCtx) WritePrimitive3DChunkKey(objectID, shapeID int, position Vec3, rotation Quat, scale Vec3, materialID int, tint Color, visible bool) {
+func (d *DrawCtx) WritePrimitive3DChunkKey(objectID, shapeID int, position Vec3, rotation Quat, scale Vec3, materialID int, tint Color, visible bool, render Primitive3DRenderParams) {
+	d.validatePrimitive3DRenderParams(render)
+	d.stats.PrimitiveDraws++
 	d.w.WritePrimitive3DKey(
 		objectID, shapeID,
 		position.X, position.Y, position.Z,
@@ -638,10 +1079,13 @@ func (d *DrawCtx) WritePrimitive3DChunkKey(objectID, shapeID int, position Vec3,
 		materialID,
 		tint.R, tint.G, tint.B, tint.A,
 		visible,
+		render.Flags, render.LodNear, render.LodFar, render.WindStrength,
+		render.AtlasUV.X, render.AtlasUV.Y, render.AtlasUV.W, render.AtlasUV.H,
 	)
 }
 
 func (d *DrawCtx) SetPrimitive3DChunkVisible(sceneID, layerID, chunkID int, visible bool) {
+	d.stats.PrimitiveVisibilityChanges++
 	d.w.WriteByte(opPrimitive3DSetChunkVisible)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -665,6 +1109,7 @@ func (d *DrawCtx) writePrimitive3DInstanceDraw(instance Primitive3DInstanceDraw)
 	d.w.WriteF32(instance.Scale.Z)
 	d.writeMaterial(material)
 	d.w.WriteBool(instance.Visible)
+	d.writePrimitive3DRenderParams(instance.Render)
 }
 
 func (d *DrawCtx) writePrimitive3DInstanceRefDraw(instance Primitive3DInstanceRefDraw) {
@@ -682,6 +1127,7 @@ func (d *DrawCtx) writePrimitive3DInstanceRefDraw(instance Primitive3DInstanceRe
 	d.w.WriteF32(instance.Scale.Z)
 	d.w.WriteU32(instance.MaterialID)
 	d.w.WriteBool(instance.Visible)
+	d.writePrimitive3DRenderParams(instance.Render)
 }
 
 func (d *DrawCtx) writePrimitive3DInstanceKeyDraw(instance Primitive3DInstanceKeyDraw) {
@@ -694,10 +1140,54 @@ func (d *DrawCtx) writePrimitive3DInstanceKeyDraw(instance Primitive3DInstanceKe
 		instance.MaterialID,
 		instance.Tint,
 		instance.Visible,
+		instance.Render,
 	)
 }
 
+func (d *DrawCtx) writePrimitive3DRenderParams(render Primitive3DRenderParams) {
+	d.validatePrimitive3DRenderParams(render)
+	d.w.WriteU32(render.Flags)
+	d.w.WriteF32(render.LodNear)
+	d.w.WriteF32(render.LodFar)
+	d.w.WriteF32(render.WindStrength)
+	d.w.WriteF32(render.AtlasUV.X)
+	d.w.WriteF32(render.AtlasUV.Y)
+	d.w.WriteF32(render.AtlasUV.W)
+	d.w.WriteF32(render.AtlasUV.H)
+}
+
+func (d *DrawCtx) validatePrimitive3DRenderParams(render Primitive3DRenderParams) {
+	if render.Flags < 0 {
+		panic("Primitive3DRenderParams: Flags must be >= 0")
+	}
+	if render.LodNear < 0 {
+		panic("Primitive3DRenderParams: LodNear must be >= 0")
+	}
+	if render.LodFar < 0 {
+		panic("Primitive3DRenderParams: LodFar must be >= 0")
+	}
+	if render.LodFar > 0 && render.LodFar < render.LodNear {
+		panic("Primitive3DRenderParams: LodFar must be >= LodNear")
+	}
+	if render.WindStrength < 0 {
+		panic("Primitive3DRenderParams: WindStrength must be >= 0")
+	}
+	if primitive3DHasFlag(render.Flags, Primitive3DFlagAtlasUV) {
+		if render.AtlasUV.W <= 0 || render.AtlasUV.H <= 0 {
+			panic("Primitive3DRenderParams: AtlasUV width and height must be > 0 when Primitive3DFlagAtlasUV is set")
+		}
+		if render.AtlasUV.X < 0 || render.AtlasUV.Y < 0 || render.AtlasUV.X+render.AtlasUV.W > 1 || render.AtlasUV.Y+render.AtlasUV.H > 1 {
+			panic("Primitive3DRenderParams: AtlasUV must be normalized inside 0..1")
+		}
+	}
+}
+
+func primitive3DHasFlag(flags, flag int) bool {
+	return (flags / flag) % 2 == 1
+}
+
 func (d *DrawCtx) DestroyPrimitive3DInstance(sceneID, layerID, objectID int) {
+	d.stats.PrimitiveVisibilityChanges++
 	d.w.WriteByte(opPrimitive3DDestroyInstance)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
@@ -705,23 +1195,28 @@ func (d *DrawCtx) DestroyPrimitive3DInstance(sceneID, layerID, objectID int) {
 }
 
 func (d *DrawCtx) ClearPrimitive3DLayer(sceneID, layerID int) {
+	d.stats.PrimitiveVisibilityChanges++
 	d.w.WriteByte(opPrimitive3DClearLayer)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
 }
 
 func (d *DrawCtx) DestroyPrimitive3DLayer(sceneID, layerID int) {
+	d.stats.PrimitiveVisibilityChanges++
 	d.w.WriteByte(opPrimitive3DDestroyLayer)
 	d.w.WriteU32(sceneID)
 	d.w.WriteU32(layerID)
 }
 
 func (d *DrawCtx) ClearScene3D(sceneID int) {
+	d.stats.SceneRemovals++
 	d.w.WriteByte(opScene3DClear)
 	d.w.WriteU32(sceneID)
 }
 
 func (d *DrawCtx) DrawScene3D(sceneID int) {
+	d.stats.DrawCalls++
+	d.stats.SceneDraws++
 	d.w.WriteByte(opScene3DDraw)
 	d.w.WriteU32(sceneID)
 }

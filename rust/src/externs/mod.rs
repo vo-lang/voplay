@@ -48,13 +48,29 @@ pub(crate) fn submit_renderer_frame(data: &[u8]) -> Result<(), String> {
     crate::renderer_runtime::submit_renderer_frame(data)
 }
 
+pub(crate) fn last_renderer_perf_packet() -> Result<Vec<u8>, String> {
+    crate::renderer_runtime::last_renderer_perf_packet()
+}
+
+pub(crate) fn set_renderer_perf_stats_enabled(enabled: bool) -> Result<(), String> {
+    crate::renderer_runtime::set_renderer_perf_stats_enabled(enabled)
+}
+
 #[cfg(target_arch = "wasm32")]
 const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     render::__EXT_voplay_initSurface,
     render::__EXT_voplay_submitFrame,
+    render::__EXT_voplay_setRendererPerfStatsEnabled,
+    render::__EXT_voplay_lastRendererPerfPacket,
+    render::__EXT_voplay_lastWebGpuPerfPacket,
     render::__EXT_voplay_pollInput,
     render::__EXT_voplay_loadTexture,
     render::__EXT_voplay_loadTextureBytes,
+    render::__EXT_voplay_loadTextureLinear,
+    render::__EXT_voplay_loadTextureBytesLinear,
+    render::__EXT_voplay_loadTextureRGBA,
+    render::__EXT_voplay_loadTextureRGBALinear,
+    render::__EXT_voplay_texturePixelsBytes,
     render::__EXT_voplay_freeTexture,
     render::__EXT_voplay_loadCubemap,
     render::__EXT_voplay_loadCubemapBytes,
@@ -68,10 +84,12 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     resource::__EXT_voplay_loadModelBytes,
     resource::__EXT_voplay_freeModel,
     resource::__EXT_voplay_modelBounds,
-    resource::__EXT_voplay_modelMeshDataBytes,
+    resource::__EXT_voplay_modelGeometryBytes,
+    resource::__EXT_voplay_scene3d_bakeImpostorAtlasBytes,
     resource::__EXT_voplay_scene3d_loadLevel,
     resource::__EXT_voplay_scene3d_createTerrain,
     resource::__EXT_voplay_scene3d_createTerrainSplat,
+    resource::__EXT_voplay_scene3d_createTerrainSplatModel,
     resource::__EXT_voplay_scene3d_createTerrainBytes,
     resource::__EXT_voplay_scene3d_createTerrainBytesSplat,
     resource::__EXT_voplay_scene3d_terrainHeightAt,
@@ -83,6 +101,7 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     resource::__EXT_voplay_createConeMesh,
     resource::__EXT_voplay_createWedgeMesh,
     resource::__EXT_voplay_createCapsuleMesh,
+    resource::__EXT_voplay_createRawMesh,
     audio::__EXT_voplay_audioLoadFile,
     animation::__EXT_voplay_animationInit,
     animation::__EXT_voplay_animationDestroy,

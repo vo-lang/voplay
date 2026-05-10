@@ -11,6 +11,12 @@ struct VertexOutput {
     @location(0) direction: vec3<f32>,
 };
 
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) receiver_mask: vec4<f32>,
+    @location(2) surface_props: vec4<f32>,
+};
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var positions = array<vec2<f32>, 3>(
@@ -28,6 +34,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+    var out: FragmentOutput;
+    out.color = textureSample(skybox_tex, skybox_sampler, in.direction);
+    out.receiver_mask = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.surface_props = vec4<f32>(0.5, 1.0, 0.5, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main_color(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(skybox_tex, skybox_sampler, in.direction);
 }

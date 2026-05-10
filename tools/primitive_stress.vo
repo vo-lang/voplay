@@ -165,3 +165,7 @@ func (b *stressPrimitiveMeshBackend) Wedge() int {
 func (b *stressPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius float64) int {
 	return b.alloc()
 }
+
+func (b *stressPrimitiveMeshBackend) Raw(vertices []voplay.RawMeshVertex, indices []int, baseColor voplay.Color) (int, error) {
+	return b.alloc(), nil
+}

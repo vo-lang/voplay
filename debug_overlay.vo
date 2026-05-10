@@ -8,11 +8,18 @@
 //   g.ToggleDebugOverlay() // toggle
 package voplay
 
-import "strconv"
+import (
+	"strconv"
+	"github.com/vo-lang/voplay/framewire"
+)
 
 const (
 	debugSlowFrameCacheSize = 8
+	debugPerfWindowSize = 240
+	debugWarmupFrameCount = 2
 	debugSlowLogCooldownFrames = 120
+	debugSevereSlowLogCooldownFrames = 30
+	debugWorkSlowLogCooldownFrames = 30
 )
 
 type debugSlowFrame struct {
@@ -27,6 +34,97 @@ type debugSlowFrame struct {
 	DrawBytes int
 	SubmitBytes int
 	FixedSteps int
+}
+
+type debugPerfSample struct {
+	FrameMs float64
+	LogicMs float64
+	AdvanceMs float64
+	DrawMs float64
+	FixedSteps int
+	Slow bool
+	WorkSlow bool
+}
+
+type debugPerfWindowStats struct {
+	Frames int
+	SlowFrames int
+	LastSlowGapFrames int
+	LastSlowGapMs float64
+	WorkSlowFrames int
+	LastWorkSlowGapFrames int
+	LastWorkSlowGapMs float64
+	FrameP50Ms float64
+	FrameP90Ms float64
+	FrameP99Ms float64
+	LogicP50Ms float64
+	LogicP90Ms float64
+	LogicP99Ms float64
+	AdvanceP90Ms float64
+	DrawP90Ms float64
+	DrawP99Ms float64
+}
+
+type debugPerfWindow struct {
+	samples [240]debugPerfSample
+	frameSorted debugSortedFloatWindow
+	logicSorted debugSortedFloatWindow
+	advanceSorted debugSortedFloatWindow
+	drawSorted debugSortedFloatWindow
+	next int
+	count int
+	stats debugPerfWindowStats
+	statsDirty bool
+}
+
+type debugRenderPerfSample struct {
+	LoopMs float64
+	PaceWaitMs float64
+	ReplyWaitMs float64
+	SubmitMs float64
+	WorkMs float64
+	InputPollMs float64
+	RequestSendMs float64
+	PerfPacketMs float64
+	DrawBytes int
+	Slow bool
+	CadenceSlow bool
+	ReplySlow bool
+	SubmitSlow bool
+	UnattributedSlow bool
+}
+
+type debugRenderPerfWindowStats struct {
+	Frames int
+	SlowFrames int
+	LastSlowGapFrames int
+	LastSlowGapMs float64
+	CadenceSlowFrames int
+	ReplySlowFrames int
+	SubmitSlowFrames int
+	UnattributedSlowFrames int
+	LoopP50Ms float64
+	LoopP90Ms float64
+	LoopP99Ms float64
+	PaceWaitP90Ms float64
+	ReplyWaitP90Ms float64
+	SubmitP90Ms float64
+}
+
+type debugRenderPerfWindow struct {
+	samples [240]debugRenderPerfSample
+	loopSorted debugSortedFloatWindow
+	paceWaitSorted debugSortedFloatWindow
+	replyWaitSorted debugSortedFloatWindow
+	submitSorted debugSortedFloatWindow
+	next int
+	count int
+	stats debugRenderPerfWindowStats
+	statsDirty bool
+}
+
+type debugSortedFloatWindow struct {
+	values [240]float64
 }
 
 type DebugOverlayStats struct {
@@ -49,14 +147,65 @@ type DebugOverlayStats struct {
 	FixedSteps int
 	SlowFrames int
 	SlowLogs int
+	WorkSlowFrames int
+	WorkSlowLogs int
 	LastSlowFrameMs float64
 	LastSlowLogicMs float64
 	LastSlowReason string
+	LastWorkSlowFrameMs float64
+	LastWorkSlowLogicMs float64
+	LastWorkSlowReason string
+	WindowFrames int
+	WindowSlowFrames int
+	WindowLastSlowGapFrames int
+	WindowLastSlowGapMs float64
+	WindowWorkSlowFrames int
+	WindowLastWorkSlowGapFrames int
+	WindowLastWorkSlowGapMs float64
+	FrameP50Ms float64
+	FrameP90Ms float64
+	FrameP99Ms float64
+	LogicP50Ms float64
+	LogicP90Ms float64
+	LogicP99Ms float64
+	AdvanceP90Ms float64
+	DrawP90Ms float64
+	DrawP99Ms float64
+	RenderFrame int
+	RenderLoopMs float64
+	RenderPaceWaitMs float64
+	RenderReplyWaitMs float64
+	RenderSubmitMs float64
+	RenderWorkMs float64
+	RenderInputPollMs float64
+	RenderRequestSendMs float64
+	RenderRequestEncodeMs float64
+	RenderRequestPortSendMs float64
+	RenderPerfPacketMs float64
+	RenderDisplayPulseMs float64
+	RenderDrawBytes int
+	RenderFrameDivisor int
+	RenderAttribution string
+	RenderWindowFrames int
+	RenderWindowSlowFrames int
+	RenderWindowLastSlowGapFrames int
+	RenderWindowLastSlowGapMs float64
+	RenderCadenceSlowFrames int
+	RenderReplySlowFrames int
+	RenderSubmitSlowFrames int
+	RenderUnattributedSlowFrames int
+	RenderLoopP50Ms float64
+	RenderLoopP90Ms float64
+	RenderLoopP99Ms float64
+	RenderPaceWaitP90Ms float64
+	RenderReplyWaitP90Ms float64
+	RenderSubmitP90Ms float64
 }
 
 // DebugOverlay tracks per-frame performance metrics and renders a HUD.
 type DebugOverlay struct {
 	enabled bool
+	hudVisible bool
 	targetFrameRate int
 	frameBudgetMs float64
 	slowFrameThresholdMs float64
@@ -64,6 +213,7 @@ type DebugOverlay struct {
 
 	// Rolling window for FPS smoothing.
 	frameTimes [60]float64
+	frameTimeSum float64
 	frameIdx   int
 	frameCount int
 	frameSeq int
@@ -78,18 +228,45 @@ type DebugOverlay struct {
 	overlayMs float64
 	maxFrameMs float64
 	maxLogicMs float64
+	drawStats DrawStats
+	overlayStats DrawStats
+	submitStats DrawStats
 	drawBytes int
 	submitBytes int
 	fixedSteps int
 	slowFrames int
 	slowLogs int
 	slowLogCooldown int
+	workSlowFrames int
+	workSlowLogs int
+	workSlowLogCooldown int
 	slowCache [8]debugSlowFrame
 	slowCacheNext int
 	slowCacheCount int
 	lastSlow debugSlowFrame
+	lastWorkSlow debugSlowFrame
+	perfWindow debugPerfWindow
+	renderFrame int
+	renderLoopMs float64
+	renderPaceWaitMs float64
+	renderReplyWaitMs float64
+	renderSubmitMs float64
+	renderWorkMs float64
+	renderInputPollMs float64
+	renderRequestSendMs float64
+	renderRequestEncodeMs float64
+	renderRequestPortSendMs float64
+	renderPerfPacketMs float64
+	renderDisplayPulseMs float64
+	renderDrawBytes int
+	renderFrameDivisor int
+	renderAttribution string
+	renderPerfWindow debugRenderPerfWindow
+	rendererPerf perfRendererPacketStats
+	gpuPerf perfGpuPacketStats
+	perf PerfCore
 
-	// Display strings (updated every N frames to avoid flicker).
+	// Cached display strings, refreshed only when the engine HUD is drawn.
 	dispFPS      string
 	dispFrameMs  string
 	dispLogicMs  string
@@ -98,9 +275,11 @@ type DebugOverlay struct {
 	dispBytes string
 	dispFixed string
 	dispPhases string
+	dispWindowFrame string
+	dispWindowLogic string
+	dispRenderWindow string
 	dispSlow string
 	dispMax string
-	dispCounter  int
 }
 
 func newDebugOverlay(targetFrameRate int) *DebugOverlay {
@@ -108,19 +287,14 @@ func newDebugOverlay(targetFrameRate int) *DebugOverlay {
 	if targetFrameRate > 0 {
 		budgetMs = 1000.0 / float64(targetFrameRate)
 	}
-	slowFrameThresholdMs := budgetMs * 2.0
-	if slowFrameThresholdMs < 18 {
-		slowFrameThresholdMs = 18
-	}
-	slowLogicThresholdMs := budgetMs * 1.25
-	if slowLogicThresholdMs < 10 {
-		slowLogicThresholdMs = 10
-	}
+	slowFrameThresholdMs := debugSlowFrameThresholdMs(targetFrameRate, budgetMs)
+	slowLogicThresholdMs := debugSlowLogicThresholdMs(targetFrameRate, budgetMs)
 	return &DebugOverlay{
 		targetFrameRate: targetFrameRate,
 		frameBudgetMs: budgetMs,
 		slowFrameThresholdMs: slowFrameThresholdMs,
 		slowLogicThresholdMs: slowLogicThresholdMs,
+		perf: newPerfCore(targetFrameRate),
 		dispFPS:     "-- fps",
 		dispFrameMs: "-- ms",
 		dispLogicMs: "-- ms",
@@ -129,15 +303,32 @@ func newDebugOverlay(targetFrameRate int) *DebugOverlay {
 		dispBytes: "draw -- / submit --",
 		dispFixed: "fixed --",
 		dispPhases: "phase input/update/draw/overlay --",
+		dispWindowFrame: "window frame --",
+		dispWindowLogic: "window logic --",
+		dispRenderWindow: "render loop --",
 		dispSlow: "slow 0",
 		dispMax: "max -- / --",
 	}
 }
 
+func debugSlowFrameThresholdMs(targetFrameRate int, budgetMs float64) float64 {
+	if targetFrameRate <= 0 {
+		return 18
+	}
+	return budgetMs * 1.25
+}
+
+func debugSlowLogicThresholdMs(targetFrameRate int, budgetMs float64) float64 {
+	if targetFrameRate <= 0 {
+		return 10
+	}
+	return budgetMs * 0.85
+}
+
 // recordFrame updates metrics after a frame completes.
 // dt is the frame-to-frame interval in seconds.
 // logicNs is the logic processing time in nanoseconds.
-func (o *DebugOverlay) recordFrame(dt float64, logicNs int64, fixedSteps int, drawBytes int, inputNs int64, advanceNs int64, drawNs int64) {
+func (o *DebugOverlay) recordFrame(dt float64, logicNs int64, fixedSteps int, drawBytes int, inputNs int64, advanceNs int64, drawNs int64, drawStats DrawStats) {
 	o.frameSeq++
 	o.frameMs = dt * 1000.0
 	o.logicMs = float64(logicNs) / 1e6
@@ -145,6 +336,9 @@ func (o *DebugOverlay) recordFrame(dt float64, logicNs int64, fixedSteps int, dr
 	o.advanceMs = float64(advanceNs) / 1e6
 	o.drawMs = float64(drawNs) / 1e6
 	o.fixedSteps = fixedSteps
+	o.drawStats = drawStats
+	o.overlayStats = DrawStats{}
+	o.submitStats = drawStats
 	o.drawBytes = drawBytes
 	if o.frameMs > o.maxFrameMs {
 		o.maxFrameMs = o.frameMs
@@ -152,56 +346,114 @@ func (o *DebugOverlay) recordFrame(dt float64, logicNs int64, fixedSteps int, dr
 	if o.logicMs > o.maxLogicMs {
 		o.maxLogicMs = o.logicMs
 	}
+	if o.enabled {
+		frameSlow := o.frameMs > o.slowFrameThresholdMs
+		workSlow := o.logicMs > o.slowLogicThresholdMs
+		o.perfWindow.record(o.frameMs, o.logicMs, o.advanceMs, o.drawMs, o.fixedSteps, frameSlow || workSlow, workSlow)
+	}
 
 	// Rolling window.
+	if o.frameCount >= len(o.frameTimes) {
+		o.frameTimeSum -= o.frameTimes[o.frameIdx]
+	}
 	o.frameTimes[o.frameIdx] = dt
+	o.frameTimeSum += dt
 	o.frameIdx = (o.frameIdx + 1) % len(o.frameTimes)
 	if o.frameCount < len(o.frameTimes) {
 		o.frameCount++
 	}
 
 	// Average FPS over window.
-	sum := 0.0
-	for i := 0; i < o.frameCount; i++ {
-		sum += o.frameTimes[i]
-	}
-	if sum > 0 {
-		o.fps = float64(o.frameCount) / sum
+	if o.frameTimeSum > 0 {
+		o.fps = float64(o.frameCount) / o.frameTimeSum
 	}
 
-	// Throttle display string updates to every 10 frames.
-	o.dispCounter++
-	if o.dispCounter >= 10 {
-		o.dispCounter = 0
-		o.dispFPS = strconv.FormatFloat(o.fps, 'f', 1, 64) + " fps"
-		o.dispFrameMs = strconv.FormatFloat(o.frameMs, 'f', 2, 64) + " ms"
-		o.dispLogicMs = strconv.FormatFloat(o.logicMs, 'f', 2, 64) + " ms"
-		if o.logicMs > 0 {
-			logicFPS := 1000.0 / o.logicMs
-			o.dispLogicFPS = strconv.FormatFloat(logicFPS, 'f', 0, 64) + " hz"
+}
+
+func (o *DebugOverlay) recordRenderFrame(t framewire.Timing) {
+	o.renderFrame = t.Frame
+	o.renderLoopMs = t.LoopMs
+	o.renderPaceWaitMs = t.PaceWaitMs
+	o.renderReplyWaitMs = t.ReplyWaitMs
+	o.renderSubmitMs = t.SubmitMs
+	o.renderWorkMs = t.WorkMs
+	o.renderInputPollMs = t.InputPollMs
+	o.renderRequestSendMs = t.RequestSendMs
+	o.renderRequestEncodeMs = t.RequestEncodeMs
+	o.renderRequestPortSendMs = t.RequestPortSendMs
+	o.renderPerfPacketMs = t.PerfPacketMs
+	o.renderDisplayPulseMs = t.DisplayPulseMs
+	o.renderDrawBytes = t.DrawBytes
+	o.renderFrameDivisor = t.FrameDivisor
+	slow, cadenceSlow, replySlow, submitSlow, unattributedSlow, attribution := debugClassifyRenderFrame(t, o.frameBudgetMs, o.slowFrameThresholdMs, o.slowLogicThresholdMs)
+	o.renderAttribution = attribution
+	o.renderPerfWindow.record(t.LoopMs, t.PaceWaitMs, t.ReplyWaitMs, t.SubmitMs, t.WorkMs, t.InputPollMs, t.RequestSendMs, t.PerfPacketMs, t.DrawBytes, slow, cadenceSlow, replySlow, submitSlow, unattributedSlow)
+}
+
+func (o *DebugOverlay) recordPerfPackets(packets []framewire.PerfPacket) {
+	for _, packet := range packets {
+		if packet.Source == framewire.PerfPacketSourceRenderer {
+			stats := decodeRendererPerfPayload(packet.Payload)
+			if stats.Valid {
+				stats.FrameId = packet.Frame
+				stats.DisplayTick = packet.DisplayTick
+				stats.AsyncWindow = true
+				if stats.SubmitFrameMs <= 0 {
+					stats.SubmitFrameMs = packet.RendererSubmitMs
+				}
+				if stats.UploadBytes <= 0 {
+					stats.UploadBytes = packet.UploadBytes
+				}
+				o.rendererPerf = stats
+			} else if packet.RendererSubmitMs > 0 || packet.UploadBytes > 0 {
+				o.rendererPerf = perfRendererPacketStats{Valid: true, FrameId: packet.Frame, DisplayTick: packet.DisplayTick, SubmitFrameMs: packet.RendererSubmitMs, UploadBytes: packet.UploadBytes, AsyncWindow: true}
+			}
+		} else if packet.Source == framewire.PerfPacketSourceWebGpu {
+			stats := decodeWebGpuPerfPayload(packet.Payload)
+			if !stats.Valid {
+				stats = perfGpuPacketStats{Valid: true}
+			}
+			if stats.SubmitCpuMs <= 0 {
+				stats.SubmitCpuMs = packet.RendererSubmitMs
+			}
+			if stats.SubmittedWorkDoneMs <= 0 {
+				stats.SubmittedWorkDoneMs = packet.GpuSubmittedWorkDoneMs
+			}
+			stats.InFlightSubmits = packet.GpuInFlightSubmits
+			if stats.SubmitCount <= 0 {
+				stats.SubmitCount = 1
+			}
+			if stats.QueueDepthClass == "" {
+				stats.QueueDepthClass = PerfQueueNormal
+				if packet.GpuInFlightSubmits <= 0 && packet.GpuSubmittedWorkDoneMs <= 0 {
+					stats.QueueDepthClass = PerfQueueEmpty
+				} else if packet.GpuInFlightSubmits >= 4 || packet.GpuSubmittedWorkDoneMs >= 100 {
+					stats.QueueDepthClass = PerfQueueSaturated
+				} else if packet.GpuInFlightSubmits >= 2 || packet.GpuSubmittedWorkDoneMs >= o.frameBudgetMs * 4 {
+					stats.QueueDepthClass = PerfQueueBacklogged
+				}
+			}
+			stats.AsyncWindow = true
+			o.gpuPerf = stats
 		}
-		o.dispBudget = "budget " + formatDebugMs(o.frameBudgetMs) + " slow>" + formatDebugMs(o.slowFrameThresholdMs)
-		o.dispBytes = "draw " + formatDebugBytes(o.drawBytes) + " / submit " + formatDebugBytes(o.submitBytes)
-		o.dispFixed = "fixed steps " + strconv.Itoa(o.fixedSteps)
-		o.dispPhases = "phase i/a/d/o " + formatDebugMs(o.inputMs) + "/" + formatDebugMs(o.advanceMs) + "/" + formatDebugMs(o.drawMs) + "/" + formatDebugMs(o.overlayMs)
-		o.dispSlow = "slow " + strconv.Itoa(o.slowFrames) + " logs " + strconv.Itoa(o.slowLogs)
-		if o.slowFrames > 0 {
-			o.dispSlow = o.dispSlow + " last " + o.lastSlow.Reason + " " + formatDebugMs(o.lastSlow.FrameMs)
-		}
-		o.dispMax = "max frame " + formatDebugMs(o.maxFrameMs) + " logic " + formatDebugMs(o.maxLogicMs)
 	}
 }
 
-func (o *DebugOverlay) recordOverlayTime(overlayNs int64) {
+func (o *DebugOverlay) recordOverlayTime(overlayNs int64, overlayStats DrawStats) {
 	o.overlayMs = float64(overlayNs) / 1e6
+	o.overlayStats = overlayStats
 }
 
-func (o *DebugOverlay) recordSubmittedBytes(submitBytes int) {
+func (o *DebugOverlay) recordSubmittedBytes(submitBytes int, submitStats DrawStats) {
 	o.submitBytes = submitBytes
+	o.submitStats = submitStats
+	o.recordPerfFrame()
 	o.recordSlowFrameIfNeeded()
 }
 
 func (o *DebugOverlay) snapshot() DebugOverlayStats {
+	window := o.perfWindow.refresh(o.frameSeq)
+	renderWindow := o.renderPerfWindow.refresh(o.frameSeq)
 	return DebugOverlayStats{
 		Enabled: o.enabled,
 		TargetFrameRate: o.targetFrameRate,
@@ -222,15 +474,71 @@ func (o *DebugOverlay) snapshot() DebugOverlayStats {
 		FixedSteps: o.fixedSteps,
 		SlowFrames: o.slowFrames,
 		SlowLogs: o.slowLogs,
+		WorkSlowFrames: o.workSlowFrames,
+		WorkSlowLogs: o.workSlowLogs,
 		LastSlowFrameMs: o.lastSlow.FrameMs,
 		LastSlowLogicMs: o.lastSlow.LogicMs,
 		LastSlowReason: o.lastSlow.Reason,
+		LastWorkSlowFrameMs: o.lastWorkSlow.FrameMs,
+		LastWorkSlowLogicMs: o.lastWorkSlow.LogicMs,
+		LastWorkSlowReason: o.lastWorkSlow.Reason,
+		WindowFrames: window.Frames,
+		WindowSlowFrames: window.SlowFrames,
+		WindowLastSlowGapFrames: window.LastSlowGapFrames,
+		WindowLastSlowGapMs: window.LastSlowGapMs,
+		WindowWorkSlowFrames: window.WorkSlowFrames,
+		WindowLastWorkSlowGapFrames: window.LastWorkSlowGapFrames,
+		WindowLastWorkSlowGapMs: window.LastWorkSlowGapMs,
+		FrameP50Ms: window.FrameP50Ms,
+		FrameP90Ms: window.FrameP90Ms,
+		FrameP99Ms: window.FrameP99Ms,
+		LogicP50Ms: window.LogicP50Ms,
+		LogicP90Ms: window.LogicP90Ms,
+		LogicP99Ms: window.LogicP99Ms,
+		AdvanceP90Ms: window.AdvanceP90Ms,
+		DrawP90Ms: window.DrawP90Ms,
+		DrawP99Ms: window.DrawP99Ms,
+		RenderFrame: o.renderFrame,
+		RenderLoopMs: o.renderLoopMs,
+		RenderPaceWaitMs: o.renderPaceWaitMs,
+		RenderReplyWaitMs: o.renderReplyWaitMs,
+		RenderSubmitMs: o.renderSubmitMs,
+		RenderWorkMs: o.renderWorkMs,
+		RenderInputPollMs: o.renderInputPollMs,
+		RenderRequestSendMs: o.renderRequestSendMs,
+		RenderRequestEncodeMs: o.renderRequestEncodeMs,
+		RenderRequestPortSendMs: o.renderRequestPortSendMs,
+		RenderPerfPacketMs: o.renderPerfPacketMs,
+		RenderDisplayPulseMs: o.renderDisplayPulseMs,
+		RenderDrawBytes: o.renderDrawBytes,
+		RenderFrameDivisor: o.renderFrameDivisor,
+		RenderAttribution: o.renderAttribution,
+		RenderWindowFrames: renderWindow.Frames,
+		RenderWindowSlowFrames: renderWindow.SlowFrames,
+		RenderWindowLastSlowGapFrames: renderWindow.LastSlowGapFrames,
+		RenderWindowLastSlowGapMs: renderWindow.LastSlowGapMs,
+		RenderCadenceSlowFrames: renderWindow.CadenceSlowFrames,
+		RenderReplySlowFrames: renderWindow.ReplySlowFrames,
+		RenderSubmitSlowFrames: renderWindow.SubmitSlowFrames,
+		RenderUnattributedSlowFrames: renderWindow.UnattributedSlowFrames,
+		RenderLoopP50Ms: renderWindow.LoopP50Ms,
+		RenderLoopP90Ms: renderWindow.LoopP90Ms,
+		RenderLoopP99Ms: renderWindow.LoopP99Ms,
+		RenderPaceWaitP90Ms: renderWindow.PaceWaitP90Ms,
+		RenderReplyWaitP90Ms: renderWindow.ReplyWaitP90Ms,
+		RenderSubmitP90Ms: renderWindow.SubmitP90Ms,
 	}
 }
 
 func (o *DebugOverlay) recordSlowFrameIfNeeded() {
 	if o.slowLogCooldown > 0 {
 		o.slowLogCooldown--
+	}
+	if o.workSlowLogCooldown > 0 {
+		o.workSlowLogCooldown--
+	}
+	if o.frameSeq <= debugWarmupFrameCount {
+		return
 	}
 	frameSlow := o.frameMs > o.slowFrameThresholdMs
 	logicSlow := o.logicMs > o.slowLogicThresholdMs
@@ -249,6 +557,15 @@ func (o *DebugOverlay) recordSlowFrameIfNeeded() {
 	slow.AdvanceMs = o.advanceMs
 	slow.DrawMs = o.drawMs
 	slow.OverlayMs = o.overlayMs
+	if logicSlow {
+		o.lastWorkSlow = slow
+		o.workSlowFrames++
+		if o.hudVisible && o.workSlowLogCooldown <= 0 {
+			o.workSlowLogs++
+			o.workSlowLogCooldown = debugWorkSlowLogCooldownFrames
+			println("voplay work slow frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason + " logicMs=" + formatDebugMs(slow.LogicMs) + " advanceMs=" + formatDebugMs(slow.AdvanceMs) + " drawMs=" + formatDebugMs(slow.DrawMs) + " drawBytes=" + strconv.Itoa(slow.DrawBytes) + " fixedSteps=" + strconv.Itoa(slow.FixedSteps))
+		}
+	}
 	o.lastSlow = slow
 	o.slowCache[o.slowCacheNext] = slow
 	o.slowCacheNext = (o.slowCacheNext + 1) % debugSlowFrameCacheSize
@@ -257,58 +574,298 @@ func (o *DebugOverlay) recordSlowFrameIfNeeded() {
 	}
 	o.slowFrames++
 	severe := slow.FrameMs >= 50 || slow.LogicMs >= 30
-	if o.slowLogCooldown > 0 && !severe {
+	if !o.hudVisible {
+		return
+	}
+	if o.slowLogCooldown > 0 {
 		return
 	}
 	o.slowLogs++
-	if !severe {
+	if severe {
+		o.slowLogCooldown = debugSevereSlowLogCooldownFrames
+	} else {
 		o.slowLogCooldown = debugSlowLogCooldownFrames
 	}
 	println("voplay slow frame frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason + " frameMs=" + formatDebugMs(slow.FrameMs) + " logicMs=" + formatDebugMs(slow.LogicMs) + " inputMs=" + formatDebugMs(slow.InputMs) + " advanceMs=" + formatDebugMs(slow.AdvanceMs) + " drawMs=" + formatDebugMs(slow.DrawMs) + " overlayMs=" + formatDebugMs(slow.OverlayMs) + " drawBytes=" + strconv.Itoa(slow.DrawBytes) + " submitBytes=" + strconv.Itoa(slow.SubmitBytes) + " fixedSteps=" + strconv.Itoa(slow.FixedSteps) + " cached=" + strconv.Itoa(o.slowCacheCount))
 }
 
+func (w *debugPerfWindow) record(frameMs, logicMs, advanceMs, drawMs float64, fixedSteps int, slow bool, workSlow bool) {
+	sortedCount := w.count
+	if w.count == debugPerfWindowSize {
+		old := w.samples[w.next]
+		w.frameSorted.remove(sortedCount, old.FrameMs)
+		w.logicSorted.remove(sortedCount, old.LogicMs)
+		w.advanceSorted.remove(sortedCount, old.AdvanceMs)
+		w.drawSorted.remove(sortedCount, old.DrawMs)
+		sortedCount--
+	} else {
+		w.count++
+	}
+	sample := debugPerfSample{FrameMs: frameMs, LogicMs: logicMs, AdvanceMs: advanceMs, DrawMs: drawMs, FixedSteps: fixedSteps, Slow: slow, WorkSlow: workSlow}
+	w.samples[w.next] = sample
+	w.frameSorted.insert(sortedCount, sample.FrameMs)
+	w.logicSorted.insert(sortedCount, sample.LogicMs)
+	w.advanceSorted.insert(sortedCount, sample.AdvanceMs)
+	w.drawSorted.insert(sortedCount, sample.DrawMs)
+	w.next = (w.next + 1) % debugPerfWindowSize
+	w.statsDirty = true
+}
+
+func (w *debugPerfWindow) refresh(frameSeq int) debugPerfWindowStats {
+	if !w.statsDirty {
+		return w.stats
+	}
+	_ = frameSeq
+	stats := debugPerfWindowStats{Frames: w.count}
+	if w.count > 0 {
+		stats.FrameP50Ms = w.frameSorted.percentile(w.count, 50)
+		stats.FrameP90Ms = w.frameSorted.percentile(w.count, 90)
+		stats.FrameP99Ms = w.frameSorted.percentile(w.count, 99)
+		stats.LogicP50Ms = w.logicSorted.percentile(w.count, 50)
+		stats.LogicP90Ms = w.logicSorted.percentile(w.count, 90)
+		stats.LogicP99Ms = w.logicSorted.percentile(w.count, 99)
+		stats.AdvanceP90Ms = w.advanceSorted.percentile(w.count, 90)
+		stats.DrawP90Ms = w.drawSorted.percentile(w.count, 90)
+		stats.DrawP99Ms = w.drawSorted.percentile(w.count, 99)
+		lastSlow := -1
+		prevSlow := -1
+		lastWorkSlow := -1
+		prevWorkSlow := -1
+		for i := 0; i < w.count; i++ {
+			sample := w.samples[w.logicalIndex(i)]
+			if sample.Slow {
+				stats.SlowFrames++
+				prevSlow = lastSlow
+				lastSlow = i
+			}
+			if sample.WorkSlow {
+				stats.WorkSlowFrames++
+				prevWorkSlow = lastWorkSlow
+				lastWorkSlow = i
+			}
+		}
+		if prevSlow >= 0 && lastSlow >= 0 {
+			stats.LastSlowGapFrames = lastSlow - prevSlow
+			stats.LastSlowGapMs = w.sumFrameMs(prevSlow + 1, lastSlow)
+		}
+		if prevWorkSlow >= 0 && lastWorkSlow >= 0 {
+			stats.LastWorkSlowGapFrames = lastWorkSlow - prevWorkSlow
+			stats.LastWorkSlowGapMs = w.sumFrameMs(prevWorkSlow + 1, lastWorkSlow)
+		}
+	}
+	w.stats = stats
+	w.statsDirty = false
+	return stats
+}
+
+func (w *debugPerfWindow) logicalIndex(i int) int {
+	if w.count < debugPerfWindowSize {
+		return i
+	}
+	return (w.next + i) % debugPerfWindowSize
+}
+
+func (w *debugPerfWindow) sumFrameMs(start int, end int) float64 {
+	total := 0.0
+	for i := start; i <= end; i++ {
+		total += w.samples[w.logicalIndex(i)].FrameMs
+	}
+	return total
+}
+
+func (w *debugRenderPerfWindow) record(loopMs, paceWaitMs, replyWaitMs, submitMs, workMs, inputPollMs, requestSendMs, perfPacketMs float64, drawBytes int, slow bool, cadenceSlow bool, replySlow bool, submitSlow bool, unattributedSlow bool) {
+	sortedCount := w.count
+	if w.count == debugPerfWindowSize {
+		old := w.samples[w.next]
+		w.loopSorted.remove(sortedCount, old.LoopMs)
+		w.paceWaitSorted.remove(sortedCount, old.PaceWaitMs)
+		w.replyWaitSorted.remove(sortedCount, old.ReplyWaitMs)
+		w.submitSorted.remove(sortedCount, old.SubmitMs)
+		sortedCount--
+	} else {
+		w.count++
+	}
+	sample := debugRenderPerfSample{LoopMs: loopMs, PaceWaitMs: paceWaitMs, ReplyWaitMs: replyWaitMs, SubmitMs: submitMs, WorkMs: workMs, InputPollMs: inputPollMs, RequestSendMs: requestSendMs, PerfPacketMs: perfPacketMs, DrawBytes: drawBytes, Slow: slow, CadenceSlow: cadenceSlow, ReplySlow: replySlow, SubmitSlow: submitSlow, UnattributedSlow: unattributedSlow}
+	w.samples[w.next] = sample
+	w.loopSorted.insert(sortedCount, sample.LoopMs)
+	w.paceWaitSorted.insert(sortedCount, sample.PaceWaitMs)
+	w.replyWaitSorted.insert(sortedCount, sample.ReplyWaitMs)
+	w.submitSorted.insert(sortedCount, sample.SubmitMs)
+	w.next = (w.next + 1) % debugPerfWindowSize
+	w.statsDirty = true
+}
+
+func (w *debugRenderPerfWindow) refresh(frameSeq int) debugRenderPerfWindowStats {
+	if !w.statsDirty {
+		return w.stats
+	}
+	_ = frameSeq
+	stats := debugRenderPerfWindowStats{Frames: w.count}
+	if w.count > 0 {
+		stats.LoopP50Ms = w.loopSorted.percentile(w.count, 50)
+		stats.LoopP90Ms = w.loopSorted.percentile(w.count, 90)
+		stats.LoopP99Ms = w.loopSorted.percentile(w.count, 99)
+		stats.PaceWaitP90Ms = w.paceWaitSorted.percentile(w.count, 90)
+		stats.ReplyWaitP90Ms = w.replyWaitSorted.percentile(w.count, 90)
+		stats.SubmitP90Ms = w.submitSorted.percentile(w.count, 90)
+		lastSlow := -1
+		prevSlow := -1
+		for i := 0; i < w.count; i++ {
+			sample := w.samples[w.logicalIndex(i)]
+			if sample.Slow {
+				stats.SlowFrames++
+				prevSlow = lastSlow
+				lastSlow = i
+			}
+			if sample.CadenceSlow {
+				stats.CadenceSlowFrames++
+			}
+			if sample.ReplySlow {
+				stats.ReplySlowFrames++
+			}
+			if sample.SubmitSlow {
+				stats.SubmitSlowFrames++
+			}
+			if sample.UnattributedSlow {
+				stats.UnattributedSlowFrames++
+			}
+		}
+		if prevSlow >= 0 && lastSlow >= 0 {
+			stats.LastSlowGapFrames = lastSlow - prevSlow
+			stats.LastSlowGapMs = w.sumLoopMs(prevSlow + 1, lastSlow)
+		}
+	}
+	w.stats = stats
+	w.statsDirty = false
+	return stats
+}
+
+func debugClassifyRenderFrame(t framewire.Timing, frameBudgetMs float64, slowFrameThresholdMs float64, slowLogicThresholdMs float64) (bool, bool, bool, bool, bool, string) {
+	if frameBudgetMs <= 0 {
+		frameBudgetMs = 16.6667
+	}
+	loopSlow := t.LoopMs > slowFrameThresholdMs
+	replySlow := t.ReplyWaitMs > slowLogicThresholdMs
+	submitSlow := t.SubmitMs > frameBudgetMs * 0.85
+	workSlow := t.WorkMs > frameBudgetMs * 0.85
+	cadenceSlow := loopSlow && t.PaceWaitMs > frameBudgetMs * 0.85 && t.PaceWaitMs >= t.ReplyWaitMs && t.PaceWaitMs >= t.SubmitMs && t.PaceWaitMs >= t.WorkMs
+	slow := loopSlow || replySlow || submitSlow || workSlow
+	unattributedSlow := slow && !cadenceSlow && !replySlow && !submitSlow && !workSlow
+	label := ""
+	if cadenceSlow {
+		label = debugJoinAttribution(label, "cadence")
+	}
+	if replySlow {
+		label = debugJoinAttribution(label, "reply")
+	}
+	if submitSlow {
+		label = debugJoinAttribution(label, "submit")
+	}
+	if workSlow {
+		label = debugJoinAttribution(label, "work")
+	}
+	if unattributedSlow {
+		label = debugJoinAttribution(label, "unattributed")
+	}
+	if label == "" {
+		label = "clean"
+	}
+	return slow, cadenceSlow, replySlow, submitSlow, unattributedSlow, label
+}
+
+func debugJoinAttribution(base string, next string) string {
+	if base == "" {
+		return next
+	}
+	return base + "+" + next
+}
+
+func (w *debugRenderPerfWindow) logicalIndex(i int) int {
+	if w.count < debugPerfWindowSize {
+		return i
+	}
+	return (w.next + i) % debugPerfWindowSize
+}
+
+func (w *debugRenderPerfWindow) sumLoopMs(start int, end int) float64 {
+	total := 0.0
+	for i := start; i <= end; i++ {
+		total += w.samples[w.logicalIndex(i)].LoopMs
+	}
+	return total
+}
+
+func (s *debugSortedFloatWindow) insert(count int, value float64) {
+	index := count
+	for index > 0 && s.values[index - 1] > value {
+		s.values[index] = s.values[index - 1]
+		index--
+	}
+	s.values[index] = value
+}
+
+func (s *debugSortedFloatWindow) remove(count int, value float64) {
+	index := -1
+	for i := 0; i < count; i++ {
+		if s.values[i] == value {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return
+	}
+	for i := index; i < count - 1; i++ {
+		s.values[i] = s.values[i + 1]
+	}
+	s.values[count - 1] = 0
+}
+
+func (s *debugSortedFloatWindow) percentile(count, pct int) float64 {
+	if count <= 0 {
+		return 0
+	}
+	index := (pct * count + 99) / 100 - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= count {
+		index = count - 1
+	}
+	return s.values[index]
+}
+
 // draw renders the overlay onto the DrawCtx.
 // Called after game Draw, before the frame reply is sent.
 func (o *DebugOverlay) draw(d *DrawCtx) {
-	if !o.enabled {
+	if !o.enabled || !o.hudVisible {
 		return
 	}
+	o.drawPerfHud(d)
+}
 
-	// Switch to screen-space coordinates, highest z-layer.
-	d.ResetCamera()
-	d.SetLayer(65535)
-
-	// Background panel.
-	panelX := 12.0
-	panelY := 14.0
-	panelW := 320.0
-	panelH := 182.0
-	d.DrawRect(panelX, panelY, panelW, panelH, Color{R: 0, G: 0, B: 0, A: 0.65})
-
-	// Text layout.
-	textX := panelX + 10.0
-	fontSize := 14.0
-	lineH := 18.0
-	textColor := Color{R: 0.0, G: 1.0, B: 0.0, A: 1.0}
-
-	y := panelY + 16.0
-	d.DrawText("present: "+o.dispFPS, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText("frame: "+o.dispFrameMs+"  "+o.dispBudget, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText("logic: "+o.dispLogicMs, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText("logic headroom: "+o.dispLogicFPS, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText(o.dispBytes, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText(o.dispFixed, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText(o.dispPhases, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText(o.dispMax, textX, y, fontSize, textColor)
-	y += lineH
-	d.DrawText(o.dispSlow, textX, y, fontSize, textColor)
+func (o *DebugOverlay) refreshDisplayStrings() {
+	o.dispFPS = strconv.FormatFloat(o.fps, 'f', 1, 64) + " fps"
+	o.dispFrameMs = strconv.FormatFloat(o.frameMs, 'f', 2, 64) + " ms"
+	o.dispLogicMs = strconv.FormatFloat(o.logicMs, 'f', 2, 64) + " ms"
+	if o.logicMs > 0 {
+		logicFPS := 1000.0 / o.logicMs
+		o.dispLogicFPS = strconv.FormatFloat(logicFPS, 'f', 0, 64) + " hz"
+	}
+	o.dispBudget = "budget " + formatDebugMs(o.frameBudgetMs) + " slow>" + formatDebugMs(o.slowFrameThresholdMs)
+	o.dispBytes = "draw " + formatDebugBytes(o.drawBytes) + " / submit " + formatDebugBytes(o.submitBytes)
+	o.dispFixed = "fixed steps " + strconv.Itoa(o.fixedSteps)
+	o.dispPhases = "phase i/a/d/o " + formatDebugMs(o.inputMs) + "/" + formatDebugMs(o.advanceMs) + "/" + formatDebugMs(o.drawMs) + "/" + formatDebugMs(o.overlayMs)
+	window := o.perfWindow.refresh(o.frameSeq)
+	renderWindow := o.renderPerfWindow.refresh(o.frameSeq)
+	o.dispWindowFrame = "240f frame p50/p90/p99 " + formatDebugMs(window.FrameP50Ms) + "/" + formatDebugMs(window.FrameP90Ms) + "/" + formatDebugMs(window.FrameP99Ms)
+	o.dispWindowLogic = "logic p50/p90/p99 " + formatDebugMs(window.LogicP50Ms) + "/" + formatDebugMs(window.LogicP90Ms) + "/" + formatDebugMs(window.LogicP99Ms) + " work " + strconv.Itoa(window.WorkSlowFrames) + " gap " + strconv.Itoa(window.LastWorkSlowGapFrames) + "/" + formatDebugMs(window.LastWorkSlowGapMs)
+	o.dispRenderWindow = "render loop p50/p90/p99 " + formatDebugMs(renderWindow.LoopP50Ms) + "/" + formatDebugMs(renderWindow.LoopP90Ms) + "/" + formatDebugMs(renderWindow.LoopP99Ms) + " pulse " + formatDebugMs(o.renderDisplayPulseMs) + " x" + strconv.Itoa(o.renderFrameDivisor) + " attr " + o.renderAttribution
+	o.dispSlow = "slow " + strconv.Itoa(o.slowFrames) + " logs " + strconv.Itoa(o.slowLogs) + " work " + strconv.Itoa(o.workSlowFrames) + " logs " + strconv.Itoa(o.workSlowLogs)
+	if o.slowFrames > 0 {
+		o.dispSlow = o.dispSlow + " last " + o.lastSlow.Reason + " " + formatDebugMs(o.lastSlow.FrameMs)
+	}
+	o.dispMax = "max frame " + formatDebugMs(o.maxFrameMs) + " logic " + formatDebugMs(o.maxLogicMs)
 }
 
 func formatDebugMs(value float64) string {

@@ -21,6 +21,17 @@ pub struct GpuTexture {
     pub bind_group: wgpu::BindGroup,
     pub width: u32,
     pub height: u32,
+    pub mip_level_count: u32,
+    pub pixels: Vec<u8>,
+    pub srgb: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TexturePixelsData {
+    pub width: u32,
+    pub height: u32,
+    pub srgb: bool,
+    pub pixels: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -65,6 +76,7 @@ impl TextureManager {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: 4,
             ..Default::default()
         });
 
@@ -164,6 +176,9 @@ impl TextureManager {
     ) -> TextureId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
+        let mip_chain = build_rgba_mip_chain(width, height, rgba_data);
+        let mip_level_count = mip_chain.len().max(1) as u32;
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("voplay_texture"),
             size: wgpu::Extent3d {
@@ -171,7 +186,7 @@ impl TextureManager {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: if srgb {
@@ -183,25 +198,7 @@ impl TextureManager {
             view_formats: &[],
         });
 
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        write_rgba_mip_chain(queue, &texture, &mip_chain, mip_level_count);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -228,6 +225,9 @@ impl TextureManager {
                 bind_group,
                 width,
                 height,
+                mip_level_count,
+                pixels: rgba_data.to_vec(),
+                srgb,
             },
         );
 
@@ -241,10 +241,21 @@ impl TextureManager {
         queue: &wgpu::Queue,
         data: &[u8],
     ) -> Result<TextureId, String> {
+        self.load_image_bytes_with_srgb(device, queue, data, true)
+    }
+
+    /// Load a texture from encoded image bytes with explicit color space.
+    pub fn load_image_bytes_with_srgb(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &[u8],
+        srgb: bool,
+    ) -> Result<TextureId, String> {
         let img = image::load_from_memory(data).map_err(|e| format!("image decode: {}", e))?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
-        Ok(self.load_rgba(device, queue, w, h, &rgba))
+        Ok(self.load_rgba_with_srgb(device, queue, w, h, &rgba, srgb))
     }
 
     /// Load a texture from a file path.
@@ -254,8 +265,18 @@ impl TextureManager {
         queue: &wgpu::Queue,
         path: &str,
     ) -> Result<TextureId, String> {
+        self.load_file_with_srgb(device, queue, path, true)
+    }
+
+    pub fn load_file_with_srgb(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &str,
+        srgb: bool,
+    ) -> Result<TextureId, String> {
         let data = file_io::read_bytes(path)?;
-        self.load_image_bytes(device, queue, &data)
+        self.load_image_bytes_with_srgb(device, queue, &data, srgb)
     }
 
     fn load_cubemap_rgba_faces(
@@ -402,27 +423,12 @@ impl TextureManager {
     }
 
     /// Re-upload RGBA pixel data to an existing texture. Size must match.
-    pub fn update_rgba(&self, queue: &wgpu::Queue, id: TextureId, rgba_data: &[u8]) {
-        if let Some(tex) = self.textures.get(&id) {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tex.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                rgba_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * tex.width),
-                    rows_per_image: Some(tex.height),
-                },
-                wgpu::Extent3d {
-                    width: tex.width,
-                    height: tex.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+    pub fn update_rgba(&mut self, queue: &wgpu::Queue, id: TextureId, rgba_data: &[u8]) {
+        if let Some(tex) = self.textures.get_mut(&id) {
+            let mip_chain = build_rgba_mip_chain(tex.width, tex.height, rgba_data);
+            write_rgba_mip_chain(queue, &tex.texture, &mip_chain, tex.mip_level_count);
+            tex.pixels.clear();
+            tex.pixels.extend_from_slice(rgba_data);
         }
     }
 
@@ -440,7 +446,121 @@ impl TextureManager {
         self.textures.get(&id)
     }
 
+    pub fn pixels(&self, id: TextureId) -> Option<TexturePixelsData> {
+        self.textures.get(&id).map(|texture| TexturePixelsData {
+            width: texture.width,
+            height: texture.height,
+            srgb: texture.srgb,
+            pixels: texture.pixels.clone(),
+        })
+    }
+
     pub fn get_cubemap(&self, id: CubemapId) -> Option<&GpuCubemap> {
         self.cubemaps.get(&id)
+    }
+}
+
+fn build_rgba_mip_chain(width: u32, height: u32, rgba_data: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
+    let expected_len = width as usize * height as usize * 4;
+    if width == 0 || height == 0 || rgba_data.len() != expected_len {
+        return vec![(width.max(1), height.max(1), rgba_data.to_vec())];
+    }
+
+    let mut chain = Vec::new();
+    chain.push((width, height, rgba_data.to_vec()));
+
+    let mut src_w = width;
+    let mut src_h = height;
+    while src_w > 1 || src_h > 1 {
+        let (_, _, previous) = chain.last().expect("mip chain has base level");
+        let dst_w = (src_w / 2).max(1);
+        let dst_h = (src_h / 2).max(1);
+        let next = downsample_rgba_2x(previous, src_w, src_h, dst_w, dst_h);
+        chain.push((dst_w, dst_h, next));
+        src_w = dst_w;
+        src_h = dst_h;
+    }
+
+    chain
+}
+
+fn downsample_rgba_2x(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    let mut dst = vec![0u8; dst_w as usize * dst_h as usize * 4];
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            let sx0 = (x * 2).min(src_w - 1);
+            let sy0 = (y * 2).min(src_h - 1);
+            let sx1 = (sx0 + 1).min(src_w - 1);
+            let sy1 = (sy0 + 1).min(src_h - 1);
+            let samples = [(sx0, sy0), (sx1, sy0), (sx0, sy1), (sx1, sy1)];
+            let mut sum = [0u32; 4];
+            for (sx, sy) in samples {
+                let src_index = ((sy * src_w + sx) * 4) as usize;
+                sum[0] += src[src_index] as u32;
+                sum[1] += src[src_index + 1] as u32;
+                sum[2] += src[src_index + 2] as u32;
+                sum[3] += src[src_index + 3] as u32;
+            }
+            let dst_index = ((y * dst_w + x) * 4) as usize;
+            dst[dst_index] = ((sum[0] + 2) / 4) as u8;
+            dst[dst_index + 1] = ((sum[1] + 2) / 4) as u8;
+            dst[dst_index + 2] = ((sum[2] + 2) / 4) as u8;
+            dst[dst_index + 3] = ((sum[3] + 2) / 4) as u8;
+        }
+    }
+    dst
+}
+
+fn write_rgba_mip_chain(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    mip_chain: &[(u32, u32, Vec<u8>)],
+    mip_level_count: u32,
+) {
+    for (level, (width, height, data)) in
+        mip_chain.iter().take(mip_level_count as usize).enumerate()
+    {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * *width),
+                rows_per_image: Some(*height),
+            },
+            wgpu::Extent3d {
+                width: *width,
+                height: *height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_rgba_mip_chain;
+
+    #[test]
+    fn rgba_mip_chain_halves_until_single_pixel() {
+        let rgba = vec![255u8; 5 * 3 * 4];
+        let chain = build_rgba_mip_chain(5, 3, &rgba);
+        let dims: Vec<(u32, u32)> = chain.iter().map(|(w, h, _)| (*w, *h)).collect();
+        assert_eq!(dims, vec![(5, 3), (2, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn rgba_mip_chain_averages_four_texels() {
+        let rgba = vec![
+            0, 0, 0, 255, 100, 0, 0, 255, 0, 100, 0, 255, 100, 100, 100, 255,
+        ];
+        let chain = build_rgba_mip_chain(2, 2, &rgba);
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[1].2, vec![50, 50, 25, 255]);
     }
 }

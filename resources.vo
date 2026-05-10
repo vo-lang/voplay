@@ -3,24 +3,119 @@
 // For raw load/free without lifecycle management, use the functions below.
 package voplay
 
+import "github.com/vo-lang/voplay/codec"
+
 // TextureID is an opaque handle to a loaded texture.
 type TextureID int
 
+type TextureBackend interface {
+	LoadFile(path string) (int, error)
+	LoadBytes(data []byte) (int, error)
+	LoadFileLinear(path string) (int, error)
+	LoadBytesLinear(data []byte) (int, error)
+	LoadRGBA(width, height int, data []byte) (int, error)
+	LoadRGBALinear(width, height int, data []byte) (int, error)
+	Pixels(id int) []byte
+	Free(id int)
+}
+
+type defaultTextureBackend struct{}
+
+func (defaultTextureBackend) LoadFile(path string) (int, error) {
+	return loadTexture(path)
+}
+
+func (defaultTextureBackend) LoadBytes(data []byte) (int, error) {
+	return loadTextureBytes(data)
+}
+
+func (defaultTextureBackend) LoadFileLinear(path string) (int, error) {
+	return loadTextureLinear(path)
+}
+
+func (defaultTextureBackend) LoadBytesLinear(data []byte) (int, error) {
+	return loadTextureBytesLinear(data)
+}
+
+func (defaultTextureBackend) LoadRGBA(width, height int, data []byte) (int, error) {
+	return loadTextureRGBA(width, height, data)
+}
+
+func (defaultTextureBackend) LoadRGBALinear(width, height int, data []byte) (int, error) {
+	return loadTextureRGBALinear(width, height, data)
+}
+
+func (defaultTextureBackend) Pixels(id int) []byte {
+	return texturePixelsBytes(id)
+}
+
+func (defaultTextureBackend) Free(id int) {
+	freeTexture(id)
+}
+
+var textureBackend TextureBackend = defaultTextureBackend{}
+
+func SetTextureBackend(b TextureBackend) TextureBackend {
+	prev := textureBackend
+	if b == nil {
+		b = defaultTextureBackend{}
+	}
+	textureBackend = b
+	return prev
+}
+
 // LoadTexture loads an image file and returns a TextureID.
 func LoadTexture(path string) (TextureID, error) {
-	id := loadTexture(path)?
+	id := textureBackend.LoadFile(path)?
 	return TextureID(id), nil
 }
 
 // LoadTextureBytes loads a texture from encoded image bytes (PNG, JPEG, etc.).
 func LoadTextureBytes(data []byte) (TextureID, error) {
-	id := loadTextureBytes(data)?
+	id := textureBackend.LoadBytes(data)?
 	return TextureID(id), nil
+}
+
+// LoadTextureLinear loads an image file as non-sRGB texture data. Use this for
+// normal, roughness, metallic, mask, and height-style textures.
+func LoadTextureLinear(path string) (TextureID, error) {
+	id := textureBackend.LoadFileLinear(path)?
+	return TextureID(id), nil
+}
+
+// LoadTextureBytesLinear loads encoded image bytes as non-sRGB texture data.
+func LoadTextureBytesLinear(data []byte) (TextureID, error) {
+	id := textureBackend.LoadBytesLinear(data)?
+	return TextureID(id), nil
+}
+
+// LoadTextureRGBA uploads raw RGBA8 pixels as an sRGB texture. This avoids
+// forcing offline/runtime generators to encode PNG/JPEG just to create an atlas.
+func LoadTextureRGBA(width, height int, data []byte) (TextureID, error) {
+	id := textureBackend.LoadRGBA(width, height, data)?
+	return TextureID(id), nil
+}
+
+// LoadTextureRGBALinear uploads raw RGBA8 pixels as a linear texture. Use this
+// for generated normal, roughness, metallic, mask, and height-style atlases.
+func LoadTextureRGBALinear(width, height int, data []byte) (TextureID, error) {
+	id := textureBackend.LoadRGBALinear(width, height, data)?
+	return TextureID(id), nil
+}
+
+// TexturePixelsBytes returns the unique v1 texture pixel payload:
+// u32 version, u32 width, u32 height, u32 flags, then base-level RGBA8 bytes.
+// flags bit 0 is 1 for sRGB and 0 for linear.
+func TexturePixelsBytes(texture TextureID) []byte {
+	if texture == 0 {
+		panic("TexturePixelsBytes: texture must not be 0")
+	}
+	return textureBackend.Pixels(int(texture))
 }
 
 // Free releases this texture.
 func (id TextureID) Free() {
-	freeTexture(int(id))
+	textureBackend.Free(int(id))
 }
 
 // MaterialID is an optional stable handle for a material owned by game code or
@@ -55,19 +150,24 @@ type MaterialDesc struct {
 	Normal TextureID
 	MetallicRoughness TextureID
 	Emissive TextureID
+	Mask TextureID
 	EmissiveColor Color
 	Roughness float64
 	Metallic float64
 	NormalScale float64
 	UVScale float64
 	ToonRamp TextureID
+	DetailStrength float64
+	MacroBlend float64
+	RoughnessResponse float64
+	ToonRampResponse float64
 	ShadingMode int
 	WrapMode int
 	FilterMode int
 }
 
 func DefaultMaterial() MaterialDesc {
-	return MaterialDesc{BaseColor: White, Roughness: 0.55, Metallic: 0, UVScale: 1}
+	return MaterialDesc{BaseColor: White, Roughness: 0.55, Metallic: 0, UVScale: 1, DetailStrength: 1, RoughnessResponse: 1, ToonRampResponse: 1}
 }
 
 func MaterialColor(c Color) MaterialDesc {
@@ -82,6 +182,18 @@ func NormalizeMaterial(m MaterialDesc) MaterialDesc {
 	}
 	if m.UVScale <= 0 {
 		m.UVScale = 1
+	}
+	if m.DetailStrength <= 0 {
+		m.DetailStrength = 1
+	}
+	if m.MacroBlend < 0 {
+		m.MacroBlend = 0
+	}
+	if m.RoughnessResponse <= 0 {
+		m.RoughnessResponse = 1
+	}
+	if m.ToonRampResponse <= 0 {
+		m.ToonRampResponse = 1
 	}
 	return m
 }
@@ -137,9 +249,18 @@ type PrimitiveMeshBackend interface {
 	Cone(segments int) int
 	Wedge() int
 	Capsule(segments int, halfHeight, radius float64) int
+	Raw(vertices []RawMeshVertex, indices []int, baseColor Color) (int, error)
 }
 
-type ModelMeshDataBackend interface {
+type RawMeshVertex struct {
+	Position Vec3
+	Normal Vec3
+	U float64
+	V float64
+	Color Color
+}
+
+type ModelGeometryBackend interface {
 	Bytes(id int) []byte
 }
 
@@ -147,7 +268,7 @@ type defaultModelBackend struct{}
 
 type defaultPrimitiveMeshBackend struct{}
 
-type defaultModelMeshDataBackend struct{}
+type defaultModelGeometryBackend struct{}
 
 func (defaultModelBackend) Free(id int) {
 	freeModel(id)
@@ -196,14 +317,18 @@ func (defaultPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius floa
 	return createCapsuleMesh(segments, halfHeight, radius)
 }
 
-func (defaultModelMeshDataBackend) Bytes(id int) []byte {
-	return modelMeshDataBytes(id)
+func (defaultPrimitiveMeshBackend) Raw(vertices []RawMeshVertex, indices []int, baseColor Color) (int, error) {
+	return createRawMesh(encodeRawMesh(vertices, indices, baseColor))
+}
+
+func (defaultModelGeometryBackend) Bytes(id int) []byte {
+	return modelGeometryBytes(id)
 }
 
 var modelBackend ModelBackend = defaultModelBackend{}
 var modelBoundsCache = map[int]AABB{}
 var primitiveMeshBackend PrimitiveMeshBackend = defaultPrimitiveMeshBackend{}
-var modelMeshDataBackend ModelMeshDataBackend = defaultModelMeshDataBackend{}
+var modelGeometryBackend ModelGeometryBackend = defaultModelGeometryBackend{}
 
 // SetModelBackend replaces the active model backend and returns the previous one.
 // Setting a new backend clears the bounds cache.
@@ -220,9 +345,9 @@ func SetPrimitiveMeshBackend(b PrimitiveMeshBackend) PrimitiveMeshBackend {
 	return prev
 }
 
-func SetModelMeshDataBackend(b ModelMeshDataBackend) ModelMeshDataBackend {
-	prev := modelMeshDataBackend
-	modelMeshDataBackend = b
+func SetModelGeometryBackend(b ModelGeometryBackend) ModelGeometryBackend {
+	prev := modelGeometryBackend
+	modelGeometryBackend = b
 	return prev
 }
 
@@ -258,11 +383,48 @@ func CreateCapsuleMesh(segments int, halfHeight, radius float64) ModelID {
 	return ModelID(primitiveMeshBackend.Capsule(segments, halfHeight, radius))
 }
 
-func ModelMeshDataBytes(model ModelID) []byte {
-	if model == 0 {
-		panic("ModelMeshDataBytes: model must not be 0")
+func CreateRawMesh(vertices []RawMeshVertex, indices []int, baseColor Color) (ModelID, error) {
+	id, err := primitiveMeshBackend.Raw(vertices, indices, baseColor)
+	if err != nil {
+		return 0, err
 	}
-	return modelMeshDataBackend.Bytes(int(model))
+	return ModelID(id), nil
+}
+
+func encodeRawMesh(vertices []RawMeshVertex, indices []int, baseColor Color) []byte {
+	w := codec.NewByteWriter(28 + len(vertices)*48 + len(indices)*4)
+	w.WriteU32(1)
+	w.WriteU32(len(vertices))
+	w.WriteU32(len(indices))
+	w.WriteF32(baseColor.R)
+	w.WriteF32(baseColor.G)
+	w.WriteF32(baseColor.B)
+	w.WriteF32(baseColor.A)
+	for _, vertex := range vertices {
+		w.WriteF32(vertex.Position.X)
+		w.WriteF32(vertex.Position.Y)
+		w.WriteF32(vertex.Position.Z)
+		w.WriteF32(vertex.Normal.X)
+		w.WriteF32(vertex.Normal.Y)
+		w.WriteF32(vertex.Normal.Z)
+		w.WriteF32(vertex.U)
+		w.WriteF32(vertex.V)
+		w.WriteF32(vertex.Color.R)
+		w.WriteF32(vertex.Color.G)
+		w.WriteF32(vertex.Color.B)
+		w.WriteF32(vertex.Color.A)
+	}
+	for _, index := range indices {
+		w.WriteU32(index)
+	}
+	return w.Bytes()
+}
+
+func ModelGeometryBytes(model ModelID) []byte {
+	if model == 0 {
+		panic("ModelGeometryBytes: model must not be 0")
+	}
+	return modelGeometryBackend.Bytes(int(model))
 }
 
 // LoadModel loads a glTF/GLB model file and returns a ModelID.
@@ -317,6 +479,11 @@ func (id CubemapID) Free() {
 
 func loadTexture(path string) (int, error)
 func loadTextureBytes(data []byte) (int, error)
+func loadTextureRGBA(width, height int, data []byte) (int, error)
+func loadTextureRGBALinear(width, height int, data []byte) (int, error)
+func loadTextureLinear(path string) (int, error)
+func loadTextureBytesLinear(data []byte) (int, error)
+func texturePixelsBytes(textureID int) []byte
 func freeTexture(id int)
 
 func loadFont(path string) (int, error)
@@ -328,7 +495,7 @@ func loadModel(path string) (int, error)
 func loadModelBytes(data []byte) (int, error)
 func freeModel(id int)
 func modelBounds(modelID int) (float64, float64, float64, float64, float64, float64, bool)
-func modelMeshDataBytes(modelID int) []byte
+func modelGeometryBytes(modelID int) []byte
 func createPlaneMesh(width, depth float64, subX, subZ int) int
 func createCubeMesh() int
 func createRoundedBoxMesh(bevelRadius float64, segments int) int
@@ -337,6 +504,7 @@ func createCylinderMesh(segments int) int
 func createConeMesh(segments int) int
 func createWedgeMesh() int
 func createCapsuleMesh(segments int, halfHeight, radius float64) int
+func createRawMesh(data []byte) (int, error)
 
 func loadCubemap(right, left, top, bottom, front, back string) (int, error)
 func loadCubemapBytes(right, left, top, bottom, front, back []byte) (int, error)

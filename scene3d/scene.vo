@@ -39,6 +39,19 @@ const (
 	RenderDebugShadow = voplay.RenderDebugShadow
 	RenderDebugDirect = voplay.RenderDebugDirect
 	RenderDebugAmbient = voplay.RenderDebugAmbient
+	RenderDebugTerrainControl = voplay.RenderDebugTerrainControl
+	RenderDebugTerrainSlope = voplay.RenderDebugTerrainSlope
+	RenderDebugTerrainHeight = voplay.RenderDebugTerrainHeight
+	RenderDebugTerrainCurvature = voplay.RenderDebugTerrainCurvature
+	RenderDebugTerrainMacro = voplay.RenderDebugTerrainMacro
+)
+
+const (
+	ShadowQualityOff = voplay.ShadowQualityOff
+	ShadowQualityLow = voplay.ShadowQualityLow
+	ShadowQualityMedium = voplay.ShadowQualityMedium
+	ShadowQualityHigh = voplay.ShadowQualityHigh
+	ShadowQualityCinematic = voplay.ShadowQualityCinematic
 )
 
 const (
@@ -71,6 +84,33 @@ type ColorGradingConfig struct {
 	Saturation float64
 }
 
+type PostProcessConfig struct {
+	BloomThreshold float64
+	BloomStrength float64
+	SharpenStrength float64
+	FxaaStrength float64
+	ContactAOStrength float64
+	ContactAORadius float64
+	ContactAODepthScale float64
+	ContactAODetailStrength float64
+	ContactAODetailRadius float64
+	ContactAONormalBias float64
+	ContactAOQuality int
+}
+
+type sceneCullFrame struct {
+	Valid bool
+	Position voplay.Vec3
+	Forward voplay.Vec3
+	Far float64
+	ConeScale float64
+}
+
+type sceneRenderBatchGroup struct {
+	Model voplay.ModelID
+	Material voplay.MaterialDesc
+}
+
 // Scene holds the 3D scene state.
 type Scene struct {
 	Camera  Camera
@@ -81,11 +121,18 @@ type Scene struct {
 	ShadowsEnabled bool
 	ShadowResolution int
 	ShadowStrength float64
+	ShadowSoftness float64
+	ShadowDistance float64
+	ShadowFade float64
+	ShadowQuality int
+	RenderingQuality int
 	Fog     FogConfig
 	ColorGrading ColorGradingConfig
+	PostProcess PostProcessConfig
 	RenderDebugMode int
 	Gravity voplay.Vec3
 	Emitters []*ParticleEmitter
+	ProjectedDecals []ProjectedDecalDesc
 
 	entities     []*Entity
 	visibleBuf   []*Entity
@@ -105,6 +152,8 @@ type Scene struct {
 	renderSceneCleared bool
 	renderDestroyedIDs []int
 	renderStats SceneRenderStats
+	cullFrame sceneCullFrame
+	renderBatchGroupScratch map[sceneRenderBatchGroup]bool
 	primitiveLayers []*primitiveLayerAttachment
 	primitiveDestroyedLayerHandles []primitive3d.LayerHandle
 	nextPrimitiveLayerHandle int
@@ -127,6 +176,12 @@ func New() *Scene {
 		ShadowsEnabled: false,
 		ShadowResolution: 2048,
 		ShadowStrength: 1.0,
+		ShadowSoftness: 1.0,
+		ShadowDistance: 240,
+		ShadowFade: 70,
+		ShadowQuality: ShadowQualityHigh,
+		RenderingQuality: SceneQualityHigh,
+		PostProcess: DefaultPostProcessConfig(),
 		Gravity:      voplay.Vec3{0, -9.8, 0},
 		nextEntityID: 1,
 		entityByID:   make(map[int]*Entity),
@@ -148,6 +203,8 @@ type EntityDesc struct {
 	Scale    voplay.Vec3
 	Model    voplay.ModelID
 	OwnedModel voplay.ModelID
+	OwnedLodModels []voplay.ModelID
+	LodLevels []EntityLodLevel
 	Material voplay.MaterialDesc
 	PickMode int
 	Tint     voplay.Color
@@ -161,10 +218,16 @@ type EntityDesc struct {
 	FrustumCull bool
 }
 
+type EntityLodLevel struct {
+	Model voplay.ModelID
+	Distance float64
+}
+
 type SceneRenderStats struct {
 	ActiveEntities int
 	VisibleEntities int
 	CulledEntities int
+	LodSwitchedEntities int
 	ModelEntities int
 	UpsertedObjects int
 	DestroyedObjects int
@@ -208,7 +271,13 @@ type Entity struct {
 	renderLastVisible bool
 	renderLastAnimationWorldID int
 	renderLastAnimationTargetID int
+	renderBatchKey sceneRenderBatchGroup
+	renderBatchKeyModel voplay.ModelID
+	renderBatchKeyMaterial voplay.MaterialDesc
+	renderBatchKeyValid bool
 	StaticRenderable bool
+	ownedLodModels []voplay.ModelID
+	LodLevels []EntityLodLevel
 	CullDistance float64
 	CullRadius float64
 	FrustumCull bool
@@ -250,6 +319,10 @@ func (e *Entity) SetCullDistance(distance float64) {
 
 func (e *Entity) SetFrustumCull(enabled bool) {
 	e.FrustumCull = enabled
+}
+
+func (e *Entity) SetLodLevels(levels []EntityLodLevel) {
+	e.LodLevels = normalizeEntityLodLevels(levels)
 }
 
 func (e *Entity) ensureHasSkeleton() {
@@ -307,6 +380,37 @@ func normalizeEntityModels(desc EntityDesc) (voplay.ModelID, voplay.ModelID) {
 		panic("Scene.Spawn: Model and OwnedModel must match when both are set")
 	}
 	return ownedModel, ownedModel
+}
+
+func normalizeEntityLodLevels(levels []EntityLodLevel) []EntityLodLevel {
+	if len(levels) == 0 {
+		return nil
+	}
+	out := make([]EntityLodLevel, 0, len(levels))
+	for _, level := range levels {
+		if level.Model == 0 {
+			panic("Scene.Spawn: LOD level model must not be zero")
+		}
+		if level.Distance < 0 {
+			panic("Scene.Spawn: LOD level distance must be >= 0")
+		}
+		out = append(out, level)
+	}
+	return out
+}
+
+func normalizeOwnedLodModels(models []voplay.ModelID) []voplay.ModelID {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]voplay.ModelID, 0, len(models))
+	for _, model := range models {
+		if model == 0 {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
 }
 
 func resolveEntityPickable(desc EntityDesc, model voplay.ModelID) bool {
@@ -382,6 +486,8 @@ func (s *Scene) newEntity(desc EntityDesc) *Entity {
 		Data:     desc.Data,
 		Physics:  desc.Physics,
 		StaticRenderable: desc.StaticRenderable,
+		ownedLodModels: normalizeOwnedLodModels(desc.OwnedLodModels),
+		LodLevels: normalizeEntityLodLevels(desc.LodLevels),
 		CullDistance: desc.CullDistance,
 		CullRadius: desc.CullRadius,
 		FrustumCull: desc.FrustumCull,
@@ -544,16 +650,27 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 }
 
 func (s *Scene) releaseOwnedModel(e *Entity) {
-	if e.ownedModel == 0 {
-		return
+	released := map[int]bool{}
+	if e.ownedModel != 0 {
+		ownedModel := e.ownedModel
+		delete(s.animationInfoCache, int(e.ownedModel))
+		e.ownedModel.Free()
+		released[int(ownedModel)] = true
+		e.ownedModel = 0
+		if e.Model == ownedModel {
+			e.Model = 0
+		}
 	}
-	ownedModel := e.ownedModel
-	delete(s.animationInfoCache, int(e.ownedModel))
-	e.ownedModel.Free()
-	e.ownedModel = 0
-	if e.Model == ownedModel {
-		e.Model = 0
+	for _, model := range e.ownedLodModels {
+		if model == 0 || released[int(model)] {
+			continue
+		}
+		delete(s.animationInfoCache, int(model))
+		model.Free()
+		released[int(model)] = true
 	}
+	e.ownedLodModels = nil
+	e.LodLevels = nil
 }
 
 func (s *Scene) removeAttachedEmitters(target *Entity) {

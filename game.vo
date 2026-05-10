@@ -8,7 +8,7 @@ type Game struct {
 	Title           string
 	FixedStep       float64
 	MaxCatchUpSteps int
-	TargetFrameRate int
+	TargetFrameRate int // 0 = render every display pulse; >0 = cap to stable/adaptive cadence
 	UncappedFrameRate bool
 	InitialState    State
 	OnClose         func(g *GameCtx) // optional; called when the game loop exits
@@ -83,7 +83,15 @@ func (g *GameCtx) ShowDebugOverlay() {
 	if g.overlay == nil {
 		g.overlay = newDebugOverlay(0)
 	}
-	g.overlay.enabled = true
+	g.overlay.setPerfMode(PerfModeHud)
+}
+
+// ShowDebugOverlayStats enables debug stat collection without drawing the engine HUD.
+func (g *GameCtx) ShowDebugOverlayStats() {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	g.overlay.setPerfMode(PerfModeStats)
 }
 
 // HideDebugOverlay disables the engine performance HUD.
@@ -91,7 +99,7 @@ func (g *GameCtx) HideDebugOverlay() {
 	if g.overlay == nil {
 		return
 	}
-	g.overlay.enabled = false
+	g.overlay.setPerfMode(PerfModeOff)
 }
 
 // ToggleDebugOverlay toggles the engine performance HUD.
@@ -99,7 +107,11 @@ func (g *GameCtx) ToggleDebugOverlay() {
 	if g.overlay == nil {
 		g.overlay = newDebugOverlay(0)
 	}
-	g.overlay.enabled = !g.overlay.enabled
+	if g.overlay.enabled {
+		g.overlay.setPerfMode(PerfModeOff)
+	} else {
+		g.overlay.setPerfMode(PerfModeHud)
+	}
 }
 
 // DebugOverlayStats returns cached F3 performance metrics from the last frame.
@@ -209,8 +221,10 @@ func Run(game Game) {
 func runSplitMode(game Game) {
 	// Create ports for inter-island communication.
 	ports := splitPorts{
-		frameReq:   make(port []byte, 1), // render→logic: frame requests (input snapshots)
-		frameReply: make(port []byte, 1), // logic→render: draw command replies
+		// The render island creates the per-frame request/reply ports and sends
+		// them back through this setup port. That keeps the frame-budget side of
+		// the loop on render-local ports, while logic waits through remote proxies.
+		frameSetup: make(port renderFramePorts, 1),
 		resReq:     make(port []byte, 8), // logic→render: resource requests
 		resResp:    make(port []byte, 8), // render→logic: resource responses
 	}
@@ -239,6 +253,10 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 	ctx.States = NewStateStack(ctx)
 
 	// Override model backend to proxy bounds queries to render island.
+	SetTextureBackend(&proxyTextureBackendImpl{
+		reqPort:  resReqPort,
+		respPort: resRespPort,
+	})
 	SetModelBackend(&proxyModelBackendImpl{
 		reqPort:  resReqPort,
 		respPort: resRespPort,
@@ -247,7 +265,7 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 		reqPort:  resReqPort,
 		respPort: resRespPort,
 	})
-	SetModelMeshDataBackend(&proxyModelMeshDataBackendImpl{
+	SetModelGeometryBackend(&proxyModelGeometryBackendImpl{
 		reqPort:  resReqPort,
 		respPort: resRespPort,
 	})
@@ -257,6 +275,57 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 	})
 
 	return ctx
+}
+
+type proxyTextureBackendImpl struct {
+	reqPort  port []byte
+	respPort port []byte
+}
+
+func (b *proxyTextureBackendImpl) LoadFile(path string) (int, error) {
+	req := encodeResString(resTagLoadTexture, path)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) LoadBytes(data []byte) (int, error) {
+	req := encodeResBytes(resTagLoadTextureBytes, data)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) LoadFileLinear(path string) (int, error) {
+	req := encodeResString(resTagLoadTextureLinear, path)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) LoadBytesLinear(data []byte) (int, error) {
+	req := encodeResBytes(resTagLoadTextureBytesLinear, data)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) LoadRGBA(width, height int, data []byte) (int, error) {
+	req := encodeResTextureRGBA(width, height, data)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) LoadRGBALinear(width, height int, data []byte) (int, error) {
+	req := encodeResTextureRGBALinear(width, height, data)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	return decodeResU32(resp)
+}
+
+func (b *proxyTextureBackendImpl) Pixels(id int) []byte {
+	return proxyTexturePixelsBytes(b.reqPort, b.respPort, id)
+}
+
+func (b *proxyTextureBackendImpl) Free(id int) {
+	req := encodeResU32(resTagFreeTexture, id)
+	resp := resProxyRoundTrip(b.reqPort, b.respPort, req)
+	_ = decodeResUnit(resp)
 }
 
 // proxyModelBackendImpl implements ModelBackend by forwarding to render island.
@@ -287,7 +356,7 @@ type proxyPrimitiveMeshBackendImpl struct {
 	respPort port []byte
 }
 
-type proxyModelMeshDataBackendImpl struct {
+type proxyModelGeometryBackendImpl struct {
 	reqPort  port []byte
 	respPort port []byte
 }
@@ -361,8 +430,12 @@ func (b *proxyPrimitiveMeshBackendImpl) Capsule(segments int, halfHeight, radius
 	return id
 }
 
-func (b *proxyModelMeshDataBackendImpl) Bytes(id int) []byte {
-	return proxyModelMeshDataBytes(b.reqPort, b.respPort, id)
+func (b *proxyPrimitiveMeshBackendImpl) Raw(vertices []RawMeshVertex, indices []int, baseColor Color) (int, error) {
+	return proxyCreateRawMesh(b.reqPort, b.respPort, encodeRawMesh(vertices, indices, baseColor))
+}
+
+func (b *proxyModelGeometryBackendImpl) Bytes(id int) []byte {
+	return proxyModelGeometryBytes(b.reqPort, b.respPort, id)
 }
 
 func (b *proxyAnimationRuntimeBackendImpl) Init() int {

@@ -17,6 +17,8 @@ const (
 	TrackSurfaceOffroad = "offroad"
 	TrackSurfaceBoost = "boost"
 	trackContinuityTolerance = 0.05
+	trackSpatialCellSize = 96.0
+	trackSpatialMaxSearchRadius = 96.0
 )
 
 type TrackIssue struct {
@@ -150,6 +152,28 @@ type TrackPoint struct {
 	OnRoad bool
 }
 
+type trackSegmentBounds struct {
+	Min voplay.Vec3
+	Max voplay.Vec3
+}
+
+type trackSegmentData struct {
+	Start float64
+	Length float64
+	LengthSq float64
+	A voplay.Vec3
+	B voplay.Vec3
+	Delta voplay.Vec3
+	Forward voplay.Vec3
+	Right voplay.Vec3
+	Yaw float64
+	HalfWidthA float64
+	HalfWidthB float64
+	BankA float64
+	BankB float64
+	Bounds trackSegmentBounds
+}
+
 type TrackSurfaceHit struct {
 	Name string
 	Kind string
@@ -162,13 +186,27 @@ type TrackSurfaceHit struct {
 	LateralDistance float64
 }
 
+type trackSpatialCellKey struct {
+	X int
+	Z int
+}
+
 type Track struct {
 	asset *TrackAsset
 	points []TrackControlPoint
 	segmentStarts []float64
 	segmentLengths []float64
+	segmentBounds []trackSegmentBounds
+	segments []trackSegmentData
+	spatialIndex map[trackSpatialCellKey][]int
+	spatialCellSize float64
+	spatialMarks []int
+	spatialMark int
+	spatialScratch []int
 	length float64
 	closed bool
+	closestSegmentHint int
+	poseSegmentHint int
 }
 
 type TrackSpawnResult struct {
@@ -179,6 +217,8 @@ type TrackSpawnResult struct {
 	Meshes map[string]*Entity
 	CollisionMeshes map[string]*Entity
 	Textures []voplay.TextureID
+	HeightSampler TrackHeightProbe
+	CollisionHeightSampler TrackHeightProbe
 }
 
 type TrackTraversabilityOptions struct {
@@ -195,13 +235,19 @@ type TrackHeightProbe func(pos voplay.Vec3) (float64, bool)
 type TrackDebugOptions struct {
 	Centerline bool
 	Boundaries bool
+	Surfaces bool
 	Gates bool
 	Respawns bool
 	HeightOffset float64
 	LineThickness float64
+	SurfaceStep float64
+	SurfaceMarkerSize float64
 	Model voplay.ModelID
 	CenterColor voplay.Color
 	BoundaryColor voplay.Color
+	RoadSurfaceColor voplay.Color
+	OffroadSurfaceColor voplay.Color
+	BoostSurfaceColor voplay.Color
 	GateColor voplay.Color
 	RespawnColor voplay.Color
 }
@@ -282,6 +328,8 @@ func newTrackUnchecked(asset *TrackAsset) *Track {
 	}
 	segmentStarts := make([]float64, segmentCount)
 	segmentLengths := make([]float64, segmentCount)
+	segmentBounds := make([]trackSegmentBounds, segmentCount)
+	segments := make([]trackSegmentData, segmentCount)
 	total := 0.0
 	for i := 0; i < segmentCount; i++ {
 		next := i + 1
@@ -289,11 +337,17 @@ func newTrackUnchecked(asset *TrackAsset) *Track {
 			next = 0
 		}
 		segmentStarts[i] = total
-		length := points[i].Position.Vec3().Distance(points[next].Position.Vec3())
-		segmentLengths[i] = length
-		total += length
+		a := points[i].Position.Vec3()
+		b := points[next].Position.Vec3()
+		segment := newTrackSegmentData(points[i], points[next], a, b, total)
+		segments[i] = segment
+		segmentLengths[i] = segment.Length
+		segmentBounds[i] = segment.Bounds
+		total += segment.Length
 	}
-	return &Track{asset: asset, points: points, segmentStarts: segmentStarts, segmentLengths: segmentLengths, length: total, closed: asset.ClosedLoop}
+	track := &Track{asset: asset, points: points, segmentStarts: segmentStarts, segmentLengths: segmentLengths, segmentBounds: segmentBounds, segments: segments, spatialCellSize: trackSpatialCellSize, spatialMarks: make([]int, segmentCount), length: total, closed: asset.ClosedLoop}
+	track.rebuildSpatialIndex()
+	return track
 }
 
 func (t *Track) Asset() *TrackAsset {
@@ -316,39 +370,100 @@ func (t *Track) ClosestPoint(pos voplay.Vec3) TrackPoint {
 	}
 	bestDistanceSq := math.MaxFloat64
 	best := TrackPoint{}
-	for i := 0; i < len(t.segmentLengths); i++ {
-		a := t.points[i]
-		next := i + 1
-		if next >= len(t.points) {
-			next = 0
-		}
-		b := t.points[next]
-		ap := pos.Sub(a.Position.Vec3())
-		ab := b.Position.Vec3().Sub(a.Position.Vec3())
-		abLenSq := ab.LengthSq()
-		segT := 0.0
-		if abLenSq > 0 {
-			segT = trackClamp(ap.Dot(ab) / abLenSq, 0, 1)
-		}
-		point := a.Position.Vec3().Lerp(b.Position.Vec3(), segT)
-		distSq := pos.Sub(point).LengthSq()
-		if distSq >= bestDistanceSq {
-			continue
-		}
-		forward := ab.Normalize()
-		right := forward.Cross(voplay.Vec3{Y: 1}).Normalize()
-		if right.LengthSq() == 0 {
-			right = voplay.Vec3{X: 1}
-		}
-		lateral := pos.Sub(point).Dot(right)
-		halfWidth := trackLerp(a.Width, b.Width, segT) * 0.5
+	hint := t.closestSegmentHint
+	if hint < 0 || hint >= len(t.segmentLengths) {
+		hint = 0
+	}
+	if candidate, distSq, ok := t.closestPointOnSegment(pos, hint); ok {
 		bestDistanceSq = distSq
-		best = TrackPoint{Position: point, Forward: forward, Right: right, Distance: t.segmentStarts[i] + t.segmentLengths[i] * segT, SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth}
+		best = candidate
+	}
+	candidates, useSpatial := t.spatialCandidateSegments(pos, bestDistanceSq)
+	if useSpatial {
+		for _, i := range candidates {
+			if i == hint {
+				continue
+			}
+			if len(t.segmentBounds) == len(t.segmentLengths) && trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
+				continue
+			}
+			candidate, distSq, ok := t.closestPointOnSegment(pos, i)
+			if !ok {
+				continue
+			}
+			if distSq >= bestDistanceSq {
+				continue
+			}
+			bestDistanceSq = distSq
+			best = candidate
+		}
+	} else {
+		for i := 0; i < len(t.segmentLengths); i++ {
+			if i == hint {
+				continue
+			}
+			if len(t.segmentBounds) == len(t.segmentLengths) && trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
+				continue
+			}
+			candidate, distSq, ok := t.closestPointOnSegment(pos, i)
+			if !ok {
+				continue
+			}
+			if distSq >= bestDistanceSq {
+				continue
+			}
+			bestDistanceSq = distSq
+			best = candidate
+		}
 	}
 	if t.closed {
 		best.Distance = trackWrapDistance(best.Distance, t.length)
 	}
+	t.closestSegmentHint = best.SegmentIndex
 	return best
+}
+
+func (t *Track) closestPointOnSegment(pos voplay.Vec3, i int) (TrackPoint, float64, bool) {
+	if t == nil || i < 0 || i >= len(t.segmentLengths) || i >= len(t.points) {
+		return TrackPoint{}, 0, false
+	}
+	if len(t.segments) == len(t.segmentLengths) {
+		seg := t.segments[i]
+		segT := 0.0
+		if seg.LengthSq > 0 {
+			segT = trackClamp(pos.Sub(seg.A).Dot(seg.Delta) / seg.LengthSq, 0, 1)
+		}
+		point := seg.A.Add(seg.Delta.Scale(segT))
+		distSq := pos.Sub(point).LengthSq()
+		lateral := pos.Sub(point).Dot(seg.Right)
+		halfWidth := trackLerp(seg.HalfWidthA, seg.HalfWidthB, segT)
+		return TrackPoint{Position: point, Forward: seg.Forward, Right: seg.Right, Distance: seg.Start + seg.Length * segT, SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth}, distSq, true
+	}
+	next := i + 1
+	if next >= len(t.points) {
+		next = 0
+	}
+	a := t.points[i]
+	b := t.points[next]
+	aPos := a.Position.Vec3()
+	bPos := b.Position.Vec3()
+	ap := pos.Sub(aPos)
+	ab := bPos.Sub(aPos)
+	abLenSq := ab.LengthSq()
+	segT := 0.0
+	if abLenSq > 0 {
+		segT = trackClamp(ap.Dot(ab) / abLenSq, 0, 1)
+	}
+	point := aPos.Lerp(bPos, segT)
+	distSq := pos.Sub(point).LengthSq()
+	forward := ab.Normalize()
+	right := forward.Cross(voplay.Vec3{Y: 1}).Normalize()
+	if right.LengthSq() == 0 {
+		right = voplay.Vec3{X: 1}
+	}
+	lateral := pos.Sub(point).Dot(right)
+	halfWidth := trackLerp(a.Width, b.Width, segT) * 0.5
+	return TrackPoint{Position: point, Forward: forward, Right: right, Distance: t.segmentStarts[i] + t.segmentLengths[i] * segT, SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth}, distSq, true
 }
 
 func (t *Track) PoseAt(distance float64) TrackPose {
@@ -367,6 +482,11 @@ func (t *Track) PoseAt(distance float64) TrackPose {
 	segT := 0.0
 	if segLen > 0 {
 		segT = trackClamp((d - segStart) / segLen, 0, 1)
+	}
+	if len(t.segments) == len(t.segmentLengths) {
+		seg := t.segments[idx]
+		pos := seg.A.Add(seg.Delta.Scale(segT))
+		return TrackPose{Position: pos, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, seg.Yaw), Forward: seg.Forward, Right: seg.Right, Yaw: seg.Yaw, Distance: d, Bank: trackLerp(seg.BankA, seg.BankB, segT), HalfWidth: trackLerp(seg.HalfWidthA, seg.HalfWidthB, segT)}
 	}
 	a := t.points[idx]
 	next := idx + 1
@@ -409,15 +529,15 @@ func (t *Track) poseOnRacingLine(line TrackRacingLine, distance float64) TrackRa
 	}
 	d := t.normalizeDistance(distance)
 	prev := line.Points[0]
-	next := line.Points[len(line.Points)-1]
+	next := line.Points[len(line.Points) - 1]
 	if d <= line.Points[0].Distance {
 		next = prev
-	} else if d >= line.Points[len(line.Points)-1].Distance {
+	} else if d >= line.Points[len(line.Points) - 1].Distance {
 		prev = next
 	} else {
-		for i := 0; i < len(line.Points)-1; i++ {
+		for i := 0; i < len(line.Points) - 1; i++ {
 			a := line.Points[i]
-			b := line.Points[i+1]
+			b := line.Points[i + 1]
 			if d >= a.Distance && d <= b.Distance {
 				prev = a
 				next = b
@@ -661,7 +781,7 @@ func SpawnTrackWithAssets(scene *Scene, assets *voplay.Assets, track *Track, bas
 	}()
 	if track.asset.Terrain != nil {
 		mapResult := &MapSpawnResult{Textures: []voplay.TextureID{}}
-		terrain, err := spawnMapTerrain(scene, assets, *track.asset.Terrain, baseDir, mapResult)
+		terrain, err := spawnMapTerrain(scene, assets, *track.asset.Terrain, baseDir, mapResult, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -671,7 +791,7 @@ func SpawnTrackWithAssets(scene *Scene, assets *voplay.Assets, track *Track, bas
 	}
 	for _, terrainAsset := range track.asset.TerrainChunks {
 		mapResult := &MapSpawnResult{Textures: []voplay.TextureID{}}
-		terrain, err := spawnMapTerrain(scene, assets, terrainAsset, baseDir, mapResult)
+		terrain, err := spawnMapTerrain(scene, assets, terrainAsset, baseDir, mapResult, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -714,6 +834,8 @@ func (r *TrackSpawnResult) Destroy(scene *Scene) {
 	r.TerrainChunks = nil
 	r.Meshes = map[string]*Entity{}
 	r.CollisionMeshes = map[string]*Entity{}
+	r.HeightSampler = nil
+	r.CollisionHeightSampler = nil
 	r.ReleaseTextures()
 }
 
@@ -721,6 +843,11 @@ func (r *TrackSpawnResult) HeightProbe() TrackHeightProbe {
 	return func(pos voplay.Vec3) (float64, bool) {
 		if r == nil {
 			return 0, false
+		}
+		if r.HeightSampler != nil {
+			if h, ok := r.HeightSampler(pos); ok {
+				return h, true
+			}
 		}
 		if h, ok := sampleSpawnedTerrainHeight(r.Terrain, pos); ok {
 			return h, true
@@ -737,8 +864,45 @@ func (r *TrackSpawnResult) HeightProbe() TrackHeightProbe {
 	}
 }
 
+func (r *TrackSpawnResult) CollisionHeightProbe() TrackHeightProbe {
+	return func(pos voplay.Vec3) (float64, bool) {
+		if r == nil {
+			return 0, false
+		}
+		if r.CollisionHeightSampler != nil {
+			if h, ok := r.CollisionHeightSampler(pos); ok {
+				return h, true
+			}
+		}
+		if r.HeightSampler != nil {
+			if h, ok := r.HeightSampler(pos); ok {
+				return h, true
+			}
+		}
+		if h, ok := sampleSpawnedTerrainCollisionHeight(r.Terrain, pos); ok {
+			return h, true
+		}
+		for _, terrain := range r.TerrainChunks {
+			if terrain == r.Terrain {
+				continue
+			}
+			if h, ok := sampleSpawnedTerrainCollisionHeight(terrain, pos); ok {
+				return h, true
+			}
+		}
+		return 0, false
+	}
+}
+
 func sampleSpawnedTerrainHeight(terrain *Terrain, pos voplay.Vec3) (float64, bool) {
 	if terrain == nil || terrain.entity == nil || !terrain.entity.Active || !terrain.entity.Visible {
+		return 0, false
+	}
+	return terrain.HeightAt(pos.X, pos.Z)
+}
+
+func sampleSpawnedTerrainCollisionHeight(terrain *Terrain, pos voplay.Vec3) (float64, bool) {
+	if terrain == nil || terrain.entity == nil || !terrain.entity.Active {
 		return 0, false
 	}
 	return terrain.HeightAt(pos.X, pos.Z)
@@ -784,6 +948,9 @@ func SpawnTrackDebugOverlay(scene *Scene, track *Track, opts TrackDebugOptions) 
 	if opts.Boundaries {
 		overlay.spawnTrackPolyline(scene, track, model, opts, -1, opts.BoundaryColor)
 		overlay.spawnTrackPolyline(scene, track, model, opts, 1, opts.BoundaryColor)
+	}
+	if opts.Surfaces {
+		overlay.spawnTrackSurfaceMarkers(scene, track, model, opts)
 	}
 	if opts.Gates {
 		for _, gate := range track.asset.Gates {
@@ -843,6 +1010,34 @@ func (o *TrackDebugOverlay) spawnTrackPolyline(scene *Scene, track *Track, model
 		yaw := trackYawFromForward(dir.Normalize())
 		ent := scene.Spawn(EntityDesc{Position: mid, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw), Scale: voplay.Vec3{X: opts.LineThickness, Y: opts.LineThickness, Z: length}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_line", PickMode: PickDisabled})
 		o.Entities = append(o.Entities, ent)
+	}
+}
+
+func (o *TrackDebugOverlay) spawnTrackSurfaceMarkers(scene *Scene, track *Track, model voplay.ModelID, opts TrackDebugOptions) {
+	step := opts.SurfaceStep
+	if step <= 0 {
+		step = 20
+	}
+	size := opts.SurfaceMarkerSize
+	if size <= 0 {
+		size = opts.LineThickness * 2.2
+	}
+	length := track.Length()
+	for distance := 0.0; distance < length; distance += step {
+		pose := track.PoseAt(distance)
+		laterals := []float64{-pose.HalfWidth - size * 2.8, -pose.HalfWidth * 0.55, 0, pose.HalfWidth * 0.55, pose.HalfWidth + size * 2.8}
+		for _, lateral := range laterals {
+			pos := pose.Position.Add(pose.Right.Scale(lateral))
+			hit := track.SurfaceAt(pos)
+			color := opts.OffroadSurfaceColor
+			if hit.Kind == TrackSurfaceBoost {
+				color = opts.BoostSurfaceColor
+			} else if hit.OnRoad || hit.Kind == TrackSurfaceRoad {
+				color = opts.RoadSurfaceColor
+			}
+			ent := scene.Spawn(EntityDesc{Position: pos.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: size, Y: size * 0.35, Z: size}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_surface_" + hit.Kind, PickMode: PickDisabled})
+			o.Entities = append(o.Entities, ent)
+		}
 	}
 }
 
@@ -1385,7 +1580,7 @@ func loadTrackModel(assets *voplay.Assets, path string) (voplay.ModelID, bool, e
 }
 
 func normalizeTrackDebugOptions(opts TrackDebugOptions) TrackDebugOptions {
-	if !opts.Centerline && !opts.Boundaries && !opts.Gates && !opts.Respawns {
+	if !opts.Centerline && !opts.Boundaries && !opts.Surfaces && !opts.Gates && !opts.Respawns {
 		opts.Centerline = true
 		opts.Boundaries = true
 		opts.Gates = true
@@ -1393,6 +1588,12 @@ func normalizeTrackDebugOptions(opts TrackDebugOptions) TrackDebugOptions {
 	}
 	if opts.LineThickness <= 0 {
 		opts.LineThickness = 0.18
+	}
+	if opts.SurfaceStep <= 0 {
+		opts.SurfaceStep = 20
+	}
+	if opts.SurfaceMarkerSize <= 0 {
+		opts.SurfaceMarkerSize = opts.LineThickness * 2.2
 	}
 	if opts.HeightOffset == 0 {
 		opts.HeightOffset = 0.35
@@ -1402,6 +1603,15 @@ func normalizeTrackDebugOptions(opts TrackDebugOptions) TrackDebugOptions {
 	}
 	if opts.BoundaryColor == (voplay.Color{}) {
 		opts.BoundaryColor = voplay.Color{R: 0.95, G: 0.15, B: 0.1, A: 1}
+	}
+	if opts.RoadSurfaceColor == (voplay.Color{}) {
+		opts.RoadSurfaceColor = voplay.Color{R: 0.15, G: 0.95, B: 0.35, A: 1}
+	}
+	if opts.OffroadSurfaceColor == (voplay.Color{}) {
+		opts.OffroadSurfaceColor = voplay.Color{R: 0.95, G: 0.48, B: 0.12, A: 1}
+	}
+	if opts.BoostSurfaceColor == (voplay.Color{}) {
+		opts.BoostSurfaceColor = voplay.Color{R: 0.1, G: 0.8, B: 1, A: 1}
 	}
 	if opts.GateColor == (voplay.Color{}) {
 		opts.GateColor = voplay.Color{R: 0.1, G: 0.8, B: 1, A: 1}
@@ -1465,19 +1675,168 @@ func trackSurfaceIsRoad(surface TrackSurface, centerlineOnRoad bool) bool {
 	return centerlineOnRoad
 }
 
+func newTrackSegmentData(aPoint, bPoint TrackControlPoint, a, b voplay.Vec3, start float64) trackSegmentData {
+	delta := b.Sub(a)
+	lengthSq := delta.LengthSq()
+	length := 0.0
+	forward := voplay.Vec3{Z: -1}
+	if lengthSq > 0 {
+		length = math.Sqrt(lengthSq)
+		forward = delta.Scale(1 / length)
+	}
+	right := forward.Cross(voplay.Vec3{Y: 1}).Normalize()
+	if right.LengthSq() == 0 {
+		right = voplay.Vec3{X: 1}
+	}
+	return trackSegmentData{Start: start, Length: length, LengthSq: lengthSq, A: a, B: b, Delta: delta, Forward: forward, Right: right, Yaw: trackYawFromForward(forward), HalfWidthA: aPoint.Width * 0.5, HalfWidthB: bPoint.Width * 0.5, BankA: aPoint.Bank, BankB: bPoint.Bank, Bounds: trackSegmentBoundsBetween(a, b)}
+}
+
+func trackSegmentBoundsBetween(a, b voplay.Vec3) trackSegmentBounds {
+	return trackSegmentBounds{
+		Min: voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)},
+		Max: voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)},
+	}
+}
+
+func trackSegmentBoundsDistanceSq(bounds trackSegmentBounds, pos voplay.Vec3) float64 {
+	return trackAxisOutsideDistanceSq(pos.X, bounds.Min.X, bounds.Max.X) + trackAxisOutsideDistanceSq(pos.Y, bounds.Min.Y, bounds.Max.Y) + trackAxisOutsideDistanceSq(pos.Z, bounds.Min.Z, bounds.Max.Z)
+}
+
+func trackAxisOutsideDistanceSq(v, lo, hi float64) float64 {
+	if v < lo {
+		d := lo - v
+		return d * d
+	}
+	if v > hi {
+		d := v - hi
+		return d * d
+	}
+	return 0
+}
+
+func (t *Track) rebuildSpatialIndex() {
+	if t == nil || len(t.segments) == 0 {
+		return
+	}
+	cellSize := t.spatialCellSize
+	if cellSize <= 0 {
+		cellSize = trackSpatialCellSize
+		t.spatialCellSize = cellSize
+	}
+	t.spatialIndex = map[trackSpatialCellKey][]int{}
+	for i, segment := range t.segments {
+		minX := trackSpatialCell(segment.Bounds.Min.X, cellSize)
+		maxX := trackSpatialCell(segment.Bounds.Max.X, cellSize)
+		minZ := trackSpatialCell(segment.Bounds.Min.Z, cellSize)
+		maxZ := trackSpatialCell(segment.Bounds.Max.Z, cellSize)
+		for x := minX; x <= maxX; x++ {
+			for z := minZ; z <= maxZ; z++ {
+				key := trackSpatialKey(x, z)
+				t.spatialIndex[key] = append(t.spatialIndex[key], i)
+			}
+		}
+	}
+}
+
+func (t *Track) spatialCandidateSegments(pos voplay.Vec3, bestDistanceSq float64) ([]int, bool) {
+	if t == nil || len(t.spatialIndex) == 0 || len(t.spatialMarks) != len(t.segmentLengths) || bestDistanceSq <= 0 {
+		return nil, false
+	}
+	radius := math.Sqrt(bestDistanceSq)
+	if radius > trackSpatialMaxSearchRadius {
+		return nil, false
+	}
+	cellSize := t.spatialCellSize
+	if cellSize <= 0 {
+		cellSize = trackSpatialCellSize
+	}
+	t.spatialMark++
+	if t.spatialMark > 1000000000 {
+		for i := 0; i < len(t.spatialMarks); i++ {
+			t.spatialMarks[i] = 0
+		}
+		t.spatialMark = 1
+	}
+	mark := t.spatialMark
+	t.spatialScratch = t.spatialScratch[:0]
+	minX := trackSpatialCell(pos.X - radius, cellSize)
+	maxX := trackSpatialCell(pos.X + radius, cellSize)
+	minZ := trackSpatialCell(pos.Z - radius, cellSize)
+	maxZ := trackSpatialCell(pos.Z + radius, cellSize)
+	for x := minX; x <= maxX; x++ {
+		for z := minZ; z <= maxZ; z++ {
+			for _, index := range t.spatialIndex[trackSpatialKey(x, z)] {
+				if index < 0 || index >= len(t.spatialMarks) {
+					continue
+				}
+				if t.spatialMarks[index] == mark {
+					continue
+				}
+				t.spatialMarks[index] = mark
+				t.spatialScratch = append(t.spatialScratch, index)
+			}
+		}
+	}
+	return t.spatialScratch, len(t.spatialScratch) > 0
+}
+
+func trackSpatialCell(v, cellSize float64) int {
+	return int(math.Floor(v / cellSize))
+}
+
+func trackSpatialKey(x, z int) trackSpatialCellKey {
+	return trackSpatialCellKey{X: x, Z: z}
+}
+
 func (t *Track) segmentIndexAt(distance float64) int {
 	if len(t.segmentStarts) == 0 {
 		return 0
 	}
-	idx := len(t.segmentStarts) - 1
-	for i := 0; i < len(t.segmentStarts); i++ {
-		start := t.segmentStarts[i]
-		end := start + t.segmentLengths[i]
-		if distance >= start && distance <= end {
-			return i
-		}
+	hint := t.poseSegmentHint
+	if hint > 0 && hint < len(t.segmentStarts) && distance == t.segmentStarts[hint] {
+		t.poseSegmentHint = hint - 1
+		return hint - 1
 	}
+	if hint >= 0 && hint < len(t.segmentStarts) && t.segmentContainsDistance(hint, distance) {
+		return hint
+	}
+	idx := t.segmentIndexAtOrBefore(distance)
+	if idx > 0 && distance == t.segmentStarts[idx] {
+		idx--
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(t.segmentStarts) {
+		idx = len(t.segmentStarts) - 1
+	}
+	t.poseSegmentHint = idx
 	return idx
+}
+
+func (t *Track) segmentContainsDistance(index int, distance float64) bool {
+	if t == nil || index < 0 || index >= len(t.segmentStarts) || index >= len(t.segmentLengths) {
+		return false
+	}
+	start := t.segmentStarts[index]
+	end := start + t.segmentLengths[index]
+	return distance >= start && distance <= end
+}
+
+func (t *Track) segmentIndexAtOrBefore(distance float64) int {
+	lo := 0
+	hi := len(t.segmentStarts) - 1
+	best := 0
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if distance < t.segmentStarts[mid] {
+			hi = mid - 1
+			continue
+		}
+		best = mid
+		lo = mid + 1
+	}
+	return best
 }
 
 func (t *Track) normalizeDistance(distance float64) float64 {

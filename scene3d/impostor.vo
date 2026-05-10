@@ -1,0 +1,668 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"strconv"
+	"github.com/vo-lang/voplay/codec"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+)
+
+const (
+	ImpostorBillboardY    = 0
+	ImpostorBillboardFull = 1
+)
+
+type ImpostorAtlasDesc struct {
+	Name string
+	Texture voplay.TextureID
+	TextureWidth int
+	TextureHeight int
+	Columns int
+	Rows int
+	Count int
+	Padding float64
+	PaddingPixels int
+	BillboardMode int
+	NoShadow bool
+	LodNear float64
+	LodFar float64
+	CardWidth float64
+	CardHeight float64
+	Material primitive3d.MaterialDesc
+	MinQuality int
+	MaxQuality int
+}
+
+type ImpostorAtlasCell struct {
+	Index int
+	Row int
+	Column int
+	UV voplay.Rect
+	PixelRect voplay.Rect
+	Yaw float64
+}
+
+type ImpostorAtlas struct {
+	Name string
+	Texture voplay.TextureID
+	TextureWidth int
+	TextureHeight int
+	Columns int
+	Rows int
+	Count int
+	Cells []ImpostorAtlasCell
+	BillboardMode int
+	NoShadow bool
+	LodNear float64
+	LodFar float64
+	CardWidth float64
+	CardHeight float64
+	Material primitive3d.MaterialDesc
+	MinQuality int
+	MaxQuality int
+}
+
+type ImpostorBakePlanDesc struct {
+	Name string
+	Model voplay.ModelID
+	Material voplay.MaterialDesc
+	Atlas ImpostorAtlasDesc
+	Center voplay.Vec3
+	Radius float64
+	Distance float64
+	Pitch float64
+	Fov float64
+	Near float64
+	Far float64
+}
+
+type ImpostorBakeView struct {
+	Name string
+	Index int
+	Model voplay.ModelID
+	Material voplay.MaterialDesc
+	Camera Camera
+	UV voplay.Rect
+	PixelRect voplay.Rect
+	Yaw float64
+	Pitch float64
+}
+
+type ImpostorBakePlan struct {
+	Name string
+	Atlas ImpostorAtlas
+	Views []ImpostorBakeView
+}
+
+type ImpostorBakeResult struct {
+	Name string
+	Atlas ImpostorAtlas
+	Texture voplay.TextureID
+	Normal voplay.TextureID
+	MetallicRoughness voplay.TextureID
+	Mask voplay.TextureID
+	TextureWidth int
+	TextureHeight int
+	Views int
+}
+
+type ImpostorBakeBackend interface {
+	BakeImpostor(plan ImpostorBakePlan) (ImpostorBakeResult, error)
+}
+
+type defaultImpostorBakeBackend struct{}
+
+func (defaultImpostorBakeBackend) BakeImpostor(plan ImpostorBakePlan) (ImpostorBakeResult, error) {
+	if len(plan.Views) == 0 {
+		return ImpostorBakeResult{}, errors.New("scene3d.BakeImpostorPlan: plan requires at least one view")
+	}
+	width := plan.Atlas.TextureWidth
+	height := plan.Atlas.TextureHeight
+	if width <= 0 {
+		width = plan.Atlas.Columns * 128
+	}
+	if height <= 0 {
+		height = plan.Atlas.Rows * 128
+	}
+	if width <= 0 || height <= 0 {
+		return ImpostorBakeResult{}, errors.New("scene3d.BakeImpostorPlan: atlas dimensions must be > 0")
+	}
+	request, err := encodeRustImpostorBakeRequest(plan, width, height)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	bakedBytes, err := bakeImpostorAtlasBytes(request)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	albedo, normal, metallicRoughness, mask, err := decodeRustImpostorBakeResult(bakedBytes, width, height)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	texture, err := voplay.LoadTextureRGBA(width, height, albedo)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	normalTexture, err := voplay.LoadTextureRGBALinear(width, height, normal)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	metallicRoughnessTexture, err := voplay.LoadTextureRGBALinear(width, height, metallicRoughness)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	maskTexture, err := voplay.LoadTextureRGBALinear(width, height, mask)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	atlas := plan.Atlas
+	atlas.Texture = texture
+	atlas.TextureWidth = width
+	atlas.TextureHeight = height
+	atlas.Material.Base.Albedo = texture
+	atlas.Material.Base.Normal = normalTexture
+	atlas.Material.Base.MetallicRoughness = metallicRoughnessTexture
+	atlas.Material.Base.Mask = maskTexture
+	atlas.Material.Base.NormalScale = 0.72
+	atlas.Material.Base.Roughness = 0.76
+	atlas.Material.Base.RoughnessResponse = 1.1
+	return ImpostorBakeResult{Name: plan.Name, Atlas: atlas, Texture: texture, Normal: normalTexture, MetallicRoughness: metallicRoughnessTexture, Mask: maskTexture, TextureWidth: width, TextureHeight: height, Views: len(plan.Views)}, nil
+}
+
+var impostorBakeBackend ImpostorBakeBackend = defaultImpostorBakeBackend{}
+
+func SetImpostorBakeBackend(backend ImpostorBakeBackend) ImpostorBakeBackend {
+	prev := impostorBakeBackend
+	if backend == nil {
+		backend = defaultImpostorBakeBackend{}
+	}
+	impostorBakeBackend = backend
+	return prev
+}
+
+func BuildImpostorAtlas(desc ImpostorAtlasDesc) (ImpostorAtlas, error) {
+	if desc.Columns <= 0 || desc.Rows <= 0 {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: Columns and Rows must be > 0")
+	}
+	if desc.TextureWidth < 0 || desc.TextureHeight < 0 {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: texture dimensions must be >= 0")
+	}
+	if desc.Padding < 0 || desc.Padding >= 0.5 {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: Padding must be >= 0 and < 0.5")
+	}
+	if desc.PaddingPixels < 0 {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: PaddingPixels must be >= 0")
+	}
+	if desc.LodFar > 0 && desc.LodFar < desc.LodNear {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: LodFar must be >= LodNear")
+	}
+	if desc.BillboardMode != ImpostorBillboardY && desc.BillboardMode != ImpostorBillboardFull {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: unknown BillboardMode")
+	}
+	capacity := desc.Columns * desc.Rows
+	count := desc.Count
+	if count <= 0 {
+		count = capacity
+	}
+	if count > capacity {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: Count exceeds atlas capacity")
+	}
+	if count <= 0 {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: Count must be > 0")
+	}
+	textureWidth := desc.TextureWidth
+	textureHeight := desc.TextureHeight
+	if textureWidth == 0 {
+		textureWidth = desc.Columns * 128
+	}
+	if textureHeight == 0 {
+		textureHeight = desc.Rows * 128
+	}
+	cellW := 1.0 / float64(desc.Columns)
+	cellH := 1.0 / float64(desc.Rows)
+	padX := desc.Padding * cellW
+	padY := desc.Padding * cellH
+	if desc.PaddingPixels > 0 {
+		if textureWidth > 0 {
+			pixelPadX := float64(desc.PaddingPixels) / float64(textureWidth)
+			if pixelPadX > padX {
+				padX = pixelPadX
+			}
+		}
+		if textureHeight > 0 {
+			pixelPadY := float64(desc.PaddingPixels) / float64(textureHeight)
+			if pixelPadY > padY {
+				padY = pixelPadY
+			}
+		}
+	}
+	if padX*2 >= cellW || padY*2 >= cellH {
+		return ImpostorAtlas{}, errors.New("scene3d.BuildImpostorAtlas: padding consumes the atlas cell")
+	}
+	name := desc.Name
+	if name == "" {
+		name = "impostor_atlas"
+	}
+	cardWidth := desc.CardWidth
+	if cardWidth <= 0 {
+		cardWidth = 1
+	}
+	cardHeight := desc.CardHeight
+	if cardHeight <= 0 {
+		cardHeight = 1
+	}
+	cells := make([]ImpostorAtlasCell, 0, count)
+	for i := 0; i < count; i++ {
+		col := i % desc.Columns
+		row := i / desc.Columns
+		uv := voplay.Rect{X: float64(col)*cellW + padX, Y: float64(row)*cellH + padY, W: cellW - padX*2, H: cellH - padY*2}
+		pixel := voplay.Rect{}
+		if textureWidth > 0 && textureHeight > 0 {
+			pixel = voplay.Rect{X: uv.X * float64(textureWidth), Y: uv.Y * float64(textureHeight), W: uv.W * float64(textureWidth), H: uv.H * float64(textureHeight)}
+		}
+		yaw := 0.0
+		if count > 1 {
+			yaw = 2 * math.Pi * float64(i) / float64(count)
+		}
+		cells = append(cells, ImpostorAtlasCell{Index: i, Row: row, Column: col, UV: uv, PixelRect: pixel, Yaw: yaw})
+	}
+	return ImpostorAtlas{
+		Name: name,
+		Texture: desc.Texture,
+		TextureWidth: textureWidth,
+		TextureHeight: textureHeight,
+		Columns: desc.Columns,
+		Rows: desc.Rows,
+		Count: count,
+		Cells: cells,
+		BillboardMode: desc.BillboardMode,
+		NoShadow: desc.NoShadow,
+		LodNear: desc.LodNear,
+		LodFar: desc.LodFar,
+		CardWidth: cardWidth,
+		CardHeight: cardHeight,
+		Material: impostorAtlasMaterial(desc),
+		MinQuality: desc.MinQuality,
+		MaxQuality: desc.MaxQuality,
+	}, nil
+}
+
+func BuildImpostorBakePlan(desc ImpostorBakePlanDesc) (ImpostorBakePlan, error) {
+	if desc.Model == 0 {
+		return ImpostorBakePlan{}, errors.New("scene3d.BuildImpostorBakePlan: Model is required")
+	}
+	atlas, err := BuildImpostorAtlas(desc.Atlas)
+	if err != nil {
+		return ImpostorBakePlan{}, err
+	}
+	radius := desc.Radius
+	if radius <= 0 {
+		radius = 1
+	}
+	distance := desc.Distance
+	if distance <= 0 {
+		distance = radius * 3
+	}
+	fov := desc.Fov
+	if fov <= 0 {
+		fov = 35
+	}
+	near := desc.Near
+	if near <= 0 {
+		near = 0.05
+	}
+	far := desc.Far
+	if far <= 0 {
+		far = distance + radius*4
+	}
+	if far <= near {
+		return ImpostorBakePlan{}, errors.New("scene3d.BuildImpostorBakePlan: Far must be greater than Near")
+	}
+	name := desc.Name
+	if name == "" {
+		name = atlas.Name
+	}
+	views := make([]ImpostorBakeView, 0, len(atlas.Cells))
+	for _, cell := range atlas.Cells {
+		camera := Camera{Up: voplay.Vec3{Y: 1}, Fov: fov, Near: near, Far: far}
+		camera.Orbit(desc.Center, distance, cell.Yaw, desc.Pitch)
+		views = append(views, ImpostorBakeView{
+			Name: name + "_view_" + impostorIndexString(cell.Index),
+			Index: cell.Index,
+			Model: desc.Model,
+			Material: desc.Material,
+			Camera: camera,
+			UV: cell.UV,
+			PixelRect: cell.PixelRect,
+			Yaw: cell.Yaw,
+			Pitch: desc.Pitch,
+		})
+	}
+	return ImpostorBakePlan{Name: name, Atlas: atlas, Views: views}, nil
+}
+
+func BakeImpostorAtlas(desc ImpostorBakePlanDesc) (ImpostorBakeResult, error) {
+	plan, err := BuildImpostorBakePlan(desc)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	return BakeImpostorPlan(plan)
+}
+
+func BakeImpostorPlan(plan ImpostorBakePlan) (ImpostorBakeResult, error) {
+	if len(plan.Views) == 0 {
+		return ImpostorBakeResult{}, errors.New("scene3d.BakeImpostorPlan: plan requires at least one view")
+	}
+	result, err := impostorBakeBackend.BakeImpostor(plan)
+	if err != nil {
+		return ImpostorBakeResult{}, err
+	}
+	normalized := normalizeImpostorBakeResult(plan, result)
+	if normalized.Texture == 0 {
+		return ImpostorBakeResult{}, errors.New("scene3d.BakeImpostorPlan: bake backend returned no texture")
+	}
+	return normalized, nil
+}
+
+func BakeImpostorScatterPrototypes(desc ImpostorBakePlanDesc, base TrackScatterPrototype) ([]TrackScatterPrototype, ImpostorBakeResult, error) {
+	result, err := BakeImpostorAtlas(desc)
+	if err != nil {
+		return nil, ImpostorBakeResult{}, err
+	}
+	prototypes, err := result.Atlas.Prototypes(base)
+	if err != nil {
+		return nil, ImpostorBakeResult{}, err
+	}
+	return prototypes, result, nil
+}
+
+func (a ImpostorAtlas) Cell(index int) (ImpostorAtlasCell, error) {
+	if index < 0 || index >= len(a.Cells) {
+		return ImpostorAtlasCell{}, errors.New("scene3d.ImpostorAtlas.Cell: index out of range")
+	}
+	return a.Cells[index], nil
+}
+
+func (a ImpostorAtlas) Prototype(index int, base TrackScatterPrototype) (TrackScatterPrototype, error) {
+	cell, err := a.Cell(index)
+	if err != nil {
+		return TrackScatterPrototype{}, err
+	}
+	out := base
+	if out.Shape == 0 && out.ShapeDesc == (primitive3d.ShapeDesc{}) {
+		out.ShapeDesc = primitive3d.ShapeDesc{Kind: primitive3d.ShapePlane, Width: a.CardWidth, Depth: a.CardHeight, SubX: 1, SubZ: 1}
+	}
+	if out.Material == 0 {
+		out.MaterialDesc = a.Material
+	}
+	out.Flags = out.Flags | primitive3d.InstanceAtlasUV
+	if a.BillboardMode == ImpostorBillboardFull {
+		out.Flags = out.Flags | primitive3d.InstanceBillboard
+	} else {
+		out.Flags = out.Flags | primitive3d.InstanceYBillboard
+	}
+	if a.NoShadow {
+		out.Flags = out.Flags | primitive3d.InstanceNoShadow
+	}
+	out.AtlasUV = cell.UV
+	if a.LodNear > 0 {
+		out.LodNear = a.LodNear
+	}
+	if a.LodFar > 0 {
+		out.LodFar = a.LodFar
+	}
+	if a.MinQuality > 0 {
+		out.MinQuality = a.MinQuality
+	}
+	if a.MaxQuality > 0 {
+		out.MaxQuality = a.MaxQuality
+	}
+	return out, nil
+}
+
+func (a ImpostorAtlas) Prototypes(base TrackScatterPrototype) ([]TrackScatterPrototype, error) {
+	prototypes := make([]TrackScatterPrototype, 0, len(a.Cells))
+	for i := 0; i < len(a.Cells); i++ {
+		proto, err := a.Prototype(i, base)
+		if err != nil {
+			return nil, err
+		}
+		prototypes = append(prototypes, proto)
+	}
+	return prototypes, nil
+}
+
+func normalizeImpostorBakeResult(plan ImpostorBakePlan, result ImpostorBakeResult) ImpostorBakeResult {
+	if result.Name == "" {
+		result.Name = plan.Name
+	}
+	if result.Atlas.Texture == 0 {
+		result.Atlas = plan.Atlas
+	}
+	if result.Texture == 0 {
+		result.Texture = result.Atlas.Texture
+	}
+	if result.TextureWidth <= 0 {
+		result.TextureWidth = result.Atlas.TextureWidth
+	}
+	if result.TextureHeight <= 0 {
+		result.TextureHeight = result.Atlas.TextureHeight
+	}
+	if result.Views <= 0 {
+		result.Views = len(plan.Views)
+	}
+	if result.Texture != result.Atlas.Texture {
+		result.Atlas.Texture = result.Texture
+		result.Atlas.Material.Base.Albedo = result.Texture
+	}
+	if result.Normal != 0 {
+		result.Atlas.Material.Base.Normal = result.Normal
+	}
+	if result.MetallicRoughness != 0 {
+		result.Atlas.Material.Base.MetallicRoughness = result.MetallicRoughness
+	}
+	if result.Mask != 0 {
+		result.Atlas.Material.Base.Mask = result.Mask
+	}
+	if result.TextureWidth > 0 {
+		result.Atlas.TextureWidth = result.TextureWidth
+	}
+	if result.TextureHeight > 0 {
+		result.Atlas.TextureHeight = result.TextureHeight
+	}
+	return result
+}
+
+func encodeRustImpostorBakeRequest(plan ImpostorBakePlan, width, height int) ([]byte, error) {
+	geometry := voplay.ModelGeometryBytes(plan.Views[0].Model)
+	textureIDs, err := impostorTextureIDsFromGeometry(geometry)
+	if err != nil {
+		return nil, err
+	}
+	texturePayloads := make([][]byte, 0, len(textureIDs))
+	for _, id := range textureIDs {
+		payload := voplay.TexturePixelsBytes(voplay.TextureID(id))
+		if len(payload) == 0 {
+			return nil, errors.New("scene3d.BakeImpostorPlan: source texture pixels are empty")
+		}
+		texturePayloads = append(texturePayloads, payload)
+	}
+	total := 4 + 4 + 4 + 4 + 16 + len(plan.Views)*20 + 4 + len(geometry) + 4
+	for _, payload := range texturePayloads {
+		total += 8 + len(payload)
+	}
+	w := codec.NewByteWriter(total)
+	w.WriteU32(1)
+	w.WriteU32(width)
+	w.WriteU32(height)
+	w.WriteU32(len(plan.Views))
+	base := plan.Atlas.Material.Base.BaseColor
+	if base == (voplay.Color{}) {
+		base = voplay.White
+	}
+	w.WriteF32(base.R)
+	w.WriteF32(base.G)
+	w.WriteF32(base.B)
+	w.WriteF32(base.A)
+	for _, view := range plan.Views {
+		w.WriteF32(view.PixelRect.X)
+		w.WriteF32(view.PixelRect.Y)
+		w.WriteF32(view.PixelRect.W)
+		w.WriteF32(view.PixelRect.H)
+		w.WriteF32(view.Yaw)
+	}
+	w.WriteU32(len(geometry))
+	w.WriteRawBytes(geometry)
+	w.WriteU32(len(textureIDs))
+	for i, id := range textureIDs {
+		w.WriteU32(id)
+		w.WriteU32(len(texturePayloads[i]))
+		w.WriteRawBytes(texturePayloads[i])
+	}
+	return w.Bytes(), nil
+}
+
+func impostorTextureIDsFromGeometry(geometry []byte) ([]int, error) {
+	if len(geometry) < 24 {
+		return nil, errors.New("scene3d.BakeImpostorPlan: model geometry bytes are truncated")
+	}
+	r := codec.NewByteReader(geometry)
+	version := r.ReadU32()
+	positionCount := r.ReadU32()
+	indexCount := r.ReadU32()
+	_ = r.ReadU32()
+	materialCount := r.ReadU32()
+	triangleMaterialCount := r.ReadU32()
+	if version != 1 {
+		return nil, errors.New("scene3d.BakeImpostorPlan: unsupported model geometry version")
+	}
+	expected := 24 + positionCount*48 + materialCount*84 + indexCount*4 + triangleMaterialCount*4
+	if expected != len(geometry) {
+		return nil, errors.New("scene3d.BakeImpostorPlan: model geometry size mismatch")
+	}
+	_ = r.ReadBytes(positionCount * 48)
+	seen := map[int]bool{}
+	ids := []int{}
+	for i := 0; i < materialCount; i++ {
+		_ = r.ReadBytes(60)
+		for slot := 0; slot < 6; slot++ {
+			id := r.ReadU32()
+			if slot == 4 {
+				continue
+			}
+			if id > 0 && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
+}
+
+func decodeRustImpostorBakeResult(data []byte, expectedWidth, expectedHeight int) ([]byte, []byte, []byte, []byte, error) {
+	if len(data) < 12 {
+		return nil, nil, nil, nil, errors.New("scene3d.BakeImpostorPlan: Rust baker result is truncated")
+	}
+	r := codec.NewByteReader(data)
+	version := r.ReadU32()
+	width := r.ReadU32()
+	height := r.ReadU32()
+	if version != 1 {
+		return nil, nil, nil, nil, errors.New("scene3d.BakeImpostorPlan: unsupported Rust baker result version")
+	}
+	if width != expectedWidth || height != expectedHeight {
+		return nil, nil, nil, nil, errors.New("scene3d.BakeImpostorPlan: Rust baker result dimensions mismatch")
+	}
+	expectedBytes := width * height * 4
+	albedo, err := readRustImpostorImage(&r, expectedBytes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	normal, err := readRustImpostorImage(&r, expectedBytes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	metallicRoughness, err := readRustImpostorImage(&r, expectedBytes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	mask, err := readRustImpostorImage(&r, expectedBytes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if r.Remaining() != 0 {
+		return nil, nil, nil, nil, errors.New("scene3d.BakeImpostorPlan: Rust baker result has trailing bytes")
+	}
+	return albedo, normal, metallicRoughness, mask, nil
+}
+
+func readRustImpostorImage(r *codec.ByteReader, expectedBytes int) ([]byte, error) {
+	if r.Remaining() < 4 {
+		return nil, errors.New("scene3d.BakeImpostorPlan: Rust baker image length is missing")
+	}
+	n := r.ReadU32()
+	if n != expectedBytes || r.Remaining() < n {
+		return nil, errors.New("scene3d.BakeImpostorPlan: Rust baker image bytes are invalid")
+	}
+	return r.ReadBytes(n), nil
+}
+
+func impostorAtlasMaterial(desc ImpostorAtlasDesc) primitive3d.MaterialDesc {
+	material := desc.Material
+	if material == (primitive3d.MaterialDesc{}) {
+		return primitive3d.MaterialDesc{
+			Base: voplay.MaterialDesc{
+				BaseColor: voplay.White,
+				Albedo: desc.Texture,
+				Roughness: 0.72,
+				UVScale: 1,
+				DetailStrength: 1,
+				RoughnessResponse: 1,
+				ToonRampResponse: 1,
+				ShadingMode: voplay.MaterialShadingToon,
+				WrapMode: voplay.MaterialWrapClamp,
+				FilterMode: voplay.MaterialFilterLinear,
+			},
+			Name: desc.Name,
+		}
+	}
+	if material.Base.Albedo == 0 {
+		material.Base.Albedo = desc.Texture
+	}
+	if material.Base.UVScale <= 0 {
+		material.Base.UVScale = 1
+	}
+	if material.Base.DetailStrength <= 0 {
+		material.Base.DetailStrength = 1
+	}
+	if material.Base.RoughnessResponse <= 0 {
+		material.Base.RoughnessResponse = 1
+	}
+	if material.Base.ToonRampResponse <= 0 {
+		material.Base.ToonRampResponse = 1
+	}
+	if material.Base.WrapMode == 0 {
+		material.Base.WrapMode = voplay.MaterialWrapClamp
+	}
+	if material.Base.FilterMode == 0 {
+		material.Base.FilterMode = voplay.MaterialFilterLinear
+	}
+	if material.Name == "" {
+		material.Name = desc.Name
+	}
+	return material
+}
+
+func impostorIndexString(index int) string {
+	if index < 10 {
+		return "00" + strconv.Itoa(index)
+	}
+	if index < 100 {
+		return "0" + strconv.Itoa(index)
+	}
+	return strconv.Itoa(index)
+}
+
+func bakeImpostorAtlasBytes(request []byte) ([]byte, error)

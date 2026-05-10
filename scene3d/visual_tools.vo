@@ -1,0 +1,249 @@
+package scene3d
+
+import (
+	"strconv"
+	"github.com/vo-lang/voplay"
+)
+
+const (
+	VisualIssueWarning = 1
+	VisualIssueError   = 2
+)
+
+type VisualCaptureView struct {
+	Name             string
+	Camera           Camera
+	RenderDebugMode  int
+	RenderingQuality int
+	ShadowQuality    int
+	Fog              FogConfig
+	ColorGrading     ColorGradingConfig
+	PostProcess      PostProcessConfig
+	Diagnostics      SceneDiagnostics
+}
+
+type VisualCaptureBoard struct {
+	Name  string
+	Views []VisualCaptureView
+}
+
+type VisualAssetIssue struct {
+	Code     string
+	Severity int
+	Path     string
+	Message  string
+}
+
+type ScreenshotCheckDesc struct {
+	Name                    string
+	Width                   int
+	Height                  int
+	PixelsRGBA8             []byte
+	MinNonTransparentPixels int
+	MinLumaRange            float64
+}
+
+type ScreenshotCheckReport struct {
+	Name                 string
+	Width                int
+	Height               int
+	NonTransparentPixels int
+	MinLuma              float64
+	MaxLuma              float64
+	LumaRange            float64
+	Issues               []VisualAssetIssue
+}
+
+func (s *Scene) CaptureView(name string) VisualCaptureView {
+	if s == nil {
+		return VisualCaptureView{Name: name}
+	}
+	return VisualCaptureView{
+		Name:             name,
+		Camera:           s.Camera,
+		RenderDebugMode:  normalizeRenderDebugMode(s.RenderDebugMode),
+		RenderingQuality: normalizeSceneQuality(s.RenderingQuality),
+		ShadowQuality:    normalizeShadowQuality(s.ShadowQuality),
+		Fog:              normalizeFogConfig(s.Fog),
+		ColorGrading:     normalizeColorGrading(s.ColorGrading),
+		PostProcess:      normalizePostProcess(s.PostProcess),
+		Diagnostics:      s.Diagnostics(),
+	}
+}
+
+func (s *Scene) CaptureDebugBoard(name string, modes []int) VisualCaptureBoard {
+	if name == "" {
+		name = "scene_debug"
+	}
+	if len(modes) == 0 {
+		modes = []int{RenderDebugLit, RenderDebugAlbedo, RenderDebugNormal, RenderDebugRoughness, RenderDebugShadow}
+	}
+	board := VisualCaptureBoard{Name: name, Views: []VisualCaptureView{}}
+	for i, mode := range modes {
+		view := s.CaptureView(debugCaptureName(mode, i))
+		view.RenderDebugMode = normalizeRenderDebugMode(mode)
+		board.Views = append(board.Views, view)
+	}
+	return board
+}
+
+func ValidateSceneMaterial(path string, material voplay.MaterialDesc) []VisualAssetIssue {
+	issues := []VisualAssetIssue{}
+	if material.UVScale < 0 {
+		issues = appendVisualIssue(issues, "visual.material.uv_scale", VisualIssueError, path+".UVScale", "material UVScale must be >= 0")
+	}
+	if material.Roughness < 0 || material.Roughness > 1 {
+		issues = appendVisualIssue(issues, "visual.material.roughness", VisualIssueError, path+".Roughness", "material Roughness must be in 0..1")
+	}
+	if material.Metallic < 0 || material.Metallic > 1 {
+		issues = appendVisualIssue(issues, "visual.material.metallic", VisualIssueError, path+".Metallic", "material Metallic must be in 0..1")
+	}
+	if material.NormalScale < 0 {
+		issues = appendVisualIssue(issues, "visual.material.normal_scale", VisualIssueError, path+".NormalScale", "material NormalScale must be >= 0")
+	}
+	if material.DetailStrength < 0 {
+		issues = appendVisualIssue(issues, "visual.material.detail_strength", VisualIssueError, path+".DetailStrength", "material DetailStrength must be >= 0")
+	}
+	if material.MacroBlend < 0 {
+		issues = appendVisualIssue(issues, "visual.material.macro_blend", VisualIssueError, path+".MacroBlend", "material MacroBlend must be >= 0")
+	}
+	if material.RoughnessResponse < 0 {
+		issues = appendVisualIssue(issues, "visual.material.roughness_response", VisualIssueError, path+".RoughnessResponse", "material RoughnessResponse must be >= 0")
+	}
+	if material.ToonRampResponse < 0 {
+		issues = appendVisualIssue(issues, "visual.material.toon_response", VisualIssueError, path+".ToonRampResponse", "material ToonRampResponse must be >= 0")
+	}
+	if material.ToonRampResponse > 1 {
+		issues = appendVisualIssue(issues, "visual.material.toon_response_clamp", VisualIssueWarning, path+".ToonRampResponse", "shader clamps ToonRampResponse above 1")
+	}
+	return issues
+}
+
+func ValidateTerrainVisualPhysics(path string, terrain *Terrain) []VisualAssetIssue {
+	issues := []VisualAssetIssue{}
+	if terrain == nil {
+		return appendVisualIssue(issues, "visual.terrain.nil", VisualIssueError, path, "terrain is nil")
+	}
+	comparison := terrain.HeightDebugComparison()
+	if comparison.ExpectedHeightBytes == 0 || comparison.VisualHeightBytes != comparison.ExpectedHeightBytes {
+		issues = appendVisualIssue(issues, "visual.terrain.height_bytes", VisualIssueError, path+".heightData", "visual terrain height data must be rows*cols*4 f32 bytes")
+	}
+	if comparison.PhysicsHeightBytes != comparison.ExpectedHeightBytes {
+		issues = appendVisualIssue(issues, "visual.terrain.physics_height_bytes", VisualIssueError, path+".physics.heightData", "physics heightfield data must match decoded visual height byte size")
+	}
+	if !comparison.VisualPhysicsMatched {
+		issues = appendVisualIssue(issues, "visual.terrain.height_mismatch", VisualIssueError, path, "visual terrain and physics heightfield are not generated from the same decoded height grid")
+	}
+	return issues
+}
+
+func (s *Scene) ValidateVisualAssets() []VisualAssetIssue {
+	issues := []VisualAssetIssue{}
+	if s == nil {
+		return appendVisualIssue(issues, "visual.scene.nil", VisualIssueError, "$", "scene is nil")
+	}
+	if normalizeSceneQuality(s.RenderingQuality) >= SceneQualityCinematic && normalizeShadowQuality(s.ShadowQuality) < ShadowQualityHigh {
+		issues = appendVisualIssue(issues, "visual.shadow.quality", VisualIssueWarning, "scene.ShadowQuality", "cinematic scene quality should use high or cinematic shadow quality")
+	}
+	for i, entity := range s.entities {
+		if entity == nil || !entity.Active {
+			continue
+		}
+		path := "entities[" + strconv.Itoa(i) + "]"
+		issues = append(issues, ValidateSceneMaterial(path+".material", entity.Material)...)
+		if entity.Physics != nil && entity.Physics.Heightfield != nil {
+			h := entity.Physics.Heightfield
+			expected := h.rows * h.cols * 4
+			if expected == 0 || len(h.heightData) != expected {
+				issues = appendVisualIssue(issues, "visual.heightfield.bytes", VisualIssueError, path+".physics.heightfield", "heightfield data must be rows*cols*4 f32 bytes")
+			}
+		}
+	}
+	return issues
+}
+
+func CheckScreenshotFrame(desc ScreenshotCheckDesc) ScreenshotCheckReport {
+	minPixels := desc.MinNonTransparentPixels
+	if minPixels <= 0 {
+		minPixels = 1
+	}
+	minRange := desc.MinLumaRange
+	if minRange <= 0 {
+		minRange = 0.01
+	}
+	report := ScreenshotCheckReport{Name: desc.Name, Width: desc.Width, Height: desc.Height, Issues: []VisualAssetIssue{}}
+	expected := desc.Width * desc.Height * 4
+	if desc.Width <= 0 || desc.Height <= 0 || len(desc.PixelsRGBA8) != expected {
+		report.Issues = appendVisualIssue(report.Issues, "visual.screenshot.size", VisualIssueError, "pixels", "screenshot pixels must be width*height*4 RGBA8 bytes")
+		return report
+	}
+	report.MinLuma = 1
+	report.MaxLuma = 0
+	for i := 0; i+3 < len(desc.PixelsRGBA8); i += 4 {
+		r := float64(desc.PixelsRGBA8[i]) / 255
+		g := float64(desc.PixelsRGBA8[i+1]) / 255
+		b := float64(desc.PixelsRGBA8[i+2]) / 255
+		a := desc.PixelsRGBA8[i+3]
+		luma := r*0.2126 + g*0.7152 + b*0.0722
+		if luma < report.MinLuma {
+			report.MinLuma = luma
+		}
+		if luma > report.MaxLuma {
+			report.MaxLuma = luma
+		}
+		if a > 0 {
+			report.NonTransparentPixels++
+		}
+	}
+	report.LumaRange = report.MaxLuma - report.MinLuma
+	if report.NonTransparentPixels < minPixels {
+		report.Issues = appendVisualIssue(report.Issues, "visual.screenshot.blank", VisualIssueError, "pixels", "screenshot appears blank or fully transparent")
+	}
+	if report.LumaRange < minRange {
+		report.Issues = appendVisualIssue(report.Issues, "visual.screenshot.flat", VisualIssueWarning, "pixels", "screenshot luminance range is too small for visual regression confidence")
+	}
+	return report
+}
+
+func normalizeRenderDebugMode(mode int) int {
+	if mode < RenderDebugLit || mode > RenderDebugTerrainMacro {
+		return RenderDebugLit
+	}
+	return mode
+}
+
+func debugCaptureName(mode, index int) string {
+	switch mode {
+	case RenderDebugLit:
+		return "lit"
+	case RenderDebugAlbedo:
+		return "albedo"
+	case RenderDebugNormal:
+		return "normal"
+	case RenderDebugRoughness:
+		return "roughness"
+	case RenderDebugMetallic:
+		return "metallic"
+	case RenderDebugShadow:
+		return "shadow"
+	case RenderDebugDirect:
+		return "direct"
+	case RenderDebugAmbient:
+		return "ambient"
+	case RenderDebugTerrainControl:
+		return "terrain_control"
+	case RenderDebugTerrainSlope:
+		return "terrain_slope"
+	case RenderDebugTerrainHeight:
+		return "terrain_height"
+	case RenderDebugTerrainCurvature:
+		return "terrain_curvature"
+	case RenderDebugTerrainMacro:
+		return "terrain_macro"
+	}
+	return "debug_" + strconv.Itoa(index)
+}
+
+func appendVisualIssue(issues []VisualAssetIssue, code string, severity int, path, message string) []VisualAssetIssue {
+	return append(issues, VisualAssetIssue{Code: code, Severity: severity, Path: path, Message: message})
+}

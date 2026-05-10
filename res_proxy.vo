@@ -31,7 +31,7 @@ const (
 	resTagCreateSphereMesh byte = 17
 	resTagCreateCylinderMesh byte = 18
 	resTagCreateCapsuleMesh  byte = 19
-	resTagModelMeshData      byte = 20
+	resTagModelGeometry      byte = 20
 	resTagAnimationInit      byte = 21
 	resTagAnimationDestroy   byte = 22
 	resTagAnimationPlay      byte = 23
@@ -45,6 +45,12 @@ const (
 	resTagCreateRoundedBoxMesh byte = 31
 	resTagCreateConeMesh byte = 32
 	resTagCreateWedgeMesh byte = 33
+	resTagLoadTextureLinear byte = 34
+	resTagLoadTextureBytesLinear byte = 35
+	resTagLoadTextureRGBA byte = 36
+	resTagLoadTextureRGBALinear byte = 37
+	resTagTexturePixels byte = 38
+	resTagCreateRawMesh byte = 39
 
 	resRespOK    byte = 0
 	resRespError byte = 1
@@ -66,6 +72,25 @@ func encodeResBytes(tag byte, data []byte) []byte {
 	out = append(out, byte(n), byte(n>>8), byte(n>>16), byte(n>>24))
 	out = append(out, data...)
 	return out
+}
+
+func encodeResTextureRGBA(width, height int, data []byte) []byte {
+	return encodeResTextureRGBAWithTag(resTagLoadTextureRGBA, width, height, data)
+}
+
+func encodeResTextureRGBALinear(width, height int, data []byte) []byte {
+	return encodeResTextureRGBAWithTag(resTagLoadTextureRGBALinear, width, height, data)
+}
+
+func encodeResTextureRGBAWithTag(tag byte, width, height int, data []byte) []byte {
+	n := len(data)
+	w := codec.NewByteWriter(1 + 4 + 4 + 4 + n)
+	w.WriteByte(tag)
+	w.WriteU32(width)
+	w.WriteU32(height)
+	w.WriteU32(n)
+	w.WriteRawBytes(data)
+	return w.Bytes()
 }
 
 func encodeResU32(tag byte, id int) []byte {
@@ -347,11 +372,64 @@ func handleLoadTextureBytes(payload []byte) []byte {
 	return encodeResOKU32(id)
 }
 
+func handleLoadTextureRGBA(payload []byte) []byte {
+	return handleLoadTextureRGBAWithSpace(payload, false)
+}
+
+func handleLoadTextureRGBALinear(payload []byte) []byte {
+	return handleLoadTextureRGBAWithSpace(payload, true)
+}
+
+func handleLoadTextureRGBAWithSpace(payload []byte, linear bool) []byte {
+	r := codec.NewByteReader(payload)
+	width := r.ReadU32()
+	height := r.ReadU32()
+	n := r.ReadU32()
+	data := r.ReadBytes(n)
+	id := 0
+	var err error
+	if linear {
+		id, err = loadTextureRGBALinear(width, height, data)
+	} else {
+		id, err = loadTextureRGBA(width, height, data)
+	}
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadTextureLinear(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	pathLen := r.ReadU16()
+	path := string(r.ReadBytes(pathLen))
+	id, err := loadTextureLinear(path)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
+func handleLoadTextureBytesLinear(payload []byte) []byte {
+	data := decodeBytesPayload(payload)
+	id, err := loadTextureBytesLinear(data)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
+}
+
 func handleFreeTexture(payload []byte) []byte {
 	r := codec.NewByteReader(payload)
 	id := r.ReadU32()
 	freeTexture(id)
 	return encodeResOKUnit()
+}
+
+func handleTexturePixels(payload []byte) []byte {
+	r := codec.NewByteReader(payload)
+	id := r.ReadU32()
+	return encodeResOKBytes(texturePixelsBytes(id))
 }
 
 func handleLoadFont(payload []byte) []byte {
@@ -425,10 +503,10 @@ func handleModelBounds(payload []byte) []byte {
 	return encodeResOKModelBounds(minX, minY, minZ, maxX, maxY, maxZ, ok)
 }
 
-func handleModelMeshData(payload []byte) []byte {
+func handleModelGeometry(payload []byte) []byte {
 	r := codec.NewByteReader(payload)
 	id := r.ReadU32()
-	return encodeResOKBytes(modelMeshDataBytes(id))
+	return encodeResOKBytes(modelGeometryBytes(id))
 }
 
 func handleCreatePlaneMesh(payload []byte) []byte {
@@ -474,6 +552,15 @@ func handleCreateCapsuleMesh(payload []byte) []byte {
 	halfHeight := r.ReadF64()
 	radius := r.ReadF64()
 	return encodeResOKU32(createCapsuleMesh(segments, halfHeight, radius))
+}
+
+func handleCreateRawMesh(payload []byte) []byte {
+	data := decodeBytesPayload(payload)
+	id, err := createRawMesh(data)
+	if err != nil {
+		return encodeResError(err.Error())
+	}
+	return encodeResOKU32(id)
 }
 
 func handleAnimationInit(_ []byte) []byte {
@@ -612,6 +699,23 @@ func proxyAssetLoaders(reqPort, respPort port []byte) AssetLoaders {
 				_ = decodeResUnit(resp)
 			},
 		},
+		TextureLinear: AssetLoader{
+			LoadFile: func(path string) (int, error) {
+				req := encodeResString(resTagLoadTextureLinear, path)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			LoadBytes: func(data []byte) (int, error) {
+				req := encodeResBytes(resTagLoadTextureBytesLinear, data)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				return decodeResU32(resp)
+			},
+			Free: func(id int) {
+				req := encodeResU32(resTagFreeTexture, id)
+				resp := resProxyRoundTrip(reqPort, respPort, req)
+				_ = decodeResUnit(resp)
+			},
+		},
 		Font: AssetLoader{
 			LoadFile: func(path string) (int, error) {
 				req := encodeResString(resTagLoadFont, path)
@@ -690,8 +794,14 @@ func proxyModelBounds(reqPort, respPort port []byte, id int) (float64, float64, 
 	return decodeResModelBounds(resp)
 }
 
-func proxyModelMeshDataBytes(reqPort, respPort port []byte, id int) []byte {
-	req := encodeResU32(resTagModelMeshData, id)
+func proxyModelGeometryBytes(reqPort, respPort port []byte, id int) []byte {
+	req := encodeResU32(resTagModelGeometry, id)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResBytes(resp)
+}
+
+func proxyTexturePixelsBytes(reqPort, respPort port []byte, id int) []byte {
+	req := encodeResU32(resTagTexturePixels, id)
 	resp := resProxyRoundTrip(reqPort, respPort, req)
 	return decodeResBytes(resp)
 }
@@ -815,6 +925,12 @@ func proxyCreateWedgeMesh(reqPort, respPort port []byte) (int, error) {
 
 func proxyCreateCapsuleMesh(reqPort, respPort port []byte, segments int, halfHeight, radius float64) (int, error) {
 	req := encodeResCapsuleMesh(segments, halfHeight, radius)
+	resp := resProxyRoundTrip(reqPort, respPort, req)
+	return decodeResU32(resp)
+}
+
+func proxyCreateRawMesh(reqPort, respPort port []byte, data []byte) (int, error) {
+	req := encodeResBytes(resTagCreateRawMesh, data)
 	resp := resProxyRoundTrip(reqPort, respPort, req)
 	return decodeResU32(resp)
 }

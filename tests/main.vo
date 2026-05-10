@@ -262,7 +262,190 @@ type testPrimitiveMeshBackend struct {
 	coneCalls int
 	wedgeCalls int
 	capsuleCalls int
+	rawCalls int
 	lastSphereSegments int
+}
+
+type testImpostorBakeBackend struct {
+	calls int
+	texture voplay.TextureID
+	lastPlan scene3d.ImpostorBakePlan
+}
+
+func (b *testImpostorBakeBackend) BakeImpostor(plan scene3d.ImpostorBakePlan) (scene3d.ImpostorBakeResult, error) {
+	b.calls++
+	b.lastPlan = plan
+	return scene3d.ImpostorBakeResult{Texture: b.texture, TextureWidth: plan.Atlas.TextureWidth, TextureHeight: plan.Atlas.TextureHeight, Views: len(plan.Views)}, nil
+}
+
+type testTextureBackend struct {
+	nextID int
+	rgbaCalls int
+	rgbaLinearCalls int
+	width int
+	height int
+	data []byte
+	linearData [][]byte
+	pixelPayloads map[int][]byte
+	pixelRequests []int
+	freed []int
+}
+
+func testTexturePixelsBytes(width, height int, srgb bool, data []byte) []byte {
+	flags := 0
+	if srgb {
+		flags = 1
+	}
+	w := codec.NewByteWriter(16 + len(data))
+	w.WriteU32(1)
+	w.WriteU32(width)
+	w.WriteU32(height)
+	w.WriteU32(flags)
+	w.WriteRawBytes(data)
+	return w.Bytes()
+}
+
+func testHasInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *testTextureBackend) LoadFile(path string) (int, error) {
+	return 0, nil
+}
+
+func (b *testTextureBackend) LoadBytes(data []byte) (int, error) {
+	return 0, nil
+}
+
+func (b *testTextureBackend) LoadFileLinear(path string) (int, error) {
+	return 0, nil
+}
+
+func (b *testTextureBackend) LoadBytesLinear(data []byte) (int, error) {
+	return 0, nil
+}
+
+func (b *testTextureBackend) LoadRGBA(width, height int, data []byte) (int, error) {
+	b.rgbaCalls++
+	b.width = width
+	b.height = height
+	b.data = make([]byte, len(data))
+	copy(b.data, data)
+	if b.nextID == 0 {
+		b.nextID = 800
+	}
+	b.nextID++
+	id := b.nextID
+	if b.pixelPayloads == nil {
+		b.pixelPayloads = map[int][]byte{}
+	}
+	b.pixelPayloads[id] = testTexturePixelsBytes(width, height, true, data)
+	return id, nil
+}
+
+func (b *testTextureBackend) LoadRGBALinear(width, height int, data []byte) (int, error) {
+	b.rgbaLinearCalls++
+	b.width = width
+	b.height = height
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	b.linearData = append(b.linearData, copyData)
+	if b.nextID == 0 {
+		b.nextID = 800
+	}
+	b.nextID++
+	id := b.nextID
+	if b.pixelPayloads == nil {
+		b.pixelPayloads = map[int][]byte{}
+	}
+	b.pixelPayloads[id] = testTexturePixelsBytes(width, height, false, data)
+	return id, nil
+}
+
+func (b *testTextureBackend) Pixels(id int) []byte {
+	b.pixelRequests = append(b.pixelRequests, id)
+	return b.pixelPayloads[id]
+}
+
+func (b *testTextureBackend) Free(id int) {
+	b.freed = append(b.freed, id)
+}
+
+type testModelGeometryBackend struct {
+	calls int
+	data []byte
+}
+
+func (b *testModelGeometryBackend) Bytes(id int) []byte {
+	b.calls++
+	return b.data
+}
+
+func testImpostorPyramidGeometryBytes() []byte {
+	positions := []voplay.Vec3{{X: -0.7, Y: 0, Z: -0.45}, {X: 0.7, Y: 0, Z: -0.45}, {X: 0.55, Y: 0, Z: 0.5}, {X: -0.55, Y: 0, Z: 0.5}, {X: 0, Y: 1.7, Z: 0.05}}
+	normals := []voplay.Vec3{{X: -0.45, Y: 0.25, Z: 0.86}, {X: 0.45, Y: 0.25, Z: 0.86}, {X: 0.42, Y: 0.2, Z: -0.89}, {X: -0.42, Y: 0.2, Z: -0.89}, {X: 0, Y: 0.96, Z: 0.28}}
+	uvs := []voplay.Vec2{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}, {X: 0, Y: 1}, {X: 0.5, Y: 0.35}}
+	colors := []voplay.Color{{R: 0.7, G: 0.9, B: 0.72, A: 1}, {R: 0.84, G: 0.96, B: 0.76, A: 1}, {R: 0.42, G: 0.72, B: 0.48, A: 1}, {R: 0.48, G: 0.78, B: 0.52, A: 1}, {R: 0.95, G: 1.0, B: 0.86, A: 1}}
+	indices := []int{0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4, 0, 3, 2, 0, 2, 1}
+	materialCount := 2
+	triangleMaterials := []int{0, 0, 1, 1, 1, 0}
+	w := codec.NewByteWriter(24 + len(positions) * 48 + materialCount * 84 + len(indices) * 4 + len(triangleMaterials) * 4)
+	w.WriteU32(1)
+	w.WriteU32(len(positions))
+	w.WriteU32(len(indices))
+	w.WriteU32(1 + 2 + 4 + 8)
+	w.WriteU32(materialCount)
+	w.WriteU32(len(triangleMaterials))
+	for i, p := range positions {
+		w.WriteF32(p.X)
+		w.WriteF32(p.Y)
+		w.WriteF32(p.Z)
+		w.WriteF32(normals[i].X)
+		w.WriteF32(normals[i].Y)
+		w.WriteF32(normals[i].Z)
+		w.WriteF32(uvs[i].X)
+		w.WriteF32(uvs[i].Y)
+		w.WriteF32(colors[i].R)
+		w.WriteF32(colors[i].G)
+		w.WriteF32(colors[i].B)
+		w.WriteF32(colors[i].A)
+	}
+	materials := []voplay.MaterialDesc{{BaseColor: voplay.Color{R: 0.8, G: 0.95, B: 0.64, A: 1}, Roughness: 0.36, Metallic: 0.12, NormalScale: 1.35, DetailStrength: 1.4, RoughnessResponse: 0.55, ToonRampResponse: 0.35, UVScale: 2.5, Albedo: voplay.TextureID(11), Normal: voplay.TextureID(12), MetallicRoughness: voplay.TextureID(13)}, {BaseColor: voplay.Color{R: 0.32, G: 0.62, B: 0.34, A: 1}, Roughness: 0.82, Metallic: 0.02, NormalScale: 0.72, DetailStrength: 0.8, RoughnessResponse: 1.4, ToonRampResponse: 0.15, UVScale: 1.25, Albedo: voplay.TextureID(21), Mask: voplay.TextureID(22)}}
+	for _, material := range materials {
+		w.WriteF32(material.BaseColor.R)
+		w.WriteF32(material.BaseColor.G)
+		w.WriteF32(material.BaseColor.B)
+		w.WriteF32(material.BaseColor.A)
+		w.WriteF32(material.EmissiveColor.R)
+		w.WriteF32(material.EmissiveColor.G)
+		w.WriteF32(material.EmissiveColor.B)
+		w.WriteF32(material.Metallic)
+		w.WriteF32(material.Roughness)
+		w.WriteF32(material.NormalScale)
+		w.WriteF32(material.DetailStrength)
+		w.WriteF32(material.MacroBlend)
+		w.WriteF32(material.RoughnessResponse)
+		w.WriteF32(material.ToonRampResponse)
+		w.WriteF32(material.UVScale)
+		w.WriteU32(int(material.Albedo))
+		w.WriteU32(int(material.Normal))
+		w.WriteU32(int(material.MetallicRoughness))
+		w.WriteU32(int(material.Emissive))
+		w.WriteU32(int(material.ToonRamp))
+		w.WriteU32(int(material.Mask))
+	}
+	for _, idx := range indices {
+		w.WriteU32(idx)
+	}
+	for _, idx := range triangleMaterials {
+		w.WriteU32(idx)
+	}
+	return w.Bytes()
 }
 
 func (b *testPrimitiveMeshBackend) allocModelID() int {
@@ -312,6 +495,11 @@ func (b *testPrimitiveMeshBackend) Wedge() int {
 func (b *testPrimitiveMeshBackend) Capsule(segments int, halfHeight, radius float64) int {
 	b.capsuleCalls++
 	return b.allocModelID()
+}
+
+func (b *testPrimitiveMeshBackend) Raw(vertices []voplay.RawMeshVertex, indices []int, baseColor voplay.Color) (int, error) {
+	b.rawCalls++
+	return b.allocModelID(), nil
 }
 
 type testAudioBackend struct {
@@ -465,6 +653,14 @@ type testTerrainBackend struct {
 	heightCalls int
 }
 
+func testTerrainHeightBytes(values []float64) []byte {
+	w := codec.NewByteWriter(len(values) * 4)
+	for _, value := range values {
+		w.WriteF32(value)
+	}
+	return w.Bytes()
+}
+
 func (t *testTerrainBackend) Create(desc scene3d.TerrainCreateDesc) (scene3d.TerrainCreateResult, error) {
 	t.createCalls++
 	assert(len(desc.Data) == 1 && desc.Data[0] == 7, "scene3d terrain create hook receives heightmap data")
@@ -478,7 +674,7 @@ func (t *testTerrainBackend) Create(desc scene3d.TerrainCreateDesc) (scene3d.Ter
 	assertFloatNear(desc.NormalScale, 0, 0.000001, "scene3d terrain create hook normal scale")
 	assertFloatNear(desc.Roughness, 0, 0.000001, "scene3d terrain create hook roughness")
 	assertFloatNear(desc.Metallic, 0, 0.000001, "scene3d terrain create hook metallic")
-	return scene3d.TerrainCreateResult{ModelID: 901, Rows: 2, Cols: 2, HeightData: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}, nil
+	return scene3d.TerrainCreateResult{ModelID: 901, Rows: 2, Cols: 2, HeightData: testTerrainHeightBytes([]float64{0, 0.25, 0.5, 1})}, nil
 }
 
 func (t *testTerrainBackend) HeightAt(worldID, bodyID int, x, z float64) (float64, bool) {
@@ -766,6 +962,13 @@ func testAssets() {
 	assert(tex1 == tex2, "assets texture dedupe id")
 	assert(stats.textureLoads == 1, "assets texture loaded once in same group")
 	assert(stats.fileLoads == 1, "assets texture loaded via file")
+	linearTex1, err := assets.TextureLinear("ui.png")
+	assert(err == nil, "assets linear texture load")
+	linearTex2, err := assets.TextureLinear("ui.png")
+	assert(err == nil, "assets linear texture dedupe load")
+	assert(linearTex1 == linearTex2 && linearTex1 != tex1, "assets linear texture has independent cache")
+	assert(stats.textureLoads == 2, "assets linear texture loaded separately from srgb texture")
+	assert(stats.fileLoads == 2, "assets linear texture loaded via file")
 	assets.EndGroup()
 	assets.BeginGroup("level")
 	tex3, err := assets.Texture("ui.png")
@@ -790,7 +993,7 @@ func testAssets() {
 	assert(didPanic, "assets source mismatch panics")
 	assets.EndGroup()
 	assets.ReleaseGroup("global")
-	assert(stats.textureFrees == 1, "shared texture freed after last owner releases")
+	assert(stats.textureFrees == 2, "shared srgb and linear textures freed after last owner releases")
 	assets.BeginGroup("transient")
 	_, err = assets.ModelBytes("ship", []byte{7, 8})
 	assert(err == nil, "assets model bytes load")
@@ -1357,6 +1560,25 @@ func testScene3DShadowSemantics() {
 		d.SetShadow3D(true, 2048, 1.2)
 	})
 	assert(didPanic, "scene3d shadows reject invalid strength")
+	_, didPanic = capturePanic(func() {
+		d.SetShadow3DEx(true, 2048, 0.5, -1)
+	})
+	assert(didPanic, "scene3d shadows reject invalid softness")
+	_, didPanic = capturePanic(func() {
+		d.SetShadow3DQuality(true, 2048, 0.5, 1, -1, 32, scene3d.ShadowQualityHigh)
+	})
+	assert(didPanic, "scene3d shadows reject invalid distance")
+	_, didPanic = capturePanic(func() {
+		d.SetShadow3DQuality(true, 2048, 0.5, 1, 200, -1, scene3d.ShadowQualityHigh)
+	})
+	assert(didPanic, "scene3d shadows reject invalid fade")
+	_, didPanic = capturePanic(func() {
+		d.SetShadow3DQuality(true, 2048, 0.5, 1, 200, 40, 99)
+	})
+	assert(didPanic, "scene3d shadows reject invalid quality")
+	qualityStream := voplay.NewDrawCtx()
+	qualityStream.SetShadow3DQuality(true, 2048, 0.5, 1.2, 200, 40, scene3d.ShadowQualityCinematic)
+	assert(len(qualityStream.Bytes()) == 26 && qualityStream.Bytes()[0] == 0x27, "scene3d shadow quality stream writes required quality tier")
 	s := scene3d.New()
 	s.ShadowsEnabled = false
 	s.ShadowResolution = 0
@@ -1404,17 +1626,44 @@ func testScene3DRenderDebugSemantics() {
 	assert(!didPanic, "scene3d render debug accepts normal view")
 	assert(len(d.Bytes()) > baseLen, "scene3d render debug writes draw command")
 	_, didPanic = capturePanic(func() {
+		d.SetRenderDebug3D(voplay.RenderDebugTerrainMacro)
+	})
+	assert(!didPanic, "scene3d render debug accepts terrain macro view")
+	_, didPanic = capturePanic(func() {
 		d.SetRenderDebug3D(99)
 	})
 	assert(didPanic, "scene3d render debug rejects unsupported mode")
 	s := scene3d.New()
-	s.RenderDebugMode = scene3d.RenderDebugRoughness
+	s.RenderDebugMode = scene3d.RenderDebugTerrainControl
 	d2 := voplay.NewDrawCtx()
 	_, didPanic = capturePanic(func() {
 		s.Draw(d2)
 	})
 	assert(!didPanic, "scene3d draw emits configured render debug state")
 	assert(len(d2.Bytes()) > 0, "scene3d draw writes render debug state")
+	s.Close()
+}
+
+func testScene3DVisualTooling() {
+	s := scene3d.New()
+	s.RenderingQuality = scene3d.SceneQualityCinematic
+	s.ShadowQuality = scene3d.ShadowQualityLow
+	s.Camera.LookAt(voplay.Vec3{X: 1, Y: 2, Z: 3}, voplay.Vec3{X: 0, Y: 0, Z: 0})
+	board := s.CaptureDebugBoard("qa", []int{scene3d.RenderDebugLit, scene3d.RenderDebugNormal, scene3d.RenderDebugTerrainMacro})
+	assert(board.Name == "qa" && len(board.Views) == 3, "scene3d visual tooling builds capture board")
+	assert(board.Views[1].Name == "normal" && board.Views[1].RenderDebugMode == scene3d.RenderDebugNormal, "scene3d visual tooling names debug captures")
+	assert(board.Views[2].RenderingQuality == scene3d.SceneQualityCinematic, "scene3d visual tooling captures quality")
+	assertVec3Near(board.Views[0].Camera.Position, voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.000001, "scene3d visual tooling captures camera")
+	issues := scene3d.ValidateSceneMaterial("mat", voplay.MaterialDesc{Roughness: 1.4, Metallic: -0.1, NormalScale: -1, ToonRampResponse: 2})
+	assert(len(issues) == 4, "scene3d visual tooling validates impossible material parameters")
+	s.Spawn(scene3d.EntityDesc{Tag: "bad_material", Material: voplay.MaterialDesc{Roughness: 2}})
+	sceneIssues := s.ValidateVisualAssets()
+	assert(visualIssuesHaveCode(sceneIssues, "visual.shadow.quality"), "scene3d visual tooling warns about cinematic low shadow quality")
+	assert(visualIssuesHaveCode(sceneIssues, "visual.material.roughness"), "scene3d visual tooling validates scene entity materials")
+	blank := scene3d.CheckScreenshotFrame(scene3d.ScreenshotCheckDesc{Name: "blank", Width: 2, Height: 1, PixelsRGBA8: []byte{0, 0, 0, 0, 0, 0, 0, 0}})
+	assert(visualIssuesHaveCode(blank.Issues, "visual.screenshot.blank"), "scene3d visual tooling detects blank screenshots")
+	lit := scene3d.CheckScreenshotFrame(scene3d.ScreenshotCheckDesc{Name: "lit", Width: 2, Height: 1, PixelsRGBA8: []byte{0, 0, 0, 255, 255, 255, 255, 255}})
+	assert(len(lit.Issues) == 0 && lit.NonTransparentPixels == 2, "scene3d visual tooling accepts nonblank screenshot sample")
 	s.Close()
 }
 
@@ -1431,7 +1680,22 @@ func testScene3DLightingProfile() {
 	assert(profile.Fog.End > profile.Fog.Start, "scene3d kart lighting fog range")
 	assert(profile.ColorGrading.ToneMap == scene3d.ToneMapNone, "scene3d kart lighting preserves source texture color")
 	assert(profile.ColorGrading.Exposure > 1, "scene3d kart lighting exposure lift")
+	assert(profile.PostProcess.ContactAODetailStrength > 0, "scene3d kart lighting uses detail contact ao")
+	assert(profile.PostProcess.ContactAODetailRadius > 0, "scene3d kart lighting sets detail contact ao radius")
+	assert(profile.PostProcess.ContactAONormalBias > 0, "scene3d kart lighting sets contact ao normal bias")
 	assert(profile.ShadowStrength > 0 && profile.ShadowStrength < 1, "scene3d kart lighting uses softened stylized shadows")
+	assert(profile.ShadowDistance > 0, "scene3d kart lighting limits shadow distance for near-field texel density")
+	assert(profile.ShadowFade > 0, "scene3d kart lighting fades shadow distance")
+	assert(profile.ShadowQuality >= scene3d.ShadowQualityHigh, "scene3d kart lighting uses high shadow quality tier")
+	presentation := scene3d.KartRacingPresentationStack()
+	assert(presentation.Fog == profile.Fog && presentation.ColorGrading == profile.ColorGrading, "scene3d kart lighting reuses presentation stack")
+	sunset := scene3d.PresentationStackPreset(scene3d.PresentationSunset)
+	assert(sunset.ColorGrading.ToneMap == scene3d.ToneMapACES && sunset.PostProcess.BloomStrength > presentation.PostProcess.BloomStrength, "scene3d sunset presentation changes tone and bloom together")
+	s.ApplyPresentationStack(scene3d.PresentationStack{Fog: scene3d.FogConfig{Mode: scene3d.FogLinear, Start: 50}, ColorGrading: scene3d.ColorGradingConfig{Exposure: -2}, PostProcess: scene3d.PostProcessConfig{BloomStrength: -1}})
+	currentPresentation := s.CurrentPresentationStack()
+	assert(currentPresentation.Fog.End > currentPresentation.Fog.Start, "scene3d presentation stack normalizes linear fog range")
+	assert(currentPresentation.ColorGrading.Exposure == 1, "scene3d presentation stack normalizes color grading")
+	assert(currentPresentation.PostProcess.BloomStrength >= 0, "scene3d presentation stack normalizes post process")
 	s.ApplyLightingProfile(profile)
 	assert(s.Ambient == profile.Ambient, "scene3d lighting profile applies ambient")
 	assert(s.AmbientGround == profile.AmbientGround, "scene3d lighting profile applies ground ambient")
@@ -1439,21 +1703,131 @@ func testScene3DLightingProfile() {
 	assert(s.Fog == profile.Fog, "scene3d lighting profile applies fog")
 	assert(s.ColorGrading == profile.ColorGrading, "scene3d lighting profile applies color grading")
 	assertFloatNear(s.ShadowStrength, profile.ShadowStrength, 0.000001, "scene3d lighting profile applies shadow strength")
+	assertFloatNear(s.ShadowDistance, profile.ShadowDistance, 0.000001, "scene3d lighting profile applies shadow distance")
+	assertFloatNear(s.ShadowFade, profile.ShadowFade, 0.000001, "scene3d lighting profile applies shadow fade")
+	assert(s.ShadowQuality == profile.ShadowQuality, "scene3d lighting profile applies shadow quality")
+	lowProfile := s.SetRenderingQuality(scene3d.SceneQualityLow)
+	assert(lowProfile.ScatterDensityScale < 1 && lowProfile.MaterialDetailScale < 1, "scene3d low rendering quality lowers scatter and material detail budgets")
+	assert(s.RenderingQuality == scene3d.SceneQualityLow && s.ShadowQuality == scene3d.ShadowQualityLow && s.PostProcess.ContactAOQuality == scene3d.ContactAOQualityLow, "scene3d rendering quality applies scene budgets")
+	cinematicQuality := scene3d.SelectRenderingQuality(scene3d.QualitySelectionDesc{GPUTier: 4, MemoryMB: 8192, DevicePixelRatio: 2})
+	assert(cinematicQuality == scene3d.SceneQualityCinematic, "scene3d quality selector chooses cinematic for high tier platform")
+	batteryQuality := scene3d.SelectRenderingQuality(scene3d.QualitySelectionDesc{GPUTier: 4, MemoryMB: 8192, BatterySaver: true})
+	assert(batteryQuality == scene3d.SceneQualityLow, "scene3d quality selector respects battery saver")
+	diag := s.Diagnostics()
+	assert(diag.RenderingQuality == scene3d.SceneQualityLow, "scene3d diagnostics exposes rendering quality")
+	s.SetShadowQuality(scene3d.ShadowQualityCinematic)
+	assert(s.ShadowsEnabled && s.ShadowResolution >= 4096 && s.ShadowQuality == scene3d.ShadowQualityCinematic, "scene3d cinematic shadow quality raises renderer budget")
+	s.SetShadowQuality(scene3d.ShadowQualityOff)
+	assert(!s.ShadowsEnabled && s.ShadowQuality == scene3d.ShadowQualityOff, "scene3d shadow quality off disables shadow render path")
+	aoStream := voplay.NewDrawCtx()
+	aoStream.SetContactAO3D(0.38, 2.75, 84, 0.22, 1.15, 0.018, scene3d.ContactAOQualityHigh)
+	assert(len(aoStream.Bytes()) == 29 && aoStream.Bytes()[0] == 0x2A, "scene3d contact ao stream uses production parameter set")
+	lowAO := scene3d.ContactAOQualityConfig(scene3d.ContactAOQualityLow)
+	highAO := scene3d.ContactAOQualityConfig(scene3d.ContactAOQualityHigh)
+	assert(highAO.ContactAOStrength > lowAO.ContactAOStrength, "scene3d contact ao high quality increases broad strength")
+	assert(highAO.ContactAODetailStrength > lowAO.ContactAODetailStrength, "scene3d contact ao high quality increases detail strength")
+	s.SetContactAOQuality(scene3d.ContactAOQualityOff)
+	assert(s.PostProcess.ContactAOStrength == 0 && s.PostProcess.ContactAODetailStrength == 0 && s.PostProcess.ContactAOQuality == scene3d.ContactAOQualityOff, "scene3d contact ao off quality disables ao")
+	s.SetContactAOQuality(scene3d.ContactAOQualityHigh)
+	assertFloatNear(s.PostProcess.ContactAONormalBias, highAO.ContactAONormalBias, 0.000001, "scene3d contact ao quality applies normal bias")
+	assert(s.PostProcess.ContactAOQuality == scene3d.ContactAOQualityHigh, "scene3d contact ao quality applies tier")
 	profile.Lights[0].Intensity = 0
 	assert(s.Lights[0].Intensity > 0, "scene3d lighting profile copies lights")
 	s.Close()
 }
 
+func bytesContainByte(values []byte, want byte) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func testScene3DDecals() {
 	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
 	assert(err == nil, "scene3d decal test track")
+	stream := voplay.NewDrawCtx()
+	stream.DrawProjectedDecal3D(voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.4, 2, 3, 1, voplay.Color{R: 0.2, G: 0.16, B: 0.1, A: 0.5})
+	assert(len(stream.Bytes()) > 0 && stream.Bytes()[0] == 0x22, "scene3d projected decal draw stream opcode")
+	atlasStream := voplay.NewDrawCtx()
+	atlasStream.SetProjectedDecalAtlas3D(voplay.TextureID(9))
+	atlasStream.DrawProjectedDecal3DUV(voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.4, 2, 3, 1, voplay.Color{R: 0.2, G: 0.16, B: 0.1, A: 0.5}, voplay.Rect{X: 0.1, Y: 0.2, W: 0.3, H: 0.4})
+	assert(len(atlasStream.Bytes()) > 0 && atlasStream.Bytes()[0] == 0x2B, "scene3d projected decal atlas stream opcode")
+	assert(bytesContainByte(atlasStream.Bytes(), 0x2C), "scene3d projected decal uv draw stream opcode")
+	normalAtlasStream := voplay.NewDrawCtx()
+	normalAtlasStream.SetProjectedDecalNormalAtlas3D(voplay.TextureID(11))
+	assert(len(normalAtlasStream.Bytes()) == 5 && normalAtlasStream.Bytes()[0] == 0x40, "scene3d projected decal normal atlas stream opcode")
+	roughnessAtlasStream := voplay.NewDrawCtx()
+	roughnessAtlasStream.SetProjectedDecalRoughnessAtlas3D(voplay.TextureID(12))
+	assert(len(roughnessAtlasStream.Bytes()) == 5 && roughnessAtlasStream.Bytes()[0] == 0x41, "scene3d projected decal roughness atlas stream opcode")
+	maskAtlasStream := voplay.NewDrawCtx()
+	maskAtlasStream.SetProjectedDecalMaskAtlas3D(voplay.TextureID(13))
+	assert(len(maskAtlasStream.Bytes()) == 5 && maskAtlasStream.Bytes()[0] == 0x42, "scene3d projected decal mask atlas stream opcode")
+	angleFadeStream := voplay.NewDrawCtx()
+	angleFadeStream.SetProjectedDecalAngleFade3D(0.35, 0.7)
+	assert(len(angleFadeStream.Bytes()) == 9 && angleFadeStream.Bytes()[0] == 0x43, "scene3d projected decal angle fade stream opcode")
+	fadeStream := voplay.NewDrawCtx()
+	fadeStream.SetProjectedDecalDistanceFade3D(18, 34)
+	assert(len(fadeStream.Bytes()) == 9 && fadeStream.Bytes()[0] == 0x2D, "scene3d projected decal distance fade stream opcode")
+	receiverStream := voplay.NewDrawCtx()
+	receiverStream.SetProjectedDecalReceiverMask3D(voplay.ProjectedDecalReceiverTerrain)
+	assert(len(receiverStream.Bytes()) == 5 && receiverStream.Bytes()[0] == 0x2E, "scene3d projected decal receiver mask stream opcode")
+	responseStream := voplay.NewDrawCtx()
+	responseStream.SetProjectedDecalSurfaceResponse3D(0.8, 0.38, 0.7)
+	assert(len(responseStream.Bytes()) == 13 && responseStream.Bytes()[0] == 0x2F, "scene3d projected decal surface response stream opcode")
+	multiAtlasStream := voplay.NewDrawCtx()
+	multiAtlasStream.SetProjectedDecalAtlas3D(voplay.TextureID(9))
+	multiAtlasStream.DrawProjectedDecal3DUV(voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.4, 2, 3, 1, voplay.Color{R: 0.2, G: 0.16, B: 0.1, A: 0.5}, voplay.Rect{X: 0.1, Y: 0.2, W: 0.3, H: 0.4})
+	multiAtlasStream.SetProjectedDecalAtlas3D(voplay.TextureID(10))
+	multiAtlasStream.DrawProjectedDecal3DUV(voplay.Vec3{X: 4, Y: 2, Z: 5}, 0.2, 2, 3, 1, voplay.Color{R: 0.2, G: 0.16, B: 0.1, A: 0.5}, voplay.Rect{X: 0.5, Y: 0.2, W: 0.25, H: 0.4})
+	assert(len(multiAtlasStream.Bytes()) > 71 && multiAtlasStream.Bytes()[66] == 0x2B && multiAtlasStream.Bytes()[71] == 0x2C, "scene3d projected decal stream supports multiple atlas switches")
 	s := scene3d.New()
+	index := s.AddProjectedDecal(scene3d.ProjectedDecalDesc{Position: voplay.Vec3{X: 1, Y: 0, Z: 2}, Width: 2.5, Length: 4, Depth: 1.2, Color: voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.42}})
+	assert(index == 0 && len(s.ProjectedDecals) == 1, "scene3d projected decal retained in scene")
+	sceneStream := voplay.NewDrawCtx()
+	s.Draw(sceneStream)
+	assert(bytesContainByte(sceneStream.Bytes(), 0x22), "scene3d draw emits projected decal command")
+	s.ClearProjectedDecals()
+	assert(len(s.ProjectedDecals) == 0, "scene3d projected decals clear")
+	atlasIndex := s.AddProjectedDecal(scene3d.ProjectedDecalDesc{Position: voplay.Vec3{X: 1, Y: 0, Z: 2}, Width: 2.5, Length: 4, Depth: 1.2, Color: voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.42}, Atlas: voplay.TextureID(9), NormalAtlas: voplay.TextureID(11), RoughnessAtlas: voplay.TextureID(12), MaskAtlas: voplay.TextureID(13), UV: voplay.Rect{X: 0.1, Y: 0.2, W: 0.3, H: 0.4}, FadeStart: 18, FadeEnd: 34, AngleFadeStart: 0.35, AngleFadeEnd: 0.7, Receivers: voplay.ProjectedDecalReceiverTerrain, NormalStrength: 0.8, Roughness: 0.38, RoughnessStrength: 0.7})
+	assert(atlasIndex == 0 && len(s.ProjectedDecals) == 1, "scene3d projected atlas decal retained in scene")
+	secondAtlasIndex := s.AddProjectedDecal(scene3d.ProjectedDecalDesc{Position: voplay.Vec3{X: 2, Y: 0, Z: 3}, Width: 2.5, Length: 4, Depth: 1.2, Color: voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.42}, Atlas: voplay.TextureID(10), UV: voplay.Rect{X: 0.5, Y: 0.2, W: 0.25, H: 0.4}})
+	assert(secondAtlasIndex == 1 && len(s.ProjectedDecals) == 2, "scene3d projected atlas decals retain multiple atlases")
+	atlasSceneStream := voplay.NewDrawCtx()
+	s.Draw(atlasSceneStream)
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x2B), "scene3d draw emits projected decal atlas command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x2C), "scene3d draw emits projected decal uv command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x2D), "scene3d draw emits projected decal distance fade command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x2E), "scene3d draw emits projected decal receiver mask command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x2F), "scene3d draw emits projected decal surface response command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x40), "scene3d draw emits projected decal normal atlas command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x41), "scene3d draw emits projected decal roughness atlas command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x42), "scene3d draw emits projected decal mask atlas command")
+	assert(bytesContainByte(atlasSceneStream.Bytes(), 0x43), "scene3d draw emits projected decal angle fade command")
+	s.ClearProjectedDecals()
+	normalOnlyIndex := s.AddProjectedDecal(scene3d.ProjectedDecalDesc{Position: voplay.Vec3{X: 3, Y: 0, Z: 4}, Width: 2.5, Length: 4, Depth: 1.2, Color: voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.42}, NormalAtlas: voplay.TextureID(11)})
+	assert(normalOnlyIndex == 0 && s.ProjectedDecals[0].NormalStrength == 1, "scene3d projected decal normal atlas defaults strength")
+	normalOnlyStream := voplay.NewDrawCtx()
+	s.Draw(normalOnlyStream)
+	assert(bytesContainByte(normalOnlyStream.Bytes(), 0x40) && bytesContainByte(normalOnlyStream.Bytes(), 0x2C), "scene3d normal-only projected decal keeps uv draw path")
+	s.ClearProjectedDecals()
 	material := voplay.MaterialDesc{BaseColor: voplay.Hex(0xffffff), Albedo: voplay.TextureID(77), UVScale: 1}
 	decal, err := scene3d.SpawnTrackDecal(s, track, 12, 1.5, scene3d.DecalDesc{Model: voplay.ModelID(812), Width: 3, Height: 1.2, Material: material, Tag: "start_line"})
 	assert(err == nil, "scene3d track decal spawns")
 	assert(decal.Entity != nil && decal.Entity.Active, "scene3d track decal entity active")
 	assert(decal.Entity.Material.Albedo == voplay.TextureID(77), "scene3d track decal material albedo")
 	assert(decal.Entity.Position().Y > track.PoseAt(12).Position.Y, "scene3d track decal offset avoids z fighting")
+	shadow, err := scene3d.SpawnTrackContactShadow(s, track, 14, -2, scene3d.ContactShadowDesc{Model: voplay.ModelID(814), Width: 2.4, Depth: 1.3, Opacity: 0.36, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 4, true
+	}})
+	assert(err == nil, "scene3d track contact shadow spawns")
+	assert(shadow.Entity != nil && shadow.Entity.Material.BaseColor.A == 0.36, "scene3d contact shadow opacity material")
+	assertFloatNear(shadow.Entity.Position().Y, 4.035, 0.000001, "scene3d contact shadow uses height probe and offset")
+	shadowEntity := shadow.Entity
+	shadow.Destroy(s)
+	assert(!shadowEntity.Active, "scene3d contact shadow destroy removes entity")
 	for i := 0; i < 100; i++ {
 		_, err = scene3d.SpawnTrackDecal(s, track, float64(i), 0, scene3d.DecalDesc{Model: voplay.ModelID(813), Width: 0.5, Height: 0.5, Material: voplay.MaterialColor(voplay.White)})
 		assert(err == nil, "scene3d many decals spawn")
@@ -1479,6 +1853,17 @@ func testScene3DTerrainHeightAtLifecycle() {
 	assert(tb.createCalls == 1, "scene3d terrain create hook called once")
 	assert(terrain.Rows() == 2, "scene3d terrain rows")
 	assert(terrain.Cols() == 2, "scene3d terrain cols")
+	source := terrain.HeightSource()
+	assert(source.SourceKind == scene3d.TerrainHeightSourceBytes, "scene3d terrain source tracks byte input")
+	assert(source.SourceBytes == 1 && source.HeightBytes == 16, "scene3d terrain source exposes source and decoded height byte sizes")
+	assert(source.Rows == 2 && source.Cols == 2 && source.HighPrecision, "scene3d terrain source exposes high precision decoded grid")
+	assertFloatNear(source.MinHeight, 0, 0.000001, "scene3d terrain source min height")
+	assertFloatNear(source.MaxHeight, 1, 0.000001, "scene3d terrain source max height")
+	comparison := terrain.HeightDebugComparison()
+	assert(comparison.VisualPhysicsMatched, "scene3d terrain visual and physics height data share decoded source")
+	assert(comparison.VisualChecksum == comparison.PhysicsChecksum && comparison.VisualChecksum == source.HeightChecksum, "scene3d terrain debug checksums match source")
+	assert(comparison.Samples == 4 && comparison.ExpectedHeightBytes == 16, "scene3d terrain debug compares all samples")
+	assertFloatNear(comparison.MaxSampleDelta, 0, 0.000001, "scene3d terrain debug reports no visual physics delta")
 	height, ok := terrain.HeightAt(0, 0)
 	assert(ok, "scene3d active terrain height query succeeds")
 	assertFloatNear(height, 1.25, 0.000001, "scene3d active terrain height query forwards hook result")
@@ -1508,6 +1893,7 @@ func testScene3DTerrainSplatMaterial() {
 	splat.Layers[1] = scene3d.TerrainLayer{Texture: voplay.TextureID(12), Normal: voplay.TextureID(22), MetallicRoughness: voplay.TextureID(32), UVScale: 5, NormalScale: 0}
 	splat.Layers[2] = scene3d.TerrainLayer{Texture: voplay.TextureID(13), UVScale: 7}
 	splat.Layers[3] = scene3d.TerrainLayer{Texture: voplay.TextureID(14), Normal: voplay.TextureID(24), MetallicRoughness: voplay.TextureID(34), UVScale: 9, NormalScale: 0.8}
+	splat.Tuning = scene3d.TerrainMaterialTuning{MacroScale: 1.5, DetailNear: 64, DetailFar: 384, SlopeStart: 0.08, SlopeEnd: 0.7, AntiTileStrength: 1.1, DetailStrength: 0.85, NormalNear: 48, NormalFar: 320, HeightBlendStrength: 0.4, HeightLow: -2, HeightHigh: 18, CurvatureStrength: 0.55}
 	_, err := scene3d.NewTerrain(s, scene3d.TerrainDesc{HeightmapData: []byte{7}, Width: 8, Height: 2, Depth: 8, Splat: splat})
 	assert(err == nil, "scene3d splat terrain err")
 	assert(tb.createCalls == 1, "scene3d splat terrain backend called")
@@ -1518,11 +1904,27 @@ func testScene3DTerrainSplatMaterial() {
 	assert(tb.desc.Splat.Layers[0].MetallicRoughness == voplay.TextureID(31), "scene3d splat terrain forwards metallic roughness")
 	assertFloatNear(tb.desc.Splat.Layers[1].UVScale, 5, 0.000001, "scene3d splat terrain keeps layer uv scale")
 	assertFloatNear(tb.desc.Splat.Layers[3].NormalScale, 0.8, 0.000001, "scene3d splat terrain forwards normal scale")
+	assertFloatNear(tb.desc.Splat.Tuning.MacroScale, 1.5, 0.000001, "scene3d splat terrain forwards tuning macro scale")
+	assertFloatNear(tb.desc.Splat.Tuning.MacroStrength, 1, 0.000001, "scene3d splat terrain defaults tuning macro strength")
+	assertFloatNear(tb.desc.Splat.Tuning.DetailFar, 384, 0.000001, "scene3d splat terrain forwards tuning detail range")
+	assertFloatNear(tb.desc.Splat.Tuning.SlopeDirtStrength, 0.38, 0.000001, "scene3d splat terrain defaults tuning slope dirt")
+	assertFloatNear(tb.desc.Splat.Tuning.HeightBlendStrength, 0.4, 0.000001, "scene3d splat terrain forwards tuning height strength")
+	assertFloatNear(tb.desc.Splat.Tuning.HeightHigh, 18, 0.000001, "scene3d splat terrain forwards tuning height high")
+	assertFloatNear(tb.desc.Splat.Tuning.CurvatureStrength, 0.55, 0.000001, "scene3d splat terrain forwards tuning curvature")
 	s.Close()
 }
 
 func newScene3DTestTrackAsset() *scene3d.TrackAsset {
 	return &scene3d.TrackAsset{Version: 1, Name: "test oval", ClosedLoop: true, Terrain: &scene3d.MapTerrain{Heightmap: "height.png", Width: 20, Height: 3, Depth: 20}, Centerline: []scene3d.TrackControlPoint{{Position: scene3d.MapVec3{X: 0, Y: 0, Z: 0}, Width: 10}, {Position: scene3d.MapVec3{X: 0, Y: 0, Z: -100}, Width: 10}, {Position: scene3d.MapVec3{X: 100, Y: 0, Z: -100}, Width: 10}, {Position: scene3d.MapVec3{X: 100, Y: 0, Z: 0}, Width: 10}, {Position: scene3d.MapVec3{X: 0, Y: 0, Z: 0}, Width: 10}}, Surfaces: []scene3d.TrackSurface{{Name: "grass_left", Kind: scene3d.TrackSurfaceOffroad, Start: 0, End: 100, Left: -100, Right: -5, Priority: 10, Friction: 0.35}, {Name: "boost_lane", Kind: "boost", Start: 20, End: 30, Left: -2, Right: 2, Priority: 20, Friction: 1, Boost: 1.5}}, Gates: []scene3d.TrackGate{{Name: "start", Distance: 0, Width: 10}, {Name: "back", Distance: 180, Width: 10}, {Name: "finish", Distance: 360, Width: 10}}, Spawns: []scene3d.TrackSpawn{{Name: "player_start", Distance: 0}}, Respawns: []scene3d.TrackRespawn{{Name: "respawn_start", Distance: 0}, {Name: "respawn_back", Distance: 180}}}
+}
+
+func visualIssuesHaveCode(issues []scene3d.VisualAssetIssue, code string) bool {
+	for _, issue := range issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func trackIssuesHaveCode(issues []scene3d.TrackIssue, code string) bool {
@@ -1556,10 +1958,16 @@ func testScene3DTrackValidationAndQueries() {
 	p0 := track.PoseAt(0)
 	p1 := track.PoseAt(track.Length())
 	assertVec3Near(p0.Position, p1.Position, 0.000001, "scene3d closed track pose wraps")
+	_ = track.PoseAt(150)
+	boundaryPose := track.PoseAt(100)
+	assertVec3Near(boundaryPose.Forward, voplay.Vec3{Z: -1}, 0.000001, "scene3d pose segment hint preserves boundary direction")
 	cp := track.ClosestPoint(voplay.Vec3{X: 3, Y: 0, Z: -20})
 	assertFloatNear(cp.Distance, 20, 0.000001, "scene3d closest point distance")
 	assertFloatNear(cp.LateralDistance, 3, 0.000001, "scene3d closest point lateral sign")
 	assert(cp.OnRoad, "scene3d closest point on road")
+	_ = track.ClosestPoint(voplay.Vec3{X: 90, Y: 0, Z: -95})
+	cp = track.ClosestPoint(voplay.Vec3{X: 3, Y: 0, Z: -20})
+	assertFloatNear(cp.Distance, 20, 0.000001, "scene3d closest point hint keeps exact result")
 	grass := track.SurfaceAt(voplay.Vec3{X: -7, Y: 0, Z: -20})
 	assert(grass.Name == "grass_left", "scene3d surface picks highest priority offroad region")
 	assertFloatNear(grass.Friction, 0.35, 0.000001, "scene3d surface friction")
@@ -1567,6 +1975,13 @@ func testScene3DTrackValidationAndQueries() {
 	assert(boost.Name == "boost_lane", "scene3d surface picks boost lane")
 	assert(track.IsOnRoad(voplay.Vec3{X: 0, Y: 0, Z: -25}), "scene3d track reports road inside width")
 	assert(!track.IsOnRoad(voplay.Vec3{X: 20, Y: 0, Z: -25}), "scene3d track reports offroad outside width")
+	surfaceDebugScene := scene3d.New()
+	surfaceOverlay, err := scene3d.SpawnTrackDebugOverlay(surfaceDebugScene, track, scene3d.TrackDebugOptions{Surfaces: true, SurfaceStep: 100, Model: voplay.ModelID(404)})
+	assert(err == nil, "scene3d track surface debug overlay err")
+	assert(len(surfaceOverlay.Entities) == 20, "scene3d track surface debug overlay emits sampled markers")
+	surfaceOverlay.Destroy(surfaceDebugScene)
+	assert(surfaceDebugScene.EntityCount() == 0, "scene3d track surface debug overlay destroy removes markers")
+	surfaceDebugScene.Close()
 	linePose, err := track.PoseOnLine("optimal", 50)
 	assert(err == nil, "scene3d racing line pose err")
 	assertFloatNear(linePose.TargetSpeed, 25, 0.000001, "scene3d racing line target speed interpolates")
@@ -1743,7 +2158,7 @@ func testScene3DTrackTerrainChunks() {
 	asset := newScene3DTestTrackAsset()
 	asset.Terrain = nil
 	asset.Meshes = nil
-	asset.TerrainChunks = []scene3d.MapTerrain{{Heightmap: "chunks/a.png", Position: scene3d.MapVec3{X: -10}, Width: 20, Height: 4, Depth: 20}, {Heightmap: "chunks/b.png", Position: scene3d.MapVec3{X: 10}, Width: 20, Height: 4, Depth: 20}}
+	asset.TerrainChunks = []scene3d.MapTerrain{{Heightmap: "chunks/a.png", Position: scene3d.MapVec3{X: -10}, Width: 20, Height: 4, Depth: 20, CullDistance: 180, FrustumCull: true}, {Heightmap: "chunks/b.png", Position: scene3d.MapVec3{X: 10}, Width: 20, Height: 4, Depth: 20, CullRadius: 32}}
 	issues := scene3d.ValidateTrackAsset(asset)
 	assert(!trackHasErrorsLocal(issues), "scene3d track terrain chunks validate")
 	track, err := scene3d.NewTrack(asset)
@@ -1754,6 +2169,9 @@ func testScene3DTrackTerrainChunks() {
 	assert(result.Terrain != nil, "scene3d track terrain chunks primary terrain")
 	assert(len(result.TerrainChunks) == 2, "scene3d track terrain chunks result count")
 	assert(len(result.Entities) == 2, "scene3d track terrain chunks entity count")
+	assert(result.Terrain.Entity().CullDistance == 180 && result.Terrain.Entity().FrustumCull, "scene3d track terrain chunk forwards culling controls")
+	assertFloatNear(result.Terrain.Entity().CullRadius, math.Sqrt(20*20 + 4*4 + 20*20) * 0.5, 0.000001, "scene3d track terrain chunk derives cull radius from terrain extents")
+	assert(result.TerrainChunks[1].Entity().CullRadius == 32, "scene3d track terrain chunk forwards cull radius")
 	assert(tb.createCalls == 2, "scene3d track terrain chunks create calls")
 	tb.heights = map[int]float64{1: 0, 2: 0}
 	issues = scene3d.CheckTrackTraversability(track, scene3d.TrackTraversabilityOptions{SampleStep: 10, MaxHeightDelta: 1, MaxSegmentLength: 120, MaxHeightProbeDelta: 0.1, HeightProbe: result.HeightProbe()})
@@ -1764,12 +2182,495 @@ func testScene3DTrackTerrainChunks() {
 	result.Terrain.Entity().Visible = false
 	h, ok = result.HeightProbe()(voplay.Vec3{})
 	assert(ok && h == 0.2, "scene3d track terrain chunks height probe skips hidden chunk")
+	h, ok = result.CollisionHeightProbe()(voplay.Vec3{})
+	assert(ok && h == 0.1, "scene3d track terrain chunks collision height probe keeps hidden terrain")
 	result.TerrainChunks[1].Entity().Visible = false
 	_, ok = result.HeightProbe()(voplay.Vec3{})
 	assert(!ok, "scene3d track terrain chunks height probe skips all hidden chunks")
+	h, ok = result.CollisionHeightProbe()(voplay.Vec3{})
+	assert(ok && h == 0.1, "scene3d track terrain chunks collision height probe ignores visual visibility")
 	result.Destroy(s)
 	assert(s.EntityCount() == 0, "scene3d track terrain chunks destroy removes entities")
 	assert(len(freed.items) == 2, "scene3d track terrain chunks frees owned terrain models")
+	s.Close()
+}
+
+func testScene3DTrackScatter() {
+	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
+	assert(err == nil, "scene3d track scatter new track")
+	shapes := primitive3d.NewShapeRegistry()
+	materials := primitive3d.NewMaterialPalette()
+	rounded := shapes.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeRoundedBox, BevelRadius: 0.08, Segments: 8})
+	grass := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGrass, Base: voplay.MaterialColor(voplay.Green)})
+	layer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 12}, Name: "test_track_scatter"})
+	result, err := scene3d.BuildTrackScatter(scene3d.TrackScatterDesc{Track: track, Layer: layer, Seed: 42, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 3.5, true
+	}, Bands: []scene3d.TrackScatterBand{scene3d.TrackScatterBand{Side: scene3d.TrackScatterBothSides, Count: 4, LateralMin: 1, LateralMax: 2, EdgeRelative: true, SurfaceOffset: 0.2, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: rounded, Material: grass, ScaleMin: voplay.Vec3{X: 0.4, Y: 0.2, Z: 0.6}, ScaleMax: voplay.Vec3{X: 0.8, Y: 0.3, Z: 1.1}, YawJitter: math.Pi, Flags: primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceYBillboard, LodFar: 90, WindStrength: 0.28, AtlasUV: voplay.Rect{X: 0.25, Y: 0.5, W: 0.125, H: 0.25}}}}}})
+	assert(err == nil, "scene3d track scatter builds")
+	assert(result.Layer == layer, "scene3d track scatter returns layer")
+	assert(result.Instances == 8, "scene3d track scatter creates both-side instances")
+	assert(result.Samples == 8, "scene3d track scatter reports samples")
+	instances := layer.Instances()
+	assert(len(instances) == 8, "scene3d track scatter writes layer instances")
+	assertFloatNear(instances[0].Position.Y, 3.7, 0.000001, "scene3d track scatter aligns to height probe")
+	cp := track.ClosestPoint(instances[0].Position)
+	assert(math.Abs(cp.LateralDistance) > cp.HalfWidth, "scene3d track scatter places outside road edge")
+	assert(instances[0].Scale.X >= 0.4 && instances[0].Scale.X <= 0.8, "scene3d track scatter applies scale range")
+	assert(instances[0].Flags == primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceYBillboard && instances[0].LodFar == 90 && instances[0].WindStrength == 0.28 && instances[0].AtlasUV.W == 0.125, "scene3d track scatter preserves render controls")
+	layer.Build()
+	assert(layer.Stats().TotalChunks > 1, "scene3d track scatter layer chunks across track")
+	filteredLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 12}, Name: "test_track_scatter_filtered"})
+	filtered, err := scene3d.BuildTrackScatter(scene3d.TrackScatterDesc{Track: track, Layer: filteredLayer, Seed: 99, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return pos.X * 0.25, true
+	}, Bands: []scene3d.TrackScatterBand{scene3d.TrackScatterBand{Side: scene3d.TrackScatterRightSide, Count: 4, LateralMin: 1, LateralMax: 2, HeightMin: 100, SlopeMax: 0.1, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: rounded, Material: grass}}}}})
+	assert(err == nil, "scene3d track scatter filtered builds")
+	assert(filtered.Samples == 4, "scene3d track scatter filtered reports samples")
+	assert(filtered.Instances == 0, "scene3d track scatter height/slope filters instances")
+	maskedLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 12}, Name: "test_track_scatter_masked"})
+	masked, err := scene3d.BuildTrackScatter(scene3d.TrackScatterDesc{Track: track, Layer: maskedLayer, Seed: 123, Bands: []scene3d.TrackScatterBand{scene3d.TrackScatterBand{Side: scene3d.TrackScatterRightSide, Count: 5, LateralMin: 1, LateralMax: 2, DensityMask: func(pos voplay.Vec3) float64 {
+		return 0
+	}, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: rounded, Material: grass}}}}})
+	assert(err == nil, "scene3d track scatter density mask builds")
+	assert(masked.Samples == 5, "scene3d track scatter density mask reports samples")
+	assert(masked.Instances == 0, "scene3d track scatter density mask rejects instances")
+	excludedLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 12}, Name: "test_track_scatter_excluded"})
+	excluded, err := scene3d.BuildTrackScatter(scene3d.TrackScatterDesc{Track: track, Layer: excludedLayer, Seed: 456, Bands: []scene3d.TrackScatterBand{scene3d.TrackScatterBand{Side: scene3d.TrackScatterRightSide, Count: 5, LateralMin: 1, LateralMax: 2, ExclusionMask: func(pos voplay.Vec3) float64 {
+		return 1
+	}, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: rounded, Material: grass}}}}})
+	assert(err == nil, "scene3d track scatter exclusion mask builds")
+	assert(excluded.Samples == 5, "scene3d track scatter exclusion mask reports samples")
+	assert(excluded.Instances == 0, "scene3d track scatter exclusion mask rejects instances")
+	tintedLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 12}, Name: "test_track_scatter_tinted"})
+	tinted, err := scene3d.BuildTrackScatter(scene3d.TrackScatterDesc{Track: track, Layer: tintedLayer, Seed: 789, Bands: []scene3d.TrackScatterBand{scene3d.TrackScatterBand{Side: scene3d.TrackScatterRightSide, Count: 1, LateralMin: 1, LateralMax: 2, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: rounded, Material: grass, TintMin: voplay.Color{R: 0.7, G: 0.8, B: 0.6, A: 1}, TintMax: voplay.Color{R: 1.0, G: 1.0, B: 0.9, A: 1}}}}}})
+	assert(err == nil, "scene3d track scatter tint range builds")
+	assert(tinted.Instances == 1, "scene3d track scatter tint range creates instance")
+	tintedInstances := tintedLayer.Instances()
+	assert(len(tintedInstances) == 1, "scene3d track scatter tint range writes layer instance")
+	tint := tintedInstances[0].Tint
+	assert(tint.R >= 0.7 && tint.R <= 1.0, "scene3d track scatter tint R range")
+	assert(tint.G >= 0.8 && tint.G <= 1.0, "scene3d track scatter tint G range")
+	assert(tint.B >= 0.6 && tint.B <= 0.9, "scene3d track scatter tint B range")
+	assert(tint.A == 1, "scene3d track scatter tint A range")
+}
+
+func testScene3DScatterField() {
+	shapes := primitive3d.NewShapeRegistry()
+	materials := primitive3d.NewMaterialPalette()
+	grassBlade := shapes.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapePlane, Width: 0.18, Depth: 0.7})
+	grass := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGrass, Base: voplay.MaterialColor(voplay.Green)})
+	result, err := scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Shapes: shapes, Materials: materials, Name: "field_grass", Seed: 77, Origin: voplay.Vec3{X: 4, Y: 0, Z: -3}, Width: 8, Depth: 6, CellSize: 2, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 1 + pos.X * 0.01, true
+	}, DensityMask: func(pos voplay.Vec3) float64 {
+		if pos.X < 4 {
+			return 1
+		}
+		return 0
+	}, SurfaceOffset: 0.05, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: grassBlade, Material: grass, ScaleMin: voplay.Vec3{X: 0.6, Y: 0.7, Z: 0.6}, ScaleMax: voplay.Vec3{X: 1.2, Y: 1.1, Z: 1.2}, YawJitter: math.Pi * 2, Flags: primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceYBillboard, LodFar: 64, WindStrength: 0.42, AtlasUV: voplay.Rect{X: 0.5, Y: 0.25, W: 0.25, H: 0.25}}}})
+	assert(err == nil, "scene3d scatter field builds")
+	assert(result.Samples == 12, "scene3d scatter field grid sample count")
+	assert(result.Instances > 0 && result.Instances < result.Samples, "scene3d scatter field density mask filters samples")
+	instances := result.Layer.Instances()
+	assert(len(instances) == result.Instances, "scene3d scatter field writes instances")
+	assert(instances[0].Flags == primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceYBillboard && instances[0].LodFar == 64 && instances[0].WindStrength == 0.42 && instances[0].AtlasUV.X == 0.5, "scene3d scatter field preserves render controls")
+	assert(instances[0].Position.Y > 0.9, "scene3d scatter field aligns to height probe")
+	low, err := scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Shapes: shapes, Materials: materials, Seed: 88, Origin: voplay.Vec3{}, Width: 6, Depth: 6, Count: 20, Quality: scene3d.SceneQualityLow, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: grassBlade, Material: grass, LodFar: 80}}})
+	assert(err == nil, "scene3d low quality scatter field builds")
+	cinematic, err := scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Shapes: shapes, Materials: materials, Seed: 88, Origin: voplay.Vec3{}, Width: 6, Depth: 6, Count: 20, Quality: scene3d.SceneQualityCinematic, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: grassBlade, Material: grass, LodFar: 80}}})
+	assert(err == nil, "scene3d cinematic quality scatter field builds")
+	assert(cinematic.Samples > low.Samples, "scene3d scatter field quality scales samples")
+	assert(cinematic.Layer.Instances()[0].LodFar > low.Layer.Instances()[0].LodFar, "scene3d scatter field quality scales lod distance")
+	gated, err := scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Shapes: shapes, Materials: materials, Seed: 91, Origin: voplay.Vec3{}, Width: 6, Depth: 6, Count: 8, Quality: scene3d.SceneQualityLow, Prototypes: []scene3d.TrackScatterPrototype{scene3d.TrackScatterPrototype{Shape: grassBlade, Material: grass, MinQuality: scene3d.SceneQualityCinematic}}})
+	assert(err == nil && gated.Instances == 0, "scene3d scatter field quality gates expensive prototypes")
+	_, err = scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Width: 4, Depth: 4, Count: 1})
+	assert(err != nil, "scene3d scatter field rejects missing prototypes")
+}
+
+func writeBakedPrimitiveLayerTestInstance(w *codec.ByteWriter, slot int, flags primitive3d.InstanceFlags, x, y, z, lodFar float64) {
+	w.WriteU32(slot)
+	w.WriteU32(int(flags))
+	w.WriteF32(x)
+	w.WriteF32(y)
+	w.WriteF32(z)
+	w.WriteF32(0)
+	w.WriteF32(0)
+	w.WriteF32(0)
+	w.WriteF32(1)
+	w.WriteF32(1.2)
+	w.WriteF32(0.8)
+	w.WriteF32(2.1)
+	w.WriteF32(0.72)
+	w.WriteF32(0.86)
+	w.WriteF32(0.52)
+	w.WriteF32(1)
+	w.WriteF32(2)
+	w.WriteF32(lodFar)
+	w.WriteF32(0.31)
+	w.WriteF32(0.5)
+	w.WriteF32(0)
+	w.WriteF32(0.5)
+	w.WriteF32(0.5)
+}
+
+func testScene3DBakedPrimitiveLayerAsset() {
+	shapes := primitive3d.NewShapeRegistry()
+	materials := primitive3d.NewMaterialPalette()
+	grassCard := shapes.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapePlane, Width: 1, Depth: 1})
+	flower := shapes.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapeSphere, Segments: 6})
+	grassMat := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGrass, Base: voplay.MaterialColor(voplay.Green)})
+	flowerMat := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.White)})
+	w := codec.NewByteWriter(20 + 2 * 92)
+	w.WriteU32(1280327510)
+	w.WriteU32(1)
+	w.WriteU32(2)
+	w.WriteU32(2)
+	w.WriteU32(0)
+	writeBakedPrimitiveLayerTestInstance(&w, 0, primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceNoShadow, 1, 2, 3, 80)
+	writeBakedPrimitiveLayerTestInstance(&w, 1, primitive3d.InstanceNoShadow, 5, 6, 7, 42)
+	result, err := scene3d.DecodeBakedPrimitiveLayerAsset(w.Bytes(), scene3d.BakedPrimitiveLayerAssetDesc{Shapes: shapes, Materials: materials, ChunkCellSize: 4, Slots: []scene3d.BakedPrimitiveLayerSlot{scene3d.BakedPrimitiveLayerSlot{Shape: grassCard, Material: grassMat}, scene3d.BakedPrimitiveLayerSlot{Shape: flower, Material: flowerMat}}})
+	assert(err == nil, "scene3d baked primitive layer decodes")
+	assert(result.Instances == 2 && result.Slots == 2, "scene3d baked primitive layer reports counts")
+	instances := result.Layer.Instances()
+	assert(len(instances) == 2, "scene3d baked primitive layer writes instances")
+	assert(instances[0].Shape == grassCard && instances[0].Material == grassMat, "scene3d baked primitive layer maps first slot")
+	assert(instances[1].Shape == flower && instances[1].Material == flowerMat, "scene3d baked primitive layer maps second slot")
+	assertVec3Near(instances[0].Position, voplay.Vec3{X: 1, Y: 2, Z: 3}, 0.000001, "scene3d baked primitive layer preserves position")
+	assertFloatNear(instances[0].Rotation.W, 1, 0.000001, "scene3d baked primitive layer preserves rotation")
+	assertVec3Near(instances[0].Scale, voplay.Vec3{X: 1.2, Y: 0.8, Z: 2.1}, 0.000001, "scene3d baked primitive layer preserves scale")
+	assert(instances[0].Flags == primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceNoShadow, "scene3d baked primitive layer preserves flags")
+	assertFloatNear(instances[0].LodFar, 80, 0.000001, "scene3d baked primitive layer preserves lod")
+	assertFloatNear(instances[0].WindStrength, 0.31, 0.000001, "scene3d baked primitive layer preserves wind")
+	assertFloatNear(instances[0].AtlasUV.W, 0.5, 0.000001, "scene3d baked primitive layer preserves atlas uv")
+	result.Layer.Build()
+	assert(result.Layer.Stats().TotalChunks >= 1, "scene3d baked primitive layer chunks")
+	_, err = scene3d.DecodeBakedPrimitiveLayerAsset(w.Bytes(), scene3d.BakedPrimitiveLayerAssetDesc{Slots: []scene3d.BakedPrimitiveLayerSlot{scene3d.BakedPrimitiveLayerSlot{Shape: grassCard, Material: grassMat}}})
+	assert(err != nil, "scene3d baked primitive layer rejects slot mismatch")
+}
+
+func testScene3DPreparedMapAsset() {
+	stats := &assetRuntimeStats{}
+	assets := voplay.NewAssetsWithLoaders(newMockAssetLoaders(stats))
+	tb := &testTerrainBackend{}
+	prevTerrain := scene3d.SetTerrainBackend(tb)
+	defer scene3d.SetTerrainBackend(prevTerrain)
+	packDir, err := os.MkdirTemp("", "voplay-map-pack-")
+	assert(err == nil, "scene3d map pack temp dir")
+	defer os.RemoveAll(packDir)
+	packPath := filepath.Join([]string{packDir, "map.vpak"})
+	writeTestMapPack(packPath)
+	err = assets.Mount(packPath, 0)
+	assert(err == nil, "scene3d map pack mount")
+	assets.BeginGroup("map")
+	prepared, err := scene3d.PrepareMapWithAssets(assets, "maps/blockkart/blockkart.map.json")
+	assert(err == nil, "scene3d prepared map loads declared resources")
+	assert(prepared.Asset.Name == "prepared_map_test", "scene3d prepared map keeps asset")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/road.glb"), "scene3d prepared map lists mesh dependency")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/road_lod.glb"), "scene3d prepared map lists mesh lod dependency")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/height.png"), "scene3d prepared map lists terrain heightmap dependency")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/terrain_lod.glb"), "scene3d prepared map lists mesh terrain lod dependency")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/terrain_grid.bin"), "scene3d prepared map lists mesh terrain grid dependency")
+	assert(mapDependenciesContain(prepared.Dependencies, "maps/blockkart/roadside.bin"), "scene3d prepared map lists primitive layer dependency")
+	road, err := prepared.Model("road")
+	assert(err == nil && road != 0, "scene3d prepared map exposes prepared model")
+	assert(len(prepared.MeshLodModels["road"]) == 1 && prepared.MeshLodModels["road"][0] != 0, "scene3d prepared map exposes prepared mesh lod models")
+	meshTerrain, err := prepared.MeshTerrain("ground")
+	assert(err == nil && meshTerrain.Model != 0 && len(meshTerrain.HeightGridData) == len(makePreparedMapMeshTerrainGridBytes()), "scene3d prepared map exposes mesh terrain payload")
+	assert(len(meshTerrain.LodModels) == 1 && meshTerrain.LodModels[0] != 0, "scene3d prepared map exposes mesh terrain lod models")
+	fileLoadsAfterPrepare := stats.fileLoads
+	mapScene := scene3d.New()
+	spawnedMap, err := scene3d.SpawnPreparedMapWithAssets(mapScene, assets, prepared)
+	assert(err == nil, "scene3d prepared map spawns prepared mesh models")
+	assert(stats.fileLoads == fileLoadsAfterPrepare, "scene3d prepared map spawn reuses prepared terrain resources")
+	assert(spawnedMap.Terrain != nil && tb.createCalls == 1, "scene3d prepared map spawns prepared terrain")
+	roadEntity := spawnedMap.Meshes["road"]
+	assert(roadEntity != nil && roadEntity.StaticRenderable && !roadEntity.Pickable && roadEntity.CullDistance == 240 && roadEntity.FrustumCull, "scene3d prepared map forwards mesh culling and picking controls")
+	assert(roadEntity.Material.Roughness == 0.86 && roadEntity.Material.DetailStrength == 1.1, "scene3d prepared map forwards mesh material")
+	assert(len(roadEntity.LodLevels) == 1 && roadEntity.LodLevels[0].Model == prepared.MeshLodModels["road"][0] && roadEntity.LodLevels[0].Distance == 80, "scene3d prepared map forwards mesh lod levels")
+	meshDesc, err := prepared.MeshEntityDesc("road")
+	assert(err == nil && meshDesc.Model == road && meshDesc.PickMode == scene3d.PickDisabled && meshDesc.Material.Roughness == 0.86 && len(meshDesc.LodLevels) == 1, "scene3d prepared map exposes mesh entity desc")
+	groundTerrain := spawnedMap.MeshTerrains["ground"]
+	assert(groundTerrain != nil && groundTerrain.Entity() != nil && groundTerrain.HeightGrid().Cols == 2, "scene3d prepared map spawns prepared mesh terrain")
+	assert(groundTerrain.Entity().Material.Roughness == 0.91 && groundTerrain.Entity().Material.DetailStrength == 1.2, "scene3d prepared map forwards mesh terrain material")
+	assert(len(groundTerrain.Entity().LodLevels) == 1 && groundTerrain.Entity().LodLevels[0].Model == meshTerrain.LodModels[0] && groundTerrain.Entity().LodLevels[0].Distance == 120, "scene3d prepared map forwards mesh terrain lod levels")
+	assert(len(spawnedMap.Entities) == 3, "scene3d prepared map records spawned terrain, mesh, and mesh terrain entities")
+	spawnedMap.Destroy(mapScene)
+	mapScene.Close()
+	meshScene := scene3d.New()
+	roadOnly, err := scene3d.SpawnPreparedMapMesh(meshScene, prepared, "road")
+	assert(err == nil && roadOnly.Model == road && !roadOnly.Pickable && roadOnly.Material.Roughness == 0.86, "scene3d prepared map spawns single prepared mesh")
+	meshScene.Destroy(roadOnly)
+	meshScene.Close()
+	trackAsset := &scene3d.TrackAsset{Version: 1, Name: "prepared_track", Centerline: []scene3d.TrackControlPoint{scene3d.TrackControlPoint{Position: scene3d.MapVec3{X: -1, Y: 0, Z: 0}, Width: 4}, scene3d.TrackControlPoint{Position: scene3d.MapVec3{X: 1, Y: 0, Z: 0}, Width: 4}}}
+	track, err := scene3d.NewTrack(trackAsset)
+	assert(err == nil, "scene3d prepared map track mesh terrain test track")
+	trackScene := scene3d.New()
+	trackResult, err := scene3d.SpawnPreparedMapTrackMeshTerrain(trackScene, track, prepared, "ground")
+	assert(err == nil && trackResult.HeightSampler != nil && trackResult.CollisionHeightSampler != nil, "scene3d prepared map spawns mesh terrain as track terrain")
+	assert(len(trackResult.Entities) == 1 && len(trackResult.Entities[0].LodLevels) == 1 && trackResult.Entities[0].LodLevels[0].Model == meshTerrain.LodModels[0], "scene3d prepared map track mesh terrain forwards lod levels")
+	probe := trackResult.HeightProbe()
+	height, ok := probe(voplay.Vec3{X: 0, Y: 0, Z: 0})
+	assert(ok && height > 0.14 && height < 0.16, "scene3d prepared map track mesh terrain supplies height probe")
+	trackResult.Destroy(trackScene)
+	trackScene.Close()
+	shapes := primitive3d.NewShapeRegistry()
+	materials := primitive3d.NewMaterialPalette()
+	grass := shapes.Shape(primitive3d.ShapeDesc{Kind: primitive3d.ShapePlane, Width: 1, Depth: 1})
+	mat := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialGrass, Base: voplay.MaterialColor(voplay.Green)})
+	layer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 4}, Name: "roadside"})
+	s := scene3d.New()
+	s.AddPrimitiveLayer(layer)
+	result, err := scene3d.SpawnPreparedMapPrimitiveLayersWithAssets(s, assets, prepared, []scene3d.MapPrimitiveLayerTarget{scene3d.MapPrimitiveLayerTarget{Name: "roadside", Layer: layer, Slots: []scene3d.BakedPrimitiveLayerSlot{scene3d.BakedPrimitiveLayerSlot{Shape: grass, Material: mat}}, SlotNames: []string{"grass_card"}}})
+	assert(err == nil, "scene3d prepared map spawns primitive layer from prepared bytes")
+	assert(result.TotalInstances == 2 && result.Instances["roadside"] == 2, "scene3d prepared map reports primitive instance count")
+	assert(len(layer.Instances()) == 2, "scene3d prepared map decoded primitive instances")
+	assert(layer.PreloadChunks(), "scene3d prepared map applies primitive layer chunk preload")
+	s.Close()
+	assets.EndGroup()
+	assets.ReleaseGroup("map")
+	assert(stats.modelFrees == 4, "scene3d prepared map group frees prepared models")
+}
+
+func mapDependenciesContain(deps []scene3d.MapDependency, path string) bool {
+	for _, dep := range deps {
+		if dep.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func writeTestMapPack(path string) {
+	w, err := vopack.Create(path)
+	assert(err == nil, "scene3d map pack create")
+	w.SetManifestInfo("voplay-test-map", "1")
+	mapJSON := `{"version":1,"name":"prepared_map_test","terrain":{"heightmap":"height.png","width":4,"height":2,"depth":4,"uvScale":1},"meshes":[{"name":"road","model":"road.glb","lodLevels":[{"model":"road_lod.glb","distance":80}],"collision":"none","material":{"roughness":0.86,"detailStrength":1.1},"pickMode":"disabled","cullDistance":240,"frustumCull":true}],"meshTerrains":[{"name":"ground","model":"terrain.glb","lodLevels":[{"model":"terrain_lod.glb","distance":120}],"heightGrid":"terrain_grid.bin","material":{"roughness":0.91,"detailStrength":1.2}}],"primitiveLayers":[{"name":"roadside","source":"roadside.bin","kind":"static","chunkCellSize":4,"preloadChunks":true,"slots":["grass_card"]}]}`
+	err = w.Add("maps/blockkart/blockkart.map.json", []byte(mapJSON), vopack.EntryOpts{Type: "map", Dependencies: []string{"maps/blockkart/height.png", "maps/blockkart/road.glb", "maps/blockkart/road_lod.glb", "maps/blockkart/terrain.glb", "maps/blockkart/terrain_lod.glb", "maps/blockkart/terrain_grid.bin", "maps/blockkart/roadside.bin"}})
+	assert(err == nil, "scene3d map pack add map")
+	err = w.Add("maps/blockkart/height.png", []byte{7}, vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add heightmap")
+	err = w.Add("maps/blockkart/road.glb", []byte("road"), vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add road")
+	err = w.Add("maps/blockkart/road_lod.glb", []byte("road lod"), vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add road lod")
+	err = w.Add("maps/blockkart/terrain.glb", []byte("terrain"), vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add terrain")
+	err = w.Add("maps/blockkart/terrain_lod.glb", []byte("terrain lod"), vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add terrain lod")
+	err = w.Add("maps/blockkart/terrain_grid.bin", makePreparedMapMeshTerrainGridBytes(), vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add grid")
+	layerBytes := makePreparedMapBakedLayerBytes()
+	err = w.Add("maps/blockkart/roadside.bin", layerBytes, vopack.EntryOpts{})
+	assert(err == nil, "scene3d map pack add primitive layer")
+	err = w.Close()
+	assert(err == nil, "scene3d map pack close")
+}
+
+func makePreparedMapMeshTerrainGridBytes() []byte {
+	w := codec.NewByteWriter(56)
+	w.WriteU32(826758221)
+	w.WriteU32(1)
+	w.WriteU32(2)
+	w.WriteU32(2)
+	w.WriteF32(0)
+	w.WriteF32(0)
+	w.WriteF32(0)
+	w.WriteF32(16)
+	w.WriteF32(16)
+	w.WriteU32(0)
+	w.WriteF32(0)
+	w.WriteF32(0.1)
+	w.WriteF32(0.2)
+	w.WriteF32(0.3)
+	return w.Bytes()
+}
+
+func makePreparedMapBakedLayerBytes() []byte {
+	w := codec.NewByteWriter(20 + 2 * 92)
+	w.WriteU32(1280327510)
+	w.WriteU32(1)
+	w.WriteU32(2)
+	w.WriteU32(1)
+	w.WriteU32(0)
+	writeBakedPrimitiveLayerTestInstance(&w, 0, primitive3d.InstanceNoShadow, 1, 0, 1, 40)
+	writeBakedPrimitiveLayerTestInstance(&w, 0, primitive3d.InstanceNoShadow, 2, 0, 2, 40)
+	return w.Bytes()
+}
+
+func testScene3DImpostorAtlas() {
+	desc := scene3d.ImpostorAtlasDesc{Name: "tree_far", Texture: voplay.TextureID(91), TextureWidth: 1024, TextureHeight: 512, Columns: 4, Rows: 2, Count: 6, Padding: 0.1, NoShadow: true, LodNear: 80, LodFar: 240, CardWidth: 2.2, CardHeight: 3.6, MinQuality: scene3d.SceneQualityLow}
+	atlas, err := scene3d.BuildImpostorAtlas(desc)
+	assert(err == nil, "scene3d impostor atlas builds")
+	assert(atlas.Name == "tree_far" && atlas.Count == 6 && len(atlas.Cells) == 6, "scene3d impostor atlas count")
+	assert(atlas.Material.Base.Albedo == voplay.TextureID(91), "scene3d impostor atlas material uses atlas texture")
+	assert(atlas.Cells[5].Row == 1 && atlas.Cells[5].Column == 1, "scene3d impostor atlas cell placement")
+	assertFloatNear(atlas.Cells[0].UV.X, 0.025, 0.000001, "scene3d impostor atlas padded uv x")
+	assertFloatNear(atlas.Cells[0].UV.W, 0.2, 0.000001, "scene3d impostor atlas padded uv w")
+	assertFloatNear(atlas.Cells[0].PixelRect.W, 204.8, 0.0001, "scene3d impostor atlas pixel rect")
+	assertFloatNear(atlas.Cells[5].Yaw, 2 * math.Pi * 5 / 6, 0.000001, "scene3d impostor atlas view yaw")
+	proto, err := atlas.Prototype(2, scene3d.TrackScatterPrototype{Flags: primitive3d.InstanceWind, WindStrength: 0.25})
+	assert(err == nil, "scene3d impostor atlas builds scatter prototype")
+	assert(proto.ShapeDesc.Kind == primitive3d.ShapePlane && proto.ShapeDesc.Width == 2.2 && proto.ShapeDesc.Depth == 3.6, "scene3d impostor prototype default card shape")
+	assert(proto.MaterialDesc.Base.Albedo == voplay.TextureID(91), "scene3d impostor prototype uses atlas material")
+	assert(proto.Flags == primitive3d.InstanceWind + primitive3d.InstanceAtlasUV + primitive3d.InstanceYBillboard + primitive3d.InstanceNoShadow, "scene3d impostor prototype flags")
+	assert(proto.LodNear == 80 && proto.LodFar == 240 && proto.MinQuality == scene3d.SceneQualityLow, "scene3d impostor prototype lod and quality")
+	assert(proto.AtlasUV == atlas.Cells[2].UV, "scene3d impostor prototype atlas uv")
+	protos, err := atlas.Prototypes(scene3d.TrackScatterPrototype{Weight: 2})
+	assert(err == nil && len(protos) == 6 && protos[4].Weight == 2, "scene3d impostor atlas expands prototype variants")
+	plan, err := scene3d.BuildImpostorBakePlan(scene3d.ImpostorBakePlanDesc{Model: voplay.ModelID(42), Atlas: desc, Center: voplay.Vec3{Y: 1.2}, Radius: 2.0, Pitch: 0.22})
+	assert(err == nil, "scene3d impostor bake plan builds")
+	assert(plan.Name == "tree_far" && len(plan.Views) == 6, "scene3d impostor bake plan view count")
+	assert(plan.Views[0].Camera.Target == (voplay.Vec3{Y: 1.2}) && plan.Views[0].Camera.Fov == 35, "scene3d impostor bake plan camera defaults")
+	assert(plan.Views[3].Model == voplay.ModelID(42) && plan.Views[3].UV == atlas.Cells[3].UV, "scene3d impostor bake plan carries model and uv")
+	baker := &testImpostorBakeBackend{texture: voplay.TextureID(123)}
+	prevBaker := scene3d.SetImpostorBakeBackend(baker)
+	baked, err := scene3d.BakeImpostorAtlas(scene3d.ImpostorBakePlanDesc{Model: voplay.ModelID(42), Atlas: desc, Center: voplay.Vec3{Y: 1.2}, Radius: 2.0})
+	assert(err == nil, "scene3d impostor bake backend runs")
+	assert(baker.calls == 1 && len(baker.lastPlan.Views) == 6, "scene3d impostor bake backend receives full plan")
+	assert(baked.Texture == voplay.TextureID(123) && baked.Atlas.Texture == voplay.TextureID(123) && baked.Atlas.Material.Base.Albedo == voplay.TextureID(123), "scene3d impostor bake result normalizes atlas texture")
+	bakedProtos, bakedAgain, err := scene3d.BakeImpostorScatterPrototypes(scene3d.ImpostorBakePlanDesc{Model: voplay.ModelID(42), Atlas: desc}, scene3d.TrackScatterPrototype{Flags: primitive3d.InstanceWind})
+	assert(err == nil && bakedAgain.Texture == voplay.TextureID(123) && len(bakedProtos) == 6, "scene3d impostor bake creates scatter prototypes")
+	assert(bakedProtos[0].MaterialDesc.Base.Albedo == voplay.TextureID(123), "scene3d baked impostor prototypes use baked texture")
+	scene3d.SetImpostorBakeBackend(prevBaker)
+	textureBackend := &testTextureBackend{}
+	prevTextureBackend := voplay.SetTextureBackend(textureBackend)
+	scene3DPickTestBounds = map[int]voplay.AABB{77: {Min: voplay.Vec3{X: -0.7, Y: 0, Z: -0.5}, Max: voplay.Vec3{X: 0.7, Y: 1.7, Z: 0.5}}}
+	scene3DPickTestBoundsPresent = map[int]bool{77: true}
+	prevModelBackend := voplay.SetModelBackend(&testPickModelBackend{})
+	geometryBackend := &testModelGeometryBackend{data: testImpostorPyramidGeometryBytes()}
+	prevGeometryBackend := voplay.SetModelGeometryBackend(geometryBackend)
+	prevDefaultBaker := scene3d.SetImpostorBakeBackend(nil)
+	textureBackend.pixelPayloads = map[int][]byte{11: testTexturePixelsBytes(2, 2, true, []byte{180, 245, 90, 255, 80, 180, 60, 255, 220, 255, 120, 255, 120, 210, 80, 255}), 12: testTexturePixelsBytes(2, 2, false, []byte{128, 128, 255, 255, 160, 120, 245, 255, 96, 150, 240, 255, 128, 128, 255, 255}), 13: testTexturePixelsBytes(2, 2, false, []byte{255, 128, 24, 255, 255, 190, 64, 255, 255, 90, 12, 255, 255, 220, 32, 255}), 21: testTexturePixelsBytes(2, 2, true, []byte{70, 155, 70, 255, 52, 120, 58, 255, 96, 180, 92, 255, 60, 135, 68, 255}), 22: testTexturePixelsBytes(2, 2, false, []byte{220, 240, 255, 255, 190, 220, 255, 255, 255, 255, 255, 255, 205, 230, 255, 255})}
+	generated, err := scene3d.BakeImpostorAtlas(scene3d.ImpostorBakePlanDesc{Model: voplay.ModelID(77), Atlas: scene3d.ImpostorAtlasDesc{Name: "generated_tree", Columns: 2, Rows: 2, Count: 4, CardWidth: 1.6, CardHeight: 2.4, Material: primitive3d.MaterialDesc{Base: voplay.MaterialColor(voplay.Color{R: 0.28, G: 0.72, B: 0.24, A: 1})}}})
+	assert(err == nil, "scene3d default impostor baker generates atlas")
+	assert(geometryBackend.calls == 1, "scene3d default impostor baker reads model geometry")
+	assert(testHasInt(textureBackend.pixelRequests, 11) && testHasInt(textureBackend.pixelRequests, 12) && testHasInt(textureBackend.pixelRequests, 13), "scene3d default impostor baker samples source material textures")
+	assert(textureBackend.rgbaCalls == 1 && textureBackend.rgbaLinearCalls == 3 && textureBackend.width == 256 && textureBackend.height == 256, "scene3d default impostor baker uploads material atlases")
+	assert(generated.Texture != 0 && generated.Atlas.Texture == generated.Texture && generated.Atlas.Material.Base.Albedo == generated.Texture, "scene3d default impostor baker returns generated texture")
+	assert(generated.Normal != 0 && generated.MetallicRoughness != 0 && generated.Mask != 0, "scene3d default impostor baker returns generated material maps")
+	assert(generated.Atlas.Material.Base.Normal == generated.Normal && generated.Atlas.Material.Base.MetallicRoughness == generated.MetallicRoughness && generated.Atlas.Material.Base.Mask == generated.Mask, "scene3d default impostor baker wires material maps")
+	pixelBytes := voplay.TexturePixelsBytes(generated.Texture)
+	pixelReader := codec.NewByteReader(pixelBytes)
+	assert(pixelReader.ReadU32() == 1 && pixelReader.ReadU32() == 256 && pixelReader.ReadU32() == 256 && pixelReader.ReadU32() == 1 && pixelReader.Remaining() == 256 * 256 * 4, "TexturePixelsBytes exports v1 sRGB RGBA8 payload")
+	normalPixelBytes := voplay.TexturePixelsBytes(generated.Normal)
+	normalPixelReader := codec.NewByteReader(normalPixelBytes)
+	assert(normalPixelReader.ReadU32() == 1 && normalPixelReader.ReadU32() == 256 && normalPixelReader.ReadU32() == 256 && normalPixelReader.ReadU32() == 0 && normalPixelReader.Remaining() == 256 * 256 * 4, "TexturePixelsBytes exports v1 linear RGBA8 payload")
+	nonTransparent := 0
+	normalVariation := 0
+	normalData := textureBackend.linearData[0]
+	for i := 3; i < len(textureBackend.data); i += 4 {
+		if textureBackend.data[i] > 0 {
+			nonTransparent++
+			n := i - 3
+			if normalData[n] != 128 || normalData[n + 1] != 128 || normalData[n + 2] != 255 {
+				normalVariation++
+			}
+		}
+	}
+	assert(nonTransparent > 0, "scene3d default impostor baker writes visible pixels")
+	assert(normalVariation > 0, "scene3d default impostor baker writes mesh-derived normals")
+	scene3d.SetImpostorBakeBackend(prevDefaultBaker)
+	voplay.SetModelGeometryBackend(prevGeometryBackend)
+	voplay.SetModelBackend(prevModelBackend)
+	voplay.SetTextureBackend(prevTextureBackend)
+	field, err := scene3d.BuildScatterField(scene3d.ScatterFieldDesc{Seed: 501, Width: 6, Depth: 6, Count: 3, Prototypes: []scene3d.TrackScatterPrototype{proto}})
+	assert(err == nil && field.Instances == 3, "scene3d impostor prototype feeds scatter field")
+	instances := field.Layer.Instances()
+	assert(len(instances) == 3 && instances[0].AtlasUV == proto.AtlasUV && instances[0].Flags == proto.Flags && instances[0].LodFar == 240, "scene3d impostor scatter preserves render controls")
+	_, err = scene3d.BuildImpostorAtlas(scene3d.ImpostorAtlasDesc{Texture: voplay.TextureID(1), Columns: 1, Rows: 1, Count: 2})
+	assert(err != nil, "scene3d impostor atlas rejects overflow count")
+	_, err = scene3d.BuildImpostorBakePlan(scene3d.ImpostorBakePlanDesc{Atlas: desc})
+	assert(err != nil, "scene3d impostor bake plan rejects missing model")
+}
+
+func testScene3DTrackEdgeTransitionMesh() {
+	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
+	assert(err == nil, "scene3d track edge transition new track")
+	mesh, err := scene3d.BuildTrackEdgeTransitionMesh(track, scene3d.TrackEdgeTransitionDesc{Name: "test_edge_blend", SampleCount: 12, InnerOffset: 0.2, OuterOffset: 3.8, Color: voplay.Color{R: 0.5, G: 0.32, B: 0.16, A: 0.7}, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 2.0 + pos.X * 0.001, true
+	}})
+	assert(err == nil, "scene3d track edge transition builds")
+	assert(len(mesh.Vertices) == 52, "scene3d track edge transition emits raw vertices")
+	assert(len(mesh.Indices) == 144, "scene3d track edge transition emits raw indices")
+	assert(mesh.VertexCount == 52, "scene3d track edge transition creates both-side strip vertices")
+	assert(mesh.IndexCount == 144, "scene3d track edge transition creates both-side strip indices")
+	assert(mesh.Max.Y > mesh.Min.Y, "scene3d track edge transition samples height probe")
+	assertFloatNear(mesh.Color.A, 0.7, 0.000001, "scene3d track edge transition preserves alpha material")
+}
+
+func testScene3DTrackProjectedDecalMesh() {
+	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
+	assert(err == nil, "scene3d track projected decal new track")
+	mesh, err := scene3d.BuildTrackProjectedDecalMesh(track, scene3d.TrackProjectedDecalDesc{Name: "test_projected_decals", Side: scene3d.TrackScatterBothSides, Seed: 71, Count: 3, LateralMin: 0.2, LateralMax: 1.1, WidthMin: 0.4, WidthMax: 0.8, LengthMin: 1.2, LengthMax: 2.4, YawJitter: math.Pi * 0.35, SurfaceOffset: 0.08, Color: voplay.Color{R: 0.07, G: 0.055, B: 0.04, A: 0.42}, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 1.0 + pos.X * 0.002, true
+	}})
+	assert(err == nil, "scene3d track projected decal builds")
+	assert(len(mesh.Vertices) == 24, "scene3d track projected decal emits raw vertices")
+	assert(len(mesh.Indices) == 36, "scene3d track projected decal emits raw indices")
+	assert(mesh.DecalCount == 6, "scene3d track projected decal creates both-side decals")
+	assert(mesh.VertexCount == 24, "scene3d track projected decal creates quad vertices")
+	assert(mesh.IndexCount == 36, "scene3d track projected decal creates quad indices")
+	assert(mesh.Max.Y > mesh.Min.Y, "scene3d track projected decal samples height probe")
+	assertFloatNear(mesh.Color.A, 0.42, 0.000001, "scene3d track projected decal preserves alpha material")
+}
+
+func testScene3DTrackSurfaceDetailsSpawn() {
+	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
+	assert(err == nil, "scene3d track surface details new track")
+	s := scene3d.New()
+	meshes := &testPrimitiveMeshBackend{}
+	prev := voplay.SetPrimitiveMeshBackend(meshes)
+	defer voplay.SetPrimitiveMeshBackend(prev)
+	details, err := scene3d.SpawnTrackSurfaceDetails(s, nil, track, scene3d.TrackSurfaceDetailsDesc{HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 1.5 + pos.Z * 0.001, true
+	}, EdgeTransitions: []scene3d.TrackEdgeTransitionDesc{{Name: "spawn_edge_band", SampleCount: 8, InnerOffset: 0.1, OuterOffset: 2.2, Color: voplay.Color{R: 0.5, G: 0.34, B: 0.18, A: 0.72}, Material: voplay.MaterialDesc{Albedo: voplay.TextureID(31), Normal: voplay.TextureID(32), MetallicRoughness: voplay.TextureID(33), NormalScale: 0.65, UVScale: 2.5}}}, ProjectedDecals: []scene3d.TrackProjectedDecalDesc{{Name: "spawn_road_grime", Side: scene3d.TrackScatterRightSide, Count: 4, LateralMin: 0.2, LateralMax: 1.4, EdgeRelative: true, WidthMin: 0.35, WidthMax: 0.7, LengthMin: 1, LengthMax: 1.8, Color: voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.45}}}})
+	assert(err == nil, "scene3d track surface details spawn")
+	assert(meshes.rawCalls == 2, "scene3d track surface details creates raw mesh models")
+	assert(len(details.Details) == 2, "scene3d track surface details count")
+	assert(details.Details[0].Kind == "edge_transition", "scene3d track surface details edge kind")
+	assert(details.Details[1].Kind == "projected_decal", "scene3d track surface details decal kind")
+	assert(details.Details[0].Material.Albedo == voplay.TextureID(31), "scene3d track surface details forwards albedo material")
+	assert(details.Details[0].Entity.Material.Normal == voplay.TextureID(32), "scene3d track surface details entity receives normal material")
+	assertFloatNear(details.Details[0].Entity.Material.UVScale, 2.5, 0.000001, "scene3d track surface details material uv scale")
+	assert(details.Details[1].DecalCount == 4, "scene3d track surface details decal count")
+	assert(details.Details[0].Entity != nil && details.Details[0].Entity.Active, "scene3d track surface details edge entity active")
+	assert(details.Details[1].Entity != nil && details.Details[1].Entity.Active, "scene3d track surface details decal entity active")
+	assert(s.EntityCount() == 2, "scene3d track surface details scene entity count")
+	edgeEntity := details.Details[0].Entity
+	decalEntity := details.Details[1].Entity
+	details.Destroy(s)
+	assert(!edgeEntity.Active && !decalEntity.Active, "scene3d track surface details destroy removes entities")
+	assert(s.EntityCount() == 0, "scene3d track surface details destroy clears scene")
+	s.Close()
+}
+
+func testScene3DTrackSurfaceAuthoringPlan() {
+	track, err := scene3d.NewTrack(newScene3DTestTrackAsset())
+	assert(err == nil, "scene3d track surface authoring new track")
+	plan, err := scene3d.BuildTrackSurfaceAuthoringPlan(track, scene3d.TrackSurfaceAuthoringDesc{Quality: scene3d.SceneQualityCinematic, EdgeSampleCount: 10, DecalCount: 2, EdgeMaterial: voplay.MaterialDesc{Albedo: voplay.TextureID(41), Normal: voplay.TextureID(42), UVScale: 3}, DecalMaterial: voplay.MaterialDesc{Albedo: voplay.TextureID(43), UVScale: 1.5}, HeightProbe: func(pos voplay.Vec3) (float64, bool) {
+		return 1.2 + pos.X * 0.001, true
+	}})
+	assert(err == nil, "scene3d track surface authoring plan builds")
+	assert(plan.HasSurfaceMetadata, "scene3d track surface authoring marks surface metadata")
+	assert(plan.SurfaceCount == 3, "scene3d track surface authoring includes default road and authored surfaces")
+	assert(len(plan.Physics) == 3, "scene3d track surface authoring emits physics metadata")
+	assert(plan.Physics[1].Name == "grass_left" && plan.Physics[1].Friction == 0.35 && !plan.Physics[1].OnRoad, "scene3d track surface authoring copies offroad physics")
+	assert(plan.Physics[2].Name == "boost_lane" && plan.Physics[2].Boost == 1.5 && plan.Physics[2].OnRoad, "scene3d track surface authoring copies boost physics")
+	assert(plan.EdgeTransitionCount == 1 && len(plan.Details.EdgeTransitions) == 1, "scene3d track surface authoring emits offroad edge transition")
+	assert(plan.Details.EdgeTransitions[0].StartDistance == 0 && plan.Details.EdgeTransitions[0].EndDistance == 100, "scene3d track surface authoring edge follows surface distance range")
+	assert(plan.Details.EdgeTransitions[0].Material.Albedo == voplay.TextureID(41), "scene3d track surface authoring forwards edge material")
+	assert(plan.ProjectedDecalLayerCount == 2 && len(plan.Details.ProjectedDecals) == 2, "scene3d track surface authoring emits surface decal layers")
+	assert(plan.Details.ProjectedDecals[1].Name == "boost_lane_surface_decals_0", "scene3d track surface authoring names boost decal layer")
+	assert(plan.Details.ProjectedDecals[1].Material.Albedo == voplay.TextureID(43), "scene3d track surface authoring forwards decal material")
+	s := scene3d.New()
+	meshes := &testPrimitiveMeshBackend{}
+	prev := voplay.SetPrimitiveMeshBackend(meshes)
+	defer voplay.SetPrimitiveMeshBackend(prev)
+	authored, err := scene3d.SpawnAuthoredTrackSurfaceDetails(s, nil, track, scene3d.TrackSurfaceAuthoringDesc{DecalCount: 1, EdgeSampleCount: 8})
+	assert(err == nil, "scene3d authored track surface details spawn")
+	assert(authored.Plan.EdgeTransitionCount == 1 && authored.Plan.ProjectedDecalLayerCount == 2, "scene3d authored track surface details keeps plan")
+	assert(meshes.rawCalls == 3, "scene3d authored track surface details creates raw visual layers")
+	assert(s.EntityCount() == 3, "scene3d authored track surface details spawns generated entities")
+	authored.Destroy(s)
+	assert(s.EntityCount() == 0, "scene3d authored track surface details destroy clears generated entities")
 	s.Close()
 }
 
@@ -2593,18 +3494,23 @@ func testScene3DTintSemantics() {
 	transparent := s.Spawn(scene3d.EntityDesc{Tag: "transparent", Tint: voplay.Color{}, TintSet: true})
 	assert(transparent.Tint == (voplay.Color{}), "scene3d explicit zero tint is preserved when TintSet")
 	assert(transparent.Material.BaseColor == (voplay.Color{}), "scene3d explicit transparent tint feeds material")
-	material := voplay.MaterialDesc{BaseColor: voplay.Hex(0x3366cc), Albedo: voplay.TextureID(42), Normal: voplay.TextureID(43), MetallicRoughness: voplay.TextureID(46), Emissive: voplay.TextureID(44), Roughness: 0.7, Metallic: 0.2, NormalScale: 0.65, UVScale: 2.5, ToonRamp: voplay.TextureID(45), EmissiveColor: voplay.Color{R: 0.1, G: 0.2, B: 0.3, A: 1}, ShadingMode: voplay.MaterialShadingToon, WrapMode: voplay.MaterialWrapClamp, FilterMode: voplay.MaterialFilterNearest}
+	material := voplay.MaterialDesc{BaseColor: voplay.Hex(0x3366cc), Albedo: voplay.TextureID(42), Normal: voplay.TextureID(43), MetallicRoughness: voplay.TextureID(46), Emissive: voplay.TextureID(44), Mask: voplay.TextureID(47), Roughness: 0.7, Metallic: 0.2, NormalScale: 0.65, UVScale: 2.5, ToonRamp: voplay.TextureID(45), DetailStrength: 1.25, MacroBlend: 0.4, RoughnessResponse: 0.85, ToonRampResponse: 0.65, EmissiveColor: voplay.Color{R: 0.1, G: 0.2, B: 0.3, A: 1}, ShadingMode: voplay.MaterialShadingToon, WrapMode: voplay.MaterialWrapClamp, FilterMode: voplay.MaterialFilterNearest}
 	materialEntity := s.Spawn(scene3d.EntityDesc{Tag: "material", Material: material})
 	assert(materialEntity.Material.BaseColor == material.BaseColor, "scene3d explicit material base color")
 	assert(materialEntity.Material.Albedo == material.Albedo, "scene3d explicit material albedo")
 	assert(materialEntity.Material.Normal == material.Normal, "scene3d explicit material normal map")
 	assert(materialEntity.Material.MetallicRoughness == material.MetallicRoughness, "scene3d explicit material metallic-roughness map")
 	assert(materialEntity.Material.Emissive == material.Emissive, "scene3d explicit material emissive map")
+	assert(materialEntity.Material.Mask == material.Mask, "scene3d explicit material mask map")
 	assert(materialEntity.Material.ToonRamp == material.ToonRamp, "scene3d explicit material toon ramp")
 	assertFloatNear(materialEntity.Material.UVScale, 2.5, 0.000001, "scene3d explicit material uv scale")
 	assertFloatNear(materialEntity.Material.Roughness, 0.7, 0.000001, "scene3d explicit material roughness")
 	assertFloatNear(materialEntity.Material.Metallic, 0.2, 0.000001, "scene3d explicit material metallic")
 	assertFloatNear(materialEntity.Material.NormalScale, 0.65, 0.000001, "scene3d explicit material normal scale")
+	assertFloatNear(materialEntity.Material.DetailStrength, 1.25, 0.000001, "scene3d explicit material detail response")
+	assertFloatNear(materialEntity.Material.MacroBlend, 0.4, 0.000001, "scene3d explicit material macro blend")
+	assertFloatNear(materialEntity.Material.RoughnessResponse, 0.85, 0.000001, "scene3d explicit material roughness response")
+	assertFloatNear(materialEntity.Material.ToonRampResponse, 0.65, 0.000001, "scene3d explicit material toon response")
 	assert(materialEntity.Material.EmissiveColor == material.EmissiveColor, "scene3d explicit material emissive color")
 	assert(materialEntity.Material.ShadingMode == voplay.MaterialShadingToon, "scene3d explicit material toon mode")
 	assert(materialEntity.Material.WrapMode == voplay.MaterialWrapClamp, "scene3d explicit material sampler wrap")
@@ -2757,23 +3663,32 @@ func testPrimitive3DModuleContract() {
 	assert(builderLayer.Stats().TotalInstances == 2, "primitive3d builder emits layer instances")
 	assert(builderLayer.Stats().TotalChunks == 2, "primitive3d builder preserves chunking")
 	stream := voplay.NewDrawCtx()
-	stream.UpsertPrimitive3DInstance(1, 2, 3, voplay.ModelID(4), voplay.Vec3{}, voplay.QuatIdentity(), voplay.Vec3{X: 1, Y: 1, Z: 1}, voplay.MaterialColor(voplay.Red), true)
+	renderParams := voplay.Primitive3DRenderParams{Flags: voplay.Primitive3DFlagWind + voplay.Primitive3DFlagAtlasUV + voplay.Primitive3DFlagYBillboard, LodNear: 4, LodFar: 120, WindStrength: 0.35, AtlasUV: voplay.Rect{X: 0.25, Y: 0.5, W: 0.125, H: 0.25}}
+	stream.UpsertPrimitive3DInstance(1, 2, 3, voplay.ModelID(4), voplay.Vec3{}, voplay.QuatIdentity(), voplay.Vec3{X: 1, Y: 1, Z: 1}, voplay.MaterialColor(voplay.Red), true, renderParams)
 	assert(len(stream.Bytes()) > 0 && stream.Bytes()[0] == 0x34, "primitive3d draw stream uses primitive upsert opcode")
 	chunkStream := voplay.NewDrawCtx()
-	chunkStream.ReplacePrimitive3DChunk(1, 2, 5, []voplay.Primitive3DInstanceDraw{voplay.Primitive3DInstanceDraw{ObjectID: 3, Model: voplay.ModelID(4), Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, Material: voplay.MaterialColor(voplay.Red), Visible: true}})
+	chunkStream.ReplacePrimitive3DChunk(1, 2, 5, []voplay.Primitive3DInstanceDraw{voplay.Primitive3DInstanceDraw{ObjectID: 3, Model: voplay.ModelID(4), Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, Material: voplay.MaterialColor(voplay.Red), Visible: true, Render: renderParams}})
 	assert(len(chunkStream.Bytes()) > 0 && chunkStream.Bytes()[0] == 0x38, "primitive3d draw stream uses chunk replace opcode")
 	materialStream := voplay.NewDrawCtx()
 	materialStream.UpsertPrimitive3DMaterials(1, 2, []voplay.Primitive3DMaterialDraw{voplay.Primitive3DMaterialDraw{ID: 7, Material: voplay.MaterialColor(voplay.Red)}})
 	assert(len(materialStream.Bytes()) > 0 && materialStream.Bytes()[0] == 0x3A, "primitive3d draw stream uses material table opcode")
 	refChunkStream := voplay.NewDrawCtx()
-	refChunkStream.ReplacePrimitive3DChunkRefs(1, 2, 5, []voplay.Primitive3DInstanceRefDraw{voplay.Primitive3DInstanceRefDraw{ObjectID: 3, Model: voplay.ModelID(4), Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, MaterialID: 7, Visible: true}})
+	refChunkStream.ReplacePrimitive3DChunkRefs(1, 2, 5, []voplay.Primitive3DInstanceRefDraw{voplay.Primitive3DInstanceRefDraw{ObjectID: 3, Model: voplay.ModelID(4), Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, MaterialID: 7, Visible: true, Render: renderParams}})
 	assert(len(refChunkStream.Bytes()) > 0 && refChunkStream.Bytes()[0] == 0x39, "primitive3d draw stream uses compact chunk refs opcode")
 	shapeStream := voplay.NewDrawCtx()
 	shapeStream.UpsertPrimitive3DShapes(1, 2, []voplay.Primitive3DShapeDraw{voplay.Primitive3DShapeDraw{ID: 6, Model: voplay.ModelID(4)}})
 	assert(len(shapeStream.Bytes()) > 0 && shapeStream.Bytes()[0] == 0x3B, "primitive3d draw stream uses shape table opcode")
 	keyChunkStream := voplay.NewDrawCtx()
-	keyChunkStream.ReplacePrimitive3DChunkKeys(1, 2, 5, []voplay.Primitive3DInstanceKeyDraw{voplay.Primitive3DInstanceKeyDraw{ObjectID: 3, ShapeID: 6, Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, MaterialID: 7, Visible: true}})
+	keyChunkStream.ReplacePrimitive3DChunkKeys(1, 2, 5, []voplay.Primitive3DInstanceKeyDraw{voplay.Primitive3DInstanceKeyDraw{ObjectID: 3, ShapeID: 6, Rotation: voplay.QuatIdentity(), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, MaterialID: 7, Visible: true, Render: renderParams}})
 	assert(len(keyChunkStream.Bytes()) > 0 && keyChunkStream.Bytes()[0] == 0x3C, "primitive3d draw stream uses shape/material key chunk opcode")
+	_, didPanic := capturePanic(func() {
+		stream.UpsertPrimitive3DInstance(1, 2, 3, voplay.ModelID(4), voplay.Vec3{}, voplay.QuatIdentity(), voplay.Vec3{X: 1, Y: 1, Z: 1}, voplay.MaterialColor(voplay.Red), true, voplay.Primitive3DRenderParams{LodNear: 100, LodFar: 10})
+	})
+	assert(didPanic, "primitive3d render params reject inverted lod range")
+	_, didPanic = capturePanic(func() {
+		stream.UpsertPrimitive3DInstance(1, 2, 3, voplay.ModelID(4), voplay.Vec3{}, voplay.QuatIdentity(), voplay.Vec3{X: 1, Y: 1, Z: 1}, voplay.MaterialColor(voplay.Red), true, voplay.Primitive3DRenderParams{Flags: voplay.Primitive3DFlagAtlasUV})
+	})
+	assert(didPanic, "primitive3d render params reject missing atlas uv")
 	chunkVisibleStream := voplay.NewDrawCtx()
 	chunkVisibleStream.SetPrimitive3DChunkVisible(1, 2, 5, false)
 	assert(len(chunkVisibleStream.Bytes()) > 0 && chunkVisibleStream.Bytes()[0] == 0x3D, "primitive3d draw stream uses chunk visibility opcode")
@@ -2804,6 +3719,12 @@ func testPrimitive3DModuleContract() {
 	chunkedLayer.Invalidate()
 	changes = chunkedLayer.DrainStaticChanges()
 	assert(changes.All && len(changes.Upserts) == 0, "primitive3d static drain avoids whole-layer upsert allocation")
+	bulkLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 10}})
+	added := bulkLayer.AddMany([]primitive3d.Instance{primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{X: 0}}, primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{X: 20}}})
+	assert(added == 2, "primitive3d AddMany reports added instances")
+	assert(bulkLayer.Stats().TotalInstances == 2 && bulkLayer.Stats().DirtyRanges == bulkLayer.Stats().TotalChunks, "primitive3d AddMany marks static layer as whole dirty")
+	changes = bulkLayer.DrainStaticChanges()
+	assert(changes.All && len(changes.Upserts) == 0, "primitive3d AddMany static drain avoids per-instance upsert allocation")
 	sceneLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials})
 	sceneLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{X: 0}})
 	sceneLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{X: 1}})
@@ -2816,6 +3737,10 @@ func testPrimitive3DModuleContract() {
 	assert(pstats.TotalInstances == 2, "scene3d primitive stats count layer instances")
 	assert(pstats.ShapeMaterialGroups == 1, "scene3d primitive stats group shared shape/material")
 	rstats := s.RenderStats()
+	diag := s.Diagnostics()
+	assert(diag.Primitive.TotalInstances == 2, "scene3d diagnostics include primitive instances")
+	assert(diag.PrimitiveLayers == 1, "scene3d diagnostics include primitive layer count")
+	assert(diag.Render.UpsertedObjects == 2, "scene3d diagnostics include render stats")
 	assert(rstats.UpsertedObjects == 2, "scene3d primitive first draw upserts layer instances")
 	assert(rstats.BatchEligibleObjects == 2, "scene3d primitive instances are batch eligible")
 	assert(rstats.BatchGroups == 1, "scene3d primitive shared material produces one batch group")
@@ -2839,13 +3764,20 @@ func testPrimitive3DModuleContract() {
 	s.Draw(d)
 	pstats = s.PrimitiveStats()
 	assert(pstats.TotalChunks == 2, "scene3d primitive stats keep total chunks")
-	assert(pstats.VisibleChunks == 2, "scene3d primitive stats report uploaded chunks before Rust culling")
-	assert(pstats.VisibleInstances == 2, "scene3d primitive stats report retained instances before Rust culling")
-	assert(s.RenderStats().UpsertedObjects == 2, "scene3d primitive first draw uploads content chunks")
+	assert(pstats.VisibleChunks == 1, "scene3d primitive stats frustum-cull static chunks")
+	assert(pstats.VisibleInstances == 1, "scene3d primitive stats count only visible static chunk instances")
+	assert(s.RenderStats().UpsertedObjects == 1, "scene3d primitive first draw uploads only visible content chunks")
 	s.Camera.Target = voplay.Vec3{X: 80, Y: 2, Z: 0}
 	d = voplay.NewDrawCtx()
 	s.Draw(d)
-	assert(s.RenderStats().UpsertedObjects == 0, "scene3d primitive camera move emits no visibility patch")
+	assert(s.RenderStats().UpsertedObjects == 0, "scene3d primitive camera move emits no content upload")
+	assert(s.PrimitiveStats().VisibleChunks == 0 && s.PrimitiveStats().VisibleInstances == 0, "scene3d primitive camera move culls static chunks at Vo layer")
+	assert(bytesContainByte(d.Bytes(), 0x3D), "scene3d primitive camera move emits chunk visibility opcode")
+	s.Camera.Target = voplay.Vec3{X: 0, Y: 2, Z: 0}
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	assert(s.RenderStats().UpsertedObjects == 0, "scene3d primitive visible static chunk reuses resident upload")
+	assert(s.PrimitiveStats().VisibleChunks == 1 && s.PrimitiveStats().VisibleInstances == 1, "scene3d primitive visible static chunk returns without rebuild")
 	s.Close()
 	stress := primitive3d.NewStressFixture(primitive3d.StressConfig{Count: 256, ShapeVariants: 4, MaterialVariants: 8, ChunkCellSize: 16})
 	s = scene3d.New()
@@ -2902,6 +3834,36 @@ func testScene3DRenderPerformanceContract() {
 	assert(stats.CulledEntities == 1, "scene3d perf culling culled count")
 	assert(stats.BatchEligibleObjects == 1, "scene3d perf culling batch eligible only visible")
 	s.Close()
+	s = scene3d.New()
+	s.Camera.Position = voplay.Vec3{}
+	s.Camera.Target = voplay.Vec3{Z: -1}
+	lodEntity := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Z: -30}, Model: voplay.ModelID(78), StaticRenderable: true, LodLevels: []scene3d.EntityLodLevel{scene3d.EntityLodLevel{Model: voplay.ModelID(79), Distance: 20}}})
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	stats = s.RenderStats()
+	assert(stats.LodSwitchedEntities == 1 && stats.BatchGroups == 1, "scene3d entity lod switches render model by camera distance")
+	s.Camera.Position = voplay.Vec3{Z: -28}
+	s.Camera.Target = voplay.Vec3{Z: -30}
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	assert(s.RenderStats().LodSwitchedEntities == 0 && s.RenderStats().UpsertedObjects == 1, "scene3d entity lod returns to base model without respawn")
+	lodEntity.SetLodLevels([]scene3d.EntityLodLevel{scene3d.EntityLodLevel{Model: voplay.ModelID(80), Distance: 1}})
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	assert(s.RenderStats().LodSwitchedEntities == 1 && s.RenderStats().UpsertedObjects == 1, "scene3d entity lod updates through entity API")
+	s.Close()
+	scene3DPickTestBounds = map[int]voplay.AABB{88: voplay.AABB{Min: voplay.Vec3{X: -50, Y: -1, Z: -50}, Max: voplay.Vec3{X: 50, Y: 1, Z: 50}}}
+	scene3DPickTestBoundsPresent = map[int]bool{88: true}
+	prevModelBackend := voplay.SetModelBackend(&testPickModelBackend{})
+	s = scene3d.New()
+	s.Camera.Position = voplay.Vec3{X: 40, Y: 2, Z: 0}
+	s.Camera.Target = voplay.Vec3{}
+	s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(88), StaticRenderable: true, CullDistance: 10, FrustumCull: true})
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	assert(s.RenderStats().VisibleEntities == 1 && s.RenderStats().CulledEntities == 0, "scene3d entity culling uses model bounds instead of scale-only sphere")
+	s.Close()
+	voplay.SetModelBackend(prevModelBackend)
 }
 
 func testScene3DOwnedModelLifecycle() {
@@ -2917,12 +3879,15 @@ func testScene3DOwnedModelLifecycle() {
 	eBorrowed := s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(102)})
 	s.Destroy(eBorrowed)
 	assert(len(freed.items) == 1, "scene3d destroy does not free borrowed model")
+	eOwnedLod := s.Spawn(scene3d.EntityDesc{OwnedModel: voplay.ModelID(105), OwnedLodModels: []voplay.ModelID{voplay.ModelID(106), voplay.ModelID(107)}, LodLevels: []scene3d.EntityLodLevel{scene3d.EntityLodLevel{Model: voplay.ModelID(106), Distance: 20}, scene3d.EntityLodLevel{Model: voplay.ModelID(107), Distance: 80}}})
+	s.Destroy(eOwnedLod)
+	assert(len(freed.items) == 4 && freed.items[1] == 105 && freed.items[2] == 106 && freed.items[3] == 107, "scene3d destroy frees owned lod models")
 	s.Spawn(scene3d.EntityDesc{OwnedModel: voplay.ModelID(103)})
 	s.Clear()
-	assert(len(freed.items) == 2 && freed.items[1] == 103, "scene3d clear frees owned model")
+	assert(len(freed.items) == 5 && freed.items[4] == 103, "scene3d clear frees owned model")
 	s.Spawn(scene3d.EntityDesc{Model: voplay.ModelID(104), OwnedModel: voplay.ModelID(104)})
 	s.Close()
-	assert(len(freed.items) == 3 && freed.items[2] == 104, "scene3d close frees owned model when model matches owned model")
+	assert(len(freed.items) == 6 && freed.items[5] == 104, "scene3d close frees owned model when model matches owned model")
 }
 
 func testScene3DColliderWithOffset() {
@@ -2988,6 +3953,89 @@ func testScene2DPhysicsBackend() {
 	scene2d.SetPhysicsBackend(prev)
 }
 
+func testDrawStatsContract() {
+	d := voplay.NewDrawCtx()
+	d.DrawRect(0, 0, 10, 10, voplay.White)
+	d.DrawText("stats", 2, 4, 12, voplay.White)
+	d.DrawSprite(voplay.SpriteParams{Tex: voplay.TextureID(1), Dst: voplay.Rect{W: 8, H: 8}, Tint: voplay.White})
+	d.DrawModel(voplay.ModelID(1), voplay.Vec3{}, voplay.QuatIdentity(), voplay.Vec3{X: 1, Y: 1, Z: 1}, voplay.MaterialColor(voplay.White))
+	stats := d.Stats()
+	assert(stats.DrawCalls == 4, "draw stats counts draw calls")
+	assert(stats.RectDraws == 1, "draw stats counts rects")
+	assert(stats.TextDraws == 1, "draw stats counts text")
+	assert(stats.SpriteDraws == 1, "draw stats counts sprites")
+	assert(stats.ModelDraws == 1, "draw stats counts models")
+
+	before := stats
+	d.DrawText("hud", 0, 0, 10, voplay.White)
+	delta := voplay.DrawStatsDelta(d.Stats(), before)
+	assert(delta.DrawCalls == 1 && delta.TextDraws == 1, "draw stats delta isolates HUD work")
+}
+
+func testPerfDiagnosticsApiContract() {
+	ctx := newTestCtx()
+	snapshot := ctx.GetPerfSnapshot()
+	assert(!snapshot.Enabled, "perf snapshot defaults disabled")
+	assert(snapshot.Mode == voplay.PerfModeOff, "perf snapshot default mode off")
+	assert(snapshot.WindowCapacity == 1200, "perf snapshot exposes fixed ring capacity")
+	trace := ctx.GetPerfTrace(16)
+	assert(trace.SchemaVersion == 1 && !trace.Enabled, "perf trace defaults disabled")
+	disabledGate := ctx.EvaluatePerfGate(voplay.PerfGateConfig{})
+	assert(!disabledGate.Passed && disabledGate.PrimaryFailure == voplay.PerfGateFailureDisabled, "perf gate fails when stats disabled")
+
+	ctx.EnablePerfStats(voplay.PerfModeStats)
+	snapshot = ctx.GetPerfSnapshot()
+	assert(snapshot.Enabled, "perf stats mode enables snapshot")
+	assert(snapshot.Mode == voplay.PerfModeStats, "perf stats mode preserved")
+	assert(!snapshot.HudVisible, "perf stats mode keeps HUD hidden")
+	trace = ctx.GetPerfTrace(4)
+	assert(trace.Enabled && trace.Mode == voplay.PerfModeStats && trace.CapturedFrames == 0, "perf trace exposes enabled mode before frames")
+
+	ctx.MarkPerfScope("fixed-step")
+	handle := ctx.BeginPerfScope("advance")
+	ctx.EndPerfScope(handle)
+	snapshot = ctx.GetPerfSnapshot()
+	assert(snapshot.WindowCapacity == 1200, "perf snapshot remains readable after custom scopes")
+	assert(snapshot.CustomScopeCount == 2, "perf snapshot records custom scopes")
+	assert(snapshot.CustomScope0Name == "fixed-step" && snapshot.CustomScope0Count == 1, "perf custom scope includes fixed-step marker")
+	assert(snapshot.CustomScope1Name == "advance" && snapshot.CustomScope1Count == 1, "perf custom scope includes timed advance marker")
+
+	ctx.TogglePerfHud()
+	snapshot = ctx.GetPerfSnapshot()
+	assert(snapshot.Mode == voplay.PerfModeHud && snapshot.HudVisible, "perf HUD toggles visible")
+	ctx.NextPerfHudPage()
+	snapshot = ctx.GetPerfSnapshot()
+	assert(snapshot.HudPage == 1, "perf HUD page advances")
+
+	ctx.DisablePerfStats()
+	snapshot = ctx.GetPerfSnapshot()
+	assert(!snapshot.Enabled && snapshot.Mode == voplay.PerfModeOff, "perf stats disable returns to off")
+
+	okSnapshot := voplay.PerfSnapshot{Enabled: true, ThirtySecond: voplay.PerfWindowSummary{Frames: 120, SlowFrames: 0, FrameP99Ms: 8.3334, FrameMaxMs: 10, GpuWorkDoneP90Ms: 0.5, HudP90Ms: 0.08}}
+	okGate := voplay.EvaluatePerfGate(okSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxFrameP99Ms: 9, MaxFrameMaxMs: 12, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0, MaxHudP90Ms: 0.2, MaxProbeOverheadMs: 0.05})
+	assert(okGate.Passed && okGate.CheckedFrames == 120, "perf gate passes clean snapshot")
+
+	slowSnapshot := okSnapshot
+	slowSnapshot.ThirtySecond.SlowFrames = 2
+	slowGate := voplay.EvaluatePerfGate(slowSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
+	assert(!slowGate.Passed && slowGate.PrimaryFailure == voplay.PerfGateFailureSlowFrames, "perf gate fails slow frames")
+
+	gpuSnapshot := okSnapshot
+	gpuSnapshot.Attribution.GpuQueueBound = 1
+	gpuGate := voplay.EvaluatePerfGate(gpuSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
+	assert(!gpuGate.Passed && gpuGate.PrimaryFailure == voplay.PerfGateFailureGpuQueue, "perf gate fails gpu queue bound frames")
+
+	gpuWorkSnapshot := okSnapshot
+	gpuWorkSnapshot.ThirtySecond.GpuWorkDoneP90Ms = 100
+	gpuWorkGate := voplay.EvaluatePerfGate(gpuWorkSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0})
+	assert(!gpuWorkGate.Passed && gpuWorkGate.PrimaryFailure == voplay.PerfGateFailureGpuWorkDone, "perf gate fails gpu work-done p90")
+
+	probeSnapshot := okSnapshot
+	probeSnapshot.Overhead.ProbeOverheadMs = 0.2
+	probeGate := voplay.EvaluatePerfGate(probeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})
+	assert(!probeGate.Passed && probeGate.PrimaryFailure == voplay.PerfGateFailureProbeOverhead, "perf gate fails probe overhead")
+}
+
 func main() {
 	testLifecycle()
 	testUpdateAndDrawBarriers()
@@ -3013,6 +4061,7 @@ func main() {
 	testScene3DShadowSemantics()
 	testScene3DColorGradingSemantics()
 	testScene3DRenderDebugSemantics()
+	testScene3DVisualTooling()
 	testScene3DLightingProfile()
 	testScene3DDecals()
 	testScene3DTerrainHeightAtLifecycle()
@@ -3021,6 +4070,15 @@ func main() {
 	testScene3DTrackAssetFilesystemLoading()
 	testScene3DTrackBakeContract()
 	testScene3DTrackTerrainChunks()
+	testScene3DTrackScatter()
+	testScene3DScatterField()
+	testScene3DBakedPrimitiveLayerAsset()
+	testScene3DPreparedMapAsset()
+	testScene3DImpostorAtlas()
+	testScene3DTrackEdgeTransitionMesh()
+	testScene3DTrackProjectedDecalMesh()
+	testScene3DTrackSurfaceDetailsSpawn()
+	testScene3DTrackSurfaceAuthoringPlan()
 	testScene3DTrackSpawnAndTraversability()
 	testScene3DVehicleTelemetryAndKartController()
 	testScene3DKartControllerAcceptance()
@@ -3037,11 +4095,15 @@ func main() {
 	testScene3DVehicleAudioHelpers()
 	testPrimitive3DModuleContract()
 	testScene3DRenderPerformanceContract()
+	testRenderClockPacerContract()
+	testFramewireContract()
 	testScene3DOwnedModelLifecycle()
 	testScene3DColliderWithOffset()
 	testScene3DEntityHasSkeleton()
 	testScene3DPickZeroDirection()
 	testScene2DPhysicsBackend()
+	testDrawStatsContract()
+	testPerfDiagnosticsApiContract()
 	testInputNormalization()
 	testPointerContactsAndTouchUI()
 	testThirdPersonCameraRotationSemantics()

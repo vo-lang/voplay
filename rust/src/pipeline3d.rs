@@ -5,7 +5,9 @@
 
 use crate::animation;
 use crate::material::{MaterialSamplerKey, MATERIAL_SAMPLER_KEYS};
-use crate::model_loader::{MeshMaterial, MeshVertex, ModelId, ModelManager, SkinnedMeshVertex};
+use crate::model_loader::{
+    MeshMaterial, MeshVertex, ModelId, ModelManager, SkinnedMeshVertex, TerrainMaterialTuning,
+};
 use crate::texture::TextureManager;
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -33,6 +35,49 @@ pub struct ModelUniform {
     pub material_params: [f32; 4],
     pub emissive_color: [f32; 4],
     pub texture_flags: [f32; 4],
+    pub material_response: [f32; 4],
+    pub texture_flags2: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct TerrainMaterialUniform {
+    params0: [f32; 4],
+    params1: [f32; 4],
+    params2: [f32; 4],
+    params3: [f32; 4],
+}
+
+impl TerrainMaterialUniform {
+    fn from_tuning(tuning: TerrainMaterialTuning) -> Self {
+        let tuning = tuning.normalized_or_default();
+        Self {
+            params0: [
+                tuning.macro_scale,
+                tuning.macro_strength,
+                tuning.detail_near,
+                tuning.detail_far,
+            ],
+            params1: [
+                tuning.slope_start,
+                tuning.slope_end,
+                tuning.slope_dirt_strength,
+                tuning.slope_rock_strength,
+            ],
+            params2: [
+                tuning.anti_tile_strength,
+                tuning.detail_strength,
+                tuning.normal_near,
+                tuning.normal_far,
+            ],
+            params3: [
+                tuning.height_blend_strength,
+                tuning.height_low,
+                tuning.height_high,
+                tuning.curvature_strength,
+            ],
+        }
+    }
 }
 
 #[repr(C)]
@@ -44,6 +89,8 @@ pub struct SkinnedModelUniform {
     pub material_params: [f32; 4],
     pub emissive_color: [f32; 4],
     pub texture_flags: [f32; 4],
+    pub material_response: [f32; 4],
+    pub texture_flags2: [f32; 4],
     pub joint_count: [u32; 4],
     pub joints: [[[f32; 4]; 4]; MAX_JOINTS],
 }
@@ -67,12 +114,16 @@ pub struct LightUniform {
     pub fog_color: [f32; 4],
     pub fog_params: [f32; 4],
     pub shadow_vp: [[f32; 4]; 4],
+    pub shadow_cascade_vp: [[[f32; 4]; 4]; 4],
+    pub shadow_cascade_splits: [f32; 4],
     pub shadow_params: [f32; 4],
+    pub shadow_params2: [f32; 4],
     pub color_params: [f32; 4],
     pub debug_params: [u32; 4],
 }
 
 /// A pending 3D model draw.
+#[derive(Clone, Copy)]
 pub struct ModelDraw {
     pub model_id: ModelId,
     pub model_uniform: ModelUniform,
@@ -89,12 +140,17 @@ pub struct MaterialOverride {
     pub normal_texture_id: u32,
     pub metallic_roughness_texture_id: u32,
     pub emissive_texture_id: u32,
+    pub mask_texture_id: u32,
     pub emissive_color: [f32; 4],
     pub roughness: f32,
     pub metallic: f32,
     pub normal_scale: f32,
     pub uv_scale: f32,
     pub toon_ramp_texture_id: u32,
+    pub detail_strength: f32,
+    pub macro_blend: f32,
+    pub roughness_response: f32,
+    pub toon_ramp_response: f32,
     pub shading_mode: u32,
     pub wrap_mode: u32,
     pub filter_mode: u32,
@@ -109,12 +165,17 @@ impl Default for MaterialOverride {
             normal_texture_id: 0,
             metallic_roughness_texture_id: 0,
             emissive_texture_id: 0,
+            mask_texture_id: 0,
             emissive_color: [0.0, 0.0, 0.0, 0.0],
             roughness: 0.55,
             metallic: 0.0,
             normal_scale: 0.0,
             uv_scale: 1.0,
             toon_ramp_texture_id: 0,
+            detail_strength: 1.0,
+            macro_blend: 0.0,
+            roughness_response: 1.0,
+            toon_ramp_response: 1.0,
             shading_mode: 0,
             wrap_mode: 0,
             filter_mode: 0,
@@ -128,6 +189,7 @@ mod tests {
         MaterialSamplerKey, MATERIAL_FILTER_LINEAR, MATERIAL_FILTER_NEAREST, MATERIAL_WRAP_CLAMP,
         MATERIAL_WRAP_MIRROR, MATERIAL_WRAP_REPEAT,
     };
+    use crate::model_loader::MeshMaterial;
 
     use super::{MaterialOverride, Pipeline3D};
 
@@ -139,6 +201,10 @@ mod tests {
             normal_texture_id: 12,
             normal_scale: 0.35,
             uv_scale: 2.0,
+            detail_strength: 1.4,
+            macro_blend: 0.6,
+            roughness_response: 0.75,
+            toon_ramp_response: 0.5,
             shading_mode: 1,
             emissive_color: [0.2, 0.3, 0.4, 1.5],
             ..MaterialOverride::default()
@@ -148,6 +214,10 @@ mod tests {
             [2.0, 1.0, 0.0, 1.0]
         );
         assert_eq!(material.normal_scale_value(0.8), 0.35);
+        assert_eq!(
+            material.material_response_values(&MeshMaterial::standard([1.0; 4], None, 1.0)),
+            [1.4, 0.6, 0.75, 0.5]
+        );
         assert_eq!(
             material.emissive_color_value([0.0, 0.0, 0.0], false),
             [0.2, 0.3, 0.4, 1.5]
@@ -163,6 +233,10 @@ mod tests {
             [0.75, 0.7, 0.25, 0.0]
         );
         assert_eq!(fallback.normal_scale_value(0.8), 0.8);
+        assert_eq!(
+            fallback.material_response_values(&MeshMaterial::standard([1.0; 4], None, 1.0)),
+            [1.0, 0.0, 1.0, 1.0]
+        );
         assert_eq!(
             fallback.emissive_color_value([0.4, 0.5, 0.6], false),
             [0.4, 0.5, 0.6, 1.0]
@@ -234,7 +308,14 @@ mod tests {
         ))
         .expect("request device");
 
-        let _pipeline = Pipeline3D::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let _pipeline = Pipeline3D::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+        );
     }
 }
 
@@ -303,6 +384,37 @@ impl MaterialOverride {
         ]
     }
 
+    fn material_response_values(&self, mesh_material: &MeshMaterial) -> [f32; 4] {
+        [
+            if self.detail_strength > 0.0 {
+                self.detail_strength
+            } else if mesh_material.detail_strength > 0.0 {
+                mesh_material.detail_strength
+            } else {
+                1.0
+            },
+            if self.macro_blend > 0.0 {
+                self.macro_blend
+            } else {
+                mesh_material.macro_blend.max(0.0)
+            },
+            if self.roughness_response > 0.0 {
+                self.roughness_response
+            } else if mesh_material.roughness_response > 0.0 {
+                mesh_material.roughness_response
+            } else {
+                1.0
+            },
+            if self.toon_ramp_response > 0.0 {
+                self.toon_ramp_response
+            } else if mesh_material.toon_ramp_response > 0.0 {
+                mesh_material.toon_ramp_response
+            } else {
+                1.0
+            },
+        ]
+    }
+
     fn emissive_color_value(
         &self,
         source_factor: [f32; 3],
@@ -330,13 +442,13 @@ struct InstanceData {
     model_1: [f32; 4],
     model_2: [f32; 4],
     model_3: [f32; 4],
-    normal_0: [f32; 4],
-    normal_1: [f32; 4],
-    normal_2: [f32; 4],
     base_color: [f32; 4],
     material_params: [f32; 4],
     emissive_color: [f32; 4],
     texture_flags: [f32; 4],
+    material_response: [f32; 4],
+    texture_flags2: [f32; 4],
+    instance_params: [f32; 4],
 }
 
 impl InstanceData {
@@ -368,13 +480,13 @@ impl InstanceData {
             model_1: uniform.model[1],
             model_2: uniform.model[2],
             model_3: uniform.model[3],
-            normal_0: uniform.normal_matrix[0],
-            normal_1: uniform.normal_matrix[1],
-            normal_2: uniform.normal_matrix[2],
             base_color: uniform.base_color,
             material_params: uniform.material_params,
             emissive_color: uniform.emissive_color,
             texture_flags: uniform.texture_flags,
+            material_response: uniform.material_response,
+            texture_flags2: uniform.texture_flags2,
+            instance_params: [0.0; 4],
         }
     }
 }
@@ -386,6 +498,7 @@ struct MainTextureKey {
     metallic_roughness: u32,
     emissive: u32,
     toon_ramp: u32,
+    mask: u32,
     sampler: MaterialSamplerKey,
 }
 
@@ -409,6 +522,10 @@ impl MainTextureKey {
             if self.emissive != 0 { 1.0 } else { 0.0 },
             if self.toon_ramp != 0 { 1.0 } else { 0.0 },
         ]
+    }
+
+    fn texture_flags2(self) -> [f32; 4] {
+        [if self.mask != 0 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]
     }
 }
 
@@ -436,6 +553,52 @@ struct TerrainTextureKey {
     albedo_layers: [u32; 4],
     normal_layers: [u32; 4],
     metallic_roughness_layers: [u32; 4],
+    material: [u32; 16],
+}
+
+struct TerrainBindGroupEntry {
+    bind_group: wgpu::BindGroup,
+    _material_buffer: wgpu::Buffer,
+}
+
+fn color_targets(
+    surface_format: wgpu::TextureFormat,
+    receiver_mask_format: wgpu::TextureFormat,
+    surface_props_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: receiver_mask_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: surface_props_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ]
+}
+
+fn color_only_targets(
+    surface_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        None,
+        None,
+    ]
 }
 
 /// The 3D mesh rendering pipeline.
@@ -443,10 +606,15 @@ pub struct Pipeline3D {
     pipeline_textured: wgpu::RenderPipeline,
     pipeline_untextured: wgpu::RenderPipeline,
     pipeline_instanced_textured: wgpu::RenderPipeline,
+    pipeline_instanced_textured_color: wgpu::RenderPipeline,
     pipeline_instanced_untextured: wgpu::RenderPipeline,
+    pipeline_instanced_untextured_color: wgpu::RenderPipeline,
     pipeline_terrain_splat: wgpu::RenderPipeline,
+    pipeline_terrain_splat_color: wgpu::RenderPipeline,
     pipeline_skinned_textured: wgpu::RenderPipeline,
+    pipeline_skinned_textured_color: wgpu::RenderPipeline,
     pipeline_skinned_untextured: wgpu::RenderPipeline,
+    pipeline_skinned_untextured_color: wgpu::RenderPipeline,
     // GPU buffers
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -469,7 +637,7 @@ pub struct Pipeline3D {
     // 1x1 white fallback texture for untextured meshes
     white_texture_view: wgpu::TextureView,
     main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup>,
-    terrain_texture_bind_groups: HashMap<TerrainTextureKey, wgpu::BindGroup>,
+    terrain_texture_bind_groups: HashMap<TerrainTextureKey, TerrainBindGroupEntry>,
 }
 
 impl Pipeline3D {
@@ -477,6 +645,9 @@ impl Pipeline3D {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
+        receiver_mask_format: wgpu::TextureFormat,
+        surface_props_format: wgpu::TextureFormat,
+        sample_count: u32,
     ) -> Self {
         let static_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh"),
@@ -527,7 +698,7 @@ impl Pipeline3D {
             label: Some("voplay_mesh_light_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -607,6 +778,16 @@ impl Pipeline3D {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let mut terrain_texture_entries = vec![
@@ -655,6 +836,16 @@ impl Pipeline3D {
                 count: None,
             });
         }
+        terrain_texture_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 16,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
         let terrain_texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("voplay_mesh_terrain_texture_bgl"),
@@ -685,12 +876,16 @@ impl Pipeline3D {
             });
 
         let depth_stencil = Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24Plus,
+            format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });
+        let multisample = wgpu::MultisampleState {
+            count: sample_count,
+            ..wgpu::MultisampleState::default()
+        };
 
         let vertex_state = wgpu::VertexState {
             module: &static_shader,
@@ -716,6 +911,12 @@ impl Pipeline3D {
         };
 
         // Textured pipeline
+        let textured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_textured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("voplay_mesh_textured"),
             layout: Some(&pipeline_layout),
@@ -723,20 +924,21 @@ impl Pipeline3D {
             fragment: Some(wgpu::FragmentState {
                 module: &static_shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &textured_targets,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive,
             depth_stencil: depth_stencil.clone(),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             multiview: None,
             cache: None,
         });
-
+        let instanced_textured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_instanced_textured =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("voplay_mesh_instanced_textured"),
@@ -745,20 +947,41 @@ impl Pipeline3D {
                 fragment: Some(wgpu::FragmentState {
                     module: &static_shader,
                     entry_point: Some("fs_instanced"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &instanced_textured_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive,
                 depth_stencil: depth_stencil.clone(),
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
+                multiview: None,
+                cache: None,
+            });
+        let instanced_textured_color_targets =
+            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
+        let pipeline_instanced_textured_color =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voplay_mesh_instanced_textured_color"),
+                layout: Some(&pipeline_layout),
+                vertex: instanced_vertex_state.clone(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &static_shader,
+                    entry_point: Some("fs_instanced_color"),
+                    targets: &instanced_textured_color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive,
+                depth_stencil: depth_stencil.clone(),
+                multisample,
                 multiview: None,
                 cache: None,
             });
 
+        let terrain_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_terrain_splat =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("voplay_mesh_terrain_splat"),
@@ -772,20 +995,46 @@ impl Pipeline3D {
                 fragment: Some(wgpu::FragmentState {
                     module: &terrain_shader,
                     entry_point: Some("fs_main_terrain"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &terrain_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive,
                 depth_stencil: depth_stencil.clone(),
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
+                multiview: None,
+                cache: None,
+            });
+        let terrain_color_targets =
+            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
+        let pipeline_terrain_splat_color =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voplay_mesh_terrain_splat_color"),
+                layout: Some(&terrain_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &terrain_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[MeshVertex::layout()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &terrain_shader,
+                    entry_point: Some("fs_main_terrain_color"),
+                    targets: &terrain_color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive,
+                depth_stencil: depth_stencil.clone(),
+                multisample,
                 multiview: None,
                 cache: None,
             });
 
+        let skinned_textured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_skinned_textured =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("voplay_mesh_skinned_textured"),
@@ -799,20 +1048,46 @@ impl Pipeline3D {
                 fragment: Some(wgpu::FragmentState {
                     module: &skinned_shader,
                     entry_point: Some("fs_skinned"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &skinned_textured_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive,
                 depth_stencil: depth_stencil.clone(),
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
+                multiview: None,
+                cache: None,
+            });
+        let skinned_textured_color_targets =
+            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
+        let pipeline_skinned_textured_color =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voplay_mesh_skinned_textured_color"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &skinned_shader,
+                    entry_point: Some("vs_skinned"),
+                    buffers: &[SkinnedMeshVertex::layout()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &skinned_shader,
+                    entry_point: Some("fs_skinned_color"),
+                    targets: &skinned_textured_color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive,
+                depth_stencil: depth_stencil.clone(),
+                multisample,
                 multiview: None,
                 cache: None,
             });
 
+        let skinned_untextured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_skinned_untextured =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("voplay_mesh_skinned_untextured"),
@@ -826,21 +1101,47 @@ impl Pipeline3D {
                 fragment: Some(wgpu::FragmentState {
                     module: &skinned_shader,
                     entry_point: Some("fs_skinned_no_tex"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &skinned_untextured_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive,
                 depth_stencil: depth_stencil.clone(),
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
+                multiview: None,
+                cache: None,
+            });
+        let skinned_untextured_color_targets =
+            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
+        let pipeline_skinned_untextured_color =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voplay_mesh_skinned_untextured_color"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &skinned_shader,
+                    entry_point: Some("vs_skinned"),
+                    buffers: &[SkinnedMeshVertex::layout()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &skinned_shader,
+                    entry_point: Some("fs_skinned_no_tex_color"),
+                    targets: &skinned_untextured_color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive,
+                depth_stencil: depth_stencil.clone(),
+                multisample,
                 multiview: None,
                 cache: None,
             });
 
         // Untextured pipeline (uses fs_main_no_tex)
+        let untextured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_untextured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("voplay_mesh_untextured"),
             layout: Some(&pipeline_layout),
@@ -853,38 +1154,54 @@ impl Pipeline3D {
             fragment: Some(wgpu::FragmentState {
                 module: &static_shader,
                 entry_point: Some("fs_main_no_tex"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &untextured_targets,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive,
             depth_stencil: depth_stencil.clone(),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             multiview: None,
             cache: None,
         });
-
+        let instanced_untextured_targets = color_targets(
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let pipeline_instanced_untextured =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("voplay_mesh_instanced_untextured"),
                 layout: Some(&pipeline_layout),
-                vertex: instanced_vertex_state,
+                vertex: instanced_vertex_state.clone(),
                 fragment: Some(wgpu::FragmentState {
                     module: &static_shader,
                     entry_point: Some("fs_instanced_no_tex"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &instanced_untextured_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive,
                 depth_stencil: depth_stencil.clone(),
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
+                multiview: None,
+                cache: None,
+            });
+        let instanced_untextured_color_targets =
+            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
+        let pipeline_instanced_untextured_color =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voplay_mesh_instanced_untextured_color"),
+                layout: Some(&pipeline_layout),
+                vertex: instanced_vertex_state,
+                fragment: Some(wgpu::FragmentState {
+                    module: &static_shader,
+                    entry_point: Some("fs_instanced_no_tex_color"),
+                    targets: &instanced_untextured_color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive,
+                depth_stencil: depth_stencil.clone(),
+                multisample,
                 multiview: None,
                 cache: None,
             });
@@ -978,6 +1295,7 @@ impl Pipeline3D {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: 8,
             ..Default::default()
         });
 
@@ -1021,10 +1339,15 @@ impl Pipeline3D {
             pipeline_textured,
             pipeline_untextured,
             pipeline_instanced_textured,
+            pipeline_instanced_textured_color,
             pipeline_instanced_untextured,
+            pipeline_instanced_untextured_color,
             pipeline_terrain_splat,
+            pipeline_terrain_splat_color,
             pipeline_skinned_textured,
+            pipeline_skinned_textured_color,
             pipeline_skinned_untextured,
+            pipeline_skinned_untextured_color,
             camera_buffer,
             camera_bind_group,
             model_bgl,
@@ -1064,6 +1387,11 @@ impl Pipeline3D {
             crate::material::MATERIAL_FILTER_NEAREST => wgpu::FilterMode::Nearest,
             _ => wgpu::FilterMode::Linear,
         };
+        let anisotropy_clamp = if filter == wgpu::FilterMode::Linear {
+            8
+        } else {
+            1
+        };
         device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("voplay_material_sampler"),
             address_mode_u: address_mode,
@@ -1072,6 +1400,7 @@ impl Pipeline3D {
             mag_filter: filter,
             min_filter: filter,
             mipmap_filter: filter,
+            anisotropy_clamp,
             ..Default::default()
         })
     }
@@ -1213,12 +1542,19 @@ impl Pipeline3D {
         } else {
             Self::valid_texture_id(textures, mesh_material.toon_ramp_texture_id)
         };
+        let mask =
+            if material.mask_texture_id != 0 && textures.get(material.mask_texture_id).is_some() {
+                material.mask_texture_id
+            } else {
+                Self::valid_texture_id(textures, mesh_material.mask_texture_id)
+            };
         MainTextureKey {
             albedo,
             normal,
             metallic_roughness,
             emissive,
             toon_ramp,
+            mask,
             sampler: material.sampler_key(mesh_material.sampler),
         }
     }
@@ -1259,6 +1595,28 @@ impl Pipeline3D {
         std::array::from_fn(|index| if mr_ids[index] == 0 { 0.0 } else { 1.0 })
     }
 
+    fn terrain_material_key(tuning: TerrainMaterialTuning) -> [u32; 16] {
+        let uniform = TerrainMaterialUniform::from_tuning(tuning);
+        [
+            uniform.params0[0].to_bits(),
+            uniform.params0[1].to_bits(),
+            uniform.params0[2].to_bits(),
+            uniform.params0[3].to_bits(),
+            uniform.params1[0].to_bits(),
+            uniform.params1[1].to_bits(),
+            uniform.params1[2].to_bits(),
+            uniform.params1[3].to_bits(),
+            uniform.params2[0].to_bits(),
+            uniform.params2[1].to_bits(),
+            uniform.params2[2].to_bits(),
+            uniform.params2[3].to_bits(),
+            uniform.params3[0].to_bits(),
+            uniform.params3[1].to_bits(),
+            uniform.params3[2].to_bits(),
+            uniform.params3[3].to_bits(),
+        ]
+    }
+
     fn sampler_for_key(&self, key: MaterialSamplerKey) -> &wgpu::Sampler {
         &self.material_samplers[key.sampler_index()]
     }
@@ -1267,7 +1625,7 @@ impl Pipeline3D {
         material: &MaterialOverride,
         mesh_material: &MeshMaterial,
         key: MainTextureKey,
-    ) -> ([f32; 4], [f32; 4], [f32; 4]) {
+    ) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
         let override_emissive_texture_active =
             material.emissive_texture_id != 0 && key.emissive == material.emissive_texture_id;
         (
@@ -1281,6 +1639,8 @@ impl Pipeline3D {
                 override_emissive_texture_active,
             ),
             key.texture_flags(material.normal_scale_value(mesh_material.normal_scale)),
+            material.material_response_values(mesh_material),
+            key.texture_flags2(),
         )
     }
 
@@ -1296,6 +1656,7 @@ impl Pipeline3D {
         let metallic_roughness_view = self.texture_view_for_key(textures, key.metallic_roughness);
         let emissive_view = self.texture_view_for_key(textures, key.emissive);
         let toon_ramp_view = self.texture_view_for_key(textures, key.toon_ramp);
+        let mask_view = self.texture_view_for_key(textures, key.mask);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voplay_mesh_main_texture_bg"),
             layout: &self.main_texture_bind_group_layout,
@@ -1328,6 +1689,10 @@ impl Pipeline3D {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(toon_ramp_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(mask_view),
+                },
             ],
         })
     }
@@ -1342,8 +1707,9 @@ impl Pipeline3D {
         normal_layer_views: [&wgpu::TextureView; 4],
         metallic_roughness_layer_views: [&wgpu::TextureView; 4],
         layer_sampler: &wgpu::Sampler,
+        terrain_material_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
-        let mut entries = Vec::with_capacity(16);
+        let mut entries = Vec::with_capacity(17);
         entries.push(wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::TextureView(control_view),
@@ -1378,6 +1744,10 @@ impl Pipeline3D {
                 resource: wgpu::BindingResource::TextureView(view),
             });
         }
+        entries.push(wgpu::BindGroupEntry {
+            binding: 16,
+            resource: terrain_material_buffer.as_entire_binding(),
+        });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voplay_mesh_terrain_texture_bg"),
             layout: &self.terrain_texture_bind_group_layout,
@@ -1402,8 +1772,10 @@ impl Pipeline3D {
     fn ensure_terrain_texture_bind_group(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         textures: &TextureManager,
         key: TerrainTextureKey,
+        terrain_tuning: TerrainMaterialTuning,
         shadow_view: &wgpu::TextureView,
     ) {
         if self.terrain_texture_bind_groups.contains_key(&key) {
@@ -1419,6 +1791,18 @@ impl Pipeline3D {
         let metallic_roughness_layer_views = key
             .metallic_roughness_layers
             .map(|id| self.texture_view_for_key(textures, id));
+        let terrain_material_uniform = TerrainMaterialUniform::from_tuning(terrain_tuning);
+        let terrain_material_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voplay_mesh_terrain_material_uniform"),
+            size: std::mem::size_of::<TerrainMaterialUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &terrain_material_buffer,
+            0,
+            bytemuck::bytes_of(&terrain_material_uniform),
+        );
         let bind_group = self.create_terrain_texture_bind_group(
             device,
             control_view,
@@ -1428,8 +1812,15 @@ impl Pipeline3D {
             normal_layer_views,
             metallic_roughness_layer_views,
             self.sampler_for_key(MaterialSamplerKey::REPEAT_LINEAR),
+            &terrain_material_buffer,
         );
-        self.terrain_texture_bind_groups.insert(key, bind_group);
+        self.terrain_texture_bind_groups.insert(
+            key,
+            TerrainBindGroupEntry {
+                bind_group,
+                _material_buffer: terrain_material_buffer,
+            },
+        );
     }
 
     /// Upload camera and light uniforms for this frame.
@@ -1453,6 +1844,7 @@ impl Pipeline3D {
         models: &'a ModelManager,
         textures: &'a TextureManager,
         shadow_view: &'a wgpu::TextureView,
+        aux_targets_enabled: bool,
     ) {
         if draws.is_empty() {
             return;
@@ -1514,11 +1906,18 @@ impl Pipeline3D {
                 };
                 let mut model_uniform = draw.model_uniform;
                 model_uniform.base_color = base_color;
-                let (material_params, emissive_color, texture_flags) =
-                    Self::mesh_material_uniform_values(&draw.material, &mesh.material, texture_key);
+                let (
+                    material_params,
+                    emissive_color,
+                    texture_flags,
+                    material_response,
+                    texture_flags2,
+                ) = Self::mesh_material_uniform_values(&draw.material, &mesh.material, texture_key);
                 model_uniform.material_params = material_params;
                 model_uniform.emissive_color = emissive_color;
                 model_uniform.texture_flags = texture_flags;
+                model_uniform.material_response = material_response;
+                model_uniform.texture_flags2 = texture_flags2;
                 instance_batches[batch_index]
                     .instances
                     .push(InstanceData::from_uniform(&model_uniform));
@@ -1567,12 +1966,17 @@ impl Pipeline3D {
                 if mesh.skinned {
                     let texture_key =
                         Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                    let (material_params, emissive_color, texture_flags) =
-                        Self::mesh_material_uniform_values(
-                            &draw.material,
-                            &mesh.material,
-                            texture_key,
-                        );
+                    let (
+                        material_params,
+                        emissive_color,
+                        texture_flags,
+                        material_response,
+                        texture_flags2,
+                    ) = Self::mesh_material_uniform_values(
+                        &draw.material,
+                        &mesh.material,
+                        texture_key,
+                    );
                     let mut skinned_uniform = SkinnedModelUniform {
                         model: draw.model_uniform.model,
                         normal_matrix: draw.model_uniform.normal_matrix,
@@ -1580,6 +1984,8 @@ impl Pipeline3D {
                         material_params,
                         emissive_color,
                         texture_flags,
+                        material_response,
+                        texture_flags2,
                         joint_count: [0, 0, 0, 0],
                         joints: [[[0.0; 4]; 4]; MAX_JOINTS],
                     };
@@ -1620,6 +2026,8 @@ impl Pipeline3D {
                         Self::terrain_layer_mr_flags(textures, &mesh.material);
                     model_uniform.texture_flags =
                         Self::terrain_layer_normal_flags(textures, &mesh.material);
+                    model_uniform.material_response = [1.0, 0.0, 1.0, 1.0];
+                    model_uniform.texture_flags2 = [0.0, 0.0, 0.0, 0.0];
                     let offset = static_slot as u64 * aligned_model_stride as u64;
                     queue.write_buffer(
                         &self.model_buffer,
@@ -1659,11 +2067,14 @@ impl Pipeline3D {
                             textures,
                             &mesh.material.layer_metallic_roughness_texture_ids,
                         ),
+                        material: Self::terrain_material_key(mesh.material.terrain_tuning),
                     };
                     self.ensure_terrain_texture_bind_group(
                         device,
+                        queue,
                         textures,
                         terrain_key,
+                        mesh.material.terrain_tuning,
                         shadow_view,
                     );
                 }
@@ -1697,11 +2108,13 @@ impl Pipeline3D {
                         .main_texture_bind_groups
                         .get(&texture_key)
                         .expect("main texture bind group cache missing");
-                    if texture_key.has_albedo() {
-                        pass.set_pipeline(&self.pipeline_skinned_textured);
-                    } else {
-                        pass.set_pipeline(&self.pipeline_skinned_untextured);
-                    }
+                    let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
+                        (true, true) => &self.pipeline_skinned_textured,
+                        (true, false) => &self.pipeline_skinned_textured_color,
+                        (false, true) => &self.pipeline_skinned_untextured,
+                        (false, false) => &self.pipeline_skinned_untextured_color,
+                    };
+                    pass.set_pipeline(pipeline);
                     pass.set_bind_group(3, &*main_texture_bind_group, &[]);
                 } else {
                     if mesh.material.control_texture_id.is_none() {
@@ -1712,7 +2125,11 @@ impl Pipeline3D {
                     static_slot += 1;
 
                     if let Some(control_id) = mesh.material.control_texture_id {
-                        pass.set_pipeline(&self.pipeline_terrain_splat);
+                        pass.set_pipeline(if aux_targets_enabled {
+                            &self.pipeline_terrain_splat
+                        } else {
+                            &self.pipeline_terrain_splat_color
+                        });
                         let texture_key = Self::valid_texture_id(textures, Some(control_id));
                         let layer_texture_ids = Self::valid_layer_texture_ids(
                             textures,
@@ -1731,12 +2148,14 @@ impl Pipeline3D {
                             albedo_layers: layer_texture_ids,
                             normal_layers: layer_normal_texture_ids,
                             metallic_roughness_layers: layer_metallic_roughness_texture_ids,
+                            material: Self::terrain_material_key(mesh.material.terrain_tuning),
                         };
-                        let terrain_texture_bind_group = self
+                        let terrain_texture_bind_group = &self
                             .terrain_texture_bind_groups
                             .get(&terrain_key)
-                            .expect("terrain texture bind group cache missing");
-                        pass.set_bind_group(3, &*terrain_texture_bind_group, &[]);
+                            .expect("terrain texture bind group cache missing")
+                            .bind_group;
+                        pass.set_bind_group(3, terrain_texture_bind_group, &[]);
                     }
                 }
 
@@ -1766,11 +2185,13 @@ impl Pipeline3D {
                 .main_texture_bind_groups
                 .get(&texture_key)
                 .expect("instanced texture bind group cache missing");
-            if texture_key.has_albedo() {
-                pass.set_pipeline(&self.pipeline_instanced_textured);
-            } else {
-                pass.set_pipeline(&self.pipeline_instanced_untextured);
-            }
+            let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
+                (true, true) => &self.pipeline_instanced_textured,
+                (true, false) => &self.pipeline_instanced_textured_color,
+                (false, true) => &self.pipeline_instanced_untextured,
+                (false, false) => &self.pipeline_instanced_untextured_color,
+            };
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(3, &*main_texture_bind_group, &[]);
 
             let start = batch.start as u64 * instance_stride;

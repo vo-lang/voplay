@@ -136,11 +136,18 @@ func (v *Vehicle) Update(input VehicleInput, dt float64) {
 	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
 		return
 	}
+	v.syncState()
+	v.applyControls(input, dt)
+}
+
+func (v *Vehicle) applyControls(input VehicleInput, dt float64) {
+	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		return
+	}
 	scene := v.scene
 	if scene == nil || scene.worldID == 0 {
 		return
 	}
-	v.syncState()
 	input.Throttle = vehicleClamp(input.Throttle, -1, 1)
 	input.Steer = vehicleClamp(input.Steer, -1, 1)
 	v.Drifting = input.Drift && math.Abs(v.Speed) >= v.Config.DriftMinSpeed && v.Grounded

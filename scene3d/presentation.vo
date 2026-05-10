@@ -1,0 +1,139 @@
+package scene3d
+
+import "github.com/vo-lang/voplay"
+
+const (
+	PresentationNeutral = 0
+	PresentationKartRacing = 1
+	PresentationOvercast = 2
+	PresentationSunset = 3
+)
+
+type PresentationStack struct {
+	Name string
+	Skybox voplay.CubemapID
+	Ambient voplay.Color
+	AmbientGround voplay.Color
+	Fog FogConfig
+	ColorGrading ColorGradingConfig
+	PostProcess PostProcessConfig
+}
+
+func DefaultPresentationStack() PresentationStack {
+	return PresentationStack{
+		Name: "neutral",
+		Ambient: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1},
+		AmbientGround: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1},
+		Fog: FogConfig{Mode: FogNone},
+		ColorGrading: DefaultColorGradingConfig(),
+		PostProcess: DefaultPostProcessConfig(),
+	}
+}
+
+func KartRacingPresentationStack() PresentationStack {
+	return PresentationStack{
+		Name: "kart_racing_day",
+		Ambient: voplay.Color{R: 0.52, G: 0.64, B: 0.70, A: 1},
+		AmbientGround: voplay.Color{R: 0.22, G: 0.30, B: 0.30, A: 1},
+		Fog: FogConfig{Mode: FogLinear, Color: voplay.Hex(0xb8e3ef), Start: 180, End: 420},
+		ColorGrading: ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.04, Contrast: 1.04, Saturation: 1.08},
+		PostProcess: DefaultPostProcessConfig(),
+	}
+}
+
+func PresentationStackPreset(preset int) PresentationStack {
+	if preset == PresentationKartRacing {
+		return KartRacingPresentationStack()
+	}
+	if preset == PresentationOvercast {
+		stack := KartRacingPresentationStack()
+		stack.Name = "overcast"
+		stack.Ambient = voplay.Color{R: 0.44, G: 0.52, B: 0.58, A: 1}
+		stack.AmbientGround = voplay.Color{R: 0.24, G: 0.29, B: 0.31, A: 1}
+		stack.Fog = FogConfig{Mode: FogLinear, Color: voplay.Hex(0xc9dbe0), Start: 120, End: 340}
+		stack.ColorGrading = ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.0, Contrast: 0.98, Saturation: 0.92}
+		stack.PostProcess.BloomStrength = 0.06
+		stack.PostProcess.SharpenStrength = 0.05
+		return stack
+	}
+	if preset == PresentationSunset {
+		stack := KartRacingPresentationStack()
+		stack.Name = "sunset"
+		stack.Ambient = voplay.Color{R: 0.56, G: 0.42, B: 0.35, A: 1}
+		stack.AmbientGround = voplay.Color{R: 0.24, G: 0.21, B: 0.24, A: 1}
+		stack.Fog = FogConfig{Mode: FogLinear, Color: voplay.Hex(0xf2b58b), Start: 150, End: 390}
+		stack.ColorGrading = ColorGradingConfig{ToneMap: ToneMapACES, Exposure: 1.02, Contrast: 1.05, Saturation: 1.04}
+		stack.PostProcess.BloomThreshold = 0.66
+		stack.PostProcess.BloomStrength = 0.16
+		return stack
+	}
+	return DefaultPresentationStack()
+}
+
+func (s *Scene) ApplyPresentationStack(stack PresentationStack) {
+	if s == nil {
+		return
+	}
+	stack = normalizePresentationStack(stack)
+	s.Skybox = stack.Skybox
+	s.Ambient = stack.Ambient
+	s.AmbientGround = stack.AmbientGround
+	s.Fog = stack.Fog
+	s.ColorGrading = stack.ColorGrading
+	s.PostProcess = stack.PostProcess
+}
+
+func (s *Scene) CurrentPresentationStack() PresentationStack {
+	if s == nil {
+		return PresentationStack{}
+	}
+	return normalizePresentationStack(PresentationStack{
+		Name: "current",
+		Skybox: s.Skybox,
+		Ambient: s.Ambient,
+		AmbientGround: s.AmbientGround,
+		Fog: s.Fog,
+		ColorGrading: s.ColorGrading,
+		PostProcess: s.PostProcess,
+	})
+}
+
+func normalizePresentationStack(stack PresentationStack) PresentationStack {
+	defaults := DefaultPresentationStack()
+	if stack.Name == "" {
+		stack.Name = defaults.Name
+	}
+	if stack.Ambient == (voplay.Color{}) {
+		stack.Ambient = defaults.Ambient
+	}
+	stack.AmbientGround = normalizeAmbientGround(stack.Ambient, stack.AmbientGround)
+	stack.Fog = normalizeFogConfig(stack.Fog)
+	stack.ColorGrading = normalizeColorGrading(stack.ColorGrading)
+	stack.PostProcess = normalizePostProcess(stack.PostProcess)
+	return stack
+}
+
+func normalizeFogConfig(config FogConfig) FogConfig {
+	if config.Mode < FogNone || config.Mode > FogExpSquared {
+		config.Mode = FogNone
+	}
+	if config.Mode == FogNone {
+		return FogConfig{Mode: FogNone}
+	}
+	if config.Color == (voplay.Color{}) {
+		config.Color = voplay.Hex(0xb8e3ef)
+	}
+	if config.Mode == FogLinear {
+		if config.Start < 0 {
+			config.Start = 0
+		}
+		if config.End <= config.Start {
+			config.End = config.Start + 300
+		}
+		return config
+	}
+	if config.Density <= 0 {
+		config.Density = 0.004
+	}
+	return config
+}

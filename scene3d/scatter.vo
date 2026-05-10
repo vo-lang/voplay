@@ -1,0 +1,685 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+)
+
+const (
+	TrackScatterBothSides = 0
+	TrackScatterLeftSide = -1
+	TrackScatterRightSide = 1
+)
+
+type TrackScatterPrototype struct {
+	Shape primitive3d.ShapeID
+	ShapeDesc primitive3d.ShapeDesc
+	Material primitive3d.MaterialID
+	MaterialDesc primitive3d.MaterialDesc
+	Weight float64
+	ScaleMin voplay.Vec3
+	ScaleMax voplay.Vec3
+	UniformScaleMin float64
+	UniformScaleMax float64
+	YawJitter float64
+	Pitch float64
+	Roll float64
+	YOffset float64
+	Tint voplay.Color
+	TintMin voplay.Color
+	TintMax voplay.Color
+	Flags primitive3d.InstanceFlags
+	LodNear float64
+	LodFar float64
+	WindStrength float64
+	AtlasUV voplay.Rect
+	MinQuality int
+	MaxQuality int
+}
+
+type TrackScatterMask func(pos voplay.Vec3) float64
+
+type ScatterMask func(pos voplay.Vec3) float64
+
+type TrackScatterBand struct {
+	Name string
+	Side int
+	Seed int
+	Count int
+	Step float64
+	Density float64
+	LateralMin float64
+	LateralMax float64
+	EdgeRelative bool
+	AlongJitter float64
+	LateralJitter float64
+	SurfaceOffset float64
+	HeightMin float64
+	HeightMax float64
+	SlopeMin float64
+	SlopeMax float64
+	SlopeSampleDistance float64
+	DensityScale float64
+	MinQuality int
+	MaxQuality int
+	DensityMask TrackScatterMask
+	DensityMaskMin float64
+	ExclusionMask TrackScatterMask
+	ExclusionThreshold float64
+	Prototypes []TrackScatterPrototype
+}
+
+type TrackScatterDesc struct {
+	Track *Track
+	Layer *primitive3d.Layer
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	Name string
+	ChunkCellSize float64
+	Seed int
+	Quality int
+	DensityScale float64
+	HeightProbe TrackHeightProbe
+	Bands []TrackScatterBand
+}
+
+type TrackScatterResult struct {
+	Layer *primitive3d.Layer
+	Instances int
+	Samples int
+	Bands int
+}
+
+type ScatterFieldDesc struct {
+	Layer *primitive3d.Layer
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	Name string
+	ChunkCellSize float64
+	Seed int
+	Origin voplay.Vec3
+	Width float64
+	Depth float64
+	Count int
+	CellSize float64
+	Density float64
+	Quality int
+	DensityScale float64
+	Jitter float64
+	HeightProbe TrackHeightProbe
+	HeightMin float64
+	HeightMax float64
+	SlopeMin float64
+	SlopeMax float64
+	SlopeSampleDistance float64
+	DensityMask ScatterMask
+	DensityMaskMin float64
+	ExclusionMask ScatterMask
+	ExclusionThreshold float64
+	SurfaceOffset float64
+	Prototypes []TrackScatterPrototype
+}
+
+type ScatterFieldResult struct {
+	Layer *primitive3d.Layer
+	Instances int
+	Samples int
+}
+
+func BuildScatterField(desc ScatterFieldDesc) (ScatterFieldResult, error) {
+	if desc.Width <= 0 || desc.Depth <= 0 {
+		return ScatterFieldResult{}, errors.New("scene3d.BuildScatterField: Width and Depth must be > 0")
+	}
+	if len(desc.Prototypes) == 0 {
+		return ScatterFieldResult{}, errors.New("scene3d.BuildScatterField: at least one prototype is required")
+	}
+	if desc.HeightMax != 0 && desc.HeightMax < desc.HeightMin {
+		return ScatterFieldResult{}, errors.New("scene3d.BuildScatterField: height range is invalid")
+	}
+	if desc.SlopeMin < 0 || desc.SlopeMax < 0 || (desc.SlopeMax != 0 && desc.SlopeMax < desc.SlopeMin) {
+		return ScatterFieldResult{}, errors.New("scene3d.BuildScatterField: slope range is invalid")
+	}
+	layer := desc.Layer
+	shapes := desc.Shapes
+	materials := desc.Materials
+	if layer == nil {
+		if shapes == nil {
+			shapes = primitive3d.NewShapeRegistry()
+		}
+		if materials == nil {
+			materials = primitive3d.NewMaterialPalette()
+		}
+		name := desc.Name
+		if name == "" {
+			name = "scatter_field"
+		}
+		layer = primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: desc.ChunkCellSize}, Name: name})
+	}
+	quality := RenderingQualityConfig(desc.Quality)
+	samples := scatterFieldSampleCount(desc, quality)
+	if samples <= 0 {
+		return ScatterFieldResult{}, errors.New("scene3d.BuildScatterField: Count, CellSize, or Density must produce samples")
+	}
+	prototypes := trackScatterQualityPrototypes(desc.Prototypes, quality.Quality)
+	if len(prototypes) == 0 {
+		return ScatterFieldResult{Layer: layer, Instances: 0, Samples: samples}, nil
+	}
+	baseSamples := scatterFieldBaseSampleCount(desc)
+	added := 0
+	for i := 0; i < samples; i++ {
+		seed := desc.Seed + 700001 + i*104729
+		positionIndex := i
+		positionSamples := samples
+		if desc.CellSize > 0 && desc.Count <= 0 && baseSamples > samples {
+			positionIndex = int(math.Floor((float64(i)+0.5) * float64(baseSamples) / float64(samples)))
+			if positionIndex >= baseSamples {
+				positionIndex = baseSamples - 1
+			}
+			positionSamples = baseSamples
+		}
+		position := scatterFieldPosition(desc, positionIndex, positionSamples, seed)
+		if !scatterFieldMaskAccepted(position, seed, desc) {
+			continue
+		}
+		height, heightOK, accepted := scatterFieldSurfaceSample(position, desc)
+		if !accepted {
+			continue
+		}
+		if heightOK {
+			position.Y = height
+		}
+		proto := trackScatterPickPrototype(prototypes, seed + 31)
+		shape, material, err := trackScatterResolvePrototype(proto, shapes, materials)
+		if err != nil {
+			return ScatterFieldResult{Layer: layer, Instances: added, Samples: samples}, err
+		}
+		position = position.Add(voplay.Vec3{Y: desc.SurfaceOffset + proto.YOffset})
+		yaw := (trackScatterRand(seed, 4.9) - 0.5) * proto.YawJitter
+		rotation := trackScatterRotation(voplay.QuatIdentity(), proto, yaw)
+		layer.Add(primitive3d.Instance{Shape: shape, Material: material, Position: position, Rotation: rotation, Scale: trackScatterScale(proto, seed), Tint: trackScatterTint(proto, seed), Flags: proto.Flags, LodNear: proto.LodNear, LodFar: trackScatterLodFar(proto, quality), WindStrength: proto.WindStrength, AtlasUV: proto.AtlasUV})
+		added++
+	}
+	return ScatterFieldResult{Layer: layer, Instances: added, Samples: samples}, nil
+}
+
+func BuildTrackScatter(desc TrackScatterDesc) (TrackScatterResult, error) {
+	if desc.Track == nil {
+		return TrackScatterResult{}, errors.New("scene3d.BuildTrackScatter: Track must not be nil")
+	}
+	if desc.Track.Length() <= 0 {
+		return TrackScatterResult{}, errors.New("scene3d.BuildTrackScatter: Track length must be > 0")
+	}
+	if len(desc.Bands) == 0 {
+		return TrackScatterResult{}, errors.New("scene3d.BuildTrackScatter: at least one band is required")
+	}
+	layer := desc.Layer
+	shapes := desc.Shapes
+	materials := desc.Materials
+	if layer == nil {
+		if shapes == nil {
+			shapes = primitive3d.NewShapeRegistry()
+		}
+		if materials == nil {
+			materials = primitive3d.NewMaterialPalette()
+		}
+		name := desc.Name
+		if name == "" {
+			name = "track_scatter"
+		}
+		layer = primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: desc.ChunkCellSize}, Name: name})
+	}
+	result := TrackScatterResult{Layer: layer}
+	quality := RenderingQualityConfig(desc.Quality)
+	for bandIndex, band := range desc.Bands {
+		added, samples, err := buildTrackScatterBand(desc, quality, layer, shapes, materials, band, bandIndex)
+		if err != nil {
+			return result, err
+		}
+		result.Instances += added
+		result.Samples += samples
+		result.Bands++
+	}
+	return result, nil
+}
+
+func buildTrackScatterBand(desc TrackScatterDesc, quality RenderingQualityProfile, layer *primitive3d.Layer, shapes *primitive3d.ShapeRegistry, materials *primitive3d.MaterialPalette, band TrackScatterBand, bandIndex int) (int, int, error) {
+	if len(band.Prototypes) == 0 {
+		return 0, 0, errors.New("scene3d.BuildTrackScatter: band requires at least one prototype")
+	}
+	if !scatterQualityEnabled(band.MinQuality, band.MaxQuality, quality.Quality) {
+		return 0, 0, nil
+	}
+	if band.LateralMin < 0 || band.LateralMax < 0 || band.LateralMax < band.LateralMin {
+		return 0, 0, errors.New("scene3d.BuildTrackScatter: band lateral range is invalid")
+	}
+	if band.HeightMax != 0 && band.HeightMax < band.HeightMin {
+		return 0, 0, errors.New("scene3d.BuildTrackScatter: band height range is invalid")
+	}
+	if band.SlopeMin < 0 || band.SlopeMax < 0 || (band.SlopeMax != 0 && band.SlopeMax < band.SlopeMin) {
+		return 0, 0, errors.New("scene3d.BuildTrackScatter: band slope range is invalid")
+	}
+	count := trackScatterCount(desc.Track.Length(), band, quality, desc.DensityScale)
+	if count <= 0 {
+		return 0, 0, errors.New("scene3d.BuildTrackScatter: band Count, Step, or Density must produce instances")
+	}
+	prototypes := trackScatterQualityPrototypes(band.Prototypes, quality.Quality)
+	if len(prototypes) == 0 {
+		return 0, count * len(trackScatterSides(band.Side)), nil
+	}
+	sideValues := trackScatterSides(band.Side)
+	bandSeed := desc.Seed + band.Seed
+	if band.Seed == 0 {
+		bandSeed += (bandIndex + 1) * 100003
+	}
+	added := 0
+	for _, side := range sideValues {
+		for i := 0; i < count; i++ {
+			sampleSeed := bandSeed + i * 7919 + int(side) * 3571
+			pose := desc.Track.PoseAt(trackScatterDistance(desc.Track.Length(), count, i, sampleSeed))
+			proto := trackScatterPickPrototype(prototypes, sampleSeed + 19)
+			shape, material, err := trackScatterResolvePrototype(proto, shapes, materials)
+			if err != nil {
+				return added, count * len(sideValues), err
+			}
+			lateralRange := band.LateralMax - band.LateralMin
+			lateral := band.LateralMin
+			if lateralRange > 0 {
+				lateral += trackScatterRand(sampleSeed, 2.1) * lateralRange
+			}
+			if band.EdgeRelative {
+				lateral += pose.HalfWidth
+			}
+			if band.LateralJitter > 0 {
+				lateral += (trackScatterRand(sampleSeed, 2.7) - 0.5) * band.LateralJitter
+			}
+			forwardOffset := 0.0
+			alongJitter := band.AlongJitter
+			if alongJitter <= 0 {
+				alongJitter = desc.Track.Length() / float64(count) * 0.72
+			}
+			if alongJitter > 0 {
+				forwardOffset = (trackScatterRand(sampleSeed, 3.4) - 0.5) * alongJitter
+			}
+			position := pose.Position.Add(pose.Right.Scale(side * lateral)).Add(pose.Forward.Scale(forwardOffset))
+			if !trackScatterMaskAccepted(position, sampleSeed, band) {
+				continue
+			}
+			height, heightOK, accepted := trackScatterSurfaceSample(position, desc.HeightProbe, band)
+			if !accepted {
+				continue
+			}
+			if heightOK {
+				position.Y = height
+			}
+			position = position.Add(voplay.Vec3{Y: band.SurfaceOffset + proto.YOffset})
+			yaw := (trackScatterRand(sampleSeed, 4.6) - 0.5) * proto.YawJitter
+			rotation := trackScatterRotation(pose.Rotation, proto, yaw)
+			layer.Add(primitive3d.Instance{Shape: shape, Material: material, Position: position, Rotation: rotation, Scale: trackScatterScale(proto, sampleSeed), Tint: trackScatterTint(proto, sampleSeed), Flags: proto.Flags, LodNear: proto.LodNear, LodFar: trackScatterLodFar(proto, quality), WindStrength: proto.WindStrength, AtlasUV: proto.AtlasUV})
+			added++
+		}
+	}
+	return added, count * len(sideValues), nil
+}
+
+func scatterFieldBaseSampleCount(desc ScatterFieldDesc) int {
+	if desc.Count > 0 {
+		return desc.Count
+	}
+	if desc.CellSize > 0 {
+		cols := int(math.Ceil(desc.Width / desc.CellSize))
+		rows := int(math.Ceil(desc.Depth / desc.CellSize))
+		return cols * rows
+	}
+	if desc.Density > 0 {
+		return int(math.Ceil(desc.Width * desc.Depth * desc.Density))
+	}
+	return 0
+}
+
+func scatterFieldSampleCount(desc ScatterFieldDesc, quality RenderingQualityProfile) int {
+	return scatterQualityCount(scatterFieldBaseSampleCount(desc), scatterCombinedDensityScale(quality, desc.DensityScale, 0))
+}
+
+func scatterFieldPosition(desc ScatterFieldDesc, index, samples, seed int) voplay.Vec3 {
+	if desc.CellSize > 0 && desc.Count <= 0 {
+		cols := int(math.Ceil(desc.Width / desc.CellSize))
+		if cols <= 0 {
+			cols = 1
+		}
+		col := index % cols
+		row := index / cols
+		cellW := desc.Width / float64(cols)
+		rows := int(math.Ceil(desc.Depth / desc.CellSize))
+		if rows <= 0 {
+			rows = 1
+		}
+		cellD := desc.Depth / float64(rows)
+		jitter := desc.Jitter
+		if jitter <= 0 {
+			jitter = 1
+		}
+		x := (float64(col)+0.5+(trackScatterRand(seed, 1.1)-0.5)*jitter) * cellW
+		z := (float64(row)+0.5+(trackScatterRand(seed, 1.7)-0.5)*jitter) * cellD
+		return desc.Origin.Add(voplay.Vec3{X: x - desc.Width*0.5, Z: z - desc.Depth*0.5})
+	}
+	x := (trackScatterRand(seed, 2.3) - 0.5) * desc.Width
+	z := (trackScatterRand(seed, 2.9) - 0.5) * desc.Depth
+	return desc.Origin.Add(voplay.Vec3{X: x, Z: z})
+}
+
+func scatterFieldMaskAccepted(position voplay.Vec3, seed int, desc ScatterFieldDesc) bool {
+	if desc.ExclusionMask != nil {
+		threshold := desc.ExclusionThreshold
+		if threshold <= 0 {
+			threshold = 0.5
+		}
+		if clampScatterMask(desc.ExclusionMask(position)) >= threshold {
+			return false
+		}
+	}
+	if desc.DensityMask != nil {
+		density := clampScatterMask(desc.DensityMask(position))
+		if desc.DensityMaskMin > 0 && density < desc.DensityMaskMin {
+			return false
+		}
+		if density <= 0 {
+			return false
+		}
+		if trackScatterRand(seed, 3.5) > density {
+			return false
+		}
+	}
+	return true
+}
+
+func scatterFieldSurfaceSample(position voplay.Vec3, desc ScatterFieldDesc) (float64, bool, bool) {
+	band := TrackScatterBand{HeightMin: desc.HeightMin, HeightMax: desc.HeightMax, SlopeMin: desc.SlopeMin, SlopeMax: desc.SlopeMax, SlopeSampleDistance: desc.SlopeSampleDistance}
+	return trackScatterSurfaceSample(position, desc.HeightProbe, band)
+}
+
+func trackScatterMaskAccepted(position voplay.Vec3, seed int, band TrackScatterBand) bool {
+	if band.ExclusionMask != nil {
+		threshold := band.ExclusionThreshold
+		if threshold <= 0 {
+			threshold = 0.5
+		}
+		if clampScatterMask(band.ExclusionMask(position)) >= threshold {
+			return false
+		}
+	}
+	if band.DensityMask != nil {
+		density := clampScatterMask(band.DensityMask(position))
+		if band.DensityMaskMin > 0 && density < band.DensityMaskMin {
+			return false
+		}
+		if density <= 0 {
+			return false
+		}
+		if trackScatterRand(seed, 9.9) > density {
+			return false
+		}
+	}
+	return true
+}
+
+func clampScatterMask(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func trackScatterSurfaceSample(position voplay.Vec3, probe TrackHeightProbe, band TrackScatterBand) (float64, bool, bool) {
+	heightRange := band.HeightMin != 0 || band.HeightMax != 0
+	slopeRange := band.SlopeMin != 0 || band.SlopeMax != 0
+	if probe == nil {
+		return 0, false, !heightRange && !slopeRange
+	}
+	height, ok := probe(position)
+	if !ok {
+		return 0, false, !heightRange && !slopeRange
+	}
+	if heightRange {
+		if height < band.HeightMin {
+			return height, true, false
+		}
+		if band.HeightMax != 0 && height > band.HeightMax {
+			return height, true, false
+		}
+	}
+	if slopeRange {
+		slope, slopeOK := trackScatterSlope(position, height, probe, band.SlopeSampleDistance)
+		if !slopeOK {
+			return height, true, false
+		}
+		if slope < band.SlopeMin {
+			return height, true, false
+		}
+		if band.SlopeMax != 0 && slope > band.SlopeMax {
+			return height, true, false
+		}
+	}
+	return height, true, true
+}
+
+func trackScatterSlope(position voplay.Vec3, centerHeight float64, probe TrackHeightProbe, sampleDistance float64) (float64, bool) {
+	step := sampleDistance
+	if step <= 0 {
+		step = 1
+	}
+	hx, okX := probe(position.Add(voplay.Vec3{X: step}))
+	hz, okZ := probe(position.Add(voplay.Vec3{Z: step}))
+	if !okX || !okZ {
+		return 0, false
+	}
+	dx := (hx - centerHeight) / step
+	dz := (hz - centerHeight) / step
+	return math.Sqrt(dx*dx + dz*dz), true
+}
+
+func trackScatterCount(length float64, band TrackScatterBand, quality RenderingQualityProfile, descDensityScale float64) int {
+	base := 0
+	if band.Count > 0 {
+		base = band.Count
+	} else if band.Step > 0 {
+		base = int(math.Ceil(length / band.Step))
+	} else if band.Density > 0 {
+		base = int(math.Ceil(length * band.Density))
+	}
+	return scatterQualityCount(base, scatterCombinedDensityScale(quality, descDensityScale, band.DensityScale))
+}
+
+func trackScatterDistance(length float64, count, index, seed int) float64 {
+	if count <= 0 {
+		return 0
+	}
+	t := (float64(index) + trackScatterRand(seed, 1.3)) / float64(count)
+	return t * length
+}
+
+func trackScatterSides(side int) []float64 {
+	if side < 0 {
+		return []float64{-1}
+	}
+	if side > 0 {
+		return []float64{1}
+	}
+	return []float64{-1, 1}
+}
+
+func trackScatterPickPrototype(prototypes []TrackScatterPrototype, seed int) TrackScatterPrototype {
+	total := 0.0
+	for _, proto := range prototypes {
+		total += trackScatterWeight(proto)
+	}
+	if total <= 0 {
+		return prototypes[0]
+	}
+	pick := trackScatterRand(seed, 5.2) * total
+	accum := 0.0
+	for _, proto := range prototypes {
+		accum += trackScatterWeight(proto)
+		if pick <= accum {
+			return proto
+		}
+	}
+	return prototypes[len(prototypes)-1]
+}
+
+func trackScatterWeight(proto TrackScatterPrototype) float64 {
+	if proto.Weight < 0 {
+		return 0
+	}
+	if proto.Weight == 0 {
+		return 1
+	}
+	return proto.Weight
+}
+
+func trackScatterQualityPrototypes(prototypes []TrackScatterPrototype, quality int) []TrackScatterPrototype {
+	filtered := []TrackScatterPrototype{}
+	for _, proto := range prototypes {
+		if scatterQualityEnabled(proto.MinQuality, proto.MaxQuality, quality) {
+			filtered = append(filtered, proto)
+		}
+	}
+	return filtered
+}
+
+func trackScatterLodFar(proto TrackScatterPrototype, quality RenderingQualityProfile) float64 {
+	if proto.LodFar <= 0 {
+		return 0
+	}
+	return proto.LodFar * quality.ScatterLodScale
+}
+
+func scatterQualityEnabled(minQuality, maxQuality, quality int) bool {
+	q := normalizeSceneQuality(quality)
+	if minQuality > 0 && q < normalizeSceneQuality(minQuality) {
+		return false
+	}
+	if maxQuality > 0 && q > normalizeSceneQuality(maxQuality) {
+		return false
+	}
+	return true
+}
+
+func scatterQualityCount(base int, scale float64) int {
+	if base <= 0 || scale <= 0 {
+		return 0
+	}
+	count := int(math.Ceil(float64(base) * scale))
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+func scatterCombinedDensityScale(quality RenderingQualityProfile, descScale, localScale float64) float64 {
+	scale := quality.ScatterDensityScale
+	if descScale > 0 {
+		scale *= descScale
+	}
+	if localScale > 0 {
+		scale *= localScale
+	}
+	if scale < 0 {
+		return 0
+	}
+	if scale > 4 {
+		return 4
+	}
+	return scale
+}
+
+func trackScatterResolvePrototype(proto TrackScatterPrototype, shapes *primitive3d.ShapeRegistry, materials *primitive3d.MaterialPalette) (primitive3d.ShapeID, primitive3d.MaterialID, error) {
+	shape := proto.Shape
+	if shape == 0 {
+		if shapes == nil {
+			return 0, 0, errors.New("scene3d.BuildTrackScatter: prototype Shape or Shapes registry is required")
+		}
+		shape = shapes.Shape(proto.ShapeDesc)
+	}
+	material := proto.Material
+	if material == 0 {
+		if materials == nil {
+			return 0, 0, errors.New("scene3d.BuildTrackScatter: prototype Material or Materials palette is required")
+		}
+		material = materials.Material(proto.MaterialDesc)
+	}
+	return shape, material, nil
+}
+
+func trackScatterRotation(base voplay.Quat, proto TrackScatterPrototype, yaw float64) voplay.Quat {
+	rotation := base.Mul(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw))
+	if proto.Pitch != 0 {
+		rotation = rotation.Mul(voplay.QuatFromAxisAngle(voplay.Vec3{X: 1}, proto.Pitch))
+	}
+	if proto.Roll != 0 {
+		rotation = rotation.Mul(voplay.QuatFromAxisAngle(voplay.Vec3{Z: 1}, proto.Roll))
+	}
+	return rotation
+}
+
+func trackScatterScale(proto TrackScatterPrototype, seed int) voplay.Vec3 {
+	min := proto.ScaleMin
+	if min.X == 0 && min.Y == 0 && min.Z == 0 {
+		min = voplay.Vec3{X: 1, Y: 1, Z: 1}
+	}
+	max := proto.ScaleMax
+	if max.X == 0 && max.Y == 0 && max.Z == 0 {
+		max = min
+	}
+	scale := voplay.Vec3{
+		X: min.X + (max.X-min.X)*trackScatterRand(seed, 6.1),
+		Y: min.Y + (max.Y-min.Y)*trackScatterRand(seed, 6.7),
+		Z: min.Z + (max.Z-min.Z)*trackScatterRand(seed, 7.3),
+	}
+	if proto.UniformScaleMax > 0 {
+		uMin := proto.UniformScaleMin
+		if uMin <= 0 {
+			uMin = proto.UniformScaleMax
+		}
+		u := uMin + (proto.UniformScaleMax-uMin)*trackScatterRand(seed, 8.8)
+		scale = scale.Scale(u)
+	}
+	return scale
+}
+
+func trackScatterTint(proto TrackScatterPrototype, seed int) voplay.Color {
+	if !trackScatterColorActive(proto.TintMin) && !trackScatterColorActive(proto.TintMax) {
+		return proto.Tint
+	}
+	min := proto.TintMin
+	max := proto.TintMax
+	if !trackScatterColorActive(min) {
+		min = max
+	}
+	if !trackScatterColorActive(max) {
+		max = min
+	}
+	return voplay.Color{
+		R: min.R + (max.R-min.R)*trackScatterRand(seed, 10.1),
+		G: min.G + (max.G-min.G)*trackScatterRand(seed, 10.7),
+		B: min.B + (max.B-min.B)*trackScatterRand(seed, 11.3),
+		A: min.A + (max.A-min.A)*trackScatterRand(seed, 11.9),
+	}
+}
+
+func trackScatterColorActive(c voplay.Color) bool {
+	return c.R != 0 || c.G != 0 || c.B != 0 || c.A != 0
+}
+
+func trackScatterRand(seed int, salt float64) float64 {
+	v := math.Sin(float64(seed)*12.9898 + salt*78.233) * 43758.5453
+	v = v - math.Floor(v)
+	if v < 0 {
+		return v + 1
+	}
+	return v
+}

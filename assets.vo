@@ -25,11 +25,12 @@ type CubemapLoader struct {
 
 // AssetLoaders groups loaders for all supported asset types.
 type AssetLoaders struct {
-	Texture AssetLoader
-	Font    AssetLoader
-	Model   AssetLoader
-	Audio   AssetLoader
-	Cubemap CubemapLoader
+	Texture       AssetLoader
+	TextureLinear AssetLoader
+	Font          AssetLoader
+	Model         AssetLoader
+	Audio         AssetLoader
+	Cubemap       CubemapLoader
 }
 
 // managedAsset tracks a loaded asset handle with group-based ownership.
@@ -68,6 +69,7 @@ type Assets struct {
 	groupStack []string
 	groupNames map[string]bool
 	textures   *assetStore
+	linearTextures *assetStore
 	cubemaps   *cubemapStore
 	fonts      *assetStore
 	models     *assetStore
@@ -116,10 +118,12 @@ func NewAssets() *Assets {
 }
 
 func NewAssetsWithLoaders(loaders AssetLoaders) *Assets {
+	loaders = normalizeAssetLoaders(loaders)
 	validateAssetLoaders(loaders)
 	return &Assets{
 		groupNames: map[string]bool{},
 		textures:   newAssetStore("Texture", loaders.Texture),
+		linearTextures: newAssetStore("TextureLinear", loaders.TextureLinear),
 		cubemaps:   newCubemapStore(loaders.Cubemap),
 		fonts:      newAssetStore("Font", loaders.Font),
 		models:     newAssetStore("Model", loaders.Model),
@@ -132,6 +136,11 @@ func defaultAssetLoaders() AssetLoaders {
 		Texture: AssetLoader{
 			LoadFile:  func(path string) (int, error) { return loadTexture(path) },
 			LoadBytes: func(data []byte) (int, error) { return loadTextureBytes(data) },
+			Free:      func(id int) { freeTexture(id) },
+		},
+		TextureLinear: AssetLoader{
+			LoadFile:  func(path string) (int, error) { return loadTextureLinear(path) },
+			LoadBytes: func(data []byte) (int, error) { return loadTextureBytesLinear(data) },
 			Free:      func(id int) { freeTexture(id) },
 		},
 		Font: AssetLoader{
@@ -166,6 +175,13 @@ func defaultAssetLoaders() AssetLoaders {
 	}
 }
 
+func normalizeAssetLoaders(loaders AssetLoaders) AssetLoaders {
+	if loaders.TextureLinear.LoadFile == nil && loaders.TextureLinear.LoadBytes == nil && loaders.TextureLinear.Free == nil {
+		loaders.TextureLinear = loaders.Texture
+	}
+	return loaders
+}
+
 func validateAssetLoader(l AssetLoader, label string) {
 	if l.LoadFile == nil || l.LoadBytes == nil || l.Free == nil {
 		panic("NewAssetsWithLoaders: " + label + " loader must be complete")
@@ -180,6 +196,7 @@ func validateCubemapLoader(l CubemapLoader) {
 
 func validateAssetLoaders(loaders AssetLoaders) {
 	validateAssetLoader(loaders.Texture, "Texture")
+	validateAssetLoader(loaders.TextureLinear, "TextureLinear")
 	validateAssetLoader(loaders.Font, "Font")
 	validateAssetLoader(loaders.Model, "Model")
 	validateAssetLoader(loaders.Audio, "Audio")
@@ -235,6 +252,7 @@ func (a *Assets) ReleaseGroup(name string) {
 		panic("Assets.ReleaseGroup: unknown group: " + name)
 	}
 	a.textures.releaseGroup(name)
+	a.linearTextures.releaseGroup(name)
 	a.cubemaps.releaseGroup(name)
 	a.fonts.releaseGroup(name)
 	a.models.releaseGroup(name)
@@ -273,6 +291,19 @@ func (a *Assets) Texture(path string) (TextureID, error) {
 // TextureBytes loads a texture from raw bytes under the given key.
 func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
 	id := a.textures.getBytes(a.requireCurrentGroup(), key, data)?
+	return TextureID(id), nil
+}
+
+// TextureLinear loads a non-sRGB texture by path. Use it for normal maps,
+// roughness/metallic maps, masks, height data, and other material data.
+func (a *Assets) TextureLinear(path string) (TextureID, error) {
+	id := a.linearTextures.get(a.mounts, a.requireCurrentGroup(), path)?
+	return TextureID(id), nil
+}
+
+// TextureBytesLinear loads a non-sRGB texture from encoded image bytes.
+func (a *Assets) TextureBytesLinear(key string, data []byte) (TextureID, error) {
+	id := a.linearTextures.getBytes(a.requireCurrentGroup(), key, data)?
 	return TextureID(id), nil
 }
 

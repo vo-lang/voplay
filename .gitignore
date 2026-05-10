@@ -7,3 +7,4 @@
 !web-artifacts/*.wasm
 js/node_modules/
 **/.vo-cache/
+.codex-release-stage/

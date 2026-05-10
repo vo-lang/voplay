@@ -1,0 +1,321 @@
+package scene3d
+
+import (
+	"errors"
+	"strconv"
+	"github.com/vo-lang/voplay"
+)
+
+type TrackSurfaceAuthoringDesc struct {
+	HeightProbe TrackHeightProbe
+	Quality int
+	SurfaceNames []string
+	EdgeMaterial voplay.MaterialDesc
+	DecalMaterial voplay.MaterialDesc
+	EdgeSampleCount int
+	EdgeInnerOffset float64
+	EdgeOuterOffset float64
+	EdgeInnerHeightOffset float64
+	EdgeOuterHeightOffset float64
+	EdgeUVScale float64
+	OffroadEdgeColor voplay.Color
+	OffroadEdgeRoughness float64
+	RoadDecalColor voplay.Color
+	OffroadDecalColor voplay.Color
+	BoostDecalColor voplay.Color
+	DecalCount int
+	DecalDensity float64
+	DecalWidthMin float64
+	DecalWidthMax float64
+	DecalLengthMin float64
+	DecalLengthMax float64
+	DecalSurfaceOffset float64
+}
+
+type TrackSurfacePhysicsMaterial struct {
+	Name string
+	Kind string
+	Priority int
+	Friction float64
+	Boost float64
+	OnRoad bool
+	Start float64
+	End float64
+	Left float64
+	Right float64
+}
+
+type TrackSurfaceAuthoringPlan struct {
+	Details TrackSurfaceDetailsDesc
+	Physics []TrackSurfacePhysicsMaterial
+	SurfaceCount int
+	EdgeTransitionCount int
+	ProjectedDecalLayerCount int
+	HasSurfaceMetadata bool
+}
+
+type AuthoredTrackSurfaceDetails struct {
+	Plan TrackSurfaceAuthoringPlan
+	Details *TrackSurfaceDetails
+}
+
+type trackSurfaceDistanceRange struct {
+	Start float64
+	End float64
+}
+
+func BuildTrackSurfaceAuthoringPlan(track *Track, desc TrackSurfaceAuthoringDesc) (TrackSurfaceAuthoringPlan, error) {
+	if track == nil {
+		return TrackSurfaceAuthoringPlan{}, errors.New("scene3d.BuildTrackSurfaceAuthoringPlan: track is nil")
+	}
+	if track.asset == nil {
+		return TrackSurfaceAuthoringPlan{}, errors.New("scene3d.BuildTrackSurfaceAuthoringPlan: track asset is nil")
+	}
+	if track.Length() <= 0 {
+		return TrackSurfaceAuthoringPlan{}, errors.New("scene3d.BuildTrackSurfaceAuthoringPlan: track length must be > 0")
+	}
+	desc = normalizeTrackSurfaceAuthoringDesc(desc)
+	quality := RenderingQualityConfig(desc.Quality)
+	plan := TrackSurfaceAuthoringPlan{
+		Details: TrackSurfaceDetailsDesc{HeightProbe: desc.HeightProbe},
+		Physics: []TrackSurfacePhysicsMaterial{trackDefaultRoadPhysics(track)},
+		SurfaceCount: 1,
+		HasSurfaceMetadata: true,
+	}
+	for _, surface := range track.asset.Surfaces {
+		if !trackSurfaceAuthoringIncludes(desc.SurfaceNames, surface.Name) {
+			continue
+		}
+		plan.Physics = append(plan.Physics, trackSurfacePhysicsMaterial(track, surface))
+		plan.SurfaceCount++
+		ranges := trackSurfaceAuthoringRanges(track, surface)
+		if surface.Kind == TrackSurfaceOffroad {
+			for i, r := range ranges {
+				edge := TrackEdgeTransitionDesc{
+					Name: surface.Name + "_edge_" + strconv.Itoa(i),
+					Side: trackSurfaceAuthoringSide(surface),
+					SampleCount: trackSurfaceAuthoringSampleCount(desc.EdgeSampleCount, quality),
+					StartDistance: r.Start,
+					EndDistance: r.End,
+					InnerOffset: desc.EdgeInnerOffset,
+					OuterOffset: desc.EdgeOuterOffset,
+					InnerHeightOffset: desc.EdgeInnerHeightOffset,
+					OuterHeightOffset: desc.EdgeOuterHeightOffset,
+					UVScale: desc.EdgeUVScale,
+					Color: desc.OffroadEdgeColor,
+					Roughness: desc.OffroadEdgeRoughness,
+					Material: desc.EdgeMaterial,
+					HeightProbe: desc.HeightProbe,
+				}
+				plan.Details.EdgeTransitions = append(plan.Details.EdgeTransitions, edge)
+				plan.EdgeTransitionCount++
+			}
+		}
+		if surface.Kind == TrackSurfaceBoost || surface.Kind == TrackSurfaceRoad || surface.Kind == TrackSurfaceOffroad {
+			for i, r := range ranges {
+				decal := trackSurfaceAuthoringDecal(track, surface, desc, quality, i, r)
+				plan.Details.ProjectedDecals = append(plan.Details.ProjectedDecals, decal)
+				plan.ProjectedDecalLayerCount++
+			}
+		}
+	}
+	return plan, nil
+}
+
+func SpawnAuthoredTrackSurfaceDetails(scene *Scene, assets *voplay.Assets, track *Track, desc TrackSurfaceAuthoringDesc) (*AuthoredTrackSurfaceDetails, error) {
+	plan, err := BuildTrackSurfaceAuthoringPlan(track, desc)
+	if err != nil {
+		return nil, err
+	}
+	details, err := SpawnTrackSurfaceDetails(scene, assets, track, plan.Details)
+	if err != nil {
+		return nil, err
+	}
+	return &AuthoredTrackSurfaceDetails{Plan: plan, Details: details}, nil
+}
+
+func (d *AuthoredTrackSurfaceDetails) Destroy(scene *Scene) {
+	if d == nil {
+		return
+	}
+	if d.Details != nil {
+		d.Details.Destroy(scene)
+	}
+	d.Details = nil
+}
+
+func normalizeTrackSurfaceAuthoringDesc(desc TrackSurfaceAuthoringDesc) TrackSurfaceAuthoringDesc {
+	if desc.EdgeOuterOffset <= 0 {
+		desc.EdgeOuterOffset = 3.5
+	}
+	if desc.EdgeInnerHeightOffset <= 0 {
+		desc.EdgeInnerHeightOffset = 0.075
+	}
+	if desc.EdgeOuterHeightOffset <= 0 {
+		desc.EdgeOuterHeightOffset = 0.055
+	}
+	if desc.EdgeUVScale <= 0 {
+		desc.EdgeUVScale = 18
+	}
+	if desc.OffroadEdgeColor == (voplay.Color{}) {
+		desc.OffroadEdgeColor = voplay.Color{R: 0.57, G: 0.37, B: 0.18, A: 0.82}
+	}
+	if desc.OffroadEdgeRoughness <= 0 {
+		desc.OffroadEdgeRoughness = 0.92
+	}
+	if desc.RoadDecalColor == (voplay.Color{}) {
+		desc.RoadDecalColor = voplay.Color{R: 0.08, G: 0.07, B: 0.055, A: 0.44}
+	}
+	if desc.OffroadDecalColor == (voplay.Color{}) {
+		desc.OffroadDecalColor = voplay.Color{R: 0.16, G: 0.12, B: 0.075, A: 0.38}
+	}
+	if desc.BoostDecalColor == (voplay.Color{}) {
+		desc.BoostDecalColor = voplay.Color{R: 0.06, G: 0.5, B: 1.0, A: 0.36}
+	}
+	if desc.DecalWidthMin <= 0 {
+		desc.DecalWidthMin = 0.35
+	}
+	if desc.DecalWidthMax <= 0 {
+		desc.DecalWidthMax = 0.85
+	}
+	if desc.DecalLengthMin <= 0 {
+		desc.DecalLengthMin = 1.0
+	}
+	if desc.DecalLengthMax <= 0 {
+		desc.DecalLengthMax = 2.2
+	}
+	if desc.DecalSurfaceOffset <= 0 {
+		desc.DecalSurfaceOffset = 0.055
+	}
+	return desc
+}
+
+func trackDefaultRoadPhysics(track *Track) TrackSurfacePhysicsMaterial {
+	return TrackSurfacePhysicsMaterial{Name: TrackSurfaceRoad, Kind: TrackSurfaceRoad, Priority: 0, Friction: 1, OnRoad: true, Start: 0, End: track.Length()}
+}
+
+func trackSurfacePhysicsMaterial(track *Track, surface TrackSurface) TrackSurfacePhysicsMaterial {
+	friction := surface.Friction
+	if friction == 0 {
+		friction = 1
+	}
+	left, right := trackSurfaceLateralBounds(surface, 0)
+	return TrackSurfacePhysicsMaterial{Name: surface.Name, Kind: surface.Kind, Priority: surface.Priority, Friction: friction, Boost: surface.Boost, OnRoad: surface.Kind != TrackSurfaceOffroad, Start: surface.Start, End: trackSurfaceAuthoringEnd(track, surface), Left: left, Right: right}
+}
+
+func trackSurfaceAuthoringEnd(track *Track, surface TrackSurface) float64 {
+	if surface.Start == 0 && surface.End == 0 {
+		return track.Length()
+	}
+	return surface.End
+}
+
+func trackSurfaceAuthoringIncludes(names []string, name string) bool {
+	if len(names) == 0 {
+		return true
+	}
+	for _, value := range names {
+		if value == name {
+			return true
+		}
+	}
+	return false
+}
+
+func trackSurfaceAuthoringRanges(track *Track, surface TrackSurface) []trackSurfaceDistanceRange {
+	if surface.Start == 0 && surface.End == 0 {
+		return []trackSurfaceDistanceRange{{Start: 0, End: track.Length()}}
+	}
+	start := surface.Start
+	end := surface.End
+	if track.closed {
+		start = trackWrapDistance(start, track.Length())
+		end = trackWrapDistance(end, track.Length())
+		if start > end {
+			return []trackSurfaceDistanceRange{{Start: start, End: track.Length()}, {Start: 0, End: end}}
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > track.Length() {
+		end = track.Length()
+	}
+	if end <= start {
+		return []trackSurfaceDistanceRange{}
+	}
+	return []trackSurfaceDistanceRange{{Start: start, End: end}}
+}
+
+func trackSurfaceAuthoringSide(surface TrackSurface) int {
+	if surface.Right <= 0 {
+		return TrackScatterLeftSide
+	}
+	if surface.Left >= 0 {
+		return TrackScatterRightSide
+	}
+	return TrackScatterBothSides
+}
+
+func trackSurfaceAuthoringSampleCount(base int, quality RenderingQualityProfile) int {
+	if base <= 0 {
+		base = 24
+	}
+	return scatterQualityCount(base, quality.TerrainDetailScale)
+}
+
+func trackSurfaceAuthoringDecal(track *Track, surface TrackSurface, desc TrackSurfaceAuthoringDesc, quality RenderingQualityProfile, index int, r trackSurfaceDistanceRange) TrackProjectedDecalDesc {
+	color := desc.RoadDecalColor
+	if surface.Kind == TrackSurfaceOffroad {
+		color = desc.OffroadDecalColor
+	}
+	if surface.Kind == TrackSurfaceBoost {
+		color = desc.BoostDecalColor
+	}
+	count := desc.DecalCount
+	density := desc.DecalDensity
+	if count > 0 {
+		count = scatterQualityCount(count, quality.ScatterDensityScale)
+	} else if density <= 0 {
+		density = 0.035 * quality.ScatterDensityScale
+	}
+	left, right := trackSurfaceLateralBounds(surface, 0)
+	side := TrackScatterRightSide
+	edgeRelative := false
+	lateralMin := left
+	lateralMax := right
+	if surface.Kind == TrackSurfaceOffroad {
+		side = trackSurfaceAuthoringSide(surface)
+		edgeRelative = true
+		lateralMin = 0.2
+		lateralMax = 2.4
+	} else if left == 0 && right == 0 {
+		side = TrackScatterBothSides
+		edgeRelative = true
+		lateralMin = 0.15
+		lateralMax = 1.25
+	}
+	return TrackProjectedDecalDesc{
+		Name: surface.Name + "_surface_decals_" + strconv.Itoa(index),
+		Side: side,
+		Seed: 501 + index*37 + surface.Priority*17,
+		Count: count,
+		Density: density,
+		StartDistance: r.Start,
+		EndDistance: r.End,
+		LateralMin: lateralMin,
+		LateralMax: lateralMax,
+		EdgeRelative: edgeRelative,
+		WidthMin: desc.DecalWidthMin,
+		WidthMax: desc.DecalWidthMax,
+		LengthMin: desc.DecalLengthMin,
+		LengthMax: desc.DecalLengthMax,
+		YawJitter: 0.55,
+		AlongJitter: 0.45,
+		SurfaceOffset: desc.DecalSurfaceOffset,
+		Color: color,
+		Roughness: 0.96,
+		Material: desc.DecalMaterial,
+		HeightProbe: desc.HeightProbe,
+	}
+}

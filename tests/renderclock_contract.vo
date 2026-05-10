@@ -1,0 +1,115 @@
+package main
+
+import (
+	"time"
+	"github.com/vo-lang/voplay/renderclock"
+)
+
+func countRenderClockFrames(targetFPS int, pulse time.Duration, pulses int) (int, int) {
+	pacer := renderclock.NewPacer(targetFPS)
+	frames := 0
+	divisor := 0
+	for i := 0; i < pulses; i++ {
+		decision := pacer.AdvancePulse(pulse)
+		divisor = decision.FrameDivisor
+		if decision.Render {
+			frames++
+		}
+	}
+	return frames, divisor
+}
+
+func countLoadedRenderClockFrames(targetFPS int, pulse time.Duration, cost time.Duration, pulses int) (int, int) {
+	pacer := renderclock.NewPacer(targetFPS)
+	frames := 0
+	divisor := 0
+	for i := 0; i < pulses; i++ {
+		decision := pacer.AdvancePulse(pulse)
+		divisor = decision.FrameDivisor
+		if decision.Render {
+			frames++
+			pacer.ReportFrameCost(cost)
+		}
+	}
+	return frames, divisor
+}
+
+func countRecoveredRenderClockFrames(targetFPS int, pulse time.Duration, overloadCost time.Duration, recoveryCost time.Duration, overloadPulses int, recoveryPulses int) (int, int) {
+	pacer := renderclock.NewPacer(targetFPS)
+	frames := 0
+	divisor := 0
+	for i := 0; i < overloadPulses; i++ {
+		decision := pacer.AdvancePulse(pulse)
+		divisor = decision.FrameDivisor
+		if decision.Render {
+			frames++
+			pacer.ReportFrameCost(overloadCost)
+		}
+	}
+	for i := 0; i < recoveryPulses; i++ {
+		decision := pacer.AdvancePulse(pulse)
+		divisor = decision.FrameDivisor
+		if decision.Render {
+			frames++
+			pacer.ReportFrameCost(recoveryCost)
+		}
+	}
+	return frames, divisor
+}
+
+func testRenderClockPacerContract() {
+	frames, divisor := countRenderClockFrames(60, time.Duration(16666667), 120)
+	assert(frames == 120 && divisor == 1, "renderclock 60hz display renders every pulse")
+
+	frames, divisor = countRenderClockFrames(60, time.Duration(8333333), 120)
+	assert(frames == 60 && divisor == 2, "renderclock 120hz display uses stable 2-pulse divisor")
+
+	frames, divisor = countRenderClockFrames(120, time.Duration(8333333), 120)
+	assert(frames == 120 && divisor == 1, "renderclock 120fps target renders every pulse on 120hz display")
+
+	frames, divisor = countRenderClockFrames(60, time.Duration(6944444), 144)
+	assert(frames == 72 && divisor == 2, "renderclock 144hz display uses nearest stable cadence")
+
+	frames, divisor = countRenderClockFrames(120, time.Duration(6944444), 144)
+	assert(frames == 144 && divisor == 1, "renderclock 120fps target avoids 60hz beat on 144hz display")
+
+	frames, divisor = countRenderClockFrames(60, time.Duration(4166667), 240)
+	assert(frames == 60 && divisor == 4, "renderclock 240hz display uses stable 4-pulse divisor")
+
+	frames, divisor = countRenderClockFrames(120, time.Duration(4166667), 240)
+	assert(frames == 120 && divisor == 2, "renderclock 120fps target uses stable 2-pulse divisor on 240hz display")
+
+	frames, divisor = countRenderClockFrames(60, time.Duration(6060606), 165)
+	assert(frames == 55 && divisor == 3, "renderclock 165hz display avoids overdriving the frame budget")
+
+	frames, divisor = countRenderClockFrames(120, time.Duration(6060606), 165)
+	assert(frames == 165 && divisor == 1, "renderclock 120fps target keeps display-smooth cadence on 165hz display")
+
+	frames, divisor = countRenderClockFrames(30, time.Duration(6944444), 720)
+	assert(frames == 144 && divisor == 5, "renderclock accepts near-target stable low-fps divisor")
+
+	frames, divisor = countLoadedRenderClockFrames(60, time.Duration(6944444), time.Duration(13000000), 144)
+	assert(frames == 72 && divisor == 2, "renderclock keeps nearest cadence while work fits the cadence budget")
+
+	frames, divisor = countLoadedRenderClockFrames(60, time.Duration(6944444), time.Duration(15000000), 144)
+	assert(frames < 72 && divisor == 3, "renderclock raises divisor under sustained render load")
+
+	frames, divisor = countLoadedRenderClockFrames(60, time.Duration(16666667), time.Duration(15000000), 120)
+	assert(frames == 120 && divisor == 1, "renderclock keeps 60hz target on every display pulse when work fits 60fps budget")
+
+	frames, divisor = countRecoveredRenderClockFrames(60, time.Duration(8333333), time.Duration(18000000), time.Duration(14000000), 60, 420)
+	assert(divisor == 2, "renderclock recovers to 60fps cadence when work fits the next faster budget")
+
+	pacerLatePulse := renderclock.NewPacer(60)
+	pacerLatePulse.AdvancePulse(time.Duration(8333333))
+	pacerLatePulse.AdvancePulse(time.Duration(8333333))
+	latePulseDecision := pacerLatePulse.AdvancePulse(time.Duration(17000000))
+	assert(latePulseDecision.Render, "renderclock does not wait a second pulse after one pulse already spans the target frame")
+
+	frames, divisor = countRenderClockFrames(0, time.Duration(8333333), 20)
+	assert(frames == 20 && divisor == 1, "renderclock uncapped target renders every display pulse")
+
+	pacer := renderclock.NewPacer(60)
+	decision := pacer.AdvancePulse(time.Duration(300000000))
+	assert(decision.Render && decision.FrameDivisor == 1, "renderclock long pause emits a recovery frame")
+}

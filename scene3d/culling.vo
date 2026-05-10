@@ -1,0 +1,41 @@
+package scene3d
+
+import "math"
+import "github.com/vo-lang/voplay"
+
+func sceneAABBSphereRadius(bounds voplay.AABB) float64 {
+	radius := bounds.Size().Length() * 0.5
+	if radius <= 0 {
+		return 0.5
+	}
+	return radius
+}
+
+func sceneDistanceToAABBSq(pos voplay.Vec3, bounds voplay.AABB) float64 {
+	dx := 0.0
+	if pos.X < bounds.Min.X {
+		dx = bounds.Min.X - pos.X
+	} else if pos.X > bounds.Max.X {
+		dx = pos.X - bounds.Max.X
+	}
+	dy := 0.0
+	if pos.Y < bounds.Min.Y {
+		dy = bounds.Min.Y - pos.Y
+	} else if pos.Y > bounds.Max.Y {
+		dy = pos.Y - bounds.Max.Y
+	}
+	dz := 0.0
+	if pos.Z < bounds.Min.Z {
+		dz = bounds.Min.Z - pos.Z
+	} else if pos.Z > bounds.Max.Z {
+		dz = pos.Z - bounds.Max.Z
+	}
+	return dx*dx + dy*dy + dz*dz
+}
+
+func sceneMaxDistanceToAABBSq(pos voplay.Vec3, bounds voplay.AABB) float64 {
+	dx := math.Max(math.Abs(pos.X - bounds.Min.X), math.Abs(pos.X - bounds.Max.X))
+	dy := math.Max(math.Abs(pos.Y - bounds.Min.Y), math.Abs(pos.Y - bounds.Max.Y))
+	dz := math.Max(math.Abs(pos.Z - bounds.Min.Z), math.Abs(pos.Z - bounds.Max.Z))
+	return dx*dx + dy*dy + dz*dz
+}

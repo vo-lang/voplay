@@ -16,10 +16,65 @@ type DecalDesc struct {
 	Tag string
 }
 
+type ContactShadowDesc struct {
+	Position voplay.Vec3
+	Yaw float64
+	Width float64
+	Depth float64
+	Opacity float64
+	SurfaceOffset float64
+	HeightProbe TrackHeightProbe
+	Material voplay.MaterialDesc
+	Model voplay.ModelID
+	Tag string
+}
+
+type ProjectedDecalDesc struct {
+	Position voplay.Vec3
+	Yaw float64
+	Width float64
+	Length float64
+	Depth float64
+	Color voplay.Color
+	Atlas voplay.TextureID
+	NormalAtlas voplay.TextureID
+	RoughnessAtlas voplay.TextureID
+	MaskAtlas voplay.TextureID
+	UV voplay.Rect
+	FadeStart float64
+	FadeEnd float64
+	AngleFadeStart float64
+	AngleFadeEnd float64
+	Receivers voplay.ProjectedDecalReceiverMask
+	NormalStrength float64
+	Roughness float64
+	RoughnessStrength float64
+	Tag string
+}
+
 type Decal struct {
 	Entity *Entity
 	model voplay.ModelID
 	ownedModel bool
+}
+
+func (s *Scene) AddProjectedDecal(desc ProjectedDecalDesc) int {
+	if s == nil {
+		return -1
+	}
+	desc = normalizeProjectedDecalDesc(desc)
+	if desc.Color.A <= 0 {
+		return -1
+	}
+	s.ProjectedDecals = append(s.ProjectedDecals, desc)
+	return len(s.ProjectedDecals) - 1
+}
+
+func (s *Scene) ClearProjectedDecals() {
+	if s == nil {
+		return
+	}
+	s.ProjectedDecals = nil
 }
 
 func SpawnDecal(scene *Scene, desc DecalDesc) (*Decal, error) {
@@ -51,6 +106,40 @@ func SpawnTrackDecal(scene *Scene, track *Track, distance, lateral float64, desc
 	return SpawnDecal(scene, desc)
 }
 
+func SpawnContactShadow(scene *Scene, desc ContactShadowDesc) (*Decal, error) {
+	if desc.HeightProbe != nil {
+		if h, ok := desc.HeightProbe(desc.Position); ok {
+			desc.Position.Y = h
+		}
+	}
+	material := desc.Material
+	if material == (voplay.MaterialDesc{}) {
+		opacity := desc.Opacity
+		if opacity <= 0 {
+			opacity = 0.28
+		}
+		if opacity > 1 {
+			opacity = 1
+		}
+		material = voplay.MaterialDesc{BaseColor: voplay.Color{R: 0.02, G: 0.018, B: 0.014, A: opacity}, Roughness: 1, Metallic: 0, UVScale: 1}
+	}
+	tag := desc.Tag
+	if tag == "" {
+		tag = "contact_shadow"
+	}
+	return SpawnDecal(scene, DecalDesc{Position: desc.Position, Yaw: desc.Yaw, Width: desc.Width, Height: desc.Depth, SurfaceOffset: desc.SurfaceOffset, Material: material, Model: desc.Model, Tag: tag})
+}
+
+func SpawnTrackContactShadow(scene *Scene, track *Track, distance, lateral float64, desc ContactShadowDesc) (*Decal, error) {
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnTrackContactShadow: track is nil")
+	}
+	pose := track.PoseAt(distance)
+	desc.Position = pose.Position.Add(pose.Right.Scale(lateral))
+	desc.Yaw = pose.Yaw
+	return SpawnContactShadow(scene, desc)
+}
+
 func (d *Decal) Destroy(scene *Scene) {
 	if d == nil {
 		return
@@ -77,5 +166,59 @@ func normalizeDecalDesc(desc DecalDesc) DecalDesc {
 		desc.SurfaceOffset = 0.035
 	}
 	desc.Material = voplay.NormalizeMaterial(desc.Material)
+	return desc
+}
+
+func normalizeProjectedDecalDesc(desc ProjectedDecalDesc) ProjectedDecalDesc {
+	if desc.Width <= 0 {
+		desc.Width = 1
+	}
+	if desc.Length <= 0 {
+		desc.Length = 1
+	}
+	if desc.Depth <= 0 {
+		desc.Depth = 1
+	}
+	if desc.Color == (voplay.Color{}) {
+		desc.Color = voplay.Color{R: 0.08, G: 0.06, B: 0.04, A: 0.45}
+	}
+	if desc.Color.A > 1 {
+		desc.Color.A = 1
+	}
+	if (desc.Atlas != 0 || desc.NormalAtlas != 0 || desc.RoughnessAtlas != 0 || desc.MaskAtlas != 0) && (desc.UV == voplay.Rect{}) {
+		desc.UV = voplay.Rect{X: 0, Y: 0, W: 1, H: 1}
+	}
+	if desc.FadeEnd <= desc.FadeStart {
+		desc.FadeStart = 0
+		desc.FadeEnd = 0
+	}
+	if desc.AngleFadeStart < 0 {
+		desc.AngleFadeStart = 0
+	}
+	if desc.AngleFadeEnd > 1 {
+		desc.AngleFadeEnd = 1
+	}
+	if desc.AngleFadeEnd <= desc.AngleFadeStart {
+		desc.AngleFadeStart = 0
+		desc.AngleFadeEnd = 0
+	}
+	if desc.Receivers == 0 {
+		desc.Receivers = voplay.ProjectedDecalReceiverAll
+	}
+	if desc.NormalStrength < 0 {
+		desc.NormalStrength = 0
+	}
+	if desc.NormalAtlas != 0 && desc.NormalStrength == 0 {
+		desc.NormalStrength = 1
+	}
+	if desc.Roughness <= 0 {
+		desc.Roughness = 0.72
+	}
+	if desc.RoughnessStrength < 0 {
+		desc.RoughnessStrength = 0
+	}
+	if desc.RoughnessAtlas != 0 && desc.RoughnessStrength == 0 {
+		desc.RoughnessStrength = 1
+	}
 	return desc
 }

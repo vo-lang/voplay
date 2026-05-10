@@ -7,10 +7,12 @@ use vo_ext::prelude::*;
 #[cfg(not(feature = "wasm"))]
 use super::renderer_ready;
 use super::util::{
-    ret_bytes, with_renderer_result, write_bool_result, write_u32_handle_result, write_unit_result,
+    ret_bytes, with_renderer_or_panic, with_renderer_result, write_bool_result,
+    write_u32_handle_result, write_unit_result,
 };
 use super::{renderer_ready_result, submit_renderer_frame, with_renderer};
 use crate::input;
+use crate::texture::TexturePixelsData;
 
 #[cfg(feature = "wasm")]
 static DISPLAY_PULSE_TOKEN: AtomicU64 = AtomicU64::new(1);
@@ -267,6 +269,33 @@ pub fn submit_frame(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
+#[vo_fn("voplay", "setRendererPerfStatsEnabled")]
+pub fn set_renderer_perf_stats_enabled(call: &mut ExternCallContext) -> ExternResult {
+    let enabled = call.arg_bool(0);
+    let result = super::set_renderer_perf_stats_enabled(enabled);
+    write_unit_result(call, 0, result);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "lastRendererPerfPacket")]
+pub fn last_renderer_perf_packet(call: &mut ExternCallContext) -> ExternResult {
+    let packet = super::last_renderer_perf_packet().unwrap_or_default();
+    ret_bytes(call, 0, &packet);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "lastWebGpuPerfPacket")]
+pub fn last_web_gpu_perf_packet(call: &mut ExternCallContext) -> ExternResult {
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-island"))]
+    let packet = crate::island_bindgen::take_web_gpu_perf_packet_bridge().unwrap_or_default();
+
+    #[cfg(not(all(target_arch = "wasm32", feature = "wasm-island")))]
+    let packet: Vec<u8> = Vec::new();
+
+    ret_bytes(call, 0, &packet);
+    ExternResult::Ok
+}
+
 // --- pollInput ---
 
 #[vo_fn("voplay", "pollInput")]
@@ -295,6 +324,17 @@ pub fn wait_display_pulse(_call: &mut ExternCallContext) -> ExternResult {
 
 // --- Texture externs ---
 
+pub(crate) fn encode_texture_pixels_bytes(texture: &TexturePixelsData) -> Vec<u8> {
+    let flags = if texture.srgb { 1u32 } else { 0u32 };
+    let mut out = Vec::with_capacity(16 + texture.pixels.len());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&texture.width.to_le_bytes());
+    out.extend_from_slice(&texture.height.to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&texture.pixels);
+    out
+}
+
 #[vo_fn("voplay", "loadTexture")]
 pub fn load_texture(call: &mut ExternCallContext) -> ExternResult {
     let path = call.arg_str(0).to_string();
@@ -311,6 +351,69 @@ pub fn load_texture_bytes(call: &mut ExternCallContext) -> ExternResult {
         1,
         with_renderer_result(|r| r.load_texture_bytes(&data)),
     );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadTextureRGBA")]
+pub fn load_texture_rgba(call: &mut ExternCallContext) -> ExternResult {
+    let width = call.arg_u64(0) as u32;
+    let height = call.arg_u64(1) as u32;
+    let data = call.arg_bytes(2).to_vec();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_texture_rgba(width, height, &data)),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadTextureRGBALinear")]
+pub fn load_texture_rgba_linear(call: &mut ExternCallContext) -> ExternResult {
+    let width = call.arg_u64(0) as u32;
+    let height = call.arg_u64(1) as u32;
+    let data = call.arg_bytes(2).to_vec();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_texture_rgba_linear(width, height, &data)),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadTextureLinear")]
+pub fn load_texture_linear(call: &mut ExternCallContext) -> ExternResult {
+    let path = call.arg_str(0).to_string();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_texture_linear(&path)),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "loadTextureBytesLinear")]
+pub fn load_texture_bytes_linear(call: &mut ExternCallContext) -> ExternResult {
+    let data = call.arg_bytes(0).to_vec();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.load_texture_bytes_linear(&data)),
+    );
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay", "texturePixelsBytes")]
+pub fn texture_pixels_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let id = call.arg_u64(0) as u32;
+    let pixels =
+        with_renderer_or_panic("texturePixelsBytes", |renderer| renderer.texture_pixels(id));
+    let pixels = pixels.unwrap_or_else(|| panic!("texturePixelsBytes: texture not found: {}", id));
+    let data = encode_texture_pixels_bytes(&pixels);
+    ret_bytes(call, 0, &data);
     ExternResult::Ok
 }
 

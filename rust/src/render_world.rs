@@ -142,6 +142,8 @@ impl RenderWorld {
                         material_params: [1.0, 1.0, 1.0, 1.0],
                         emissive_color: [0.0, 0.0, 0.0, 0.0],
                         texture_flags: [0.0, 0.0, 0.0, 0.0],
+                        material_response: [1.0, 0.0, 1.0, 1.0],
+                        texture_flags2: [0.0, 0.0, 0.0, 0.0],
                     },
                     material: object.material,
                     animation_world_id: object.animation_world_id,
@@ -160,5 +162,73 @@ impl RenderWorld {
     ) {
         self.primitive_scenes
             .collect_draws(scene_id, camera, draws, chunks);
+    }
+
+    pub fn collect_scene_primitive_shadow_objects(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        draws: &mut Vec<PrimitiveDraw>,
+    ) {
+        self.primitive_scenes
+            .collect_shadow_objects(scene_id, camera, draws);
+    }
+
+    pub fn collect_scene_primitive_shadow_chunks_from_candidates(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        candidate_chunks: &[PrimitiveChunkRef],
+        chunks: &mut Vec<PrimitiveChunkRef>,
+    ) {
+        self.primitive_scenes.collect_shadow_chunks_from_candidates(
+            scene_id,
+            camera,
+            candidate_chunks,
+            chunks,
+        );
+    }
+
+    pub fn collect_scene_primitive_shadow_objects_for_light_view(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        light_camera: &Camera3DUniform,
+        draws: &mut Vec<PrimitiveDraw>,
+    ) {
+        self.primitive_scenes.collect_shadow_objects_for_light_view(
+            scene_id,
+            camera,
+            light_camera,
+            draws,
+        );
+    }
+
+    pub fn collect_scene_primitive_shadow_chunks_for_light_view(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        light_camera: &Camera3DUniform,
+        candidate_chunks: &[PrimitiveChunkRef],
+        chunks: &mut Vec<PrimitiveChunkRef>,
+    ) {
+        self.primitive_scenes.collect_shadow_chunks_for_light_view(
+            scene_id,
+            camera,
+            light_camera,
+            candidate_chunks,
+            chunks,
+        );
+    }
+
+    pub fn collect_scene_primitive_depth_draws(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        draws: &mut Vec<PrimitiveDraw>,
+        chunks: &mut Vec<PrimitiveChunkRef>,
+    ) {
+        self.primitive_scenes
+            .collect_depth_draws(scene_id, camera, draws, chunks);
     }
 }

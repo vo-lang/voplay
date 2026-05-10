@@ -194,7 +194,7 @@ func spawnLevelTerrainNode(scene *Scene, node LevelNodeInfo) (*Terrain, error) {
 		Depth:    info.Scale.Z,
 		Tag:      node.Name,
 		Physics:  physics,
-	}, physics, int(node.ModelID), info.Rows, info.Cols, info.HeightData), nil
+	}, physics, int(node.ModelID), info.Rows, info.Cols, info.HeightData)
 }
 
 func classifyLevelNode(node LevelNodeInfo) levelNodePlanKind {

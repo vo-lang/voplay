@@ -160,11 +160,47 @@ pub struct Pipeline2D {
 const INITIAL_INSTANCE_CAPACITY: usize = 1024;
 
 impl Pipeline2D {
+    #[allow(dead_code)]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
+        sample_count: u32,
+    ) -> Self {
+        Self::create(
+            device,
+            queue,
+            surface_format,
+            camera_bind_group_layout,
+            sample_count,
+            true,
+        )
+    }
+
+    pub fn new_overlay(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        camera_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        Self::create(
+            device,
+            queue,
+            surface_format,
+            camera_bind_group_layout,
+            1,
+            false,
+        )
+    }
+
+    fn create(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        camera_bind_group_layout: &wgpu::BindGroupLayout,
+        sample_count: u32,
+        depth_enabled: bool,
     ) -> Self {
         // Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -208,14 +244,21 @@ impl Pipeline2D {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: false, // 2D: no depth write
-                depth_compare: wgpu::CompareFunction::Always, // 2D: always pass
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
+            depth_stencil: if depth_enabled {
+                Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24Plus,
+                    depth_write_enabled: false, // 2D: no depth write
+                    depth_compare: wgpu::CompareFunction::Always, // 2D: always pass
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                })
+            } else {
+                None
+            },
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                ..wgpu::MultisampleState::default()
+            },
             multiview: None,
             cache: None,
         });

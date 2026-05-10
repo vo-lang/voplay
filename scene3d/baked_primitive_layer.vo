@@ -1,0 +1,141 @@
+package scene3d
+
+import (
+	"errors"
+	"os"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+	"github.com/vo-lang/voplay/primitive3d"
+)
+
+const (
+	bakedPrimitiveLayerMagic = 1280327510
+	bakedPrimitiveLayerVersion = 1
+	bakedPrimitiveLayerHeaderBytes = 20
+	bakedPrimitiveLayerInstanceBytes = 92
+)
+
+type BakedPrimitiveLayerSlot struct {
+	Shape primitive3d.ShapeID
+	Material primitive3d.MaterialID
+}
+
+type BakedPrimitiveLayerAssetDesc struct {
+	Assets *voplay.Assets
+	Path string
+	Data []byte
+	Layer *primitive3d.Layer
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	Slots []BakedPrimitiveLayerSlot
+	Name string
+	Kind primitive3d.LayerKind
+	ChunkCellSize float64
+}
+
+type BakedPrimitiveLayerAssetResult struct {
+	Layer *primitive3d.Layer
+	Instances int
+	Slots int
+}
+
+func LoadBakedPrimitiveLayerAsset(desc BakedPrimitiveLayerAssetDesc) (BakedPrimitiveLayerAssetResult, error) {
+	normalized, err := normalizeBakedPrimitiveLayerAssetDesc(desc, true)
+	if err != nil {
+		return BakedPrimitiveLayerAssetResult{}, err
+	}
+	data, dataErr := loadBakedPrimitiveLayerAssetData(normalized)
+	if dataErr != nil {
+		return BakedPrimitiveLayerAssetResult{}, dataErr
+	}
+	return DecodeBakedPrimitiveLayerAsset(data, normalized)
+}
+
+func DecodeBakedPrimitiveLayerAsset(data []byte, desc BakedPrimitiveLayerAssetDesc) (BakedPrimitiveLayerAssetResult, error) {
+	normalized, err := normalizeBakedPrimitiveLayerAssetDesc(desc, false)
+	if err != nil {
+		return BakedPrimitiveLayerAssetResult{}, err
+	}
+	if len(data) < bakedPrimitiveLayerHeaderBytes {
+		return BakedPrimitiveLayerAssetResult{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: data is too short")
+	}
+	reader := codec.NewByteReader(data)
+	magic := reader.ReadU32()
+	if magic != bakedPrimitiveLayerMagic {
+		return BakedPrimitiveLayerAssetResult{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: invalid magic")
+	}
+	version := reader.ReadU32()
+	if version != bakedPrimitiveLayerVersion {
+		return BakedPrimitiveLayerAssetResult{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: unsupported version")
+	}
+	count := reader.ReadU32()
+	slotCount := reader.ReadU32()
+	reader.ReadU32()
+	if slotCount != len(normalized.Slots) {
+		return BakedPrimitiveLayerAssetResult{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: slot count does not match descriptor")
+	}
+	expected := bakedPrimitiveLayerHeaderBytes + count * bakedPrimitiveLayerInstanceBytes
+	if len(data) != expected {
+		return BakedPrimitiveLayerAssetResult{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: data length does not match instance count")
+	}
+	layer := normalized.Layer
+	if layer == nil {
+		kind := normalized.Kind
+		if kind == 0 {
+			kind = primitive3d.StaticLayer
+		}
+		name := normalized.Name
+		if name == "" {
+			name = "baked_primitive_layer"
+		}
+		layer = primitive3d.NewLayer(primitive3d.LayerDesc{Kind: kind, Shapes: normalized.Shapes, Materials: normalized.Materials, Chunking: primitive3d.ChunkingDesc{CellSize: normalized.ChunkCellSize}, Name: name})
+	}
+	batch := layer.BeginBulkAdd()
+	for i := 0; i < count; i++ {
+		instance, instanceErr := decodeBakedPrimitiveLayerInstance(&reader, normalized.Slots)
+		if instanceErr != nil {
+			return BakedPrimitiveLayerAssetResult{Layer: layer, Instances: i, Slots: slotCount}, instanceErr
+		}
+		batch.Add(instance)
+	}
+	batch.End()
+	return BakedPrimitiveLayerAssetResult{Layer: layer, Instances: count, Slots: slotCount}, nil
+}
+
+func normalizeBakedPrimitiveLayerAssetDesc(desc BakedPrimitiveLayerAssetDesc, requireDataSource bool) (BakedPrimitiveLayerAssetDesc, error) {
+	if requireDataSource && desc.Path == "" && len(desc.Data) == 0 {
+		return desc, errors.New("scene3d.LoadBakedPrimitiveLayerAsset: Path or Data is required")
+	}
+	if desc.Path != "" && len(desc.Data) != 0 {
+		return desc, errors.New("scene3d.LoadBakedPrimitiveLayerAsset: choose either Path or Data")
+	}
+	if len(desc.Slots) == 0 {
+		return desc, errors.New("scene3d.LoadBakedPrimitiveLayerAsset: at least one slot is required")
+	}
+	for _, slot := range desc.Slots {
+		if slot.Shape == 0 || slot.Material == 0 {
+			return desc, errors.New("scene3d.LoadBakedPrimitiveLayerAsset: slots require Shape and Material")
+		}
+	}
+	return desc, nil
+}
+
+func loadBakedPrimitiveLayerAssetData(desc BakedPrimitiveLayerAssetDesc) ([]byte, error) {
+	if len(desc.Data) != 0 {
+		return desc.Data, nil
+	}
+	if desc.Assets != nil {
+		return desc.Assets.Bytes(desc.Path)
+	}
+	return os.ReadFile(desc.Path)
+}
+
+func decodeBakedPrimitiveLayerInstance(reader *codec.ByteReader, slots []BakedPrimitiveLayerSlot) (primitive3d.Instance, error) {
+	slotIndex := reader.ReadU32()
+	if slotIndex < 0 || slotIndex >= len(slots) {
+		return primitive3d.Instance{}, errors.New("scene3d.DecodeBakedPrimitiveLayerAsset: invalid slot index")
+	}
+	flags := primitive3d.InstanceFlags(reader.ReadU32())
+	slot := slots[slotIndex]
+	return primitive3d.Instance{Shape: slot.Shape, Material: slot.Material, Position: voplay.Vec3{X: reader.ReadF32(), Y: reader.ReadF32(), Z: reader.ReadF32()}, Rotation: voplay.Quat{X: reader.ReadF32(), Y: reader.ReadF32(), Z: reader.ReadF32(), W: reader.ReadF32()}, Scale: voplay.Vec3{X: reader.ReadF32(), Y: reader.ReadF32(), Z: reader.ReadF32()}, Tint: voplay.Color{R: reader.ReadF32(), G: reader.ReadF32(), B: reader.ReadF32(), A: reader.ReadF32()}, Flags: flags, LodNear: reader.ReadF32(), LodFar: reader.ReadF32(), WindStrength: reader.ReadF32(), AtlasUV: voplay.Rect{X: reader.ReadF32(), Y: reader.ReadF32(), W: reader.ReadF32(), H: reader.ReadF32()}}, nil
+}

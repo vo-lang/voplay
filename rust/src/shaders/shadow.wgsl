@@ -29,6 +29,13 @@ struct SkinnedVertexInput {
     @location(6) joint_weights: vec4<f32>,
 };
 
+struct ShadowInstanceInput {
+    @location(5) model_0: vec4<f32>,
+    @location(6) model_1: vec4<f32>,
+    @location(7) model_2: vec4<f32>,
+    @location(8) model_3: vec4<f32>,
+};
+
 fn skin_matrix(joint_indices: vec4<u32>, joint_weights: vec4<f32>) -> mat4x4<f32> {
     return joint_weights.x * shadow_model.joints[joint_indices.x]
         + joint_weights.y * shadow_model.joints[joint_indices.y]
@@ -39,6 +46,12 @@ fn skin_matrix(joint_indices: vec4<u32>, joint_weights: vec4<f32>) -> mat4x4<f32
 @vertex
 fn vs_shadow(in: VertexInput) -> @builtin(position) vec4<f32> {
     return light.light_vp * shadow_model.model * vec4<f32>(in.position, 1.0);
+}
+
+@vertex
+fn vs_shadow_instanced(in: VertexInput, instance: ShadowInstanceInput) -> @builtin(position) vec4<f32> {
+    let model_mat = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+    return light.light_vp * model_mat * vec4<f32>(in.position, 1.0);
 }
 
 @vertex

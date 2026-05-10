@@ -55,10 +55,25 @@ type VoplayDebugGlobal = typeof globalThis & {
   __voplayDebugStatus?: (message: string) => void;
 };
 
+type VoplayRenderGlobal = typeof globalThis & {
+  __voplayNativeDevicePixelRatio?: number;
+  __voplayRenderDevicePixelRatio?: number;
+};
+
+type RenderMetrics = {
+  width: number;
+  height: number;
+  nativeDevicePixelRatio: number;
+  devicePixelRatio: number;
+  pixelWidth: number;
+  pixelHeight: number;
+};
+
 // Relative paths within the framework's VFS snapshot for the island WASM.
 // These match wasm-pack output names for the `wasm-island` feature build.
 const WASM_BG_PATH = "wasm/voplay_island_bg.wasm";
 const WASM_JS_PATH = "wasm/voplay_island.js";
+const DEFAULT_MAX_RENDER_CANVAS_PIXELS = 2_250_000;
 
 const activeInstances = new Set<RenderIslandWidgetInstance>();
 let widgetSequence = 0;
@@ -95,6 +110,62 @@ function shouldShowDebugOverlay(): boolean {
   } catch {
     return false;
   }
+}
+
+function readLocationParam(name: string): string | null {
+  try {
+    const searchValue = new URLSearchParams(window.location.search).get(name);
+    if (searchValue !== null) {
+      return searchValue;
+    }
+    const hash = window.location.hash || "";
+    const queryOffset = hash.indexOf("?");
+    if (queryOffset >= 0) {
+      return new URLSearchParams(hash.slice(queryOffset + 1)).get(name);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function readPositiveNumberSetting(queryName: string, storageName: string): number | null {
+  let raw = readLocationParam(queryName);
+  if (raw === null) {
+    try {
+      raw = window.localStorage.getItem(storageName);
+    } catch {
+      raw = null;
+    }
+  }
+  if (raw == null || raw.trim() === "") {
+    return null;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+function resolveRenderDevicePixelRatio(width: number, height: number, nativeDevicePixelRatio: number): number {
+  const native = Number.isFinite(nativeDevicePixelRatio) && nativeDevicePixelRatio > 0
+    ? nativeDevicePixelRatio
+    : 1;
+  const explicit = readPositiveNumberSetting("voplayRenderPixelRatio", "voplay.render.pixelRatio");
+  let ratio = explicit ?? native;
+  const cap = readPositiveNumberSetting("voplayRenderPixelRatioCap", "voplay.render.pixelRatioCap");
+  if (cap !== null) {
+    ratio = Math.min(ratio, cap);
+  }
+  const maxPixels = readPositiveNumberSetting("voplayMaxCanvasPixels", "voplay.render.maxCanvasPixels")
+    ?? DEFAULT_MAX_RENDER_CANVAS_PIXELS;
+  if (maxPixels > 0 && width > 0 && height > 0) {
+    ratio = Math.min(ratio, Math.sqrt(maxPixels / (width * height)));
+  }
+  ratio = Math.min(ratio, native);
+  const minRatio = native >= 1 ? 1 : native;
+  return Math.max(minRatio, ratio);
 }
 
 class RenderIslandWidgetInstance {
@@ -217,6 +288,7 @@ class RenderIslandWidgetInstance {
       const voWeb = await this.services.getVoWeb();
       this.debug(`[voplay] island.voweb.ready canvasId=${this.canvasId}`);
       this.debug(`[voplay] island.bootstrap.begin canvasId=${this.canvasId}`);
+      this.publishRenderMetrics();
       const island = await bootstrapWebView(
         {
           canvasId: this.canvasId,
@@ -251,17 +323,29 @@ class RenderIslandWidgetInstance {
   }
 
   private emitWidgetEvent(type: "mount" | "resize"): void {
+    const metrics = this.publishRenderMetrics();
+    if (!metrics) {
+      return;
+    }
+    this.debug(`[voplay] widget.event type=${type} canvasId=${this.canvasId} size=${metrics.width}x${metrics.height} pixels=${metrics.pixelWidth}x${metrics.pixelHeight} dpr=${metrics.devicePixelRatio} nativeDpr=${metrics.nativeDevicePixelRatio}`);
+    this.onEvent(JSON.stringify({ type, width: metrics.width, height: metrics.height, pixelWidth: metrics.pixelWidth, pixelHeight: metrics.pixelHeight, devicePixelRatio: metrics.devicePixelRatio, nativeDevicePixelRatio: metrics.nativeDevicePixelRatio, canvasId: this.canvasId }));
+  }
+
+  private publishRenderMetrics(): RenderMetrics | null {
     const width = Math.round(this.container.clientWidth);
     const height = Math.round(this.container.clientHeight);
     if (width <= 0 || height <= 0) {
-      this.debug(`[voplay] widget.event.skip type=${type} canvasId=${this.canvasId} width=${width} height=${height}`);
-      return;
+      this.debug(`[voplay] widget.metrics.skip canvasId=${this.canvasId} width=${width} height=${height}`);
+      return null;
     }
-    const devicePixelRatio = window.devicePixelRatio || 1;
+    const nativeDevicePixelRatio = window.devicePixelRatio || 1;
+    const devicePixelRatio = resolveRenderDevicePixelRatio(width, height, nativeDevicePixelRatio);
     const pixelWidth = Math.max(1, Math.round(width * devicePixelRatio));
     const pixelHeight = Math.max(1, Math.round(height * devicePixelRatio));
-    this.debug(`[voplay] widget.event type=${type} canvasId=${this.canvasId} size=${width}x${height} pixels=${pixelWidth}x${pixelHeight} dpr=${devicePixelRatio}`);
-    this.onEvent(JSON.stringify({ type, width, height, pixelWidth, pixelHeight, devicePixelRatio, canvasId: this.canvasId }));
+    const renderGlobal = globalThis as VoplayRenderGlobal;
+    renderGlobal.__voplayNativeDevicePixelRatio = nativeDevicePixelRatio;
+    renderGlobal.__voplayRenderDevicePixelRatio = devicePixelRatio;
+    return { width, height, nativeDevicePixelRatio, devicePixelRatio, pixelWidth, pixelHeight };
   }
 
   private debug(message: string): void {

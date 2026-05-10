@@ -7,7 +7,7 @@ use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
 
 use crate::file_io;
 use crate::font_manager::FontManager;
-use crate::model_loader::{LevelNode, LevelNodeKind};
+use crate::model_loader::{LevelNode, LevelNodeKind, ModelGeometryData, TerrainMaterialTuning};
 
 use super::util::{
     ret_bytes, with_renderer_or_panic, with_renderer_result, write_bytes_result,
@@ -136,31 +136,134 @@ pub fn model_bounds(call: &mut ExternCallContext) -> ExternResult {
     ExternResult::Ok
 }
 
-pub(crate) fn encode_model_mesh_data_bytes(positions: &[[f32; 3]], indices: &[u32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + positions.len() * 12 + indices.len() * 4);
-    out.extend_from_slice(&(positions.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(indices.len() as u32).to_le_bytes());
-    for pos in positions {
+pub(crate) fn encode_model_geometry_bytes(geometry: &ModelGeometryData) -> Vec<u8> {
+    let vertex_count = geometry.positions.len();
+    let index_count = geometry.indices.len();
+    let triangle_count = index_count / 3;
+    let normals: &[[f32; 3]] = if geometry.normals.len() == vertex_count {
+        &geometry.normals
+    } else {
+        &[]
+    };
+    let uvs: &[[f32; 2]] = if geometry.uvs.len() == vertex_count {
+        &geometry.uvs
+    } else {
+        &[]
+    };
+    let colors: &[[f32; 4]] = if geometry.colors.len() == vertex_count {
+        &geometry.colors
+    } else {
+        &[]
+    };
+    let default_material =
+        crate::model_loader::MeshMaterial::standard([1.0, 1.0, 1.0, 1.0], None, 1.0);
+    let materials: &[crate::model_loader::MeshMaterial] = if geometry.materials.is_empty() {
+        std::slice::from_ref(&default_material)
+    } else {
+        &geometry.materials
+    };
+    let flags = (if normals.is_empty() { 0 } else { 1 })
+        | (if uvs.is_empty() { 0 } else { 2 })
+        | (if colors.is_empty() { 0 } else { 4 })
+        | 8;
+    let material_record_bytes = 84usize;
+    let mut out = Vec::with_capacity(
+        24 + vertex_count * 48
+            + materials.len() * material_record_bytes
+            + index_count * 4
+            + triangle_count * 4,
+    );
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&(vertex_count as u32).to_le_bytes());
+    out.extend_from_slice(&(index_count as u32).to_le_bytes());
+    out.extend_from_slice(&(flags as u32).to_le_bytes());
+    out.extend_from_slice(&(materials.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(triangle_count as u32).to_le_bytes());
+    for index in 0..vertex_count {
+        let pos = geometry.positions[index];
         out.extend_from_slice(&pos[0].to_le_bytes());
         out.extend_from_slice(&pos[1].to_le_bytes());
         out.extend_from_slice(&pos[2].to_le_bytes());
+        let normal = normals.get(index).copied().unwrap_or([0.0, 1.0, 0.0]);
+        out.extend_from_slice(&normal[0].to_le_bytes());
+        out.extend_from_slice(&normal[1].to_le_bytes());
+        out.extend_from_slice(&normal[2].to_le_bytes());
+        let uv = uvs.get(index).copied().unwrap_or([0.0, 0.0]);
+        out.extend_from_slice(&uv[0].to_le_bytes());
+        out.extend_from_slice(&uv[1].to_le_bytes());
+        let color = colors.get(index).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
+        out.extend_from_slice(&color[0].to_le_bytes());
+        out.extend_from_slice(&color[1].to_le_bytes());
+        out.extend_from_slice(&color[2].to_le_bytes());
+        out.extend_from_slice(&color[3].to_le_bytes());
     }
-    for index in indices {
-        out.extend_from_slice(&(*index).to_le_bytes());
+    for material in materials {
+        for value in material.base_color {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in material.emissive_factor {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [
+            material.metallic,
+            material.roughness,
+            material.normal_scale,
+            material.detail_strength,
+            material.macro_blend,
+            material.roughness_response,
+            material.toon_ramp_response,
+            material.uv_scales[0],
+        ] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [
+            material.texture_id.unwrap_or(0),
+            material.normal_texture_id.unwrap_or(0),
+            material.metallic_roughness_texture_id.unwrap_or(0),
+            material.emissive_texture_id.unwrap_or(0),
+            material.toon_ramp_texture_id.unwrap_or(0),
+            material.mask_texture_id.unwrap_or(0),
+        ] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    for index in &geometry.indices {
+        out.extend_from_slice(&index.to_le_bytes());
+    }
+    for triangle_index in 0..triangle_count {
+        let material_index = geometry
+            .triangle_materials
+            .get(triangle_index)
+            .copied()
+            .unwrap_or(0)
+            .min((materials.len() - 1) as u32);
+        out.extend_from_slice(&material_index.to_le_bytes());
     }
     out
 }
 
-#[vo_fn("voplay", "modelMeshDataBytes")]
-pub fn model_mesh_data_bytes(call: &mut ExternCallContext) -> ExternResult {
+#[vo_fn("voplay", "modelGeometryBytes")]
+pub fn model_geometry_bytes(call: &mut ExternCallContext) -> ExternResult {
     let id = call.arg_u64(0) as u32;
-    let mesh_data = with_renderer_or_panic("modelMeshDataBytes", |renderer| {
-        renderer.get_model_mesh_data(id)
+    let geometry = with_renderer_or_panic("modelGeometryBytes", |renderer| {
+        renderer.get_model_geometry(id)
     });
-    let (positions, indices) =
-        mesh_data.unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
-    let data = encode_model_mesh_data_bytes(&positions, &indices);
+    let geometry =
+        geometry.unwrap_or_else(|| panic!("modelGeometryBytes: model not found: {}", id));
+    let data = encode_model_geometry_bytes(&geometry);
     ret_bytes(call, 0, &data);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "bakeImpostorAtlasBytes")]
+pub fn scene3d_bake_impostor_atlas_bytes(call: &mut ExternCallContext) -> ExternResult {
+    let request = call.arg_bytes(0).to_vec();
+    write_bytes_result(
+        call,
+        0,
+        1,
+        crate::impostor_baker::bake_impostor_atlas_bytes(&request),
+    );
     ExternResult::Ok
 }
 
@@ -296,7 +399,15 @@ fn write_terrain_result(
     }
 }
 
-pub(crate) type TerrainSplatArgs = (u32, [u32; 4], [u32; 4], [u32; 4], [f32; 4], [f32; 4]);
+pub(crate) type TerrainSplatArgs = (
+    u32,
+    [u32; 4],
+    [u32; 4],
+    [u32; 4],
+    [f32; 4],
+    [f32; 4],
+    TerrainMaterialTuning,
+);
 
 fn read_layer_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
     if *pos + 4 > data.len() {
@@ -323,14 +434,16 @@ pub(crate) fn decode_terrain_splat_layer_data(
     const LAYER_COUNT: usize = 4;
     const LAYER_BYTES: usize = 4 + 4 + 4 + 8 + 8;
     const EXPECTED_BYTES: usize = LAYER_COUNT * LAYER_BYTES;
+    const TUNING_BYTES: usize = 16 * 8;
+    const EXPECTED_BYTES_WITH_TUNING: usize = EXPECTED_BYTES + TUNING_BYTES;
 
     if control_texture_id == 0 {
         return Err("terrain splat control texture must be non-zero".to_string());
     }
-    if layer_data.len() != EXPECTED_BYTES {
+    if layer_data.len() != EXPECTED_BYTES_WITH_TUNING {
         return Err(format!(
             "terrain splat layer data must be {} bytes, got {}",
-            EXPECTED_BYTES,
+            EXPECTED_BYTES_WITH_TUNING,
             layer_data.len()
         ));
     }
@@ -368,6 +481,28 @@ pub(crate) fn decode_terrain_splat_layer_data(
         uv_scales[index] = uv_scale;
         normal_scales[index] = normal_scale;
     }
+    let terrain_tuning = {
+        let mut tuning = TerrainMaterialTuning {
+            macro_scale: read_layer_f64(layer_data, &mut pos)? as f32,
+            macro_strength: read_layer_f64(layer_data, &mut pos)? as f32,
+            detail_near: read_layer_f64(layer_data, &mut pos)? as f32,
+            detail_far: read_layer_f64(layer_data, &mut pos)? as f32,
+            slope_start: read_layer_f64(layer_data, &mut pos)? as f32,
+            slope_end: read_layer_f64(layer_data, &mut pos)? as f32,
+            slope_dirt_strength: read_layer_f64(layer_data, &mut pos)? as f32,
+            slope_rock_strength: read_layer_f64(layer_data, &mut pos)? as f32,
+            anti_tile_strength: read_layer_f64(layer_data, &mut pos)? as f32,
+            detail_strength: read_layer_f64(layer_data, &mut pos)? as f32,
+            normal_near: read_layer_f64(layer_data, &mut pos)? as f32,
+            normal_far: read_layer_f64(layer_data, &mut pos)? as f32,
+            ..TerrainMaterialTuning::default()
+        };
+        tuning.height_blend_strength = read_layer_f64(layer_data, &mut pos)? as f32;
+        tuning.height_low = read_layer_f64(layer_data, &mut pos)? as f32;
+        tuning.height_high = read_layer_f64(layer_data, &mut pos)? as f32;
+        tuning.curvature_strength = read_layer_f64(layer_data, &mut pos)? as f32;
+        tuning.normalized()?
+    };
 
     Ok((
         control_texture_id,
@@ -376,6 +511,7 @@ pub(crate) fn decode_terrain_splat_layer_data(
         layer_metallic_roughness_texture_ids,
         uv_scales,
         normal_scales,
+        terrain_tuning,
     ))
 }
 
@@ -457,6 +593,7 @@ pub fn create_terrain_splat(call: &mut ExternCallContext) -> ExternResult {
             layer_metallic_roughness_texture_ids,
             uv_scales,
             normal_scales,
+            terrain_tuning,
         )| {
             file_io::read_bytes(&path)
                 .map_err(|e| format!("terrain: read {}: {}", path, e))
@@ -473,12 +610,45 @@ pub fn create_terrain_splat(call: &mut ExternCallContext) -> ExternResult {
                             layer_metallic_roughness_texture_ids,
                             uv_scales,
                             normal_scales,
+                            terrain_tuning,
                         )
                     })
                 })
         },
     );
     write_terrain_result(call, result);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "createTerrainSplatModel")]
+pub fn create_terrain_splat_model(call: &mut ExternCallContext) -> ExternResult {
+    let model_id = call.arg_u64(0) as u32;
+    let args = decode_terrain_splat_args(call, 1);
+    let result = args.and_then(
+        |(
+            control_texture_id,
+            layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
+            uv_scales,
+            normal_scales,
+            terrain_tuning,
+        )| {
+            with_renderer_result(|r| {
+                r.create_terrain_splat_model(
+                    model_id,
+                    control_texture_id,
+                    layer_texture_ids,
+                    layer_normal_texture_ids,
+                    layer_metallic_roughness_texture_ids,
+                    uv_scales,
+                    normal_scales,
+                    terrain_tuning,
+                )
+            })
+        },
+    );
+    write_u32_handle_result(call, 0, 1, result);
     ExternResult::Ok
 }
 
@@ -538,6 +708,7 @@ pub fn create_terrain_bytes_splat(call: &mut ExternCallContext) -> ExternResult 
             layer_metallic_roughness_texture_ids,
             uv_scales,
             normal_scales,
+            terrain_tuning,
         )| {
             with_renderer_result(|r| {
                 r.create_terrain_splat(
@@ -551,6 +722,7 @@ pub fn create_terrain_bytes_splat(call: &mut ExternCallContext) -> ExternResult 
                     layer_metallic_roughness_texture_ids,
                     uv_scales,
                     normal_scales,
+                    terrain_tuning,
                 )
             })
         },
@@ -650,4 +822,67 @@ pub fn create_capsule_mesh(call: &mut ExternCallContext) -> ExternResult {
     });
     call.ret_u64(0, id as u64);
     ExternResult::Ok
+}
+
+#[vo_fn("voplay", "createRawMesh")]
+pub fn create_raw_mesh(call: &mut ExternCallContext) -> ExternResult {
+    let data = call.arg_bytes(0).to_vec();
+    write_u32_handle_result(
+        call,
+        0,
+        1,
+        with_renderer_result(|r| r.create_raw_mesh(&data)),
+    );
+    ExternResult::Ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_terrain_splat_layer_data;
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_f64(out: &mut Vec<u8>, value: f64) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn terrain_splat_payload(tuning_fields: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for layer in 0..4u32 {
+            push_u32(&mut out, 11 + layer);
+            push_u32(&mut out, 21 + layer);
+            push_u32(&mut out, 31 + layer);
+            push_f64(&mut out, 1.0 + layer as f64);
+            push_f64(&mut out, 0.25 + layer as f64 * 0.1);
+        }
+        let values = [
+            1.25, 0.85, 120.0, 420.0, 0.12, 0.68, 0.4, 0.7, 0.9, 1.1, 90.0, 460.0, 0.35, -2.0,
+            18.0, 0.45,
+        ];
+        for value in values.iter().take(tuning_fields) {
+            push_f64(&mut out, *value);
+        }
+        out
+    }
+
+    #[test]
+    fn terrain_splat_requires_single_current_payload_shape() {
+        let layer_only = terrain_splat_payload(0);
+        assert!(decode_terrain_splat_layer_data(9, &layer_only).is_err());
+
+        let twelve_field_tuning_shape = terrain_splat_payload(12);
+        assert!(decode_terrain_splat_layer_data(9, &twelve_field_tuning_shape).is_err());
+
+        let current = terrain_splat_payload(16);
+        let decoded = decode_terrain_splat_layer_data(9, &current).unwrap();
+        assert_eq!(decoded.0, 9);
+        assert_eq!(decoded.1, [11, 12, 13, 14]);
+        assert_eq!(decoded.2, [21, 22, 23, 24]);
+        assert_eq!(decoded.3, [31, 32, 33, 34]);
+        assert!((decoded.4[3] - 4.0).abs() < 0.0001);
+        assert!((decoded.6.height_blend_strength - 0.35).abs() < 0.0001);
+        assert!((decoded.6.curvature_strength - 0.45).abs() < 0.0001);
+    }
 }

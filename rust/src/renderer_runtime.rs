@@ -149,3 +149,11 @@ pub fn renderer_ready_result() -> Result<bool, String> {
 pub fn submit_renderer_frame(data: &[u8]) -> Result<(), String> {
     with_renderer(|renderer| renderer.submit_frame(data)).and_then(|result| result)
 }
+
+pub fn last_renderer_perf_packet() -> Result<Vec<u8>, String> {
+    with_renderer(|renderer| renderer.last_perf_packet().to_vec())
+}
+
+pub fn set_renderer_perf_stats_enabled(enabled: bool) -> Result<(), String> {
+    with_renderer(|renderer| renderer.set_perf_stats_enabled(enabled))
+}

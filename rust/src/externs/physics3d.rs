@@ -139,19 +139,32 @@ pub(crate) fn decode_trimesh_desc(body_id: u32, data: &[u8]) -> TrimeshDesc3D {
     }
 }
 
-pub(crate) fn decode_model_mesh_data_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u32>) {
+pub(crate) fn decode_model_geometry_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u32>) {
     assert!(
-        data.len() >= 8,
-        "voplay: model mesh data too short: {}",
+        data.len() >= 16,
+        "voplay: model geometry too short: {}",
         data.len()
     );
     let mut pos = 0usize;
+    let version = read_u32_le(data, &mut pos);
+    assert!(
+        version == 1,
+        "voplay: model geometry unsupported version: {}",
+        version
+    );
     let position_count = read_u32_le(data, &mut pos) as usize;
     let index_count = read_u32_le(data, &mut pos) as usize;
-    let expected_len = 8 + position_count * 12 + index_count * 4;
+    let _flags = read_u32_le(data, &mut pos);
+    let material_count = read_u32_le(data, &mut pos) as usize;
+    let triangle_material_count = read_u32_le(data, &mut pos) as usize;
+    let expected_len = 24
+        + position_count * 48
+        + material_count * 84
+        + index_count * 4
+        + triangle_material_count * 4;
     assert!(
         data.len() == expected_len,
-        "voplay: model mesh data size mismatch: got {}, expected {}",
+        "voplay: model geometry size mismatch: got {}, expected {}",
         data.len(),
         expected_len
     );
@@ -162,8 +175,9 @@ pub(crate) fn decode_model_mesh_data_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u
             f32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
             f32::from_le_bytes([data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11]]),
         ]);
-        pos += 12;
+        pos += 48;
     }
+    pos += material_count * 84;
     let mut indices = Vec::with_capacity(index_count);
     for _ in 0..index_count {
         indices.push(read_u32_le(data, &mut pos));
@@ -171,14 +185,14 @@ pub(crate) fn decode_model_mesh_data_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u
     (positions, indices)
 }
 
-pub(crate) fn spawn_trimesh_body_from_mesh_data(
+pub(crate) fn spawn_trimesh_body_from_geometry(
     world_id: u32,
     body_id: u32,
     data: &[u8],
-    mesh_data: &[u8],
+    geometry_data: &[u8],
 ) {
     let desc = decode_trimesh_desc(body_id, data);
-    let (positions, indices) = decode_model_mesh_data_bytes(mesh_data);
+    let (positions, indices) = decode_model_geometry_bytes(geometry_data);
     crate::physics3d::with_world(world_id, |world| {
         world.spawn_trimesh_body(&desc, &positions, &indices)
     });
@@ -250,15 +264,15 @@ pub fn physics3d_spawn_trimesh_body(call: &mut ExternCallContext) -> ExternResul
     let model_id = call.arg_u64(2) as u32;
     let data = call.arg_bytes(3);
     let desc = decode_trimesh_desc(body_id, data);
-    let mesh_data = with_renderer_or_panic("physicsSpawnTrimeshBody", |renderer| {
-        renderer.get_model_mesh_data(model_id)
+    let geometry = with_renderer_or_panic("physicsSpawnTrimeshBody", |renderer| {
+        renderer.get_model_geometry(model_id)
     });
-    let (positions, indices) = match mesh_data {
-        Some(mesh_data) => mesh_data,
+    let geometry = match geometry {
+        Some(geometry) => geometry,
         None => panic!("physicsSpawnTrimeshBody: model not found: {}", model_id),
     };
     crate::physics3d::with_world(world_id, |world| {
-        world.spawn_trimesh_body(&desc, &positions, &indices)
+        world.spawn_trimesh_body(&desc, &geometry.positions, &geometry.indices)
     });
     ExternResult::Ok
 }
@@ -268,8 +282,8 @@ pub fn physics3d_spawn_trimesh_body_data(call: &mut ExternCallContext) -> Extern
     let world_id = call.arg_u64(0) as u32;
     let body_id = call.arg_u64(1) as u32;
     let data = call.arg_bytes(2);
-    let mesh_data = call.arg_bytes(3);
-    spawn_trimesh_body_from_mesh_data(world_id, body_id, data, mesh_data);
+    let geometry_data = call.arg_bytes(3);
+    spawn_trimesh_body_from_geometry(world_id, body_id, data, geometry_data);
     ExternResult::Ok
 }
 

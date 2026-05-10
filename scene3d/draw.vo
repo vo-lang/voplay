@@ -1,13 +1,11 @@
-// Scene3D draw convenience functions.
-// These wrap voplay.DrawCtx methods with scene3d types (Scene, Light).
 package scene3d
 
-import "math"
-import "strconv"
-import "time"
-import "github.com/vo-lang/voplay"
+import (
+	"math"
+	"time"
+	"github.com/vo-lang/voplay"
+)
 
-// SetLights encodes the lighting state for subsequent 3D draw commands.
 func SetLights(d *voplay.DrawCtx, ambientSky, ambientGround voplay.Color, lights []Light) {
 	d.SetLights3D(ambientSky, ambientGround, lights)
 }
@@ -15,30 +13,81 @@ func SetLights(d *voplay.DrawCtx, ambientSky, ambientGround voplay.Color, lights
 func (s *Scene) writeFrame3DState(d *voplay.DrawCtx) {
 	c := &s.Camera
 	d.SetCamera3D(c.Position, c.Target, c.Up, c.Fov, c.Near, c.Far)
-	d.SetShadow3D(s.ShadowsEnabled, s.ShadowResolution, normalizeShadowStrength(s.ShadowStrength))
+	d.SetShadow3DQuality(s.ShadowsEnabled, s.ShadowResolution, normalizeShadowStrength(s.ShadowStrength), normalizeShadowSoftness(s.ShadowSoftness), normalizeShadowDistance(s.ShadowDistance), normalizeShadowFade(s.ShadowFade), normalizeShadowQuality(s.ShadowQuality))
 	if s.Skybox != 0 {
 		d.DrawSkybox(s.Skybox)
 	}
 	SetLights(d, s.Ambient, normalizeAmbientGround(s.Ambient, s.AmbientGround), s.Lights)
-	if s.Fog.Mode != voplay.FogNone {
-		d.SetFog3D(s.Fog.Mode, s.Fog.Color, s.Fog.Start, s.Fog.End, s.Fog.Density)
+	fog := normalizeFogConfig(s.Fog)
+	if fog.Mode != voplay.FogNone {
+		d.SetFog3D(fog.Mode, fog.Color, fog.Start, fog.End, fog.Density)
 	}
 	grading := normalizeColorGrading(s.ColorGrading)
 	d.SetColorGrading3D(grading.ToneMap, grading.Exposure, grading.Contrast, grading.Saturation)
+	post := normalizePostProcess(s.PostProcess)
+	d.SetPostProcess3D(post.BloomThreshold, post.BloomStrength, post.SharpenStrength, post.FxaaStrength)
+	d.SetContactAO3D(post.ContactAOStrength, post.ContactAORadius, post.ContactAODepthScale, post.ContactAODetailStrength, post.ContactAODetailRadius, post.ContactAONormalBias, post.ContactAOQuality)
+	activeDecalAtlas := voplay.TextureID(0)
+	activeDecalNormalAtlas := voplay.TextureID(0)
+	activeDecalRoughnessAtlas := voplay.TextureID(0)
+	activeDecalMaskAtlas := voplay.TextureID(0)
+	activeDecalFadeStart := 0.0
+	activeDecalFadeEnd := 0.0
+	activeDecalAngleFadeStart := 0.0
+	activeDecalAngleFadeEnd := 0.0
+	activeDecalReceivers := voplay.ProjectedDecalReceiverAll
+	activeDecalNormalStrength := 0.0
+	activeDecalRoughness := 0.72
+	activeDecalRoughnessStrength := 0.0
+	for _, decal := range s.ProjectedDecals {
+		decal = normalizeProjectedDecalDesc(decal)
+		if decal.Atlas != activeDecalAtlas {
+			activeDecalAtlas = decal.Atlas
+			d.SetProjectedDecalAtlas3D(activeDecalAtlas)
+		}
+		if decal.NormalAtlas != activeDecalNormalAtlas {
+			activeDecalNormalAtlas = decal.NormalAtlas
+			d.SetProjectedDecalNormalAtlas3D(activeDecalNormalAtlas)
+		}
+		if decal.RoughnessAtlas != activeDecalRoughnessAtlas {
+			activeDecalRoughnessAtlas = decal.RoughnessAtlas
+			d.SetProjectedDecalRoughnessAtlas3D(activeDecalRoughnessAtlas)
+		}
+		if decal.MaskAtlas != activeDecalMaskAtlas {
+			activeDecalMaskAtlas = decal.MaskAtlas
+			d.SetProjectedDecalMaskAtlas3D(activeDecalMaskAtlas)
+		}
+		if decal.FadeStart != activeDecalFadeStart || decal.FadeEnd != activeDecalFadeEnd {
+			activeDecalFadeStart = decal.FadeStart
+			activeDecalFadeEnd = decal.FadeEnd
+			d.SetProjectedDecalDistanceFade3D(activeDecalFadeStart, activeDecalFadeEnd)
+		}
+		if decal.AngleFadeStart != activeDecalAngleFadeStart || decal.AngleFadeEnd != activeDecalAngleFadeEnd {
+			activeDecalAngleFadeStart = decal.AngleFadeStart
+			activeDecalAngleFadeEnd = decal.AngleFadeEnd
+			d.SetProjectedDecalAngleFade3D(activeDecalAngleFadeStart, activeDecalAngleFadeEnd)
+		}
+		if decal.Receivers != activeDecalReceivers {
+			activeDecalReceivers = decal.Receivers
+			d.SetProjectedDecalReceiverMask3D(activeDecalReceivers)
+		}
+		if decal.NormalStrength != activeDecalNormalStrength || decal.Roughness != activeDecalRoughness || decal.RoughnessStrength != activeDecalRoughnessStrength {
+			activeDecalNormalStrength = decal.NormalStrength
+			activeDecalRoughness = decal.Roughness
+			activeDecalRoughnessStrength = decal.RoughnessStrength
+			d.SetProjectedDecalSurfaceResponse3D(activeDecalNormalStrength, activeDecalRoughness, activeDecalRoughnessStrength)
+		}
+		if decal.Atlas != 0 || decal.NormalAtlas != 0 || decal.RoughnessAtlas != 0 || decal.MaskAtlas != 0 {
+			d.DrawProjectedDecal3DUV(decal.Position, decal.Yaw, decal.Width, decal.Length, decal.Depth, decal.Color, decal.UV)
+		} else {
+			d.DrawProjectedDecal3D(decal.Position, decal.Yaw, decal.Width, decal.Length, decal.Depth, decal.Color)
+		}
+	}
 	d.SetRenderDebug3D(s.RenderDebugMode)
 }
 
 func (e *Entity) renderObjectNeedsUpsert(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) bool {
-	return !e.renderObjectCreated ||
-		e.renderLastModel != model ||
-		e.renderLastMaterial != e.Material ||
-		e.renderLastPosition != e.position ||
-		e.renderLastRotation != e.rotation ||
-		e.renderLastScale != e.scale ||
-		e.renderLastTint != e.Tint ||
-		e.renderLastVisible != visible ||
-		e.renderLastAnimationWorldID != animationWorldID ||
-		e.renderLastAnimationTargetID != animationTargetID
+	return !e.renderObjectCreated || e.renderLastModel != model || e.renderLastMaterial != e.Material || e.renderLastPosition != e.position || e.renderLastRotation != e.rotation || e.renderLastScale != e.scale || e.renderLastTint != e.Tint || e.renderLastVisible != visible || e.renderLastAnimationWorldID != animationWorldID || e.renderLastAnimationTargetID != animationTargetID
 }
 
 func (e *Entity) rememberRenderedObject(model voplay.ModelID, visible bool, animationWorldID, animationTargetID int) {
@@ -57,7 +106,8 @@ func (e *Entity) rememberRenderedObject(model voplay.ModelID, visible bool, anim
 func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 	start := time.Now()
 	stats := SceneRenderStats{}
-	batchGroups := map[string]bool{}
+	sceneBatchGroups := s.beginRenderBatchGroups()
+	s.beginCullFrame()
 	if !s.renderSceneCreated {
 		s.renderSceneCreated = true
 	}
@@ -70,7 +120,6 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 		stats.DestroyedObjects++
 	}
 	s.renderDestroyedIDs = s.renderDestroyedIDs[:0]
-
 	for _, n := range s.entities {
 		if !n.Active {
 			continue
@@ -85,15 +134,18 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 			continue
 		}
 		stats.ModelEntities++
-
 		n.ensureHasSkeleton()
+		renderModel := s.entityRenderModel(n)
+		if renderModel != n.Model {
+			stats.LodSwitchedEntities++
+		}
 		animationWorldID := 0
 		animationTargetID := 0
 		if n.hasSkeleton && s.animationWorldID != 0 && n.animationTargetID != 0 {
 			animationWorldID = s.animationWorldID
 			animationTargetID = n.animationTargetID
 		}
-		culled := s.entityCulled(n)
+		culled := s.entityCulled(n, renderModel)
 		visible := n.Visible && !culled
 		if visible {
 			stats.VisibleEntities++
@@ -101,84 +153,133 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 		if culled {
 			stats.CulledEntities++
 		}
-		if visible && n.StaticRenderable && !n.hasSkeleton {
-			stats.BatchEligibleObjects++
-			batchGroups[sceneRenderBatchKey(n)] = true
-		}
-		if !n.renderObjectNeedsUpsert(n.Model, visible, animationWorldID, animationTargetID) {
+			if visible && n.StaticRenderable && !n.hasSkeleton {
+				stats.BatchEligibleObjects++
+				sceneBatchGroups[n.sceneRenderBatchKey(renderModel)] = true
+			}
+		if !n.renderObjectNeedsUpsert(renderModel, visible, animationWorldID, animationTargetID) {
 			continue
 		}
-		d.UpsertScene3DObject(
-			s.renderSceneID,
-			n.id,
-			n.Model,
-			n.position,
-			n.rotation,
-			n.scale,
-			n.Material,
-			visible,
-			animationWorldID,
-			animationTargetID,
-		)
+		d.UpsertScene3DObject(s.renderSceneID, n.id, renderModel, n.position, n.rotation, n.scale, n.Material, visible, animationWorldID, animationTargetID)
 		stats.UpsertedObjects++
-		n.rememberRenderedObject(n.Model, visible, animationWorldID, animationTargetID)
+		n.rememberRenderedObject(renderModel, visible, animationWorldID, animationTargetID)
 	}
-	s.flushPrimitiveLayers(d, &stats, batchGroups)
-	stats.BatchGroups = len(batchGroups)
+	s.flushPrimitiveLayers(d, &stats)
+	stats.BatchGroups += len(sceneBatchGroups)
 	stats.FlushCpuMs = float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0
 	s.renderStats = stats
 }
 
-func (s *Scene) entityCulled(e *Entity) bool {
+func (s *Scene) entityRenderModel(e *Entity) voplay.ModelID {
+	if e == nil || len(e.LodLevels) == 0 {
+		if e == nil {
+			return 0
+		}
+		return e.Model
+	}
+	model := e.Model
+	dist := e.position.Distance(s.Camera.Position)
+	activeDistance := 0.0
+	for _, level := range e.LodLevels {
+		if level.Model == 0 || level.Distance < activeDistance || dist < level.Distance {
+			continue
+		}
+		model = level.Model
+		activeDistance = level.Distance
+	}
+	return model
+}
+
+func (s *Scene) entityCulled(e *Entity, model voplay.ModelID) bool {
 	if e == nil {
 		return true
 	}
-	if e.CullDistance > 0 && e.position.Distance(s.Camera.Position)-e.CullRadius > e.CullDistance {
-		return true
+	bounds, hasBounds := e.worldAABBForModel(model)
+	if e.CullDistance > 0 {
+		if hasBounds {
+			if sceneDistanceToAABBSq(s.Camera.Position, bounds) > e.CullDistance * e.CullDistance {
+				return true
+			}
+		} else if e.position.Distance(s.Camera.Position) - e.CullRadius > e.CullDistance {
+			return true
+		}
 	}
-	if e.FrustumCull && !s.cameraSeesSphere(e.position, e.CullRadius) {
-		return true
+	if e.FrustumCull {
+		if hasBounds {
+			return !s.cameraSeesAABB(bounds)
+		}
+		return !s.cameraSeesSphere(e.position, e.CullRadius)
 	}
 	return false
 }
 
-func (s *Scene) cameraSeesSphere(center voplay.Vec3, radius float64) bool {
+func (s *Scene) cameraSeesAABB(bounds voplay.AABB) bool {
+	return s.cameraSeesSphere(bounds.Center(), sceneAABBSphereRadius(bounds))
+}
+
+func (s *Scene) beginCullFrame() {
 	forward := s.Camera.Target.Sub(s.Camera.Position).Normalize()
 	if forward.LengthSq() <= 0.000001 {
-		return true
-	}
-	toCenter := center.Sub(s.Camera.Position)
-	dist := toCenter.Length()
-	if dist <= radius {
-		return true
-	}
-	depth := toCenter.Dot(forward)
-	if depth < -radius || depth > s.Camera.Far+radius {
-		return false
+		s.cullFrame = sceneCullFrame{}
+		return
 	}
 	halfFov := s.Camera.Fov * math.Pi / 360.0
 	if halfFov <= 0 {
 		halfFov = math.Pi / 6
 	}
-	dir := toCenter.Normalize()
-	angle := math.Acos(sceneClamp(dir.Dot(forward), -1, 1))
-	padding := math.Asin(sceneClamp(radius/dist, 0, 1))
-	return angle <= halfFov*1.35+padding
+	s.cullFrame = sceneCullFrame{Valid: true, Position: s.Camera.Position, Forward: forward, Far: s.Camera.Far, ConeScale: math.Tan(halfFov * 1.35)}
 }
 
-func sceneRenderBatchKey(e *Entity) string {
-	m := e.Material
-	return strconv.Itoa(int(e.Model)) + ":" +
-		strconv.Itoa(int(m.ID)) + ":" +
-		strconv.Itoa(int(m.Albedo)) + ":" +
-		strconv.Itoa(int(m.Normal)) + ":" +
-		strconv.Itoa(int(m.MetallicRoughness)) + ":" +
-		strconv.Itoa(int(m.Emissive)) + ":" +
-		strconv.Itoa(int(m.ToonRamp)) + ":" +
-		strconv.FormatFloat(m.NormalScale, 'f', 3, 64) + ":" +
-		strconv.Itoa(m.ShadingMode) + ":" +
-		strconv.Itoa(m.WrapMode) + ":" +
-		strconv.Itoa(m.FilterMode)
+func (s *Scene) beginRenderBatchGroups() map[sceneRenderBatchGroup]bool {
+	if s.renderBatchGroupScratch == nil {
+		s.renderBatchGroupScratch = map[sceneRenderBatchGroup]bool{}
+		return s.renderBatchGroupScratch
+	}
+	for key := range s.renderBatchGroupScratch {
+		delete(s.renderBatchGroupScratch, key)
+	}
+	return s.renderBatchGroupScratch
+}
+
+func (s *Scene) cameraSeesSphere(center voplay.Vec3, radius float64) bool {
+	frame := s.cullFrame
+	if !frame.Valid {
+		return true
+	}
+	toCenter := center.Sub(frame.Position)
+	distSq := toCenter.LengthSq()
+	radiusSq := radius * radius
+	if distSq <= radiusSq {
+		return true
+	}
+	depth := toCenter.Dot(frame.Forward)
+	if depth < -radius || depth > frame.Far + radius {
+		return false
+	}
+	lateralSq := distSq - depth * depth
+	if lateralSq <= 0 {
+		return true
+	}
+	if depth <= 0 {
+		return lateralSq <= radiusSq
+	}
+	allowed := depth * frame.ConeScale + radius
+	return lateralSq <= allowed * allowed
+}
+
+func (e *Entity) sceneRenderBatchKey(model voplay.ModelID) sceneRenderBatchGroup {
+	if e == nil {
+		return sceneRenderBatchGroup{}
+	}
+	if e.renderBatchKeyValid && e.renderBatchKeyModel == model && e.renderBatchKeyMaterial == e.Material {
+		return e.renderBatchKey
+	}
+	key := sceneRenderBatchGroup{Model: model, Material: e.Material}
+	e.renderBatchKey = key
+	e.renderBatchKeyModel = model
+	e.renderBatchKeyMaterial = e.Material
+	e.renderBatchKeyValid = true
+	return key
 }
 
 func sceneClamp(v, lo, hi float64) float64 {
@@ -198,8 +299,13 @@ func normalizeShadowStrength(strength float64) float64 {
 	return sceneClamp(strength, 0, 1)
 }
 
-// Draw renders the entire 3D scene: camera, lights, then all visible entities.
-// Resets the camera at the end so subsequent 2D draws (HUD etc.) use screen-space.
+func normalizeShadowSoftness(softness float64) float64 {
+	if softness <= 0 {
+		return 1
+	}
+	return sceneClamp(softness, 0.5, 4.0)
+}
+
 func (s *Scene) Draw(d *voplay.DrawCtx) {
 	start := time.Now()
 	s.writeFrame3DState(d)
@@ -208,6 +314,16 @@ func (s *Scene) Draw(d *voplay.DrawCtx) {
 	for _, emitter := range s.Emitters {
 		emitter.Draw(d)
 	}
+	d.ResetCamera()
+	stats := s.renderStats
+	stats.FrameCpuMs = float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0
+	s.renderStats = stats
+}
+
+func (s *Scene) Prepare(d *voplay.DrawCtx) {
+	start := time.Now()
+	s.writeFrame3DState(d)
+	s.flushRenderScene(d)
 	d.ResetCamera()
 	stats := s.renderStats
 	stats.FrameCpuMs = float64(time.Now().Sub(start).Nanoseconds()) / 1000000.0

@@ -432,6 +432,22 @@ pub fn orthographic_rh_zo(
 }
 
 pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
+    compute_shadow_vp_with_snap(camera_inv_vp, light_dir, 0)
+}
+
+pub fn compute_shadow_vp_stabilized(
+    camera_inv_vp: &Mat4,
+    light_dir: Vec3,
+    shadow_resolution: u32,
+) -> Mat4 {
+    compute_shadow_vp_with_snap(camera_inv_vp, light_dir, shadow_resolution.max(1))
+}
+
+fn compute_shadow_vp_with_snap(
+    camera_inv_vp: &Mat4,
+    light_dir: Vec3,
+    shadow_resolution: u32,
+) -> Mat4 {
     let ndc_corners = [
         [-1.0, -1.0, 0.0, 1.0],
         [-1.0, 1.0, 0.0, 1.0],
@@ -491,10 +507,26 @@ pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
     let z_pad = radius * 2.0 + 32.0;
     let near = (-max.z - z_pad).max(0.1);
     let far = (-min.z + z_pad).max(near + 0.1);
-    let left = min.x - xy_pad;
-    let right_bound = max.x + xy_pad;
-    let bottom = min.y - xy_pad;
-    let top = max.y + xy_pad;
+    let mut left = min.x - xy_pad;
+    let mut right_bound = max.x + xy_pad;
+    let mut bottom = min.y - xy_pad;
+    let mut top = max.y + xy_pad;
+
+    if shadow_resolution > 1 {
+        let resolution = shadow_resolution as f32;
+        let width = right_bound - left;
+        let height = top - bottom;
+        let texel_x = width / resolution;
+        let texel_y = height / resolution;
+        if texel_x.is_finite() && texel_x > 0.0 && texel_y.is_finite() && texel_y > 0.0 {
+            let center_x = ((left + right_bound) * 0.5 / texel_x).round() * texel_x;
+            let center_y = ((bottom + top) * 0.5 / texel_y).round() * texel_y;
+            left = center_x - width * 0.5;
+            right_bound = center_x + width * 0.5;
+            bottom = center_y - height * 0.5;
+            top = center_y + height * 0.5;
+        }
+    }
 
     let scale_x = 2.0 / (right_bound - left);
     let scale_y = 2.0 / (top - bottom);
@@ -529,6 +561,41 @@ pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
             1.0,
         ],
     ]
+}
+
+pub fn compute_shadow_vp_for_camera(
+    eye: Vec3,
+    target: Vec3,
+    up: Vec3,
+    fov_y_rad: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+    light_dir: Vec3,
+) -> Mat4 {
+    compute_shadow_vp_for_camera_stabilized(
+        eye, target, up, fov_y_rad, aspect, near, far, light_dir, 0,
+    )
+}
+
+pub fn compute_shadow_vp_for_camera_stabilized(
+    eye: Vec3,
+    target: Vec3,
+    up: Vec3,
+    fov_y_rad: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+    light_dir: Vec3,
+    shadow_resolution: u32,
+) -> Mat4 {
+    let shadow_far = far.max(near + 0.1);
+    let view = look_at_rh(eye, target, up);
+    let proj = perspective_rh_zo(fov_y_rad, aspect, near, shadow_far);
+    let view_proj = mat4_mul(&proj, &view);
+    mat4_inverse(&view_proj)
+        .map(|inv| compute_shadow_vp_with_snap(&inv, light_dir, shadow_resolution))
+        .unwrap_or(MAT4_IDENTITY)
 }
 
 #[cfg(test)]
@@ -654,6 +721,57 @@ mod tests {
                 "shadow z out of range: {}",
                 shadow_ndc[2]
             );
+        }
+    }
+
+    #[test]
+    fn compute_shadow_vp_for_camera_contains_limited_frustum() {
+        let eye = Vec3::new(0.0, 4.0, 12.0);
+        let target = Vec3::new(0.0, 1.0, 0.0);
+        let up = Vec3::UP;
+        let fov = 60.0f32.to_radians();
+        let aspect = 16.0 / 9.0;
+        let near = 0.1;
+        let limited_far = 60.0;
+        let shadow_vp = compute_shadow_vp_for_camera(
+            eye,
+            target,
+            up,
+            fov,
+            aspect,
+            near,
+            limited_far,
+            Vec3::new(0.3, -1.0, 0.2).normalize(),
+        );
+        let view = look_at_rh(eye, target, up);
+        let proj = perspective_rh_zo(fov, aspect, near, limited_far);
+        let view_proj = mat4_mul(&proj, &view);
+        let inv_view_proj = mat4_inverse(&view_proj).expect("view-projection should invert");
+        let ndc_corners = [
+            [-1.0, -1.0, 0.0, 1.0],
+            [-1.0, 1.0, 0.0, 1.0],
+            [1.0, -1.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0, 1.0],
+            [-1.0, -1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0, 1.0],
+            [1.0, -1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+        ];
+        for ndc in ndc_corners {
+            let world = mat4_mul_vec4(&inv_view_proj, ndc);
+            let inv_w = 1.0 / world[3];
+            let shadow_clip = mat4_mul_vec4(
+                &shadow_vp,
+                [world[0] * inv_w, world[1] * inv_w, world[2] * inv_w, 1.0],
+            );
+            let shadow_ndc = [
+                shadow_clip[0] / shadow_clip[3],
+                shadow_clip[1] / shadow_clip[3],
+                shadow_clip[2] / shadow_clip[3],
+            ];
+            assert!(shadow_ndc[0] >= -1.01 && shadow_ndc[0] <= 1.01);
+            assert!(shadow_ndc[1] >= -1.01 && shadow_ndc[1] <= 1.01);
+            assert!(shadow_ndc[2] >= -0.01 && shadow_ndc[2] <= 1.01);
         }
     }
 }

@@ -53,7 +53,7 @@ func (w *ByteWriter) WriteBool(v bool) {
 	}
 }
 
-func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, ry, rz, rw, sx, sy, sz float64, materialID int, tr, tg, tb, ta float64, visible bool) {
+func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, ry, rz, rw, sx, sy, sz float64, materialID int, tr, tg, tb, ta float64, visible bool, flags int, lodNear, lodFar, windStrength, atlasX, atlasY, atlasW, atlasH float64) {
 	pXB := math.Float32bits(float32(px))
 	pYB := math.Float32bits(float32(py))
 	pZB := math.Float32bits(float32(pz))
@@ -68,6 +68,13 @@ func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, 
 	tGB := math.Float32bits(float32(tg))
 	tBB := math.Float32bits(float32(tb))
 	tAB := math.Float32bits(float32(ta))
+	lodNearB := math.Float32bits(float32(lodNear))
+	lodFarB := math.Float32bits(float32(lodFar))
+	windStrengthB := math.Float32bits(float32(windStrength))
+	atlasXB := math.Float32bits(float32(atlasX))
+	atlasYB := math.Float32bits(float32(atlasY))
+	atlasWB := math.Float32bits(float32(atlasW))
+	atlasHB := math.Float32bits(float32(atlasH))
 	visibleByte := byte(0)
 	if visible {
 		visibleByte = 1
@@ -91,6 +98,14 @@ func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, 
 		byte(tBB), byte(tBB>>8), byte(tBB>>16), byte(tBB>>24),
 		byte(tAB), byte(tAB>>8), byte(tAB>>16), byte(tAB>>24),
 		visibleByte,
+		byte(flags), byte(flags>>8), byte(flags>>16), byte(flags>>24),
+		byte(lodNearB), byte(lodNearB>>8), byte(lodNearB>>16), byte(lodNearB>>24),
+		byte(lodFarB), byte(lodFarB>>8), byte(lodFarB>>16), byte(lodFarB>>24),
+		byte(windStrengthB), byte(windStrengthB>>8), byte(windStrengthB>>16), byte(windStrengthB>>24),
+		byte(atlasXB), byte(atlasXB>>8), byte(atlasXB>>16), byte(atlasXB>>24),
+		byte(atlasYB), byte(atlasYB>>8), byte(atlasYB>>16), byte(atlasYB>>24),
+		byte(atlasWB), byte(atlasWB>>8), byte(atlasWB>>16), byte(atlasWB>>24),
+		byte(atlasHB), byte(atlasHB>>8), byte(atlasHB>>16), byte(atlasHB>>24),
 	)
 }
 

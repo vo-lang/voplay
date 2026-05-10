@@ -1,0 +1,173 @@
+package scene3d
+
+import (
+	"errors"
+	"strconv"
+	"github.com/vo-lang/voplay"
+)
+
+type TrackSurfaceDetailsDesc struct {
+	HeightProbe TrackHeightProbe
+	EdgeTransitions []TrackEdgeTransitionDesc
+	ProjectedDecals []TrackProjectedDecalDesc
+}
+
+type TrackSurfaceDetail struct {
+	Entity *Entity
+	Model voplay.ModelID
+	OwnedModel bool
+	Name string
+	Kind string
+	Material voplay.MaterialDesc
+	VertexCount int
+	IndexCount int
+	DecalCount int
+	Min voplay.Vec3
+	Max voplay.Vec3
+}
+
+type TrackSurfaceDetails struct {
+	Details []*TrackSurfaceDetail
+}
+
+func SpawnTrackSurfaceDetails(scene *Scene, assets *voplay.Assets, track *Track, desc TrackSurfaceDetailsDesc) (*TrackSurfaceDetails, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnTrackSurfaceDetails: scene is nil")
+	}
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnTrackSurfaceDetails: track is nil")
+	}
+	if len(desc.EdgeTransitions) == 0 && len(desc.ProjectedDecals) == 0 {
+		return nil, errors.New("scene3d.SpawnTrackSurfaceDetails: at least one detail layer is required")
+	}
+	result := &TrackSurfaceDetails{Details: []*TrackSurfaceDetail{}}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		result.Destroy(scene)
+	}()
+	for i, edge := range desc.EdgeTransitions {
+		if edge.HeightProbe == nil {
+			edge.HeightProbe = desc.HeightProbe
+		}
+		detail, err := SpawnTrackEdgeTransition(scene, assets, track, edge)
+		if err != nil {
+			return nil, err
+		}
+		if detail.Name == "" {
+			detail.Name = "track_edge_transition_" + trackDetailIndexString(i)
+		}
+		result.Details = append(result.Details, detail)
+	}
+	for i, decal := range desc.ProjectedDecals {
+		if decal.HeightProbe == nil {
+			decal.HeightProbe = desc.HeightProbe
+		}
+		detail, err := SpawnTrackProjectedDecals(scene, assets, track, decal)
+		if err != nil {
+			return nil, err
+		}
+		if detail.Name == "" {
+			detail.Name = "track_projected_decal_" + trackDetailIndexString(i)
+		}
+		result.Details = append(result.Details, detail)
+	}
+	success = true
+	return result, nil
+}
+
+func SpawnTrackEdgeTransition(scene *Scene, assets *voplay.Assets, track *Track, desc TrackEdgeTransitionDesc) (*TrackSurfaceDetail, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnTrackEdgeTransition: scene is nil")
+	}
+	mesh, err := BuildTrackEdgeTransitionMesh(track, desc)
+	if err != nil {
+		return nil, err
+	}
+	name := desc.Name
+	if name == "" {
+		name = "track_edge_transition"
+	}
+	return spawnTrackGeneratedSurface(scene, name, "edge_transition", desc.Material, mesh.Vertices, mesh.Indices, mesh.Color, mesh.VertexCount, mesh.IndexCount, 0, mesh.Min, mesh.Max)
+}
+
+func SpawnTrackProjectedDecals(scene *Scene, assets *voplay.Assets, track *Track, desc TrackProjectedDecalDesc) (*TrackSurfaceDetail, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnTrackProjectedDecals: scene is nil")
+	}
+	mesh, err := BuildTrackProjectedDecalMesh(track, desc)
+	if err != nil {
+		return nil, err
+	}
+	name := desc.Name
+	if name == "" {
+		name = "track_projected_decal"
+	}
+	return spawnTrackGeneratedSurface(scene, name, "projected_decal", desc.Material, mesh.Vertices, mesh.Indices, mesh.Color, mesh.VertexCount, mesh.IndexCount, mesh.DecalCount, mesh.Min, mesh.Max)
+}
+
+func spawnTrackGeneratedSurface(scene *Scene, name, kind string, material voplay.MaterialDesc, vertices []voplay.RawMeshVertex, indices []int, color voplay.Color, vertexCount, indexCount, decalCount int, min, max voplay.Vec3) (*TrackSurfaceDetail, error) {
+	if len(vertices) == 0 || len(indices) == 0 {
+		return nil, errors.New("scene3d.spawnTrackGeneratedSurface: generated mesh is empty")
+	}
+	model, err := voplay.CreateRawMesh(vertices, indices, color)
+	if err != nil {
+		return nil, err
+	}
+	material = voplay.NormalizeMaterial(material)
+	detail := &TrackSurfaceDetail{
+		Model: model,
+		OwnedModel: true,
+		Name: name,
+		Kind: kind,
+		Material: material,
+		VertexCount: vertexCount,
+		IndexCount: indexCount,
+		DecalCount: decalCount,
+		Min: min,
+		Max: max,
+	}
+	detail.Entity = scene.Spawn(EntityDesc{
+		Model: model,
+		OwnedModel: model,
+		Material: material,
+		Tag: name,
+		StaticRenderable: true,
+		PickMode: PickDisabled,
+	})
+	detail.OwnedModel = false
+	return detail, nil
+}
+
+func (d *TrackSurfaceDetail) Destroy(scene *Scene) {
+	if d == nil {
+		return
+	}
+	if d.Entity != nil && scene != nil && d.Entity.scene == scene && d.Entity.Active {
+		scene.Destroy(d.Entity)
+	}
+	d.Entity = nil
+	if d.OwnedModel && d.Model != 0 {
+		d.Model.Free()
+	}
+	d.Model = 0
+	d.OwnedModel = false
+}
+
+func (d *TrackSurfaceDetails) Destroy(scene *Scene) {
+	if d == nil {
+		return
+	}
+	for _, detail := range d.Details {
+		if detail != nil {
+			detail.Destroy(scene)
+		}
+	}
+	d.Details = nil
+}
+
+func trackDetailIndexString(index int) string {
+	return strconv.Itoa(index)
+}

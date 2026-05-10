@@ -320,8 +320,8 @@ func (defaultPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
 }
 
 func (defaultPhysicsBackend) SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte) {
-	meshData := voplay.ModelMeshDataBytes(voplay.ModelID(modelID))
-	physicsSpawnTrimeshBodyData(worldID, bodyID, data, meshData)
+	geometryData := voplay.ModelGeometryBytes(voplay.ModelID(modelID))
+	physicsSpawnTrimeshBodyData(worldID, bodyID, data, geometryData)
 }
 
 func (defaultPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc) {

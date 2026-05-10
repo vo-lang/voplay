@@ -8,28 +8,108 @@ type LightingProfile struct {
 	Lights []Light
 	Fog FogConfig
 	ColorGrading ColorGradingConfig
+	PostProcess PostProcessConfig
 	ShadowsEnabled bool
 	ShadowResolution int
 	ShadowStrength float64
+	ShadowSoftness float64
+	ShadowDistance float64
+	ShadowFade float64
+	ShadowQuality int
 }
+
+const (
+	ContactAOQualityOff = 0
+	ContactAOQualityLow = 1
+	ContactAOQualityMedium = 2
+	ContactAOQualityHigh = 3
+	ContactAOQualityCinematic = 4
+)
 
 func DefaultColorGradingConfig() ColorGradingConfig {
 	return ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1, Contrast: 1, Saturation: 1}
 }
 
+func DefaultPostProcessConfig() PostProcessConfig {
+	return PostProcessConfig{BloomThreshold: 0.74, BloomStrength: 0.105, SharpenStrength: 0.055, FxaaStrength: 0.82, ContactAOStrength: 0.28, ContactAORadius: 2.5, ContactAODepthScale: 70, ContactAODetailStrength: 0.18, ContactAODetailRadius: 0.95, ContactAONormalBias: 0.015, ContactAOQuality: ContactAOQualityMedium}
+}
+
+func ContactAOQualityConfig(quality int) PostProcessConfig {
+	config := DefaultPostProcessConfig()
+	if quality <= ContactAOQualityOff {
+		config.ContactAOStrength = 0
+		config.ContactAODetailStrength = 0
+		config.ContactAOQuality = ContactAOQualityOff
+		return config
+	}
+	if quality == ContactAOQualityLow {
+		config.ContactAOStrength = 0.18
+		config.ContactAORadius = 1.65
+		config.ContactAODepthScale = 54
+		config.ContactAODetailStrength = 0.08
+		config.ContactAODetailRadius = 0.7
+		config.ContactAONormalBias = 0.022
+		config.ContactAOQuality = ContactAOQualityLow
+		return config
+	}
+	if quality == ContactAOQualityMedium {
+		return config
+	}
+	if quality == ContactAOQualityHigh {
+		config.ContactAOStrength = 0.36
+		config.ContactAORadius = 3.2
+		config.ContactAODepthScale = 92
+		config.ContactAODetailStrength = 0.26
+		config.ContactAODetailRadius = 1.2
+		config.ContactAONormalBias = 0.014
+		config.ContactAOQuality = ContactAOQualityHigh
+		return config
+	}
+	config.ContactAOStrength = 0.46
+	config.ContactAORadius = 4.4
+	config.ContactAODepthScale = 118
+	config.ContactAODetailStrength = 0.34
+	config.ContactAODetailRadius = 1.55
+	config.ContactAONormalBias = 0.012
+	config.ContactAOQuality = ContactAOQualityCinematic
+	return config
+}
+
+func (s *Scene) SetContactAOQuality(quality int) {
+	if s == nil {
+		return
+	}
+	current := normalizePostProcess(s.PostProcess)
+	next := ContactAOQualityConfig(quality)
+	current.ContactAOStrength = next.ContactAOStrength
+	current.ContactAORadius = next.ContactAORadius
+	current.ContactAODepthScale = next.ContactAODepthScale
+	current.ContactAODetailStrength = next.ContactAODetailStrength
+	current.ContactAODetailRadius = next.ContactAODetailRadius
+	current.ContactAONormalBias = next.ContactAONormalBias
+	current.ContactAOQuality = next.ContactAOQuality
+	s.PostProcess = current
+}
+
 func KartRacingLightingProfile() LightingProfile {
+	presentation := KartRacingPresentationStack()
 	return LightingProfile{
-		Ambient: voplay.Color{R: 0.52, G: 0.64, B: 0.70, A: 1},
-		AmbientGround: voplay.Color{R: 0.22, G: 0.30, B: 0.30, A: 1},
+		Ambient: presentation.Ambient,
+		AmbientGround: presentation.AmbientGround,
 		Lights: []Light{
 			{Type: DirectionalLight, Direction: voplay.Vec3{X: -0.36, Y: 0.58, Z: -0.73}.Normalize(), Color: voplay.Hex(0xfff2d2), Intensity: 0.92},
 			{Type: DirectionalLight, Direction: voplay.Vec3{X: 0.48, Y: 0.34, Z: 0.2}.Normalize(), Color: voplay.Hex(0x8fc8ff), Intensity: 0.14},
 		},
-		Fog: FogConfig{Mode: FogLinear, Color: voplay.Hex(0xb8e3ef), Start: 180, End: 420},
-		ColorGrading: ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.04, Contrast: 1.04, Saturation: 1.08},
+		Fog: presentation.Fog,
+		ColorGrading: presentation.ColorGrading,
+		PostProcess: presentation.PostProcess,
 		ShadowsEnabled: false,
 		ShadowResolution: 2048,
 		ShadowStrength: 0.58,
+		ShadowSoftness: 1.4,
+		ShadowDistance: 240,
+		ShadowFade: 70,
+		ShadowQuality: ShadowQualityHigh,
 	}
 }
 
@@ -40,13 +120,55 @@ func (s *Scene) ApplyLightingProfile(profile LightingProfile) {
 	s.Ambient = profile.Ambient
 	s.AmbientGround = normalizeAmbientGround(profile.Ambient, profile.AmbientGround)
 	s.Lights = append([]Light{}, profile.Lights...)
-	s.Fog = profile.Fog
+	s.Fog = normalizeFogConfig(profile.Fog)
 	s.ColorGrading = normalizeColorGrading(profile.ColorGrading)
+	s.PostProcess = normalizePostProcess(profile.PostProcess)
 	s.ShadowsEnabled = profile.ShadowsEnabled
 	if profile.ShadowResolution > 0 {
 		s.ShadowResolution = profile.ShadowResolution
 	}
 	s.ShadowStrength = normalizeShadowStrength(profile.ShadowStrength)
+	s.ShadowSoftness = normalizeShadowSoftness(profile.ShadowSoftness)
+	s.ShadowDistance = normalizeShadowDistance(profile.ShadowDistance)
+	s.ShadowFade = normalizeShadowFade(profile.ShadowFade)
+	s.ShadowQuality = normalizeShadowQuality(profile.ShadowQuality)
+}
+
+func (s *Scene) SetShadowQuality(quality int) {
+	if s == nil {
+		return
+	}
+	s.ShadowQuality = normalizeShadowQuality(quality)
+	if s.ShadowQuality == ShadowQualityOff {
+		s.ShadowsEnabled = false
+		return
+	}
+	s.ShadowsEnabled = true
+	if s.ShadowQuality == ShadowQualityLow {
+		s.ShadowResolution = 1024
+		s.ShadowSoftness = 1.8
+		s.ShadowDistance = 160
+		s.ShadowFade = 60
+		return
+	}
+	if s.ShadowQuality == ShadowQualityMedium {
+		s.ShadowResolution = 2048
+		s.ShadowSoftness = 1.4
+		s.ShadowDistance = 240
+		s.ShadowFade = 70
+		return
+	}
+	if s.ShadowQuality == ShadowQualityHigh {
+		s.ShadowResolution = 3072
+		s.ShadowSoftness = 1.2
+		s.ShadowDistance = 320
+		s.ShadowFade = 90
+		return
+	}
+	s.ShadowResolution = 4096
+	s.ShadowSoftness = 1.05
+	s.ShadowDistance = 420
+	s.ShadowFade = 120
 }
 
 func normalizeAmbientGround(ambientSky, ambientGround voplay.Color) voplay.Color {
@@ -70,4 +192,102 @@ func normalizeColorGrading(config ColorGradingConfig) ColorGradingConfig {
 		config.ToneMap = ToneMapNone
 	}
 	return config
+}
+
+func normalizePostProcess(config PostProcessConfig) PostProcessConfig {
+	defaults := DefaultPostProcessConfig()
+	if config.BloomThreshold == 0 && config.BloomStrength == 0 && config.SharpenStrength == 0 && config.FxaaStrength == 0 && config.ContactAOStrength == 0 && config.ContactAORadius == 0 && config.ContactAODepthScale == 0 && config.ContactAODetailStrength == 0 && config.ContactAODetailRadius == 0 && config.ContactAONormalBias == 0 && config.ContactAOQuality == 0 {
+		return defaults
+	}
+	if config.BloomThreshold < 0 {
+		config.BloomThreshold = 0
+	}
+	if config.BloomThreshold > 1 {
+		config.BloomThreshold = 1
+	}
+	if config.BloomStrength < 0 {
+		config.BloomStrength = 0
+	}
+	if config.BloomStrength > 2 {
+		config.BloomStrength = 2
+	}
+	if config.SharpenStrength < 0 {
+		config.SharpenStrength = 0
+	}
+	if config.SharpenStrength > 1 {
+		config.SharpenStrength = 1
+	}
+	if config.FxaaStrength < 0 {
+		config.FxaaStrength = 0
+	}
+	if config.FxaaStrength > 1.5 {
+		config.FxaaStrength = 1.5
+	}
+	if config.ContactAOStrength < 0 {
+		config.ContactAOStrength = 0
+	}
+	if config.ContactAOStrength > 1.5 {
+		config.ContactAOStrength = 1.5
+	}
+	if config.ContactAORadius < 0.5 {
+		config.ContactAORadius = 0.5
+	}
+	if config.ContactAORadius > 8 {
+		config.ContactAORadius = 8
+	}
+	if config.ContactAODepthScale < 1 {
+		config.ContactAODepthScale = 1
+	}
+	if config.ContactAODepthScale > 400 {
+		config.ContactAODepthScale = 400
+	}
+	if config.ContactAODetailStrength < 0 {
+		config.ContactAODetailStrength = 0
+	}
+	if config.ContactAODetailStrength > 1 {
+		config.ContactAODetailStrength = 1
+	}
+	if config.ContactAODetailRadius < 0.35 {
+		config.ContactAODetailRadius = 0.35
+	}
+	if config.ContactAODetailRadius > 3 {
+		config.ContactAODetailRadius = 3
+	}
+	if config.ContactAONormalBias < 0 {
+		config.ContactAONormalBias = 0
+	}
+	if config.ContactAONormalBias > 0.08 {
+		config.ContactAONormalBias = 0.08
+	}
+	if config.ContactAOQuality < ContactAOQualityOff {
+		config.ContactAOQuality = ContactAOQualityOff
+	}
+	if config.ContactAOQuality > ContactAOQualityCinematic {
+		config.ContactAOQuality = ContactAOQualityCinematic
+	}
+	return config
+}
+
+func normalizeShadowDistance(distance float64) float64 {
+	if distance <= 0 {
+		return 0
+	}
+	return sceneClamp(distance, 16, 2000)
+}
+
+func normalizeShadowFade(fade float64) float64 {
+	if fade <= 0 {
+		return 0
+	}
+	return sceneClamp(fade, 1, 1000)
+}
+
+func normalizeShadowQuality(quality int) int {
+	if quality < ShadowQualityOff {
+		return ShadowQualityOff
+	}
+	if quality > ShadowQualityCinematic {
+		return ShadowQualityCinematic
+	}
+	return quality
 }

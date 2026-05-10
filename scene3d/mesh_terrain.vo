@@ -1,0 +1,339 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"os"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
+
+const meshTerrainGridMagic = 826758221
+
+type MeshTerrainAssetDesc struct {
+	Assets *voplay.Assets
+	Model voplay.ModelID
+	ModelPath string
+	LodLevels []MeshTerrainLodLevelDesc
+	HeightGridPath string
+	HeightGridData []byte
+	Material voplay.MaterialDesc
+	Splat *TerrainSplatMaterial
+	Tag string
+	PickMode int
+	CullDistance float64
+	CullRadius float64
+	FrustumCull bool
+}
+
+type MeshTerrainLodLevelDesc struct {
+	Model voplay.ModelID
+	ModelPath string
+	Distance float64
+}
+
+type MeshTerrainHeightGrid struct {
+	Center voplay.Vec3
+	Width float64
+	Depth float64
+	Cols int
+	Rows int
+	Heights []float64
+}
+
+type MeshTerrainAsset struct {
+	entity *Entity
+	grid MeshTerrainHeightGrid
+	heightProbe TrackHeightProbe
+}
+
+func SpawnMeshTerrainAsset(scene *Scene, desc MeshTerrainAssetDesc) (*MeshTerrainAsset, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnMeshTerrainAsset: scene is nil")
+	}
+	normalized, err := normalizeMeshTerrainAssetDesc(desc)
+	if err != nil {
+		return nil, err
+	}
+	model, ownedModel, modelErr := loadMeshTerrainAssetModel(normalized)
+	if modelErr != nil {
+		return nil, modelErr
+	}
+	lodLevels, ownedLodModels, lodErr := loadMeshTerrainAssetLodLevels(normalized)
+	if lodErr != nil {
+		if ownedModel != 0 {
+			ownedModel.Free()
+		}
+		return nil, lodErr
+	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if ownedModel != 0 {
+			ownedModel.Free()
+		}
+		for _, ownedLod := range ownedLodModels {
+			if ownedLod != 0 {
+				ownedLod.Free()
+			}
+		}
+	}()
+	if normalized.Splat != nil {
+		var splatErr error
+		model, ownedModel, splatErr = createMeshTerrainSplatModel(model, ownedModel, normalized.Splat)
+		if splatErr != nil {
+			return nil, splatErr
+		}
+		for i, level := range lodLevels {
+			wrapped, ownedWrapped, wrapErr := createMeshTerrainSplatModel(level.Model, ownedLodModels[i], normalized.Splat)
+			if wrapErr != nil {
+				return nil, wrapErr
+			}
+			lodLevels[i].Model = wrapped
+			ownedLodModels[i] = ownedWrapped
+		}
+	}
+	gridData, gridDataErr := loadMeshTerrainHeightGridData(normalized)
+	if gridDataErr != nil {
+		return nil, gridDataErr
+	}
+	grid, gridErr := DecodeMeshTerrainHeightGrid(gridData)
+	if gridErr != nil {
+		return nil, gridErr
+	}
+	entity := scene.Spawn(EntityDesc{Model: model, OwnedModel: ownedModel, OwnedLodModels: ownedLodModels, LodLevels: lodLevels, Material: normalized.Material, Tag: normalized.Tag, PickMode: normalized.PickMode, StaticRenderable: true, CullDistance: normalized.CullDistance, CullRadius: normalized.CullRadius, FrustumCull: normalized.FrustumCull})
+	terrain := &MeshTerrainAsset{entity: entity, grid: grid, heightProbe: meshTerrainGridProbe(grid)}
+	success = true
+	return terrain, nil
+}
+
+func SpawnTrackMeshTerrainAsset(scene *Scene, track *Track, desc MeshTerrainAssetDesc) (*TrackSpawnResult, error) {
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnTrackMeshTerrainAsset: track is nil")
+	}
+	terrain, err := SpawnMeshTerrainAsset(scene, desc)
+	if err != nil {
+		return nil, err
+	}
+	probe := terrain.HeightProbe()
+	return &TrackSpawnResult{Track: track, Entities: []*Entity{terrain.Entity()}, Meshes: map[string]*Entity{}, CollisionMeshes: map[string]*Entity{}, Textures: []voplay.TextureID{}, HeightSampler: probe, CollisionHeightSampler: probe}, nil
+}
+
+func (t *MeshTerrainAsset) Entity() *Entity {
+	if t == nil {
+		return nil
+	}
+	return t.entity
+}
+
+func (t *MeshTerrainAsset) HeightGrid() MeshTerrainHeightGrid {
+	if t == nil {
+		return MeshTerrainHeightGrid{}
+	}
+	return t.grid
+}
+
+func (t *MeshTerrainAsset) HeightProbe() TrackHeightProbe {
+	if t == nil {
+		return nil
+	}
+	return t.heightProbe
+}
+
+func (t *MeshTerrainAsset) HeightAt(pos voplay.Vec3) (float64, bool) {
+	if t == nil || t.heightProbe == nil {
+		return 0, false
+	}
+	return t.heightProbe(pos)
+}
+
+func DecodeMeshTerrainHeightGrid(data []byte) (MeshTerrainHeightGrid, error) {
+	minLen := 4 * 5 + 4 * 5
+	if len(data) < minLen {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: data is too short")
+	}
+	reader := codec.NewByteReader(data)
+	magic := reader.ReadU32()
+	if magic != meshTerrainGridMagic {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: invalid magic")
+	}
+	version := reader.ReadU32()
+	if version != 1 {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: unsupported version")
+	}
+	cols := reader.ReadU32()
+	rows := reader.ReadU32()
+	if cols < 2 || rows < 2 {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: rows and cols must be >= 2")
+	}
+	centerX := reader.ReadF32()
+	centerY := reader.ReadF32()
+	centerZ := reader.ReadF32()
+	width := reader.ReadF32()
+	depth := reader.ReadF32()
+	reader.ReadU32()
+	if width <= 0 || depth <= 0 {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: width and depth must be > 0")
+	}
+	count := rows * cols
+	expected := minLen + count * 4
+	if len(data) != expected {
+		return MeshTerrainHeightGrid{}, errors.New("scene3d.DecodeMeshTerrainHeightGrid: data length does not match rows*cols")
+	}
+	heights := make([]float64, 0, count)
+	for i := 0; i < count; i++ {
+		heights = append(heights, reader.ReadF32())
+	}
+	return MeshTerrainHeightGrid{Center: voplay.Vec3{X: centerX, Y: centerY, Z: centerZ}, Width: width, Depth: depth, Cols: cols, Rows: rows, Heights: heights}, nil
+}
+
+func normalizeMeshTerrainAssetDesc(desc MeshTerrainAssetDesc) (MeshTerrainAssetDesc, error) {
+	if desc.Model == 0 && desc.ModelPath == "" {
+		return desc, errors.New("scene3d.SpawnMeshTerrainAsset: Model or ModelPath is required")
+	}
+	if desc.Model != 0 && desc.ModelPath != "" {
+		return desc, errors.New("scene3d.SpawnMeshTerrainAsset: choose either Model or ModelPath")
+	}
+	for _, level := range desc.LodLevels {
+		if level.Model == 0 && level.ModelPath == "" {
+			return desc, errors.New("scene3d.SpawnMeshTerrainAsset: LOD Model or ModelPath is required")
+		}
+		if level.Model != 0 && level.ModelPath != "" {
+			return desc, errors.New("scene3d.SpawnMeshTerrainAsset: choose either LOD Model or ModelPath")
+		}
+		if level.Distance < 0 {
+			return desc, errors.New("scene3d.SpawnMeshTerrainAsset: LOD distance must be >= 0")
+		}
+	}
+	if desc.HeightGridPath == "" && len(desc.HeightGridData) == 0 {
+		return desc, errors.New("scene3d.SpawnMeshTerrainAsset: HeightGridPath or HeightGridData is required")
+	}
+	if desc.HeightGridPath != "" && len(desc.HeightGridData) != 0 {
+		return desc, errors.New("scene3d.SpawnMeshTerrainAsset: choose either HeightGridPath or HeightGridData")
+	}
+	if desc.Material == (voplay.MaterialDesc{}) {
+		desc.Material = voplay.MaterialColor(voplay.White)
+	}
+	if desc.Splat != nil {
+		splat, splatErr := validateAndNormalizeSplat(desc.Splat)
+		if splatErr != nil {
+			return desc, splatErr
+		}
+		desc.Splat = splat
+	}
+	if desc.Tag == "" {
+		desc.Tag = "mesh_terrain_asset"
+	}
+	if desc.PickMode == PickDefault {
+		desc.PickMode = PickDisabled
+	}
+	return desc, nil
+}
+
+func loadMeshTerrainAssetModel(desc MeshTerrainAssetDesc) (voplay.ModelID, voplay.ModelID, error) {
+	if desc.Model != 0 {
+		return desc.Model, 0, nil
+	}
+	if desc.Assets != nil {
+		model, err := desc.Assets.Model(desc.ModelPath)
+		return model, 0, err
+	}
+	model, err := voplay.LoadModel(desc.ModelPath)
+	return model, model, err
+}
+
+func loadMeshTerrainAssetLodLevels(desc MeshTerrainAssetDesc) ([]EntityLodLevel, []voplay.ModelID, error) {
+	if len(desc.LodLevels) == 0 {
+		return nil, nil, nil
+	}
+	levels := make([]EntityLodLevel, 0, len(desc.LodLevels))
+	ownedModels := make([]voplay.ModelID, 0, len(desc.LodLevels))
+	for _, level := range desc.LodLevels {
+		model, owned, err := loadMeshTerrainAssetLodModel(desc, level)
+		if err != nil {
+			for _, ownedModel := range ownedModels {
+				if ownedModel != 0 {
+					ownedModel.Free()
+				}
+			}
+			return nil, nil, err
+		}
+		levels = append(levels, EntityLodLevel{Model: model, Distance: level.Distance})
+		ownedModels = append(ownedModels, owned)
+	}
+	return levels, ownedModels, nil
+}
+
+func loadMeshTerrainAssetLodModel(desc MeshTerrainAssetDesc, level MeshTerrainLodLevelDesc) (voplay.ModelID, voplay.ModelID, error) {
+	if level.Model != 0 {
+		return level.Model, 0, nil
+	}
+	if desc.Assets != nil {
+		model, err := desc.Assets.Model(level.ModelPath)
+		return model, 0, err
+	}
+	model, err := voplay.LoadModel(level.ModelPath)
+	return model, model, err
+}
+
+func createMeshTerrainSplatModel(model voplay.ModelID, ownedModel voplay.ModelID, splat *TerrainSplatMaterial) (voplay.ModelID, voplay.ModelID, error) {
+	splatModel, splatErr := createTerrainSplatModel(int(model), int(splat.Control), encodeTerrainSplatLayers(splat))
+	if splatErr != nil {
+		return 0, ownedModel, splatErr
+	}
+	if ownedModel != 0 {
+		ownedModel.Free()
+	}
+	wrapped := voplay.ModelID(splatModel)
+	return wrapped, wrapped, nil
+}
+
+func loadMeshTerrainHeightGridData(desc MeshTerrainAssetDesc) ([]byte, error) {
+	if len(desc.HeightGridData) != 0 {
+		return desc.HeightGridData, nil
+	}
+	if desc.Assets != nil {
+		return desc.Assets.Bytes(desc.HeightGridPath)
+	}
+	return os.ReadFile(desc.HeightGridPath)
+}
+
+func createTerrainSplatModel(modelID int, controlTextureID int, layerData []byte) (int, error)
+
+func meshTerrainGridProbe(grid MeshTerrainHeightGrid) TrackHeightProbe {
+	return func(pos voplay.Vec3) (float64, bool) {
+		if grid.Cols < 2 || grid.Rows < 2 || len(grid.Heights) != grid.Cols * grid.Rows {
+			return 0, false
+		}
+		u := (pos.X - (grid.Center.X - grid.Width * 0.5)) / grid.Width
+		v := (pos.Z - (grid.Center.Z - grid.Depth * 0.5)) / grid.Depth
+		if u < 0 || u > 1 || v < 0 || v > 1 {
+			return 0, false
+		}
+		x := u * float64(grid.Cols - 1)
+		z := v * float64(grid.Rows - 1)
+		x0 := int(math.Floor(x))
+		z0 := int(math.Floor(z))
+		if x0 >= grid.Cols - 1 {
+			x0 = grid.Cols - 2
+		}
+		if z0 >= grid.Rows - 1 {
+			z0 = grid.Rows - 2
+		}
+		tx := x - float64(x0)
+		tz := z - float64(z0)
+		h00 := meshTerrainGridHeight(grid, x0, z0)
+		h10 := meshTerrainGridHeight(grid, x0 + 1, z0)
+		h01 := meshTerrainGridHeight(grid, x0, z0 + 1)
+		h11 := meshTerrainGridHeight(grid, x0 + 1, z0 + 1)
+		h0 := h00 + (h10 - h00) * tx
+		h1 := h01 + (h11 - h01) * tx
+		return h0 + (h1 - h0) * tz, true
+	}
+}
+
+func meshTerrainGridHeight(grid MeshTerrainHeightGrid, x, z int) float64 {
+	return grid.Heights[z * grid.Cols + x]
+}

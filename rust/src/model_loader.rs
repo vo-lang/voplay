@@ -75,7 +75,12 @@ struct ParsedPrimitive {
 struct ParsedNodeModel {
     primitives: Vec<ParsedPrimitive>,
     cpu_positions: Vec<[f32; 3]>,
+    cpu_normals: Vec<[f32; 3]>,
+    cpu_uvs: Vec<[f32; 2]>,
+    cpu_colors: Vec<[f32; 4]>,
+    cpu_materials: Vec<MeshMaterial>,
     cpu_indices: Vec<u32>,
+    cpu_triangle_materials: Vec<u32>,
     skinned: bool,
 }
 
@@ -108,8 +113,69 @@ struct LevelTerrainMaterialExtras {
     albedo: Option<String>,
     control: Option<String>,
     layers: Option<Vec<LevelTerrainLayerExtras>>,
+    #[serde(default)]
+    tuning: LevelTerrainMaterialTuningExtras,
     #[serde(default = "default_terrain_uv_scale", rename = "uvScale")]
     uv_scale: f32,
+}
+
+#[derive(Default, Deserialize)]
+struct LevelTerrainMaterialTuningExtras {
+    #[serde(default, rename = "macroScale")]
+    macro_scale: f32,
+    #[serde(default, rename = "macroStrength")]
+    macro_strength: f32,
+    #[serde(default, rename = "detailNear")]
+    detail_near: f32,
+    #[serde(default, rename = "detailFar")]
+    detail_far: f32,
+    #[serde(default, rename = "slopeStart")]
+    slope_start: f32,
+    #[serde(default, rename = "slopeEnd")]
+    slope_end: f32,
+    #[serde(default, rename = "slopeDirtStrength")]
+    slope_dirt_strength: f32,
+    #[serde(default, rename = "slopeRockStrength")]
+    slope_rock_strength: f32,
+    #[serde(default, rename = "antiTileStrength")]
+    anti_tile_strength: f32,
+    #[serde(default, rename = "detailStrength")]
+    detail_strength: f32,
+    #[serde(default, rename = "normalNear")]
+    normal_near: f32,
+    #[serde(default, rename = "normalFar")]
+    normal_far: f32,
+    #[serde(default, rename = "heightBlendStrength")]
+    height_blend_strength: f32,
+    #[serde(default, rename = "heightLow")]
+    height_low: f32,
+    #[serde(default, rename = "heightHigh")]
+    height_high: f32,
+    #[serde(default, rename = "curvatureStrength")]
+    curvature_strength: f32,
+}
+
+impl From<&LevelTerrainMaterialTuningExtras> for TerrainMaterialTuning {
+    fn from(value: &LevelTerrainMaterialTuningExtras) -> Self {
+        Self {
+            macro_scale: value.macro_scale,
+            macro_strength: value.macro_strength,
+            detail_near: value.detail_near,
+            detail_far: value.detail_far,
+            slope_start: value.slope_start,
+            slope_end: value.slope_end,
+            slope_dirt_strength: value.slope_dirt_strength,
+            slope_rock_strength: value.slope_rock_strength,
+            anti_tile_strength: value.anti_tile_strength,
+            detail_strength: value.detail_strength,
+            normal_near: value.normal_near,
+            normal_far: value.normal_far,
+            height_blend_strength: value.height_blend_strength,
+            height_low: value.height_low,
+            height_high: value.height_high,
+            curvature_strength: value.curvature_strength,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -150,6 +216,171 @@ pub struct GpuMesh {
     pub skinned: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainMaterialTuning {
+    pub macro_scale: f32,
+    pub macro_strength: f32,
+    pub detail_near: f32,
+    pub detail_far: f32,
+    pub slope_start: f32,
+    pub slope_end: f32,
+    pub slope_dirt_strength: f32,
+    pub slope_rock_strength: f32,
+    pub anti_tile_strength: f32,
+    pub detail_strength: f32,
+    pub normal_near: f32,
+    pub normal_far: f32,
+    pub height_blend_strength: f32,
+    pub height_low: f32,
+    pub height_high: f32,
+    pub curvature_strength: f32,
+}
+
+impl Default for TerrainMaterialTuning {
+    fn default() -> Self {
+        Self {
+            macro_scale: 1.0,
+            macro_strength: 1.0,
+            detail_near: 130.0,
+            detail_far: 560.0,
+            slope_start: 0.16,
+            slope_end: 0.62,
+            slope_dirt_strength: 0.38,
+            slope_rock_strength: 0.62,
+            anti_tile_strength: 1.0,
+            detail_strength: 1.0,
+            normal_near: 120.0,
+            normal_far: 520.0,
+            height_blend_strength: 0.0,
+            height_low: 0.0,
+            height_high: 1.0,
+            curvature_strength: 0.0,
+        }
+    }
+}
+
+impl TerrainMaterialTuning {
+    pub fn normalized(self) -> Result<Self, String> {
+        let defaults = Self::default();
+        let macro_scale =
+            normalize_positive_tuning(self.macro_scale, defaults.macro_scale, "macroScale")?;
+        let macro_strength = normalize_non_negative_tuning(
+            self.macro_strength,
+            defaults.macro_strength,
+            "macroStrength",
+        )?;
+        let detail_near =
+            normalize_positive_tuning(self.detail_near, defaults.detail_near, "detailNear")?;
+        let detail_far =
+            normalize_positive_tuning(self.detail_far, defaults.detail_far, "detailFar")?;
+        if detail_far <= detail_near {
+            return Err("terrain material tuning detailFar must be > detailNear".to_string());
+        }
+        let slope_start =
+            normalize_non_negative_tuning(self.slope_start, defaults.slope_start, "slopeStart")?;
+        let slope_end = normalize_positive_tuning(self.slope_end, defaults.slope_end, "slopeEnd")?;
+        if slope_end <= slope_start {
+            return Err("terrain material tuning slopeEnd must be > slopeStart".to_string());
+        }
+        let slope_dirt_strength = normalize_non_negative_tuning(
+            self.slope_dirt_strength,
+            defaults.slope_dirt_strength,
+            "slopeDirtStrength",
+        )?;
+        let slope_rock_strength = normalize_non_negative_tuning(
+            self.slope_rock_strength,
+            defaults.slope_rock_strength,
+            "slopeRockStrength",
+        )?;
+        let anti_tile_strength = normalize_non_negative_tuning(
+            self.anti_tile_strength,
+            defaults.anti_tile_strength,
+            "antiTileStrength",
+        )?;
+        let detail_strength = normalize_non_negative_tuning(
+            self.detail_strength,
+            defaults.detail_strength,
+            "detailStrength",
+        )?;
+        let normal_near =
+            normalize_positive_tuning(self.normal_near, defaults.normal_near, "normalNear")?;
+        let normal_far =
+            normalize_positive_tuning(self.normal_far, defaults.normal_far, "normalFar")?;
+        if normal_far <= normal_near {
+            return Err("terrain material tuning normalFar must be > normalNear".to_string());
+        }
+        let height_blend_strength = normalize_non_negative_tuning(
+            self.height_blend_strength,
+            defaults.height_blend_strength,
+            "heightBlendStrength",
+        )?;
+        let height_low =
+            normalize_finite_tuning(self.height_low, defaults.height_low, "heightLow")?;
+        let height_high =
+            normalize_finite_tuning(self.height_high, defaults.height_high, "heightHigh")?;
+        if height_high <= height_low {
+            return Err("terrain material tuning heightHigh must be > heightLow".to_string());
+        }
+        let curvature_strength = normalize_non_negative_tuning(
+            self.curvature_strength,
+            defaults.curvature_strength,
+            "curvatureStrength",
+        )?;
+        Ok(Self {
+            macro_scale,
+            macro_strength,
+            detail_near,
+            detail_far,
+            slope_start,
+            slope_end,
+            slope_dirt_strength,
+            slope_rock_strength,
+            anti_tile_strength,
+            detail_strength,
+            normal_near,
+            normal_far,
+            height_blend_strength,
+            height_low,
+            height_high,
+            curvature_strength,
+        })
+    }
+
+    pub fn normalized_or_default(self) -> Self {
+        self.normalized().unwrap_or_default()
+    }
+}
+
+fn normalize_positive_tuning(value: f32, fallback: f32, name: &str) -> Result<f32, String> {
+    if value == 0.0 {
+        return Ok(fallback);
+    }
+    if value.is_finite() && value > 0.0 {
+        return Ok(value);
+    }
+    Err(format!("terrain material tuning {} must be > 0", name))
+}
+
+fn normalize_non_negative_tuning(value: f32, fallback: f32, name: &str) -> Result<f32, String> {
+    if value == 0.0 {
+        return Ok(fallback);
+    }
+    if value.is_finite() && value >= 0.0 {
+        return Ok(value);
+    }
+    Err(format!("terrain material tuning {} must be >= 0", name))
+}
+
+fn normalize_finite_tuning(value: f32, fallback: f32, name: &str) -> Result<f32, String> {
+    if value == 0.0 {
+        return Ok(fallback);
+    }
+    if !value.is_finite() {
+        return Err(format!("terrain material tuning {} must be finite", name));
+    }
+    Ok(value)
+}
+
 /// Material payload consumed by the forward renderer.
 #[derive(Clone, Copy)]
 pub struct MeshMaterial {
@@ -159,10 +390,15 @@ pub struct MeshMaterial {
     pub metallic_roughness_texture_id: Option<TextureId>,
     pub emissive_texture_id: Option<TextureId>,
     pub toon_ramp_texture_id: Option<TextureId>,
+    pub mask_texture_id: Option<TextureId>,
     pub metallic: f32,
     pub roughness: f32,
     pub normal_scale: f32,
     pub emissive_factor: [f32; 3],
+    pub detail_strength: f32,
+    pub macro_blend: f32,
+    pub roughness_response: f32,
+    pub toon_ramp_response: f32,
     pub uv_scales: [f32; 4],
     pub sampler: MaterialSamplerKey,
     pub control_texture_id: Option<TextureId>,
@@ -170,6 +406,7 @@ pub struct MeshMaterial {
     pub layer_normal_texture_ids: [Option<TextureId>; 4],
     pub layer_metallic_roughness_texture_ids: [Option<TextureId>; 4],
     pub layer_normal_scales: [f32; 4],
+    pub terrain_tuning: TerrainMaterialTuning,
 }
 
 impl MeshMaterial {
@@ -182,10 +419,15 @@ impl MeshMaterial {
             metallic_roughness_texture_id: None,
             emissive_texture_id: None,
             toon_ramp_texture_id: None,
+            mask_texture_id: None,
             metallic: 0.0,
             roughness: 0.55,
             normal_scale: 1.0,
             emissive_factor: [0.0, 0.0, 0.0],
+            detail_strength: 1.0,
+            macro_blend: 0.0,
+            roughness_response: 1.0,
+            toon_ramp_response: 1.0,
             uv_scales: [uv_scale, 1.0, 1.0, 1.0],
             sampler: MaterialSamplerKey::REPEAT_LINEAR,
             control_texture_id: None,
@@ -193,6 +435,7 @@ impl MeshMaterial {
             layer_normal_texture_ids: [None, None, None, None],
             layer_metallic_roughness_texture_ids: [None, None, None, None],
             layer_normal_scales: [0.0, 0.0, 0.0, 0.0],
+            terrain_tuning: TerrainMaterialTuning::default(),
         }
     }
 
@@ -204,6 +447,7 @@ impl MeshMaterial {
         layer_metallic_roughness_texture_ids: [TextureId; 4],
         uv_scales: [f32; 4],
         layer_normal_scales: [f32; 4],
+        terrain_tuning: TerrainMaterialTuning,
     ) -> Self {
         let uv_scales: [f32; 4] = std::array::from_fn(|index| {
             let value = uv_scales[index];
@@ -237,10 +481,15 @@ impl MeshMaterial {
             metallic_roughness_texture_id: None,
             emissive_texture_id: None,
             toon_ramp_texture_id: None,
+            mask_texture_id: None,
             metallic: 0.0,
             roughness: 0.55,
             normal_scale: 1.0,
             emissive_factor: [0.0, 0.0, 0.0],
+            detail_strength: 1.0,
+            macro_blend: 0.0,
+            roughness_response: 1.0,
+            toon_ramp_response: 1.0,
             uv_scales,
             sampler: MaterialSamplerKey::REPEAT_LINEAR,
             control_texture_id: Some(control_texture_id),
@@ -260,6 +509,7 @@ impl MeshMaterial {
                 }
             }),
             layer_normal_scales,
+            terrain_tuning: terrain_tuning.normalized_or_default(),
         }
     }
 }
@@ -268,12 +518,28 @@ impl MeshMaterial {
 pub struct GpuModel {
     pub meshes: Vec<GpuMesh>,
     pub cpu_positions: Vec<[f32; 3]>,
+    pub cpu_normals: Vec<[f32; 3]>,
+    pub cpu_uvs: Vec<[f32; 2]>,
+    pub cpu_colors: Vec<[f32; 4]>,
+    pub cpu_materials: Vec<MeshMaterial>,
     pub cpu_indices: Vec<u32>,
+    pub cpu_triangle_materials: Vec<u32>,
     pub aabb_min: [f32; 3],
     pub aabb_max: [f32; 3],
     pub skeleton: Option<Skeleton>,
     pub clips: Vec<AnimationClip>,
     pub rest_joint_palette: Vec<Mat4>,
+}
+
+#[derive(Clone)]
+pub struct ModelGeometryData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub colors: Vec<[f32; 4]>,
+    pub materials: Vec<MeshMaterial>,
+    pub indices: Vec<u32>,
+    pub triangle_materials: Vec<u32>,
 }
 
 /// Interleaved vertex format: position (3) + normal (3) + UV (2) + tangent (4) + color (4).
@@ -466,7 +732,12 @@ impl ModelManager {
         &mut self,
         meshes: Vec<GpuMesh>,
         cpu_positions: Vec<[f32; 3]>,
+        cpu_normals: Vec<[f32; 3]>,
+        cpu_uvs: Vec<[f32; 2]>,
+        cpu_colors: Vec<[f32; 4]>,
+        cpu_materials: Vec<MeshMaterial>,
         cpu_indices: Vec<u32>,
+        cpu_triangle_materials: Vec<u32>,
         skeleton: Option<Skeleton>,
         clips: Vec<AnimationClip>,
     ) -> ModelId {
@@ -481,7 +752,12 @@ impl ModelManager {
             GpuModel {
                 meshes,
                 cpu_positions,
+                cpu_normals,
+                cpu_uvs,
+                cpu_colors,
+                cpu_materials,
                 cpu_indices,
+                cpu_triangle_materials,
                 aabb_min,
                 aabb_max,
                 skeleton,
@@ -545,14 +821,74 @@ impl ModelManager {
         material: MeshMaterial,
     ) -> ModelId {
         let cpu_positions: Vec<[f32; 3]> = vertices.iter().map(|vertex| vertex.position).collect();
+        let cpu_normals: Vec<[f32; 3]> = vertices.iter().map(|vertex| vertex.normal).collect();
+        let cpu_uvs: Vec<[f32; 2]> = vertices.iter().map(|vertex| vertex.uv).collect();
+        let cpu_colors: Vec<[f32; 4]> = vertices.iter().map(|vertex| vertex.color).collect();
+        let triangle_count = indices.len() / 3;
         let mesh = Self::create_gpu_mesh(device, queue, vertices, indices, material);
         self.insert_model(
             vec![mesh],
             cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            vec![material],
             indices.to_vec(),
+            vec![0; triangle_count],
             None,
             Vec::new(),
         )
+    }
+
+    pub fn create_material_variant(
+        &mut self,
+        source_id: ModelId,
+        material: MeshMaterial,
+    ) -> Result<ModelId, String> {
+        let (meshes, cpu_positions, cpu_normals, cpu_uvs, cpu_colors, cpu_indices, triangle_count) = {
+            let source = self
+                .models
+                .get(&source_id)
+                .ok_or_else(|| format!("model material variant source not found: {}", source_id))?;
+            if source.skeleton.is_some() || source.meshes.iter().any(|mesh| mesh.skinned) {
+                return Err(format!(
+                    "model material variant does not support skinned source model: {}",
+                    source_id
+                ));
+            }
+            let meshes = source
+                .meshes
+                .iter()
+                .map(|mesh| GpuMesh {
+                    vertex_buffer: mesh.vertex_buffer.clone(),
+                    index_buffer: mesh.index_buffer.clone(),
+                    index_count: mesh.index_count,
+                    material,
+                    skinned: false,
+                })
+                .collect();
+            (
+                meshes,
+                source.cpu_positions.clone(),
+                source.cpu_normals.clone(),
+                source.cpu_uvs.clone(),
+                source.cpu_colors.clone(),
+                source.cpu_indices.clone(),
+                source.cpu_indices.len() / 3,
+            )
+        };
+        Ok(self.insert_model(
+            meshes,
+            cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            vec![material],
+            cpu_indices,
+            vec![0; triangle_count],
+            None,
+            Vec::new(),
+        ))
     }
 
     pub fn create_plane(
@@ -671,6 +1007,9 @@ impl ModelManager {
             }
             if let Some(info) = material.emissive_texture() {
                 srgb.insert(info.texture().source().index());
+            }
+            if let Some(info) = material.occlusion_texture() {
+                linear.insert(info.texture().source().index());
             }
             if let Some(info) = material.normal_texture() {
                 linear.insert(info.texture().source().index());
@@ -1074,7 +1413,7 @@ impl ModelManager {
         Self::normalize3(projected).unwrap_or([1.0, 0.0, 0.0])
     }
 
-    fn generate_tangents(
+    pub(crate) fn generate_tangents(
         positions: &[[f32; 3]],
         normals: &[[f32; 3]],
         uvs: &[[f32; 2]],
@@ -1171,7 +1510,12 @@ impl ModelManager {
         }
         let mut primitives = Vec::new();
         let mut cpu_positions = Vec::new();
+        let mut cpu_normals = Vec::new();
+        let mut cpu_uvs = Vec::new();
+        let mut cpu_colors = Vec::new();
+        let mut cpu_materials = Vec::new();
         let mut cpu_indices = Vec::new();
+        let mut cpu_triangle_materials = Vec::new();
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
             let positions: Vec<[f32; 3]> = match reader.read_positions() {
@@ -1258,10 +1602,29 @@ impl ModelManager {
                     material.sampler = Self::gltf_texture_sampler(info.texture());
                 }
             }
+            if let Some(info) = material_src.occlusion_texture() {
+                material.mask_texture_id = textures
+                    .linear
+                    .get(&info.texture().source().index())
+                    .copied();
+                if material.texture_id.is_none()
+                    && material.normal_texture_id.is_none()
+                    && material.metallic_roughness_texture_id.is_none()
+                    && material.emissive_texture_id.is_none()
+                {
+                    material.sampler = Self::gltf_texture_sampler(info.texture());
+                }
+            }
             material.emissive_factor = material_src.emissive_factor();
+            let material_index = cpu_materials.len() as u32;
+            cpu_materials.push(material);
             let index_base = cpu_positions.len() as u32;
             cpu_positions.extend(positions.iter().copied());
+            cpu_normals.extend(normals.iter().copied());
+            cpu_uvs.extend(uvs.iter().copied());
+            cpu_colors.extend(colors.iter().copied());
             cpu_indices.extend(indices.iter().map(|index| index_base + *index));
+            cpu_triangle_materials.extend((0..indices.len() / 3).map(|_| material_index));
             let skinning = if node_skin.is_some() {
                 let joint_indices: Vec<[u16; 4]> = reader
                     .read_joints(0)
@@ -1315,7 +1678,12 @@ impl ModelManager {
         Ok(Some(ParsedNodeModel {
             primitives,
             cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            cpu_materials,
             cpu_indices,
+            cpu_triangle_materials,
             skinned: node_skin.is_some(),
         }))
     }
@@ -1570,14 +1938,24 @@ impl ModelManager {
         let ParsedNodeModel {
             primitives,
             cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            cpu_materials,
             cpu_indices,
+            cpu_triangle_materials,
             skinned,
         } = parsed;
         let gpu_meshes = Self::upload_parsed_node_primitives(device, queue, primitives);
         let model_id = self.insert_model(
             gpu_meshes,
             cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            cpu_materials,
             cpu_indices,
+            cpu_triangle_materials,
             if skinned { skeleton.clone() } else { None },
             if skinned { clips.to_vec() } else { Vec::new() },
         );
@@ -1724,6 +2102,7 @@ impl ModelManager {
                 layer_metallic_roughness_texture_ids,
                 uv_scales,
                 normal_scales,
+                TerrainMaterialTuning::from(&extras.material.tuning),
             ));
         }
         if let Some(layers) = extras.material.layers.as_ref() {
@@ -2057,7 +2436,12 @@ impl ModelManager {
             Self::build_skin_and_clips(&document, &buffers, &node_parent, label)?;
         let mut gpu_meshes = Vec::new();
         let mut cpu_positions = Vec::new();
+        let mut cpu_normals = Vec::new();
+        let mut cpu_uvs = Vec::new();
+        let mut cpu_colors = Vec::new();
+        let mut cpu_materials = Vec::new();
         let mut cpu_indices = Vec::new();
+        let mut cpu_triangle_materials = Vec::new();
         for node in document.nodes() {
             let Some(parsed) =
                 Self::parse_node_model(&node, &textures, &buffers, used_skin_index, label)?
@@ -2067,12 +2451,27 @@ impl ModelManager {
             let ParsedNodeModel {
                 primitives,
                 cpu_positions: node_positions,
+                cpu_normals: node_normals,
+                cpu_uvs: node_uvs,
+                cpu_colors: node_colors,
+                cpu_materials: node_materials,
                 cpu_indices: node_indices,
+                cpu_triangle_materials: node_triangle_materials,
                 ..
             } = parsed;
             let index_base = cpu_positions.len() as u32;
+            let material_base = cpu_materials.len() as u32;
             cpu_positions.extend(node_positions.into_iter());
+            cpu_normals.extend(node_normals.into_iter());
+            cpu_uvs.extend(node_uvs.into_iter());
+            cpu_colors.extend(node_colors.into_iter());
+            cpu_materials.extend(node_materials.into_iter());
             cpu_indices.extend(node_indices.into_iter().map(|index| index_base + index));
+            cpu_triangle_materials.extend(
+                node_triangle_materials
+                    .into_iter()
+                    .map(|index| material_base + index),
+            );
             gpu_meshes.extend(Self::upload_parsed_node_primitives(
                 device, queue, primitives,
             ));
@@ -2080,7 +2479,18 @@ impl ModelManager {
         if gpu_meshes.is_empty() {
             return Err(format!("model '{}' contains no renderable meshes", label));
         }
-        Ok(self.insert_model(gpu_meshes, cpu_positions, cpu_indices, skeleton, clips))
+        Ok(self.insert_model(
+            gpu_meshes,
+            cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            cpu_materials,
+            cpu_indices,
+            cpu_triangle_materials,
+            skeleton,
+            clips,
+        ))
     }
 
     /// Free a model by ID.
@@ -2092,6 +2502,19 @@ impl ModelManager {
     /// Get a model by ID.
     pub fn get(&self, id: ModelId) -> Option<&GpuModel> {
         self.models.get(&id)
+    }
+
+    pub fn geometry_data(&self, id: ModelId) -> Option<ModelGeometryData> {
+        let model = self.models.get(&id)?;
+        Some(ModelGeometryData {
+            positions: model.cpu_positions.clone(),
+            normals: model.cpu_normals.clone(),
+            uvs: model.cpu_uvs.clone(),
+            colors: model.cpu_colors.clone(),
+            materials: model.cpu_materials.clone(),
+            indices: model.cpu_indices.clone(),
+            triangle_materials: model.cpu_triangle_materials.clone(),
+        })
     }
 
     pub fn animation_info(&self, id: ModelId) -> Option<ModelAnimationInfo> {

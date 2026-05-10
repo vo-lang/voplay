@@ -20,6 +20,12 @@
 
 use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch, js_namespace = globalThis, js_name = "__voplayTakeWebGpuPerfPacket")]
+    fn js_take_web_gpu_perf_packet() -> Result<js_sys::Uint8Array, JsValue>;
+}
+
 // ── Output tag constants ──────────────────────────────────────────────────────
 
 const TAG_DISPLAY_PULSE: u8 = 0x03;
@@ -172,6 +178,12 @@ pub fn vo_dispose() {
     let _ = crate::renderer_runtime::reset_renderer();
 }
 
+pub(crate) fn take_web_gpu_perf_packet_bridge() -> Result<Vec<u8>, String> {
+    js_take_web_gpu_perf_packet()
+        .map(|packet| packet.to_vec())
+        .map_err(|_| "voplay: webgpu perf packet bridge failed".to_string())
+}
+
 // ── Render externs ────────────────────────────────────────────────────────────
 
 /// initSurface(canvasRef string, noVsync bool) → error
@@ -202,6 +214,35 @@ pub fn submit_frame(input: &[u8]) -> Vec<u8> {
     let result = crate::externs::submit_renderer_frame(&cmds);
     let mut out = Vec::new();
     out_unit_result(&mut out, result);
+    out
+}
+
+/// setRendererPerfStatsEnabled(enabled bool) → error
+#[wasm_bindgen(js_name = "setRendererPerfStatsEnabled")]
+pub fn set_renderer_perf_stats_enabled(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let enabled = in_bool(input, &mut pos);
+    let result = crate::externs::set_renderer_perf_stats_enabled(enabled);
+    let mut out = Vec::new();
+    out_unit_result(&mut out, result);
+    out
+}
+
+/// lastRendererPerfPacket() → []byte
+#[wasm_bindgen(js_name = "lastRendererPerfPacket")]
+pub fn last_renderer_perf_packet(_input: &[u8]) -> Vec<u8> {
+    let packet = crate::externs::last_renderer_perf_packet().unwrap_or_default();
+    let mut out = Vec::new();
+    out_bytes(&mut out, &packet);
+    out
+}
+
+/// lastWebGpuPerfPacket() → []byte
+#[wasm_bindgen(js_name = "lastWebGpuPerfPacket")]
+pub fn last_web_gpu_perf_packet(_input: &[u8]) -> Vec<u8> {
+    let packet = take_web_gpu_perf_packet_bridge().unwrap_or_default();
+    let mut out = Vec::new();
+    out_bytes(&mut out, &packet);
     out
 }
 
@@ -239,6 +280,72 @@ pub fn load_texture_bytes(input: &[u8]) -> Vec<u8> {
     let result = crate::externs::util::with_renderer_result(|r| r.load_texture_bytes(&data));
     let mut out = Vec::new();
     out_u32_handle_result(&mut out, result);
+    out
+}
+
+/// loadTextureRGBA(width uint32, height uint32, data []byte) -> (uint32, error)
+#[wasm_bindgen(js_name = "loadTextureRGBA")]
+pub fn load_texture_rgba(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let width = in_value(input, &mut pos) as u32;
+    let height = in_value(input, &mut pos) as u32;
+    let data = in_bytes(input, &mut pos).to_vec();
+    let result =
+        crate::externs::util::with_renderer_result(|r| r.load_texture_rgba(width, height, &data));
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
+}
+
+/// loadTextureRGBALinear(width uint32, height uint32, data []byte) -> (uint32, error)
+#[wasm_bindgen(js_name = "loadTextureRGBALinear")]
+pub fn load_texture_rgba_linear(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let width = in_value(input, &mut pos) as u32;
+    let height = in_value(input, &mut pos) as u32;
+    let data = in_bytes(input, &mut pos).to_vec();
+    let result = crate::externs::util::with_renderer_result(|r| {
+        r.load_texture_rgba_linear(width, height, &data)
+    });
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
+}
+
+/// loadTextureLinear(path string) -> (uint32, error)
+#[wasm_bindgen(js_name = "loadTextureLinear")]
+pub fn load_texture_linear(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let path = in_str(input, &mut pos).to_string();
+    let result = crate::externs::util::with_renderer_result(|r| r.load_texture_linear(&path));
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
+}
+
+/// loadTextureBytesLinear(data []byte) -> (uint32, error)
+#[wasm_bindgen(js_name = "loadTextureBytesLinear")]
+pub fn load_texture_bytes_linear(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let data = in_bytes(input, &mut pos).to_vec();
+    let result = crate::externs::util::with_renderer_result(|r| r.load_texture_bytes_linear(&data));
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
+}
+
+/// texturePixelsBytes(id uint32) -> []byte
+#[wasm_bindgen(js_name = "texturePixelsBytes")]
+pub fn texture_pixels_bytes(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let id = in_value(input, &mut pos) as u32;
+    let pixels = crate::externs::util::with_renderer_or_panic("texturePixelsBytes", |renderer| {
+        renderer.texture_pixels(id)
+    });
+    let pixels = pixels.unwrap_or_else(|| panic!("texturePixelsBytes: texture not found: {}", id));
+    let data = crate::externs::render::encode_texture_pixels_bytes(&pixels);
+    let mut out = Vec::new();
+    out_bytes(&mut out, &data);
     out
 }
 
@@ -393,6 +500,17 @@ pub fn load_model_bytes(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// createRawMesh(data []byte) → (uint32, error)
+#[wasm_bindgen(js_name = "createRawMesh")]
+pub fn create_raw_mesh(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let data = in_bytes(input, &mut pos).to_vec();
+    let result = crate::externs::util::with_renderer_result(|r| r.create_raw_mesh(&data));
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
+}
+
 /// freeModel(id uint32)
 #[wasm_bindgen(js_name = "freeModel")]
 pub fn free_model(input: &[u8]) -> Vec<u8> {
@@ -428,24 +546,34 @@ pub fn model_bounds(input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// modelMeshDataBytes(id uint32) → []byte
-#[wasm_bindgen(js_name = "modelMeshDataBytes")]
-pub fn model_mesh_data_bytes(input: &[u8]) -> Vec<u8> {
+/// modelGeometryBytes(id uint32) → []byte
+#[wasm_bindgen(js_name = "modelGeometryBytes")]
+pub fn model_geometry_bytes(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let id = in_value(input, &mut pos) as u32;
-    let mesh_data =
-        crate::externs::util::with_renderer_or_panic("modelMeshDataBytes", |renderer| {
-            renderer.get_model_mesh_data(id)
-        });
-    let (positions, indices) =
-        mesh_data.unwrap_or_else(|| panic!("modelMeshDataBytes: model not found: {}", id));
-    let data = crate::externs::resource::encode_model_mesh_data_bytes(&positions, &indices);
+    let geometry = crate::externs::util::with_renderer_or_panic("modelGeometryBytes", |renderer| {
+        renderer.get_model_geometry(id)
+    });
+    let geometry =
+        geometry.unwrap_or_else(|| panic!("modelGeometryBytes: model not found: {}", id));
+    let data = crate::externs::resource::encode_model_geometry_bytes(&geometry);
     let mut out = Vec::new();
     out_bytes(&mut out, &data);
     out
 }
 
 // ── scene3d resource externs ──────────────────────────────────────────────────
+
+/// scene3d_bakeImpostorAtlasBytes(request []byte) → ([]byte, error)
+#[wasm_bindgen(js_name = "scene3d_bakeImpostorAtlasBytes")]
+pub fn scene3d_bake_impostor_atlas_bytes(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let request = in_bytes(input, &mut pos).to_vec();
+    let result = crate::impostor_baker::bake_impostor_atlas_bytes(&request);
+    let mut out = Vec::new();
+    out_bytes_result(&mut out, result);
+    out
+}
 
 /// scene3d_loadLevel(path string) → ([]byte, error)
 #[wasm_bindgen(js_name = "scene3d_loadLevel")]
@@ -522,6 +650,7 @@ pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
             layer_metallic_roughness_texture_ids,
             uv_scales,
             normal_scales,
+            terrain_tuning,
         )| {
             crate::file_io::read_bytes(&path)
                 .map_err(|e| format!("terrain: read {}: {}", path, e))
@@ -538,12 +667,48 @@ pub fn scene3d_create_terrain_splat(input: &[u8]) -> Vec<u8> {
                             layer_metallic_roughness_texture_ids,
                             uv_scales,
                             normal_scales,
+                            terrain_tuning,
                         )
                     })
                 })
         },
     );
     crate::externs::resource::encode_terrain_result_bytes(result)
+}
+
+/// scene3d_createTerrainSplatModel(modelId, controlTexId, layerData) → (uint32, error)
+#[wasm_bindgen(js_name = "scene3d_createTerrainSplatModel")]
+pub fn scene3d_create_terrain_splat_model(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let model_id = in_value(input, &mut pos) as u32;
+    let args = decode_terrain_splat_input(input, &mut pos);
+    let result = args.and_then(
+        |(
+            control_texture_id,
+            layer_texture_ids,
+            layer_normal_texture_ids,
+            layer_metallic_roughness_texture_ids,
+            uv_scales,
+            normal_scales,
+            terrain_tuning,
+        )| {
+            crate::externs::util::with_renderer_result(|r| {
+                r.create_terrain_splat_model(
+                    model_id,
+                    control_texture_id,
+                    layer_texture_ids,
+                    layer_normal_texture_ids,
+                    layer_metallic_roughness_texture_ids,
+                    uv_scales,
+                    normal_scales,
+                    terrain_tuning,
+                )
+            })
+        },
+    );
+    let mut out = Vec::new();
+    out_u32_handle_result(&mut out, result);
+    out
 }
 
 /// scene3d_createTerrainBytes(data []byte, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
@@ -605,6 +770,7 @@ pub fn scene3d_create_terrain_bytes_splat(input: &[u8]) -> Vec<u8> {
             layer_metallic_roughness_texture_ids,
             uv_scales,
             normal_scales,
+            terrain_tuning,
         )| {
             crate::externs::util::with_renderer_result(|r| {
                 r.create_terrain_splat(
@@ -618,6 +784,7 @@ pub fn scene3d_create_terrain_bytes_splat(input: &[u8]) -> Vec<u8> {
                     layer_metallic_roughness_texture_ids,
                     uv_scales,
                     normal_scales,
+                    terrain_tuning,
                 )
             })
         },
@@ -1110,27 +1277,30 @@ pub fn scene3d_physics_spawn_trimesh_body(input: &[u8]) -> Vec<u8> {
     let model_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
     let desc = crate::externs::physics3d::decode_trimesh_desc(body_id, data);
-    let mesh_data = crate::externs::util::with_renderer_or_panic("physicsSpawnTrimeshBody", |r| {
-        r.get_model_mesh_data(model_id)
+    let geometry = crate::externs::util::with_renderer_or_panic("physicsSpawnTrimeshBody", |r| {
+        r.get_model_geometry(model_id)
     });
-    let (positions, indices) = mesh_data
+    let geometry = geometry
         .unwrap_or_else(|| panic!("physicsSpawnTrimeshBody: model not found: {}", model_id));
     crate::physics3d::with_world(world_id, |world| {
-        world.spawn_trimesh_body(&desc, &positions, &indices)
+        world.spawn_trimesh_body(&desc, &geometry.positions, &geometry.indices)
     });
     Vec::new()
 }
 
-/// scene3d_physicsSpawnTrimeshBodyData(worldId, bodyId, data []byte, meshData []byte)
+/// scene3d_physicsSpawnTrimeshBodyData(worldId, bodyId, data []byte, geometryData []byte)
 #[wasm_bindgen(js_name = "scene3d_physicsSpawnTrimeshBodyData")]
 pub fn scene3d_physics_spawn_trimesh_body_data(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
-    let mesh_data = in_bytes(input, &mut pos);
-    crate::externs::physics3d::spawn_trimesh_body_from_mesh_data(
-        world_id, body_id, data, mesh_data,
+    let geometry_data = in_bytes(input, &mut pos);
+    crate::externs::physics3d::spawn_trimesh_body_from_geometry(
+        world_id,
+        body_id,
+        data,
+        geometry_data,
     );
     Vec::new()
 }

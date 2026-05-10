@@ -1,0 +1,110 @@
+package main
+
+import (
+	"github.com/vo-lang/voplay/codec"
+	"github.com/vo-lang/voplay/framewire"
+)
+
+func testFramewireSameBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func testFramewireContract() {
+	input := []byte{1, 2, 3, 4, 5}
+	timing := framewire.Timing{Frame: 42, LoopMs: 16.7, PaceWaitMs: 8.3, ReplyWaitMs: 3.2, SubmitMs: 1.1, WorkMs: 4.4, InputPollMs: 0.5, RequestSendMs: 0.6, RequestEncodeMs: 0.21, RequestPortSendMs: 0.39, PerfPacketMs: 0.7, DisplayPulseMs: 8.33, DrawBytes: 1234, FrameDivisor: 2}
+	reqWriter := codec.NewByteWriter(framewire.RequestHeaderSize + len(input))
+	req := framewire.DecodeRequest(framewire.EncodeRequest(&reqWriter, timing, input))
+	assert(req.HasRenderTiming, "framewire request carries render timing")
+	assert(testFramewireSameBytes(req.InputBytes, input), "framewire request preserves input bytes")
+	assert(req.RenderTiming.Frame == 42, "framewire request preserves frame")
+	assert(req.RenderTiming.FrameDivisor == 2, "framewire request preserves frame divisor")
+	assert(req.RenderTiming.DrawBytes == 1234, "framewire request preserves draw bytes")
+	assertFloatNear(req.RenderTiming.LoopMs, 16.7, 0.0001, "framewire request preserves loop ms")
+	assertFloatNear(req.RenderTiming.PaceWaitMs, 8.3, 0.0001, "framewire request preserves pace wait ms")
+	assertFloatNear(req.RenderTiming.WorkMs, 4.4, 0.0001, "framewire request preserves render work ms")
+	assertFloatNear(req.RenderTiming.InputPollMs, 0.5, 0.0001, "framewire request preserves input poll ms")
+	assertFloatNear(req.RenderTiming.RequestSendMs, 0.6, 0.0001, "framewire request preserves request send ms")
+	assertFloatNear(req.RenderTiming.RequestEncodeMs, 0.21, 0.0001, "framewire request preserves request encode ms")
+	assertFloatNear(req.RenderTiming.RequestPortSendMs, 0.39, 0.0001, "framewire request preserves request port send ms")
+	assertFloatNear(req.RenderTiming.PerfPacketMs, 0.7, 0.0001, "framewire request preserves perf packet ms")
+	assertFloatNear(req.RenderTiming.DisplayPulseMs, 8.33, 0.0001, "framewire request preserves display pulse ms")
+
+	rawReq := []byte{9, 8, 7}
+	decodedRawReq := framewire.DecodeRequest(rawReq)
+	assert(!decodedRawReq.HasRenderTiming, "framewire raw request has no timing")
+	assert(testFramewireSameBytes(decodedRawReq.InputBytes, rawReq), "framewire raw request remains payload-compatible")
+
+	draw := []byte{16, 17, 18}
+	replyWriter := codec.NewByteWriter(framewire.ReplyHeaderSize + len(draw))
+	reply := framewire.DecodeReply(framewire.EncodeReply(&replyWriter, true, draw))
+	assert(reply.WantRenderTiming, "framewire reply requests render timing")
+	assert(testFramewireSameBytes(reply.DrawBytes, draw), "framewire reply preserves draw bytes")
+
+	rawReply := []byte{4, 5}
+	decodedRawReply := framewire.DecodeReply(rawReply)
+	assert(!decodedRawReply.WantRenderTiming, "framewire raw reply has no timing request")
+	assert(testFramewireSameBytes(decodedRawReply.DrawBytes, rawReply), "framewire raw reply remains payload-compatible")
+
+	payload := []byte{31, 32, 33, 34}
+	perfPacket := framewire.PerfPacket{
+		SchemaVersion: framewire.PerfPacketSchemaVersion,
+		Frame: 77,
+		DisplayTick: 88,
+		Source: framewire.PerfPacketSourceWebGpu,
+		Payload: payload,
+		RendererSubmitMs: 2.5,
+		GpuSubmittedWorkDoneMs: 43.25,
+		GpuInFlightSubmits: 3,
+		UploadBytes: 4096,
+		AsyncWindow: true,
+	}
+	perfWriter := codec.NewByteWriter(framewire.PerfPacketHeaderSize + len(payload))
+	decodedPerf := framewire.DecodePerfPacket(framewire.EncodePerfPacket(&perfWriter, perfPacket))
+	assert(decodedPerf.Valid, "framewire perf packet validates")
+	assert(decodedPerf.SchemaVersion == framewire.PerfPacketSchemaVersion, "framewire perf packet preserves schema")
+	assert(decodedPerf.Frame == 77, "framewire perf packet preserves frame")
+	assert(decodedPerf.DisplayTick == 88, "framewire perf packet preserves display tick")
+	assert(decodedPerf.Source == framewire.PerfPacketSourceWebGpu, "framewire perf packet preserves source")
+	assert(decodedPerf.GpuInFlightSubmits == 3, "framewire perf packet preserves in-flight submits")
+	assert(decodedPerf.UploadBytes == 4096, "framewire perf packet preserves upload bytes")
+	assert(decodedPerf.AsyncWindow, "framewire perf packet preserves async window")
+	assertFloatNear(decodedPerf.RendererSubmitMs, 2.5, 0.0001, "framewire perf packet preserves renderer submit")
+	assertFloatNear(decodedPerf.GpuSubmittedWorkDoneMs, 43.25, 0.0001, "framewire perf packet preserves gpu latency")
+	assert(testFramewireSameBytes(decodedPerf.Payload, payload), "framewire perf packet preserves payload bytes")
+
+	decodedRawPerf := framewire.DecodePerfPacket([]byte{5, 6, 7})
+	assert(!decodedRawPerf.Valid, "framewire raw perf packet invalid")
+	assert(testFramewireSameBytes(decodedRawPerf.Payload, []byte{5, 6, 7}), "framewire raw perf packet remains payload-compatible")
+
+	reqWithPerfWriter := codec.NewByteWriter(framewire.RequestHeaderSize + len(input) + framewire.PerfPacketHeaderSize + len(payload) + 8)
+	reqWithPerf := framewire.DecodeRequest(framewire.EncodeRequestWithPerfPacket(&reqWithPerfWriter, timing, input, framewire.EncodePerfPacket(&perfWriter, perfPacket)))
+	assert(reqWithPerf.HasRenderTiming, "framewire request with perf preserves render timing")
+	assert(reqWithPerf.HasPerfPackets, "framewire request exposes perf packets")
+	assert(len(reqWithPerf.PerfPackets) == 1, "framewire request decodes one perf packet")
+	assert(reqWithPerf.PerfPackets[0].Source == framewire.PerfPacketSourceWebGpu, "framewire request preserves perf packet source")
+	assertFloatNear(reqWithPerf.PerfPackets[0].GpuSubmittedWorkDoneMs, 43.25, 0.0001, "framewire request preserves packet gpu latency")
+
+	rendererPacket := perfPacket
+	rendererPacket.Source = framewire.PerfPacketSourceRenderer
+	rendererPacket.RendererSubmitMs = 5.75
+	rendererPacket.GpuSubmittedWorkDoneMs = 0
+	rendererPacket.GpuInFlightSubmits = 0
+	rendererPerfWriter := codec.NewByteWriter(framewire.PerfPacketHeaderSize + len(payload))
+	webGpuPerfWriter := codec.NewByteWriter(framewire.PerfPacketHeaderSize + len(payload))
+	twoPacketWriter := codec.NewByteWriter(framewire.RequestHeaderSize + len(input) + 2 * (framewire.PerfPacketHeaderSize + len(payload) + 4) + 4)
+	reqWithTwoPerf := framewire.DecodeRequest(framewire.EncodeRequestWithPerfPackets(&twoPacketWriter, timing, input, framewire.EncodePerfPacket(&rendererPerfWriter, rendererPacket), framewire.EncodePerfPacket(&webGpuPerfWriter, perfPacket)))
+	assert(reqWithTwoPerf.HasPerfPackets, "framewire request exposes multiple perf packets")
+	assert(len(reqWithTwoPerf.PerfPackets) == 2, "framewire request decodes two perf packets")
+	assert(reqWithTwoPerf.PerfPackets[0].Source == framewire.PerfPacketSourceRenderer, "framewire request preserves first perf packet source")
+	assert(reqWithTwoPerf.PerfPackets[1].Source == framewire.PerfPacketSourceWebGpu, "framewire request preserves second perf packet source")
+	assertFloatNear(reqWithTwoPerf.PerfPackets[0].RendererSubmitMs, 5.75, 0.0001, "framewire request preserves renderer packet timing")
+	assertFloatNear(reqWithTwoPerf.PerfPackets[1].GpuSubmittedWorkDoneMs, 43.25, 0.0001, "framewire request preserves webgpu packet timing")
+}

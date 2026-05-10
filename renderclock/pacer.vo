@@ -1,0 +1,182 @@
+package renderclock
+
+import "time"
+
+const (
+	maxFrameDivisor = 8
+	overloadThresholdFrames = 30
+	underloadThresholdFrames = 4
+)
+
+type Decision struct {
+	Render bool
+	PulseInterval time.Duration
+	FrameDivisor int
+}
+
+type Pacer struct {
+	targetInterval time.Duration
+	pulseInterval time.Duration
+	elapsedSinceRender time.Duration
+	pulseCount int
+	frameDivisor int
+	loadDivisor int
+	overloadFrames int
+	underloadFrames int
+}
+
+func NewPacer(targetFrameRate int) Pacer {
+	return Pacer{targetInterval: TargetFrameInterval(targetFrameRate), frameDivisor: 1}
+}
+
+func TargetFrameInterval(fps int) time.Duration {
+	if fps <= 0 {
+		return 0
+	}
+	if fps > 1000 {
+		fps = 1000
+	}
+	return time.Duration(int64(1000000000) / int64(fps))
+}
+
+func (p *Pacer) AdvancePulse(delta time.Duration) Decision {
+	p.recordPulse(delta)
+	divisor := p.currentDivisor()
+	baseDivisor := divisor
+	if p.targetInterval > 0 && p.pulseInterval > 0 {
+		baseDivisor = p.bestStableDivisor()
+	}
+	p.pulseCount++
+	if delta > 0 && delta <= 250 * time.Millisecond {
+		p.elapsedSinceRender += delta
+	}
+	render := false
+	if p.pulseCount >= divisor || delta > 250 * time.Millisecond || (divisor == baseDivisor && p.targetInterval > 0 && p.elapsedSinceRender >= p.targetInterval) {
+		p.pulseCount = 0
+		p.elapsedSinceRender = 0
+		render = true
+	}
+	return Decision{Render: render, PulseInterval: p.pulseInterval, FrameDivisor: divisor}
+}
+
+func (p *Pacer) PulseInterval() time.Duration {
+	return p.pulseInterval
+}
+
+func (p *Pacer) FrameDivisor() int {
+	divisor := p.frameDivisor
+	if p.loadDivisor > divisor {
+		divisor = p.loadDivisor
+	}
+	if divisor <= 0 {
+		return 1
+	}
+	return divisor
+}
+
+func (p *Pacer) ReportFrameCost(cost time.Duration) {
+	if cost <= 0 || p.targetInterval <= 0 || p.pulseInterval <= 0 {
+		return
+	}
+	current := p.currentDivisor()
+	base := p.bestStableDivisor()
+	if base <= 1 {
+		p.loadDivisor = 0
+		p.frameDivisor = 1
+		p.overloadFrames = 0
+		p.underloadFrames = 0
+		return
+	}
+	budget := p.pulseInterval * time.Duration(current)
+	if budget <= 0 {
+		return
+	}
+	if cost > budget {
+		p.overloadFrames++
+		p.underloadFrames = 0
+		if p.overloadFrames >= overloadThresholdFrames && current < maxFrameDivisor {
+			p.loadDivisor = current + 1
+			p.frameDivisor = p.loadDivisor
+			p.overloadFrames = 0
+		}
+		return
+	}
+	if current > base {
+		nextBudget := p.pulseInterval * time.Duration(current - 1)
+		if nextBudget <= 0 {
+			p.overloadFrames = 0
+			p.underloadFrames = 0
+			return
+		}
+		if cost <= nextBudget {
+			p.underloadFrames++
+			p.overloadFrames = 0
+			if p.underloadFrames >= underloadThresholdFrames && p.loadDivisor > base {
+				p.loadDivisor--
+				p.frameDivisor = p.loadDivisor
+				p.underloadFrames = 0
+			}
+			return
+		}
+		p.overloadFrames = 0
+		p.underloadFrames = 0
+		return
+	}
+	if cost < budget * 50 / 100 {
+		p.underloadFrames++
+		p.overloadFrames = 0
+		if p.underloadFrames >= underloadThresholdFrames && p.loadDivisor > base {
+			p.loadDivisor--
+			p.frameDivisor = p.loadDivisor
+			p.underloadFrames = 0
+		}
+		return
+	}
+	p.overloadFrames = 0
+	p.underloadFrames = 0
+}
+
+func (p *Pacer) recordPulse(delta time.Duration) {
+	if delta < time.Millisecond || delta > 250 * time.Millisecond {
+		return
+	}
+	if p.pulseInterval <= 0 {
+		p.pulseInterval = delta
+		return
+	}
+	p.pulseInterval = (p.pulseInterval * 7 + delta) / 8
+}
+
+func (p *Pacer) currentDivisor() int {
+	if p.targetInterval <= 0 || p.pulseInterval <= 0 {
+		p.frameDivisor = 1
+		return 1
+	}
+	divisor := p.bestStableDivisor()
+	if p.loadDivisor > divisor {
+		divisor = p.loadDivisor
+	}
+	p.frameDivisor = divisor
+	return divisor
+}
+
+func (p *Pacer) bestStableDivisor() int {
+	best := 1
+	bestDiff := renderclockAbsDuration(p.pulseInterval - p.targetInterval)
+	for divisor := 2; divisor <= maxFrameDivisor; divisor++ {
+		interval := p.pulseInterval * time.Duration(divisor)
+		diff := renderclockAbsDuration(interval - p.targetInterval)
+		if diff < bestDiff {
+			best = divisor
+			bestDiff = diff
+		}
+	}
+	return best
+}
+
+func renderclockAbsDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}

@@ -18,6 +18,8 @@ mod font_manager;
 #[cfg(feature = "native")]
 mod host_api;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod impostor_baker;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod input;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod material;
@@ -35,6 +37,10 @@ mod physics_registry;
 mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline3d;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline_depth;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline_post;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_shadow;
 #[cfg(any(feature = "native", feature = "wasm"))]

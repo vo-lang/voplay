@@ -11,6 +11,8 @@ struct SkinnedModelUniform {
     material_params: vec4<f32>,
     emissive_color: vec4<f32>,
     texture_flags: vec4<f32>,
+    material_response: vec4<f32>,
+    texture_flags2: vec4<f32>,
     joint_count: vec4<u32>,
     joints: array<mat4x4<f32>, 128>,
 };
@@ -28,7 +30,10 @@ struct LightUniform {
     fog_color: vec4<f32>,
     fog_params: vec4<f32>,
     shadow_vp: mat4x4<f32>,
+    shadow_cascade_vp: array<mat4x4<f32>, 4>,
+    shadow_cascade_splits: vec4<f32>,
     shadow_params: vec4<f32>,
+    shadow_params2: vec4<f32>,
     color_params: vec4<f32>,
     debug_params: vec4<u32>,
 };
@@ -41,6 +46,7 @@ const RENDER_DEBUG_METALLIC: u32 = 4u;
 const RENDER_DEBUG_SHADOW: u32 = 5u;
 const RENDER_DEBUG_DIRECT: u32 = 6u;
 const RENDER_DEBUG_AMBIENT: u32 = 7u;
+const PI: f32 = 3.14159265359;
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 @group(1) @binding(0) var<uniform> skinned_model: SkinnedModelUniform;
@@ -52,6 +58,7 @@ const RENDER_DEBUG_AMBIENT: u32 = 7u;
 @group(3) @binding(4) var metallic_roughness_tex: texture_2d<f32>;
 @group(3) @binding(5) var emissive_tex: texture_2d<f32>;
 @group(3) @binding(6) var toon_ramp_tex: texture_2d<f32>;
+@group(3) @binding(7) var mask_tex: texture_2d<f32>;
 
 struct SkinnedVertexInput {
     @location(0) position: vec3<f32>,
@@ -71,6 +78,38 @@ struct VertexOutput {
     @location(3) world_tangent: vec4<f32>,
     @location(4) vertex_color: vec4<f32>,
 };
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) receiver_mask: vec4<f32>,
+    @location(2) surface_props: vec4<f32>,
+};
+
+fn surface_props(in: VertexOutput) -> vec4<f32> {
+    let N = surface_normal(in);
+    let rm = roughness_metallic(in);
+    return vec4<f32>(N * 0.5 + vec3<f32>(0.5), rm.x);
+}
+
+fn fragment_output(color: vec4<f32>, in: VertexOutput) -> FragmentOutput {
+    var out: FragmentOutput;
+    out.color = color;
+    out.receiver_mask = vec4<f32>(2.0 / 255.0, 0.0, 0.0, 1.0);
+    out.surface_props = surface_props(in);
+    return out;
+}
+
+fn skinned_textured_fragment_color(in: VertexOutput) -> vec4<f32> {
+    var albedo = textureSample(albedo_tex, albedo_sampler, material_uv(in)) * skinned_model.base_color * in.vertex_color;
+    albedo.a = albedo.a * material_mask(in).a;
+    return shade(albedo, in);
+}
+
+fn skinned_untextured_fragment_color(in: VertexOutput) -> vec4<f32> {
+    var albedo = skinned_model.base_color * in.vertex_color;
+    albedo.a = albedo.a * material_mask(in).a;
+    return shade(albedo, in);
+}
 
 fn apply_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
     let fog_mode = light_uni.count.y;
@@ -124,11 +163,38 @@ fn apply_color_grading(color: vec3<f32>) -> vec3<f32> {
 }
 
 fn shadow_factor(world_pos: vec3<f32>) -> f32 {
-    if light_uni.shadow_params.x < 0.5 {
+    let shadow_quality = u32(light_uni.shadow_params2.z + 0.5);
+    if light_uni.shadow_params.x < 0.5 || shadow_quality == 0u {
         return 1.0;
     }
 
-    let shadow_clip = light_uni.shadow_vp * vec4<f32>(world_pos, 1.0);
+    let cascade_count = min(u32(light_uni.shadow_params2.w + 0.5), 4u);
+    let world_dist = distance(world_pos, camera.camera_pos);
+    let shadow_distance = light_uni.shadow_params2.x;
+    if shadow_distance > 0.0 && world_dist >= shadow_distance {
+        return 1.0;
+    }
+    var cascade_index = 0u;
+    if cascade_count > 1u {
+        if world_dist > light_uni.shadow_cascade_splits.x {
+            cascade_index = 1u;
+        }
+        if cascade_count > 2u && world_dist > light_uni.shadow_cascade_splits.y {
+            cascade_index = 2u;
+        }
+        if cascade_count > 3u && world_dist > light_uni.shadow_cascade_splits.z {
+            cascade_index = 3u;
+        }
+        if cascade_index >= cascade_count {
+            return 1.0;
+        }
+    }
+
+    var shadow_matrix = light_uni.shadow_vp;
+    if cascade_count > 1u {
+        shadow_matrix = light_uni.shadow_cascade_vp[cascade_index];
+    }
+    let shadow_clip = shadow_matrix * vec4<f32>(world_pos, 1.0);
     if shadow_clip.w <= 0.0 {
         return 1.0;
     }
@@ -140,20 +206,51 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
     }
 
     let shadow_size = vec2<i32>(textureDimensions(shadow_tex));
-    let base_texel = vec2<i32>(uv * vec2<f32>(shadow_size));
-    let max_texel = shadow_size - vec2<i32>(1, 1);
+    var atlas_uv = uv;
+    var min_texel = vec2<i32>(0, 0);
+    var max_texel = shadow_size - vec2<i32>(1, 1);
+    if cascade_count > 1u {
+        let tile = vec2<f32>(f32(cascade_index % 2u), f32(cascade_index / 2u));
+        atlas_uv = (uv + tile) * 0.5;
+        let tile_size = max(shadow_size / vec2<i32>(2, 2), vec2<i32>(1, 1));
+        let tile_index = vec2<i32>(i32(cascade_index % 2u), i32(cascade_index / 2u));
+        min_texel = tile_index * tile_size;
+        max_texel = min(min_texel + tile_size - vec2<i32>(1, 1), shadow_size - vec2<i32>(1, 1));
+    }
+    let base_texel = clamp(vec2<i32>(atlas_uv * vec2<f32>(shadow_size)), min_texel, max_texel);
     let compare_depth = shadow_ndc.z - light_uni.shadow_params.y;
+    let softness = clamp(light_uni.shadow_params.z, 0.5, 4.0);
+    var sample_radius: i32 = 0;
+    if shadow_quality >= 2u {
+        sample_radius = 2;
+    }
+    if shadow_quality >= 3u {
+        sample_radius = 3;
+    }
+    if shadow_quality >= 4u {
+        sample_radius = 4;
+    }
     var visibility = 0.0;
-    for (var y = -1; y <= 1; y = y + 1) {
-        for (var x = -1; x <= 1; x = x + 1) {
-            let texel = clamp(base_texel + vec2<i32>(x, y), vec2<i32>(0, 0), max_texel);
+    var weight_total = 0.0;
+    for (var y = -sample_radius; y <= sample_radius; y = y + 1) {
+        for (var x = -sample_radius; x <= sample_radius; x = x + 1) {
+            let tap = vec2<f32>(f32(x), f32(y));
+            let normalized_dist = length(tap) / max(f32(sample_radius), 1.0);
+            let weight = 0.2 + max(0.0, 1.0 - normalized_dist) * softness;
+            let texel = clamp(base_texel + vec2<i32>(x, y), min_texel, max_texel);
             let sampled_depth = textureLoad(shadow_tex, texel, 0);
-            visibility += select(0.0, 1.0, compare_depth <= sampled_depth);
+            visibility += select(0.0, 1.0, compare_depth <= sampled_depth) * weight;
+            weight_total += weight;
         }
     }
-    let raw_visibility = visibility / 9.0;
+    let raw_visibility = visibility / max(weight_total, 0.0001);
     let strength = clamp(light_uni.shadow_params.w, 0.0, 1.0);
-    return 1.0 + (raw_visibility - 1.0) * strength;
+    var distance_fade = 1.0;
+    if shadow_distance > 0.0 {
+        let fade_width = max(light_uni.shadow_params2.y, 1.0);
+        distance_fade = 1.0 - smoothstep(max(shadow_distance - fade_width, 0.0), shadow_distance, world_dist);
+    }
+    return 1.0 + (raw_visibility - 1.0) * strength * distance_fade;
 }
 
 fn ambient_light(normal: vec3<f32>) -> vec3<f32> {
@@ -203,11 +300,20 @@ fn surface_normal(in: VertexOutput) -> vec3<f32> {
     return normalize(N + (mapped - N) * normal_active);
 }
 
+fn material_mask(in: VertexOutput) -> vec4<f32> {
+    let mask_enabled = select(0.0, 1.0, skinned_model.texture_flags2.x > 0.5);
+    let sampled = textureSample(mask_tex, albedo_sampler, material_uv(in));
+    return vec4<f32>(1.0) + (sampled - vec4<f32>(1.0)) * mask_enabled;
+}
+
 fn roughness_metallic(in: VertexOutput) -> vec2<f32> {
     let mr = textureSample(metallic_roughness_tex, albedo_sampler, material_uv(in));
     let mr_active = select(0.0, 1.0, skinned_model.texture_flags.y > 0.5);
-    let roughness = clamp(skinned_model.material_params.y * (1.0 + (mr.g - 1.0) * mr_active), 0.04, 1.0);
-    let metallic = clamp(skinned_model.material_params.z * (1.0 + (mr.b - 1.0) * mr_active), 0.0, 1.0);
+    let response = clamp(skinned_model.material_response.z, 0.0, 4.0);
+    let mask = material_mask(in);
+    let mask_active = select(0.0, 1.0, skinned_model.texture_flags2.x > 0.5);
+    let roughness = clamp(skinned_model.material_params.y * (1.0 + (mr.g - 1.0) * mr_active * response) * (1.0 + (mask.r - 1.0) * mask_active * response), 0.04, 1.0);
+    let metallic = clamp(skinned_model.material_params.z * (1.0 + (mr.b - 1.0) * mr_active * response) * (1.0 + (mask.g - 1.0) * mask_active * response), 0.0, 1.0);
     return vec2<f32>(roughness, metallic);
 }
 
@@ -216,8 +322,39 @@ fn diffuse_shape(diff: f32, toon: bool) -> f32 {
     let toon_step_0 = select(0.0, 0.28, diff > 0.08);
     let toon_step_1 = select(toon_step_0, 0.62, diff > 0.36);
     let toon_step_2 = select(toon_step_1, 1.0, diff > 0.72);
-    let shaped = select(diff, toon_step_2, toon);
-    return select(shaped, ramp, skinned_model.texture_flags.w > 0.5);
+    let toon_response = clamp(skinned_model.material_response.w, 0.0, 1.0);
+    let shaped = mix(diff, toon_step_2, select(0.0, toon_response, toon));
+    return mix(shaped, ramp, clamp(skinned_model.texture_flags.w * toon_response, 0.0, 1.0));
+}
+
+fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    let f = pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+    return f0 + (vec3<f32>(1.0) - f0) * f;
+}
+
+fn pbr_direct(albedo: vec3<f32>, roughness: f32, metallic: f32, N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, diffuse_factor: f32) -> vec3<f32> {
+    let n_dot_l = max(dot(N, L), 0.0);
+    let n_dot_v = max(dot(N, V), 0.001);
+    if n_dot_l <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+
+    let H = normalize(L + V);
+    let n_dot_h = max(dot(N, H), 0.0);
+    let v_dot_h = max(dot(V, H), 0.0);
+    let r = clamp(roughness, 0.04, 1.0);
+    let alpha = max(r * r, 0.0025);
+    let alpha2 = alpha * alpha;
+    let d_denom = max(n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0, 0.001);
+    let d = alpha2 / max(PI * d_denom * d_denom, 0.001);
+    let k = ((r + 1.0) * (r + 1.0)) * 0.125;
+    let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
+    let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let f = fresnel_schlick(v_dot_h, f0);
+    let specular = f * ((d * g_l * g_v) / max(4.0 * n_dot_l * n_dot_v, 0.001)) * n_dot_l;
+    let diffuse = (vec3<f32>(1.0) - f) * (1.0 - metallic) * albedo * diffuse_factor;
+    return diffuse + specular;
 }
 
 fn emissive_value(in: VertexOutput) -> vec3<f32> {
@@ -262,18 +399,7 @@ fn shade(albedo: vec4<f32>, in: VertexOutput) -> vec4<f32> {
         }
 
         let diff = diffuse_shape(max(dot(N, L), 0.0), toon);
-        direct_color += albedo.rgb * light_color * diff * attenuation * shadow;
-
-        let H = normalize(L + V);
-        let spec_power = 8.0 + (1.0 - roughness) * 88.0;
-        let spec = pow(max(dot(N, H), 0.0), spec_power);
-        let spec_strength = (0.18 + metallic * 0.45) * (1.0 - roughness * 0.7);
-        let spec_color = vec3<f32>(
-            1.0 + (albedo.r - 1.0) * metallic,
-            1.0 + (albedo.g - 1.0) * metallic,
-            1.0 + (albedo.b - 1.0) * metallic,
-        );
-        direct_color += spec_color * light_color * spec * attenuation * spec_strength * shadow;
+        direct_color += pbr_direct(albedo.rgb, roughness, metallic, N, V, L, diff) * light_color * attenuation * shadow;
     }
 
     let debug_mode = light_uni.debug_params.x;
@@ -307,12 +433,21 @@ fn shade(albedo: vec4<f32>, in: VertexOutput) -> vec4<f32> {
 }
 
 @fragment
-fn fs_skinned(in: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo = textureSample(albedo_tex, albedo_sampler, material_uv(in)) * skinned_model.base_color * in.vertex_color;
-    return shade(albedo, in);
+fn fs_skinned(in: VertexOutput) -> FragmentOutput {
+    return fragment_output(skinned_textured_fragment_color(in), in);
 }
 
 @fragment
-fn fs_skinned_no_tex(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(skinned_model.base_color * in.vertex_color, in);
+fn fs_skinned_no_tex(in: VertexOutput) -> FragmentOutput {
+    return fragment_output(skinned_untextured_fragment_color(in), in);
+}
+
+@fragment
+fn fs_skinned_color(in: VertexOutput) -> @location(0) vec4<f32> {
+    return skinned_textured_fragment_color(in);
+}
+
+@fragment
+fn fs_skinned_no_tex_color(in: VertexOutput) -> @location(0) vec4<f32> {
+    return skinned_untextured_fragment_color(in);
 }

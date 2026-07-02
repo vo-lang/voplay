@@ -38,6 +38,10 @@ mod pipeline2d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline3d_batches;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod pipeline3d_material;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_depth;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod pipeline_post;
@@ -58,7 +62,13 @@ mod render_world;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_frame;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_perf;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer_runtime;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_targets;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod stream;
 #[cfg(any(feature = "native", feature = "wasm"))]

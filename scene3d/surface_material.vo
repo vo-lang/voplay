@@ -1,0 +1,83 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+const (
+	SurfaceMaterialRoad = TrackSurfaceRoad
+	SurfaceMaterialOffroad = TrackSurfaceOffroad
+	SurfaceMaterialBoost = TrackSurfaceBoost
+)
+
+type SurfaceMaterial struct {
+	ID string
+	Kind string
+	Friction float64
+	GripScale float64
+	SpeedScale float64
+	EngineScale float64
+	Drag float64
+	Boost float64
+	OnRoad bool
+}
+
+func DefaultSurfaceMaterial() SurfaceMaterial {
+	return SurfaceMaterial{ID: TrackSurfaceRoad, Kind: TrackSurfaceRoad, Friction: 1, GripScale: 1, SpeedScale: 1, EngineScale: 1, OnRoad: true}
+}
+
+func SurfaceMaterialFromTrackHit(hit TrackSurfaceHit) SurfaceMaterial {
+	m := DefaultSurfaceMaterial()
+	if hit.Name != "" {
+		m.ID = hit.Name
+	}
+	if hit.Kind != "" {
+		m.Kind = hit.Kind
+	}
+	m.Friction = hit.Friction
+	m.GripScale = hit.Friction
+	m.SpeedScale = hit.Friction
+	m.EngineScale = hit.Friction
+	m.Boost = hit.Boost
+	m.OnRoad = hit.OnRoad
+	return NormalizeSurfaceMaterial(m)
+}
+
+func SurfaceMaterialAtTrackPosition(track *Track, pos voplay.Vec3) SurfaceMaterial {
+	if track == nil {
+		return DefaultSurfaceMaterial()
+	}
+	return SurfaceMaterialFromTrackHit(track.SurfaceAt(pos))
+}
+
+func NormalizeSurfaceMaterial(m SurfaceMaterial) SurfaceMaterial {
+	defaults := DefaultSurfaceMaterial()
+	if m.ID == "" {
+		m.ID = defaults.ID
+	}
+	if m.Kind == "" {
+		m.Kind = m.ID
+	}
+	m.Friction = vehicleFiniteOr(m.Friction, defaults.Friction)
+	if m.Friction <= 0 {
+		m.Friction = defaults.Friction
+	}
+	m.GripScale = vehicleFiniteOr(m.GripScale, m.Friction)
+	if m.GripScale <= 0 {
+		m.GripScale = m.Friction
+	}
+	m.SpeedScale = vehicleFiniteOr(m.SpeedScale, m.Friction)
+	if m.SpeedScale <= 0 {
+		m.SpeedScale = m.Friction
+	}
+	m.EngineScale = vehicleFiniteOr(m.EngineScale, m.Friction)
+	if m.EngineScale <= 0 {
+		m.EngineScale = m.Friction
+	}
+	m.Drag = vehicleFiniteOr(m.Drag, 0)
+	m.Boost = vehicleFiniteOr(m.Boost, 0)
+	if m.Kind == TrackSurfaceRoad || m.Kind == TrackSurfaceBoost {
+		m.OnRoad = true
+	}
+	return m
+}

@@ -1,15 +1,17 @@
 package scene3d
 
-import "sort"
-import "github.com/vo-lang/voplay"
+import (
+	"sort"
+	"github.com/vo-lang/voplay"
+)
 
 type PickFilter func(*Entity) bool
 
 type PickResult struct {
-	Entity   *Entity
+	Entity *Entity
 	Distance float64
-	Point    voplay.Vec3
-	Bounds   voplay.AABB
+	Point voplay.Vec3
+	Bounds voplay.AABB
 }
 
 type pickResultsByDistance []PickResult
@@ -88,12 +90,7 @@ func (s *Scene) PickRayFiltered(origin, dir voplay.Vec3, maxDist float64, filter
 		}
 		if !hasBest || dist < best.Distance {
 			hasBest = true
-			best = PickResult{
-				Entity:   e,
-				Distance: dist,
-				Point:    origin.Add(dir.Scale(dist)),
-				Bounds:   bounds,
-			}
+			best = PickResult{Entity: e, Distance: dist, Point: origin.Add(dir.Scale(dist)), Bounds: bounds}
 		}
 	}
 	if !hasBest {
@@ -133,12 +130,7 @@ func (s *Scene) PickAllRayFiltered(origin, dir voplay.Vec3, maxDist float64, fil
 		if !hit {
 			continue
 		}
-		results = append(results, PickResult{
-			Entity:   e,
-			Distance: dist,
-			Point:    origin.Add(dir.Scale(dist)),
-			Bounds:   bounds,
-		})
+		results = append(results, PickResult{Entity: e, Distance: dist, Point: origin.Add(dir.Scale(dist)), Bounds: bounds})
 	}
 	sort.Stable(pickResultsByDistance(results))
 	return results

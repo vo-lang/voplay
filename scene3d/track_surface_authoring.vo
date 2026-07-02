@@ -76,12 +76,7 @@ func BuildTrackSurfaceAuthoringPlan(track *Track, desc TrackSurfaceAuthoringDesc
 	}
 	desc = normalizeTrackSurfaceAuthoringDesc(desc)
 	quality := RenderingQualityConfig(desc.Quality)
-	plan := TrackSurfaceAuthoringPlan{
-		Details: TrackSurfaceDetailsDesc{HeightProbe: desc.HeightProbe},
-		Physics: []TrackSurfacePhysicsMaterial{trackDefaultRoadPhysics(track)},
-		SurfaceCount: 1,
-		HasSurfaceMetadata: true,
-	}
+	plan := TrackSurfaceAuthoringPlan{Details: TrackSurfaceDetailsDesc{HeightProbe: desc.HeightProbe}, Physics: []TrackSurfacePhysicsMaterial{trackDefaultRoadPhysics(track)}, SurfaceCount: 1, HasSurfaceMetadata: true}
 	for _, surface := range track.asset.Surfaces {
 		if !trackSurfaceAuthoringIncludes(desc.SurfaceNames, surface.Name) {
 			continue
@@ -91,22 +86,7 @@ func BuildTrackSurfaceAuthoringPlan(track *Track, desc TrackSurfaceAuthoringDesc
 		ranges := trackSurfaceAuthoringRanges(track, surface)
 		if surface.Kind == TrackSurfaceOffroad {
 			for i, r := range ranges {
-				edge := TrackEdgeTransitionDesc{
-					Name: surface.Name + "_edge_" + strconv.Itoa(i),
-					Side: trackSurfaceAuthoringSide(surface),
-					SampleCount: trackSurfaceAuthoringSampleCount(desc.EdgeSampleCount, quality),
-					StartDistance: r.Start,
-					EndDistance: r.End,
-					InnerOffset: desc.EdgeInnerOffset,
-					OuterOffset: desc.EdgeOuterOffset,
-					InnerHeightOffset: desc.EdgeInnerHeightOffset,
-					OuterHeightOffset: desc.EdgeOuterHeightOffset,
-					UVScale: desc.EdgeUVScale,
-					Color: desc.OffroadEdgeColor,
-					Roughness: desc.OffroadEdgeRoughness,
-					Material: desc.EdgeMaterial,
-					HeightProbe: desc.HeightProbe,
-				}
+				edge := TrackEdgeTransitionDesc{Name: surface.Name + "_edge_" + strconv.Itoa(i), Side: trackSurfaceAuthoringSide(surface), SampleCount: trackSurfaceAuthoringSampleCount(desc.EdgeSampleCount, quality), StartDistance: r.Start, EndDistance: r.End, InnerOffset: desc.EdgeInnerOffset, OuterOffset: desc.EdgeOuterOffset, InnerHeightOffset: desc.EdgeInnerHeightOffset, OuterHeightOffset: desc.EdgeOuterHeightOffset, UVScale: desc.EdgeUVScale, Color: desc.OffroadEdgeColor, Roughness: desc.OffroadEdgeRoughness, Material: desc.EdgeMaterial, HeightProbe: desc.HeightProbe}
 				plan.Details.EdgeTransitions = append(plan.Details.EdgeTransitions, edge)
 				plan.EdgeTransitionCount++
 			}
@@ -295,27 +275,5 @@ func trackSurfaceAuthoringDecal(track *Track, surface TrackSurface, desc TrackSu
 		lateralMin = 0.15
 		lateralMax = 1.25
 	}
-	return TrackProjectedDecalDesc{
-		Name: surface.Name + "_surface_decals_" + strconv.Itoa(index),
-		Side: side,
-		Seed: 501 + index*37 + surface.Priority*17,
-		Count: count,
-		Density: density,
-		StartDistance: r.Start,
-		EndDistance: r.End,
-		LateralMin: lateralMin,
-		LateralMax: lateralMax,
-		EdgeRelative: edgeRelative,
-		WidthMin: desc.DecalWidthMin,
-		WidthMax: desc.DecalWidthMax,
-		LengthMin: desc.DecalLengthMin,
-		LengthMax: desc.DecalLengthMax,
-		YawJitter: 0.55,
-		AlongJitter: 0.45,
-		SurfaceOffset: desc.DecalSurfaceOffset,
-		Color: color,
-		Roughness: 0.96,
-		Material: desc.DecalMaterial,
-		HeightProbe: desc.HeightProbe,
-	}
+	return TrackProjectedDecalDesc{Name: surface.Name + "_surface_decals_" + strconv.Itoa(index), Side: side, Seed: 501 + index * 37 + surface.Priority * 17, Count: count, Density: density, StartDistance: r.Start, EndDistance: r.End, LateralMin: lateralMin, LateralMax: lateralMax, EdgeRelative: edgeRelative, WidthMin: desc.DecalWidthMin, WidthMax: desc.DecalWidthMax, LengthMin: desc.DecalLengthMin, LengthMax: desc.DecalLengthMax, YawJitter: 0.55, AlongJitter: 0.45, SurfaceOffset: desc.DecalSurfaceOffset, Color: color, Roughness: 0.96, Material: desc.DecalMaterial, HeightProbe: desc.HeightProbe}
 }

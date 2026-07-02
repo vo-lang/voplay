@@ -7,6 +7,7 @@ import (
 )
 
 const RacingReplayFormatVersion = 1
+
 const RacingReplayEngineVersion = "voplay-racing-1"
 
 type RacingReplay struct {

@@ -1,44 +1,32 @@
 package scene3d
 
-import "math"
-import "github.com/vo-lang/voplay"
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
 
 type ThirdPersonCamera struct {
-	Target           *Entity
-	PivotOffset      voplay.Vec3
-	Yaw              float64
-	Pitch            float64
-	MinPitch         float64
-	MaxPitch         float64
-	Distance         float64
-	MinDistance      float64
-	MaxDistance      float64
-	Smoothing        float64
+	Target *Entity
+	PivotOffset voplay.Vec3
+	Yaw float64
+	Pitch float64
+	MinPitch float64
+	MaxPitch float64
+	Distance float64
+	MinDistance float64
+	MaxDistance float64
+	Smoothing float64
 	CollisionEnabled bool
-	CollisionOffset  float64
+	CollisionOffset float64
 	AlignToTargetYaw bool
-
-	currentPos    voplay.Vec3
+	currentPos voplay.Vec3
 	currentTarget voplay.Vec3
-	initialized   bool
-	lastTarget    *Entity
+	initialized bool
+	lastTarget *Entity
 }
 
 func NewThirdPersonCamera(target *Entity) *ThirdPersonCamera {
-	return &ThirdPersonCamera{
-		Target:           target,
-		PivotOffset:      voplay.Vec3{Y: 1.6},
-		Pitch:            0.3,
-		MinPitch:         -1.3962634015954636,
-		MaxPitch:         1.3962634015954636,
-		Distance:         5.0,
-		MinDistance:      1.0,
-		MaxDistance:      20.0,
-		Smoothing:        10.0,
-		CollisionEnabled: true,
-		CollisionOffset:  0.2,
-		AlignToTargetYaw: false,
-	}
+	return &ThirdPersonCamera{Target: target, PivotOffset: voplay.Vec3{Y: 1.6}, Pitch: 0.3, MinPitch: -1.3962634015954636, MaxPitch: 1.3962634015954636, Distance: 5.0, MinDistance: 1.0, MaxDistance: 20.0, Smoothing: 10.0, CollisionEnabled: true, CollisionOffset: 0.2, AlignToTargetYaw: false}
 }
 
 func (c *ThirdPersonCamera) HandleInput(dx, dy float64) {
@@ -48,11 +36,11 @@ func (c *ThirdPersonCamera) HandleInput(dx, dy float64) {
 }
 
 func (c *ThirdPersonCamera) HandleInputScaled(dx, dy, sensitivity float64) {
-	c.HandleInput(dx*sensitivity, dy*sensitivity)
+	c.HandleInput(dx * sensitivity, dy * sensitivity)
 }
 
 func (c *ThirdPersonCamera) Zoom(delta float64) {
-	c.Distance = thirdPersonClamp(c.Distance+delta, c.MinDistance, c.MaxDistance)
+	c.Distance = thirdPersonClamp(c.Distance + delta, c.MinDistance, c.MaxDistance)
 }
 
 func (c *ThirdPersonCamera) Update(scene *Scene, dt float64) {
@@ -74,7 +62,7 @@ func (c *ThirdPersonCamera) Update(scene *Scene, dt float64) {
 	} else if c.Smoothing <= 0 || dt <= 0 {
 		c.currentPos = desiredPos
 	} else {
-		t := 1.0 - math.Exp(-c.Smoothing*dt)
+		t := 1.0 - math.Exp(-c.Smoothing * dt)
 		c.currentPos = c.currentPos.Lerp(desiredPos, t)
 	}
 	if c.CollisionEnabled && scene != nil {
@@ -99,11 +87,7 @@ func (c *ThirdPersonCamera) desiredPosition(pivot voplay.Vec3) voplay.Vec3 {
 		orbitYaw += c.targetBackYaw()
 	}
 	cosPitch := math.Cos(c.Pitch)
-	return pivot.Add(voplay.Vec3{
-		X: c.Distance * math.Sin(orbitYaw) * cosPitch,
-		Y: c.Distance * math.Sin(c.Pitch),
-		Z: c.Distance * math.Cos(orbitYaw) * cosPitch,
-	})
+	return pivot.Add(voplay.Vec3{X: c.Distance * math.Sin(orbitYaw) * cosPitch, Y: c.Distance * math.Sin(c.Pitch), Z: c.Distance * math.Cos(orbitYaw) * cosPitch})
 }
 
 func (c *ThirdPersonCamera) targetBackYaw() float64 {

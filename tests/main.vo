@@ -2170,7 +2170,7 @@ func testScene3DTrackTerrainChunks() {
 	assert(len(result.TerrainChunks) == 2, "scene3d track terrain chunks result count")
 	assert(len(result.Entities) == 2, "scene3d track terrain chunks entity count")
 	assert(result.Terrain.Entity().CullDistance == 180 && result.Terrain.Entity().FrustumCull, "scene3d track terrain chunk forwards culling controls")
-	assertFloatNear(result.Terrain.Entity().CullRadius, math.Sqrt(20*20 + 4*4 + 20*20) * 0.5, 0.000001, "scene3d track terrain chunk derives cull radius from terrain extents")
+	assertFloatNear(result.Terrain.Entity().CullRadius, math.Sqrt(20 * 20 + 4 * 4 + 20 * 20) * 0.5, 0.000001, "scene3d track terrain chunk derives cull radius from terrain extents")
 	assert(result.TerrainChunks[1].Entity().CullRadius == 32, "scene3d track terrain chunk forwards cull radius")
 	assert(tb.createCalls == 2, "scene3d track terrain chunks create calls")
 	tb.heights = map[int]float64{1: 0, 2: 0}
@@ -2860,6 +2860,14 @@ func makeBadRaycastVehicleState() []byte {
 	return w.Bytes()
 }
 
+func makePhysicsContacts(a, b int) []byte {
+	w := codec.NewByteWriter(12)
+	w.WriteU32(1)
+	w.WriteU32(a)
+	w.WriteU32(b)
+	return w.Bytes()
+}
+
 func makePhysicsBodyState(bodyID int, position voplay.Vec3, rotation voplay.Quat, velocity voplay.Vec3) []byte {
 	return makePhysicsBodyStateWithAngular(bodyID, position, rotation, velocity, voplay.Vec3{})
 }
@@ -2934,6 +2942,15 @@ func assertVehicleTelemetryFinite(vehicle *scene3d.Vehicle, label string) {
 	}
 }
 
+func telemetryIssuesHaveCode(issues []scene3d.VehicleTelemetryIssue, code string) bool {
+	for _, issue := range issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func testScene3DVehicleTelemetryAndKartController() {
 	pb := &testScene3DPhysicsBackend{vehicleState: makeRaycastVehicleState()}
 	prevPhys := scene3d.SetPhysicsBackend(pb)
@@ -2942,10 +2959,16 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(err == nil, "scene3d vehicle telemetry track err")
 	s := scene3d.New()
 	body := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: 1}, Physics: &scene3d.Physics{Type: scene3d.Dynamic, Collider: scene3d.Box(1, 0.5, 1), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll}})
+	wall := s.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: 2, Y: 1}, Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(1, 1, 1), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll}})
 	config := scene3d.DefaultKartVehicleConfig()
 	config.Wheels = config.Wheels[:1]
 	vehicle := scene3d.NewVehicle(body, config)
 	vehicle.BindTrack(track)
+	pb.contacts = makePhysicsContacts(body.ID(), wall.ID())
+	contactEvents := s.ContactEvents()
+	assert(len(contactEvents) == 1, "scene3d contact events decode backend pair")
+	assert(contactEvents[0].A == body && contactEvents[0].B == wall, "scene3d contact events resolve entities")
+	assert(contactEvents[0].RelativeSpeed >= 0, "scene3d contact events report relative speed")
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle wheel count before sync")
 	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: 1}, 1.0 / 60.0)
 	assert(len(pb.vehicleControls) > 0, "scene3d vehicle sends wheel controls")
@@ -2958,6 +2981,15 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(state.NormalLoad > 0, "scene3d vehicle normal load approximated")
 	assert(state.LongitudinalSlip > 0, "scene3d vehicle longitudinal slip approximated")
 	assert(state.SurfaceID == scene3d.TrackSurfaceRoad || state.SurfaceID == "boost_lane", "scene3d vehicle wheel surface id")
+	intent := scene3d.VehicleIntentFromRacingInput(scene3d.RacingInput{Throttle: 0.2, Brake: 0.75, Steer: 2, Drift: true, Boost: true})
+	assertFloatNear(intent.Normalized().Steering, 1, 0.000001, "scene3d vehicle intent clamps steering")
+	assertFloatNear(intent.VehicleInput().Throttle, -0.75, 0.000001, "scene3d vehicle intent maps brake to reverse throttle")
+	assert(intent.VehicleInput().Drift && intent.VehicleInput().Boost, "scene3d vehicle intent maps action flags")
+	material := scene3d.SurfaceMaterialFromTrackHit(track.SurfaceAt(voplay.Vec3{X: -8, Y: 0, Z: -20}))
+	assert(material.Kind == scene3d.TrackSurfaceOffroad && !material.OnRoad, "scene3d surface material resolves offroad")
+	dynamics := scene3d.NewKartDynamics(scene3d.KartDynamicsConfigFromControllerConfig(scene3d.DefaultKartControllerConfig()))
+	resolved := dynamics.Resolve(intent, material)
+	assert(resolved.VehicleConfig.MaxForwardSpeed < scene3d.DefaultKartVehicleConfig().MaxForwardSpeed, "scene3d kart dynamics applies material speed budget")
 	pb.bodyState = makePhysicsBodyState(body.ID(), body.Position(), body.Rotation(), voplay.Vec3{X: 4, Z: -12})
 	pb.vehicleState = makeRaycastVehicleStateWith(12, voplay.Vec3{Y: 0.2, Z: -20}, voplay.Vec3{Z: -20}, 0.28, 0, 18)
 	s.StepAndSyncPhysics(1.0 / 60.0)
@@ -2971,6 +3003,14 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(debugSnapshot.Surface.OnSurface, "scene3d vehicle debug snapshot surface")
 	assert(len(debugSnapshot.Wheels) == 1, "scene3d vehicle debug snapshot wheel count")
 	assert(debugSnapshot.Wheels[0].LateralSlip > 3.9 && debugSnapshot.Wheels[0].LateralSlip < 4.1, "scene3d vehicle debug snapshot slip")
+	telemetry := vehicle.Telemetry()
+	assert(telemetry.WheelCount == 1 && telemetry.ContactCount == 1, "scene3d vehicle telemetry summarizes wheels")
+	assert(telemetry.Surface.ID != "", "scene3d vehicle telemetry includes surface material")
+	assert(telemetry.IsHealthy(scene3d.VehicleIntent{Throttle: 0.1}, scene3d.VehicleTelemetryBudget{}), "scene3d vehicle telemetry healthy under budget")
+	badTelemetry := scene3d.VehicleTelemetry{Rotation: voplay.Quat{}, Velocity: voplay.Vec3{X: math.Inf(1)}, GroundNormal: voplay.Vec3{Y: 1}}
+	issues := badTelemetry.ValidationIssues(scene3d.VehicleIntent{Throttle: 1}, scene3d.VehicleTelemetryBudget{MaxVelocity: 20})
+	assert(telemetryIssuesHaveCode(issues, scene3d.VehicleTelemetryIssueInvalidNumber), "scene3d vehicle telemetry flags invalid numbers")
+	assert(telemetryIssuesHaveCode(issues, scene3d.VehicleTelemetryIssueInvalidQuaternion), "scene3d vehicle telemetry flags invalid quaternion")
 	racingOverlay, err := scene3d.SpawnRacingDebugOverlay(s, track, vehicle, scene3d.RacingDebugOptions{Model: voplay.ModelID(405), SurfaceMarker: true})
 	assert(err == nil, "scene3d racing debug overlay spawns")
 	assert(racingOverlay.TrackOverlay != nil && len(racingOverlay.TrackOverlay.Entities) > 0, "scene3d racing debug overlay track layer")
@@ -3005,7 +3045,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	vehicle.SetPose(voplay.Vec3{Y: 1}, 0)
 	pb.vehicleControls = nil
 	pb.vehicleState = makeRaycastVehicleState()
-	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: -1}, 1.0 / 60.0)
+	vehicle.UpdateIntent(scene3d.VehicleIntent{Throttle: 1, Steering: -1}, 1.0 / 60.0)
 	assert(len(pb.vehicleControls) > 0, "scene3d vehicle sends left steer controls")
 	assert(pb.vehicleControls[0].steering > 0, "scene3d left steer uses backend sign convention")
 	pb.vehicleState = nil
@@ -3013,7 +3053,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle missing state keeps configured wheel count")
 	kart := scene3d.NewKartController(vehicle, track, scene3d.KartControllerConfig{})
 	kart.ActivateBoost(0.5)
-	kstate := kart.Update(scene3d.KartInput{Throttle: 1, Steer: 0.5}, 1.0 / 60.0)
+	kstate := kart.UpdateIntent(scene3d.VehicleIntent{Throttle: 1, Steering: 0.5}, 1.0 / 60.0)
 	assert(kstate.Boosting, "scene3d kart controller boosting state")
 	kart.Respawn(track.PoseAt(0))
 	assertFloatNear(kart.BoostTimer, 0, 0.000001, "scene3d kart respawn clears boost")
@@ -3382,6 +3422,7 @@ type testScene3DPhysicsBackend struct {
 	panicOnSpawn bool
 	vehicleState []byte
 	bodyState []byte
+	contacts []byte
 	vehicleControls []testVehicleControl
 }
 
@@ -3444,7 +3485,7 @@ func (b *testScene3DPhysicsBackend) Step(worldID int, dt float64, cmds []byte) [
 }
 
 func (b *testScene3DPhysicsBackend) Contacts(worldID int) []byte {
-	return nil
+	return b.contacts
 }
 
 func (b *testScene3DPhysicsBackend) SetGravity(worldID int, gravity voplay.Vec3) {}
@@ -3965,7 +4006,6 @@ func testDrawStatsContract() {
 	assert(stats.TextDraws == 1, "draw stats counts text")
 	assert(stats.SpriteDraws == 1, "draw stats counts sprites")
 	assert(stats.ModelDraws == 1, "draw stats counts models")
-
 	before := stats
 	d.DrawText("hud", 0, 0, 10, voplay.White)
 	delta := voplay.DrawStatsDelta(d.Stats(), before)
@@ -3982,7 +4022,6 @@ func testPerfDiagnosticsApiContract() {
 	assert(trace.SchemaVersion == 1 && !trace.Enabled, "perf trace defaults disabled")
 	disabledGate := ctx.EvaluatePerfGate(voplay.PerfGateConfig{})
 	assert(!disabledGate.Passed && disabledGate.PrimaryFailure == voplay.PerfGateFailureDisabled, "perf gate fails when stats disabled")
-
 	ctx.EnablePerfStats(voplay.PerfModeStats)
 	snapshot = ctx.GetPerfSnapshot()
 	assert(snapshot.Enabled, "perf stats mode enables snapshot")
@@ -3990,7 +4029,6 @@ func testPerfDiagnosticsApiContract() {
 	assert(!snapshot.HudVisible, "perf stats mode keeps HUD hidden")
 	trace = ctx.GetPerfTrace(4)
 	assert(trace.Enabled && trace.Mode == voplay.PerfModeStats && trace.CapturedFrames == 0, "perf trace exposes enabled mode before frames")
-
 	ctx.MarkPerfScope("fixed-step")
 	handle := ctx.BeginPerfScope("advance")
 	ctx.EndPerfScope(handle)
@@ -3999,37 +4037,30 @@ func testPerfDiagnosticsApiContract() {
 	assert(snapshot.CustomScopeCount == 2, "perf snapshot records custom scopes")
 	assert(snapshot.CustomScope0Name == "fixed-step" && snapshot.CustomScope0Count == 1, "perf custom scope includes fixed-step marker")
 	assert(snapshot.CustomScope1Name == "advance" && snapshot.CustomScope1Count == 1, "perf custom scope includes timed advance marker")
-
 	ctx.TogglePerfHud()
 	snapshot = ctx.GetPerfSnapshot()
 	assert(snapshot.Mode == voplay.PerfModeHud && snapshot.HudVisible, "perf HUD toggles visible")
 	ctx.NextPerfHudPage()
 	snapshot = ctx.GetPerfSnapshot()
 	assert(snapshot.HudPage == 1, "perf HUD page advances")
-
 	ctx.DisablePerfStats()
 	snapshot = ctx.GetPerfSnapshot()
 	assert(!snapshot.Enabled && snapshot.Mode == voplay.PerfModeOff, "perf stats disable returns to off")
-
 	okSnapshot := voplay.PerfSnapshot{Enabled: true, ThirtySecond: voplay.PerfWindowSummary{Frames: 120, SlowFrames: 0, FrameP99Ms: 8.3334, FrameMaxMs: 10, GpuWorkDoneP90Ms: 0.5, HudP90Ms: 0.08}}
 	okGate := voplay.EvaluatePerfGate(okSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxFrameP99Ms: 9, MaxFrameMaxMs: 12, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0, MaxHudP90Ms: 0.2, MaxProbeOverheadMs: 0.05})
 	assert(okGate.Passed && okGate.CheckedFrames == 120, "perf gate passes clean snapshot")
-
 	slowSnapshot := okSnapshot
 	slowSnapshot.ThirtySecond.SlowFrames = 2
 	slowGate := voplay.EvaluatePerfGate(slowSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
 	assert(!slowGate.Passed && slowGate.PrimaryFailure == voplay.PerfGateFailureSlowFrames, "perf gate fails slow frames")
-
 	gpuSnapshot := okSnapshot
 	gpuSnapshot.Attribution.GpuQueueBound = 1
 	gpuGate := voplay.EvaluatePerfGate(gpuSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
 	assert(!gpuGate.Passed && gpuGate.PrimaryFailure == voplay.PerfGateFailureGpuQueue, "perf gate fails gpu queue bound frames")
-
 	gpuWorkSnapshot := okSnapshot
 	gpuWorkSnapshot.ThirtySecond.GpuWorkDoneP90Ms = 100
 	gpuWorkGate := voplay.EvaluatePerfGate(gpuWorkSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0})
 	assert(!gpuWorkGate.Passed && gpuWorkGate.PrimaryFailure == voplay.PerfGateFailureGpuWorkDone, "perf gate fails gpu work-done p90")
-
 	probeSnapshot := okSnapshot
 	probeSnapshot.Overhead.ProbeOverheadMs = 0.2
 	probeGate := voplay.EvaluatePerfGate(probeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})

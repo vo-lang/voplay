@@ -33,63 +33,15 @@ type QualitySelectionDesc struct {
 func RenderingQualityConfig(quality int) RenderingQualityProfile {
 	q := normalizeSceneQuality(quality)
 	if q == SceneQualityLow {
-		return RenderingQualityProfile{
-			Quality: q,
-			ShadowQuality: ShadowQualityLow,
-			ContactAOQuality: ContactAOQualityLow,
-			ScatterDensityScale: 0.45,
-			ScatterLodScale: 0.62,
-			MaterialDetailScale: 0.7,
-			TerrainDetailScale: 0.7,
-			BloomThreshold: 0.82,
-			BloomStrength: 0.055,
-			SharpenStrength: 0.035,
-			FxaaStrength: 0.65,
-		}
+		return RenderingQualityProfile{Quality: q, ShadowQuality: ShadowQualityLow, ContactAOQuality: ContactAOQualityLow, ScatterDensityScale: 0.45, ScatterLodScale: 0.62, MaterialDetailScale: 0.7, TerrainDetailScale: 0.7, BloomThreshold: 0.82, BloomStrength: 0.055, SharpenStrength: 0.035, FxaaStrength: 0.65}
 	}
 	if q == SceneQualityMedium {
-		return RenderingQualityProfile{
-			Quality: q,
-			ShadowQuality: ShadowQualityMedium,
-			ContactAOQuality: ContactAOQualityMedium,
-			ScatterDensityScale: 0.75,
-			ScatterLodScale: 0.84,
-			MaterialDetailScale: 0.88,
-			TerrainDetailScale: 0.88,
-			BloomThreshold: 0.76,
-			BloomStrength: 0.09,
-			SharpenStrength: 0.05,
-			FxaaStrength: 0.78,
-		}
+		return RenderingQualityProfile{Quality: q, ShadowQuality: ShadowQualityMedium, ContactAOQuality: ContactAOQualityMedium, ScatterDensityScale: 0.75, ScatterLodScale: 0.84, MaterialDetailScale: 0.88, TerrainDetailScale: 0.88, BloomThreshold: 0.76, BloomStrength: 0.09, SharpenStrength: 0.05, FxaaStrength: 0.78}
 	}
 	if q == SceneQualityCinematic {
-		return RenderingQualityProfile{
-			Quality: q,
-			ShadowQuality: ShadowQualityCinematic,
-			ContactAOQuality: ContactAOQualityCinematic,
-			ScatterDensityScale: 1.35,
-			ScatterLodScale: 1.28,
-			MaterialDetailScale: 1.25,
-			TerrainDetailScale: 1.25,
-			BloomThreshold: 0.68,
-			BloomStrength: 0.16,
-			SharpenStrength: 0.08,
-			FxaaStrength: 1.0,
-		}
+		return RenderingQualityProfile{Quality: q, ShadowQuality: ShadowQualityCinematic, ContactAOQuality: ContactAOQualityCinematic, ScatterDensityScale: 1.35, ScatterLodScale: 1.28, MaterialDetailScale: 1.25, TerrainDetailScale: 1.25, BloomThreshold: 0.68, BloomStrength: 0.16, SharpenStrength: 0.08, FxaaStrength: 1.0}
 	}
-	return RenderingQualityProfile{
-		Quality: SceneQualityHigh,
-		ShadowQuality: ShadowQualityHigh,
-		ContactAOQuality: ContactAOQualityHigh,
-		ScatterDensityScale: 1.0,
-		ScatterLodScale: 1.0,
-		MaterialDetailScale: 1.0,
-		TerrainDetailScale: 1.0,
-		BloomThreshold: 0.72,
-		BloomStrength: 0.12,
-		SharpenStrength: 0.065,
-		FxaaStrength: 0.9,
-	}
+	return RenderingQualityProfile{Quality: SceneQualityHigh, ShadowQuality: ShadowQualityHigh, ContactAOQuality: ContactAOQualityHigh, ScatterDensityScale: 1.0, ScatterLodScale: 1.0, MaterialDetailScale: 1.0, TerrainDetailScale: 1.0, BloomThreshold: 0.72, BloomStrength: 0.12, SharpenStrength: 0.065, FxaaStrength: 0.9}
 }
 
 func SelectRenderingQuality(desc QualitySelectionDesc) int {

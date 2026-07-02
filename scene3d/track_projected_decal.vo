@@ -60,7 +60,7 @@ func BuildTrackProjectedDecalMesh(track *Track, desc TrackProjectedDecalDesc) (T
 	if desc.EndDistance <= desc.StartDistance {
 		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: distance range is invalid")
 	}
-	count := trackProjectedDecalCount(desc.EndDistance-desc.StartDistance, desc)
+	count := trackProjectedDecalCount(desc.EndDistance - desc.StartDistance, desc)
 	if count <= 0 {
 		return TrackProjectedDecalMesh{}, errors.New("scene3d.BuildTrackProjectedDecalMesh: Count, Step, or Density must produce decals")
 	}
@@ -69,8 +69,8 @@ func BuildTrackProjectedDecalMesh(track *Track, desc TrackProjectedDecalDesc) (T
 	decals := 0
 	for _, side := range trackScatterSides(desc.Side) {
 		for i := 0; i < count; i++ {
-			seed := desc.Seed + i*9151 + int(side)*1973
-			distance := desc.StartDistance + trackProjectedDecalDistance(desc.EndDistance-desc.StartDistance, count, i, seed)
+			seed := desc.Seed + i * 9151 + int(side) * 1973
+			distance := desc.StartDistance + trackProjectedDecalDistance(desc.EndDistance - desc.StartDistance, count, i, seed)
 			pose := track.PoseAt(distance)
 			lateral := desc.LateralMin
 			if desc.LateralMax > desc.LateralMin {
@@ -84,8 +84,8 @@ func BuildTrackProjectedDecalMesh(track *Track, desc TrackProjectedDecalDesc) (T
 				along = (trackScatterRand(seed, 2.5) - 0.5) * desc.AlongJitter
 			}
 			center := pose.Position.Add(pose.Right.Scale(side * lateral)).Add(pose.Forward.Scale(along))
-			width := desc.WidthMin + (desc.WidthMax-desc.WidthMin)*trackScatterRand(seed, 3.1)
-			length := desc.LengthMin + (desc.LengthMax-desc.LengthMin)*trackScatterRand(seed, 3.7)
+			width := desc.WidthMin + (desc.WidthMax - desc.WidthMin) * trackScatterRand(seed, 3.1)
+			length := desc.LengthMin + (desc.LengthMax - desc.LengthMin) * trackScatterRand(seed, 3.7)
 			yaw := (trackScatterRand(seed, 4.3) - 0.5) * desc.YawJitter
 			forward := pose.Forward.Scale(math.Cos(yaw)).Add(pose.Right.Scale(math.Sin(yaw))).Normalize()
 			if forward.LengthSq() <= 0.000001 {
@@ -177,18 +177,8 @@ func appendProjectedDecalQuad(vertices []trackEdgeVertex, indices []int, center,
 	base := len(vertices)
 	halfW := width * 0.5
 	halfL := length * 0.5
-	corners := []voplay.Vec3{
-		center.Sub(right.Scale(halfW)).Sub(forward.Scale(halfL)),
-		center.Add(right.Scale(halfW)).Sub(forward.Scale(halfL)),
-		center.Sub(right.Scale(halfW)).Add(forward.Scale(halfL)),
-		center.Add(right.Scale(halfW)).Add(forward.Scale(halfL)),
-	}
-	uvs := []voplay.Vec2{
-		voplay.Vec2{X: 0, Y: 0},
-		voplay.Vec2{X: 1, Y: 0},
-		voplay.Vec2{X: 0, Y: 1},
-		voplay.Vec2{X: 1, Y: 1},
-	}
+	corners := []voplay.Vec3{center.Sub(right.Scale(halfW)).Sub(forward.Scale(halfL)), center.Add(right.Scale(halfW)).Sub(forward.Scale(halfL)), center.Sub(right.Scale(halfW)).Add(forward.Scale(halfL)), center.Add(right.Scale(halfW)).Add(forward.Scale(halfL))}
+	uvs := []voplay.Vec2{voplay.Vec2{X: 0, Y: 0}, voplay.Vec2{X: 1, Y: 0}, voplay.Vec2{X: 0, Y: 1}, voplay.Vec2{X: 1, Y: 1}}
 	for i, corner := range corners {
 		if heightProbe != nil {
 			if h, ok := heightProbe(corner); ok {

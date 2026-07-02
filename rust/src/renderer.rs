@@ -2,10 +2,6 @@
 //! Manages device, surface, camera, and all rendering pipelines (shapes, sprites).
 
 use std::collections::HashMap;
-#[cfg(not(feature = "wasm"))]
-use std::time::Instant;
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-use wasm_bindgen::prelude::*;
 
 use crate::draw_list::{DrawCallKind, DrawList2D};
 use crate::font_manager::FontManager;
@@ -28,269 +24,31 @@ use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
 use crate::primitive_pipeline::PrimitivePipeline;
 use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
 use crate::render_world::{RenderObjectUpdate, RenderWorld};
+use crate::renderer_frame::{
+    FrameGraph, FrameGraphReport, RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY, RES_POST_COLOR,
+    RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
+};
+use crate::renderer_perf::{
+    elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
+    RendererPerfStats, RENDERER_DIAG_DISABLE_BLOOM, RENDERER_DIAG_DISABLE_CONTACT_AO,
+    RENDERER_DIAG_DISABLE_DECALS, RENDERER_DIAG_DISABLE_FXAA, RENDERER_DIAG_DISABLE_POST_EFFECTS,
+    RENDERER_DIAG_DISABLE_PRIMITIVES, RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS,
+    RENDERER_DIAG_DISABLE_SHADOWS, RENDERER_DIAG_DISABLE_SHARPEN,
+};
+use crate::renderer_targets::{
+    create_depth_view, create_msaa_color_view, create_msaa_receiver_mask_view,
+    create_msaa_surface_props_view, create_post_color_view, create_receiver_mask_view,
+    create_surface_props_view, MAIN_SAMPLE_COUNT, RECEIVER_MASK_FORMAT, SURFACE_PROPS_FORMAT,
+};
 use crate::stream::{DrawCommand, StreamReader};
 use crate::terrain::TerrainData;
 use crate::texture::{TextureId, TextureManager, TexturePixelsData};
 
 /// Maximum number of camera states per frame before buffer regrow.
 const INITIAL_CAMERA_SLOTS: usize = 16;
-const MAIN_SAMPLE_COUNT: u32 = 1;
-const MAIN_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const RECEIVER_MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const SURFACE_PROPS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DECAL_RECEIVER_ALL: u32 = 3;
-const PERF_PACKET_MAGIC: u8 = 0xf9;
-const PERF_PACKET_VERSION: u8 = 1;
-const PERF_PACKET_SCHEMA_VERSION: u32 = 1;
-const PERF_PACKET_SOURCE_RENDERER: u32 = 2;
-const RENDERER_PERF_PAYLOAD_VERSION: u32 = 3;
-
-const RENDERER_DIAG_DISABLE_SHADOWS: u32 = 1 << 0;
-const RENDERER_DIAG_DISABLE_POST_EFFECTS: u32 = 1 << 1;
-const RENDERER_DIAG_DISABLE_BLOOM: u32 = 1 << 2;
-const RENDERER_DIAG_DISABLE_SHARPEN: u32 = 1 << 3;
-const RENDERER_DIAG_DISABLE_FXAA: u32 = 1 << 4;
-const RENDERER_DIAG_DISABLE_CONTACT_AO: u32 = 1 << 5;
-const RENDERER_DIAG_DISABLE_PRIMITIVES: u32 = 1 << 6;
-const RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS: u32 = 1 << 7;
-const RENDERER_DIAG_DISABLE_DECALS: u32 = 1 << 8;
 #[cfg(feature = "wasm")]
 const CANVAS_METRICS_CHECK_INTERVAL_MS: f64 = 250.0;
-
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(catch, js_namespace = globalThis, js_name = "__voplayRendererPerfConfig")]
-    fn js_renderer_perf_config() -> Result<String, JsValue>;
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-struct RendererPerfOverrides {
-    flags: u32,
-}
-
-impl RendererPerfOverrides {
-    fn current() -> Self {
-        Self::from_config(&renderer_perf_config_string())
-    }
-
-    fn from_config(config: &str) -> Self {
-        let mut flags = 0u32;
-        for raw_token in
-            config.split(|c: char| c == ',' || c == ';' || c == '&' || c.is_whitespace())
-        {
-            let token = normalize_renderer_perf_token(raw_token);
-            match token.as_str() {
-                "disableshadows" | "shadowoff" | "shadowsoff" | "noshadows" => {
-                    flags |= RENDERER_DIAG_DISABLE_SHADOWS;
-                }
-                "disablepost" | "disableposteffects" | "postoff" | "posteffectsoff" => {
-                    flags |= RENDERER_DIAG_DISABLE_POST_EFFECTS;
-                }
-                "disablebloom" | "bloomoff" | "nobloom" => {
-                    flags |= RENDERER_DIAG_DISABLE_BLOOM;
-                }
-                "disablesharpen" | "sharpenoff" | "nosharpen" => {
-                    flags |= RENDERER_DIAG_DISABLE_SHARPEN;
-                }
-                "disablefxaa" | "fxaaoff" | "nofxaa" => {
-                    flags |= RENDERER_DIAG_DISABLE_FXAA;
-                }
-                "disablecontactao" | "contactaooff" | "noao" | "noambientocclusion" => {
-                    flags |= RENDERER_DIAG_DISABLE_CONTACT_AO;
-                }
-                "disableprimitives" | "primitivesoff" | "noprimitives" => {
-                    flags |= RENDERER_DIAG_DISABLE_PRIMITIVES;
-                }
-                "disableprimitiveshadows" | "primitiveshadowsoff" | "noprimitiveshadows" => {
-                    flags |= RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS;
-                }
-                "disabledecals" | "decalsoff" | "nodecals" => {
-                    flags |= RENDERER_DIAG_DISABLE_DECALS;
-                }
-                _ => {}
-            }
-        }
-        Self { flags }
-    }
-
-    fn flags(self) -> u32 {
-        self.flags
-    }
-
-    fn has(self, flag: u32) -> bool {
-        self.flags & flag != 0
-    }
-}
-
-fn normalize_renderer_perf_token(token: &str) -> String {
-    let mut out = String::with_capacity(token.len());
-    for ch in token.chars() {
-        if ch != '_' && ch != '-' && ch != '=' {
-            out.push(ch.to_ascii_lowercase());
-        }
-    }
-    out
-}
-
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-fn renderer_perf_config_string() -> String {
-    js_renderer_perf_config().unwrap_or_default()
-}
-
-#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
-fn renderer_perf_config_string() -> String {
-    String::new()
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-struct RendererPerfStats {
-    frame_id: u32,
-    display_tick: u32,
-    submit_frame_ms: f64,
-    surface_acquire_ms: f64,
-    decode_ms: f64,
-    scene_update_ms: f64,
-    depth_pass_ms: f64,
-    shadow_pass_ms: f64,
-    main_pass_ms: f64,
-    main_pass_setup_ms: f64,
-    main_skybox_ms: f64,
-    main_model_ms: f64,
-    main_primitive_ms: f64,
-    main_pass_close_ms: f64,
-    post_pass_ms: f64,
-    overlay_pass_ms: f64,
-    queue_submit_cpu_ms: f64,
-    present_cpu_ms: f64,
-    draw_calls: u32,
-    model_draws: u32,
-    skinned_draws: u32,
-    primitive_draws: u32,
-    sprite_draws: u32,
-    text_draws: u32,
-    instances: u32,
-    triangles: u32,
-    upload_bytes: u32,
-    bind_group_creates: u32,
-    buffer_creates: u32,
-    texture_uploads: u32,
-    resident_chunk_rebuilds: u32,
-    shadow_cascades: u32,
-    primitive_chunks: u32,
-    post_effects: u32,
-    retained_scene_upserts: u32,
-    retained_scene_removals: u32,
-    visible_objects: u32,
-    culled_objects: u32,
-    diagnostic_flags: u32,
-}
-
-#[cfg(not(feature = "wasm"))]
-type PerfInstant = Instant;
-#[cfg(feature = "wasm")]
-type PerfInstant = f64;
-
-#[cfg(not(feature = "wasm"))]
-fn perf_now() -> PerfInstant {
-    Instant::now()
-}
-
-#[cfg(feature = "wasm")]
-fn perf_now() -> PerfInstant {
-    web_sys::window()
-        .and_then(|window| window.performance())
-        .map(|performance| performance.now())
-        .unwrap_or_else(js_sys::Date::now)
-}
-
-#[cfg(not(feature = "wasm"))]
-fn elapsed_ms(start: PerfInstant) -> f64 {
-    start.elapsed().as_secs_f64() * 1000.0
-}
-
-#[cfg(feature = "wasm")]
-fn elapsed_ms(start: PerfInstant) -> f64 {
-    (perf_now() - start).max(0.0)
-}
-
-fn elapsed_ms_opt(start: Option<PerfInstant>) -> f64 {
-    start.map(elapsed_ms).unwrap_or(0.0)
-}
-
-fn saturating_u32(value: usize) -> u32 {
-    value.min(u32::MAX as usize) as u32
-}
-
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_f64(out: &mut Vec<u8>, value: f64) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 16 * 8 + 21 * 4);
-    push_u32(&mut out, RENDERER_PERF_PAYLOAD_VERSION);
-    push_f64(&mut out, stats.submit_frame_ms);
-    push_f64(&mut out, stats.surface_acquire_ms);
-    push_f64(&mut out, stats.decode_ms);
-    push_f64(&mut out, stats.scene_update_ms);
-    push_f64(&mut out, stats.depth_pass_ms);
-    push_f64(&mut out, stats.shadow_pass_ms);
-    push_f64(&mut out, stats.main_pass_ms);
-    push_f64(&mut out, stats.main_pass_setup_ms);
-    push_f64(&mut out, stats.main_skybox_ms);
-    push_f64(&mut out, stats.main_model_ms);
-    push_f64(&mut out, stats.main_primitive_ms);
-    push_f64(&mut out, stats.main_pass_close_ms);
-    push_f64(&mut out, stats.post_pass_ms);
-    push_f64(&mut out, stats.overlay_pass_ms);
-    push_f64(&mut out, stats.queue_submit_cpu_ms);
-    push_f64(&mut out, stats.present_cpu_ms);
-    push_u32(&mut out, stats.draw_calls);
-    push_u32(&mut out, stats.model_draws);
-    push_u32(&mut out, stats.skinned_draws);
-    push_u32(&mut out, stats.primitive_draws);
-    push_u32(&mut out, stats.sprite_draws);
-    push_u32(&mut out, stats.text_draws);
-    push_u32(&mut out, stats.instances);
-    push_u32(&mut out, stats.triangles);
-    push_u32(&mut out, stats.upload_bytes);
-    push_u32(&mut out, stats.bind_group_creates);
-    push_u32(&mut out, stats.buffer_creates);
-    push_u32(&mut out, stats.texture_uploads);
-    push_u32(&mut out, stats.resident_chunk_rebuilds);
-    push_u32(&mut out, stats.shadow_cascades);
-    push_u32(&mut out, stats.primitive_chunks);
-    push_u32(&mut out, stats.post_effects);
-    push_u32(&mut out, stats.retained_scene_upserts);
-    push_u32(&mut out, stats.retained_scene_removals);
-    push_u32(&mut out, stats.visible_objects);
-    push_u32(&mut out, stats.culled_objects);
-    push_u32(&mut out, stats.diagnostic_flags);
-    out
-}
-
-fn encode_renderer_perf_packet(stats: &RendererPerfStats) -> Vec<u8> {
-    let payload = encode_renderer_perf_payload(stats);
-    let mut out = Vec::with_capacity(50 + payload.len());
-    out.push(PERF_PACKET_MAGIC);
-    out.push(PERF_PACKET_VERSION);
-    push_u32(&mut out, PERF_PACKET_SCHEMA_VERSION);
-    push_u32(&mut out, stats.frame_id);
-    push_u32(&mut out, stats.display_tick);
-    push_u32(&mut out, PERF_PACKET_SOURCE_RENDERER);
-    push_u32(&mut out, payload.len() as u32);
-    push_f64(&mut out, stats.submit_frame_ms);
-    push_f64(&mut out, 0.0);
-    push_u32(&mut out, 0);
-    push_u32(&mut out, stats.upload_bytes);
-    push_u32(&mut out, 1);
-    out.extend_from_slice(&payload);
-    out
-}
 
 fn shadow_cascade_count_for_quality(quality: u32) -> usize {
     match quality {
@@ -484,6 +242,7 @@ pub struct Renderer {
     canvas_metrics_last_check_ms: f64,
     debug_frame_count: u64,
     last_perf_packet: Vec<u8>,
+    last_frame_graph_report: FrameGraphReport,
     perf_stats_enabled: bool,
 }
 
@@ -543,13 +302,13 @@ impl Renderer {
         surface_config: wgpu::SurfaceConfiguration,
         canvas_id: Option<String>,
     ) -> Result<Self, String> {
-        let depth_view = Self::create_depth_view(
+        let depth_view = create_depth_view(
             &device,
             surface_config.width,
             surface_config.height,
             MAIN_SAMPLE_COUNT,
         );
-        let msaa_color_view = Self::create_msaa_color_view(
+        let msaa_color_view = create_msaa_color_view(
             &device,
             surface_config.width,
             surface_config.height,
@@ -617,13 +376,13 @@ impl Renderer {
             MAIN_SAMPLE_COUNT,
         );
         let pipeline_post = PipelinePost::new(&device, &queue, surface_config.format);
-        let post_color_view = Self::create_post_color_view(
+        let post_color_view = create_post_color_view(
             &device,
             surface_config.width,
             surface_config.height,
             surface_config.format,
         );
-        let receiver_mask_view = Self::create_receiver_mask_view(
+        let receiver_mask_view = create_receiver_mask_view(
             &device,
             surface_config.width,
             surface_config.height,
@@ -631,13 +390,13 @@ impl Renderer {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             "voplay_receiver_mask",
         );
-        let msaa_receiver_mask_view = Self::create_msaa_receiver_mask_view(
+        let msaa_receiver_mask_view = create_msaa_receiver_mask_view(
             &device,
             surface_config.width,
             surface_config.height,
             MAIN_SAMPLE_COUNT,
         );
-        let surface_props_view = Self::create_surface_props_view(
+        let surface_props_view = create_surface_props_view(
             &device,
             surface_config.width,
             surface_config.height,
@@ -645,7 +404,7 @@ impl Renderer {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             "voplay_surface_props",
         );
-        let msaa_surface_props_view = Self::create_msaa_surface_props_view(
+        let msaa_surface_props_view = create_msaa_surface_props_view(
             &device,
             surface_config.width,
             surface_config.height,
@@ -734,6 +493,7 @@ impl Renderer {
             canvas_metrics_last_check_ms: 0.0,
             debug_frame_count: 0,
             last_perf_packet: Vec::new(),
+            last_frame_graph_report: FrameGraphReport::default(),
             perf_stats_enabled: false,
         })
     }
@@ -847,172 +607,6 @@ impl Renderer {
         }
     }
 
-    fn create_depth_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-    ) -> wgpu::TextureView {
-        let usage = if sample_count > 1 {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-        };
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voplay_depth"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: MAIN_DEPTH_FORMAT,
-            usage,
-            view_formats: &[],
-        });
-        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_msaa_color_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-        sample_count: u32,
-    ) -> Option<wgpu::TextureView> {
-        if sample_count <= 1 {
-            return None;
-        }
-        let color_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voplay_main_msaa_color"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        Some(color_texture.create_view(&wgpu::TextureViewDescriptor::default()))
-    }
-
-    fn create_post_color_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> wgpu::TextureView {
-        let color_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voplay_post_color"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        color_texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_receiver_mask_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-        usage: wgpu::TextureUsages,
-        label: &str,
-    ) -> wgpu::TextureView {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: RECEIVER_MASK_FORMAT,
-            usage,
-            view_formats: &[],
-        });
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_msaa_receiver_mask_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-    ) -> Option<wgpu::TextureView> {
-        if sample_count <= 1 {
-            return None;
-        }
-        Some(Self::create_receiver_mask_view(
-            device,
-            width,
-            height,
-            sample_count,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-            "voplay_receiver_mask_msaa",
-        ))
-    }
-
-    fn create_surface_props_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-        usage: wgpu::TextureUsages,
-        label: &str,
-    ) -> wgpu::TextureView {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_PROPS_FORMAT,
-            usage,
-            view_formats: &[],
-        });
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_msaa_surface_props_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-    ) -> Option<wgpu::TextureView> {
-        if sample_count <= 1 {
-            return None;
-        }
-        Some(Self::create_surface_props_view(
-            device,
-            width,
-            height,
-            sample_count,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-            "voplay_surface_props_msaa",
-        ))
-    }
-
     /// Resize the surface and depth buffer.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -1027,13 +621,13 @@ impl Renderer {
         self.surface_config.height = height;
         eprintln!("voplay: renderer resize {}x{}", width, height);
         self.surface.configure(&self.device, &self.surface_config);
-        self.depth_view = Some(Self::create_depth_view(
+        self.depth_view = Some(create_depth_view(
             &self.device,
             width,
             height,
             MAIN_SAMPLE_COUNT,
         ));
-        self.msaa_color_view = Self::create_msaa_color_view(
+        self.msaa_color_view = create_msaa_color_view(
             &self.device,
             width,
             height,
@@ -1041,8 +635,8 @@ impl Renderer {
             MAIN_SAMPLE_COUNT,
         );
         let post_color_view =
-            Self::create_post_color_view(&self.device, width, height, self.surface_config.format);
-        let receiver_mask_view = Self::create_receiver_mask_view(
+            create_post_color_view(&self.device, width, height, self.surface_config.format);
+        let receiver_mask_view = create_receiver_mask_view(
             &self.device,
             width,
             height,
@@ -1051,8 +645,8 @@ impl Renderer {
             "voplay_receiver_mask",
         );
         self.msaa_receiver_mask_view =
-            Self::create_msaa_receiver_mask_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
-        let surface_props_view = Self::create_surface_props_view(
+            create_msaa_receiver_mask_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
+        let surface_props_view = create_surface_props_view(
             &self.device,
             width,
             height,
@@ -1061,7 +655,7 @@ impl Renderer {
             "voplay_surface_props",
         );
         self.msaa_surface_props_view =
-            Self::create_msaa_surface_props_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
+            create_msaa_surface_props_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
         if MAIN_SAMPLE_COUNT > 1 {
             self.pipeline_depth.resize(&self.device, width, height);
         }
@@ -3332,8 +2926,10 @@ impl Renderer {
         let present_start = if perf_enabled { Some(perf_now()) } else { None };
         output.present();
         perf.present_cpu_ms = elapsed_ms_opt(present_start);
+        self.last_frame_graph_report = frame_graph_report_from_perf(&perf);
         if perf_enabled {
             perf.submit_frame_ms = elapsed_ms_opt(frame_start);
+            self.last_frame_graph_report = frame_graph_report_from_perf(&perf);
             perf.text_draws = text_count;
             perf.sprite_draws = sprite_count;
             perf.primitive_draws = primitive_main_draw_calls;
@@ -3404,7 +3000,7 @@ impl Renderer {
                 saturating_u32(camera_upload + shape_upload + sprite_upload + post_upload);
             if perf.submit_frame_ms >= 16.0 {
                 eprintln!(
-                    "voplay renderer slow submit frame={} total={:.2}ms acquire={:.2}ms decode={:.2}ms scene={:.2}ms depth={:.2}ms shadow={:.2}ms main={:.2}ms(setup={:.2} sky={:.2} model={:.2} primitive={:.2} close={:.2}) post={:.2}ms overlay={:.2}ms queue={:.2}ms present={:.2}ms draws={} primitives={} chunks={} cascades={} postEffects={} upload={} flags=0x{:x}",
+                    "voplay renderer slow submit frame={} total={:.2}ms acquire={:.2}ms decode={:.2}ms scene={:.2}ms depth={:.2}ms shadow={:.2}ms main={:.2}ms(setup={:.2} sky={:.2} model={:.2} primitive={:.2} close={:.2}) post={:.2}ms overlay={:.2}ms queue={:.2}ms present={:.2}ms graphPasses={} graphResources={} slowestPass={} slowestPassMs={:.2} draws={} primitives={} chunks={} cascades={} postEffects={} upload={} flags=0x{:x}",
                     perf.frame_id,
                     perf.submit_frame_ms,
                     perf.surface_acquire_ms,
@@ -3422,6 +3018,10 @@ impl Renderer {
                     perf.overlay_pass_ms,
                     perf.queue_submit_cpu_ms,
                     perf.present_cpu_ms,
+                    self.last_frame_graph_report.pass_count,
+                    self.last_frame_graph_report.resource_count,
+                    self.last_frame_graph_report.slowest_pass,
+                    self.last_frame_graph_report.slowest_pass_ms,
                     perf.draw_calls,
                     perf.primitive_draws,
                     perf.primitive_chunks,
@@ -3453,6 +3053,10 @@ impl Renderer {
 
     pub fn last_perf_packet(&self) -> &[u8] {
         &self.last_perf_packet
+    }
+
+    pub(crate) fn last_frame_graph_report(&self) -> &FrameGraphReport {
+        &self.last_frame_graph_report
     }
 
     pub fn set_perf_stats_enabled(&mut self, enabled: bool) {
@@ -3501,5 +3105,75 @@ impl Renderer {
                 crate::externs::render::wasm_debug(&format!("{} validation: {}", label, error));
             }
         });
+    }
+}
+
+fn frame_graph_report_from_perf(perf: &RendererPerfStats) -> FrameGraphReport {
+    let mut graph = FrameGraph::single_view(perf.frame_id, perf.diagnostic_flags);
+    graph.add_pass("depth", &[], &[RES_DEPTH], perf.depth_pass_ms);
+    graph.add_pass(
+        "shadow",
+        &[RES_DEPTH],
+        &[RES_SHADOW_MAP],
+        perf.shadow_pass_ms,
+    );
+    graph.add_pass(
+        "main",
+        &[RES_SHADOW_MAP],
+        &[
+            RES_MAIN_COLOR,
+            RES_DEPTH,
+            RES_RECEIVER_MASK,
+            RES_SURFACE_PROPS,
+        ],
+        perf.main_pass_ms,
+    );
+    graph.add_pass(
+        "post",
+        &[
+            RES_MAIN_COLOR,
+            RES_DEPTH,
+            RES_RECEIVER_MASK,
+            RES_SURFACE_PROPS,
+        ],
+        &[RES_POST_COLOR, RES_SURFACE_COLOR],
+        perf.post_pass_ms,
+    );
+    graph.add_pass(
+        "overlay",
+        &[RES_SURFACE_COLOR],
+        &[RES_OVERLAY],
+        perf.overlay_pass_ms,
+    );
+    graph.add_pass(
+        "backend-submit",
+        &[RES_OVERLAY],
+        &[RES_SURFACE_COLOR],
+        perf.queue_submit_cpu_ms + perf.present_cpu_ms,
+    );
+    graph.report()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_graph_report_uses_renderer_pass_timings() {
+        let perf = RendererPerfStats {
+            frame_id: 11,
+            shadow_pass_ms: 1.0,
+            main_pass_ms: 3.0,
+            post_pass_ms: 2.0,
+            overlay_pass_ms: 0.25,
+            queue_submit_cpu_ms: 0.4,
+            present_cpu_ms: 0.2,
+            ..RendererPerfStats::default()
+        };
+        let report = frame_graph_report_from_perf(&perf);
+        assert_eq!(report.frame_id, 11);
+        assert_eq!(report.pass_count, 6);
+        assert_eq!(report.slowest_pass, "main");
+        assert!(report.resource_count >= 6);
     }
 }

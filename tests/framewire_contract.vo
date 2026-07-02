@@ -36,36 +36,21 @@ func testFramewireContract() {
 	assertFloatNear(req.RenderTiming.RequestPortSendMs, 0.39, 0.0001, "framewire request preserves request port send ms")
 	assertFloatNear(req.RenderTiming.PerfPacketMs, 0.7, 0.0001, "framewire request preserves perf packet ms")
 	assertFloatNear(req.RenderTiming.DisplayPulseMs, 8.33, 0.0001, "framewire request preserves display pulse ms")
-
 	rawReq := []byte{9, 8, 7}
 	decodedRawReq := framewire.DecodeRequest(rawReq)
 	assert(!decodedRawReq.HasRenderTiming, "framewire raw request has no timing")
 	assert(testFramewireSameBytes(decodedRawReq.InputBytes, rawReq), "framewire raw request remains payload-compatible")
-
 	draw := []byte{16, 17, 18}
 	replyWriter := codec.NewByteWriter(framewire.ReplyHeaderSize + len(draw))
 	reply := framewire.DecodeReply(framewire.EncodeReply(&replyWriter, true, draw))
 	assert(reply.WantRenderTiming, "framewire reply requests render timing")
 	assert(testFramewireSameBytes(reply.DrawBytes, draw), "framewire reply preserves draw bytes")
-
 	rawReply := []byte{4, 5}
 	decodedRawReply := framewire.DecodeReply(rawReply)
 	assert(!decodedRawReply.WantRenderTiming, "framewire raw reply has no timing request")
 	assert(testFramewireSameBytes(decodedRawReply.DrawBytes, rawReply), "framewire raw reply remains payload-compatible")
-
 	payload := []byte{31, 32, 33, 34}
-	perfPacket := framewire.PerfPacket{
-		SchemaVersion: framewire.PerfPacketSchemaVersion,
-		Frame: 77,
-		DisplayTick: 88,
-		Source: framewire.PerfPacketSourceWebGpu,
-		Payload: payload,
-		RendererSubmitMs: 2.5,
-		GpuSubmittedWorkDoneMs: 43.25,
-		GpuInFlightSubmits: 3,
-		UploadBytes: 4096,
-		AsyncWindow: true,
-	}
+	perfPacket := framewire.PerfPacket{SchemaVersion: framewire.PerfPacketSchemaVersion, Frame: 77, DisplayTick: 88, Source: framewire.PerfPacketSourceWebGpu, Payload: payload, RendererSubmitMs: 2.5, GpuSubmittedWorkDoneMs: 43.25, GpuInFlightSubmits: 3, UploadBytes: 4096, AsyncWindow: true}
 	perfWriter := codec.NewByteWriter(framewire.PerfPacketHeaderSize + len(payload))
 	decodedPerf := framewire.DecodePerfPacket(framewire.EncodePerfPacket(&perfWriter, perfPacket))
 	assert(decodedPerf.Valid, "framewire perf packet validates")
@@ -79,11 +64,9 @@ func testFramewireContract() {
 	assertFloatNear(decodedPerf.RendererSubmitMs, 2.5, 0.0001, "framewire perf packet preserves renderer submit")
 	assertFloatNear(decodedPerf.GpuSubmittedWorkDoneMs, 43.25, 0.0001, "framewire perf packet preserves gpu latency")
 	assert(testFramewireSameBytes(decodedPerf.Payload, payload), "framewire perf packet preserves payload bytes")
-
 	decodedRawPerf := framewire.DecodePerfPacket([]byte{5, 6, 7})
 	assert(!decodedRawPerf.Valid, "framewire raw perf packet invalid")
 	assert(testFramewireSameBytes(decodedRawPerf.Payload, []byte{5, 6, 7}), "framewire raw perf packet remains payload-compatible")
-
 	reqWithPerfWriter := codec.NewByteWriter(framewire.RequestHeaderSize + len(input) + framewire.PerfPacketHeaderSize + len(payload) + 8)
 	reqWithPerf := framewire.DecodeRequest(framewire.EncodeRequestWithPerfPacket(&reqWithPerfWriter, timing, input, framewire.EncodePerfPacket(&perfWriter, perfPacket)))
 	assert(reqWithPerf.HasRenderTiming, "framewire request with perf preserves render timing")
@@ -91,7 +74,6 @@ func testFramewireContract() {
 	assert(len(reqWithPerf.PerfPackets) == 1, "framewire request decodes one perf packet")
 	assert(reqWithPerf.PerfPackets[0].Source == framewire.PerfPacketSourceWebGpu, "framewire request preserves perf packet source")
 	assertFloatNear(reqWithPerf.PerfPackets[0].GpuSubmittedWorkDoneMs, 43.25, 0.0001, "framewire request preserves packet gpu latency")
-
 	rendererPacket := perfPacket
 	rendererPacket.Source = framewire.PerfPacketSourceRenderer
 	rendererPacket.RendererSubmitMs = 5.75

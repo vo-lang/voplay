@@ -1,0 +1,83 @@
+package scene3d
+
+type KartDynamics struct {
+	Config KartDynamicsConfig
+}
+
+type KartDynamicsConfig struct {
+	Vehicle VehicleConfig
+	OffroadSpeedScale float64
+	OffroadEngineScale float64
+}
+
+type KartDynamicsResult struct {
+	VehicleConfig VehicleConfig
+	VehicleInput VehicleInput
+	Surface SurfaceMaterial
+	Intent VehicleIntent
+}
+
+func DefaultKartDynamicsConfig() KartDynamicsConfig {
+	kart := DefaultKartControllerConfig()
+	return KartDynamicsConfig{Vehicle: kart.Vehicle, OffroadSpeedScale: kart.OffroadSpeedScale, OffroadEngineScale: kart.OffroadEngineScale}
+}
+
+func NewKartDynamics(config KartDynamicsConfig) KartDynamics {
+	return KartDynamics{Config: NormalizeKartDynamicsConfig(config)}
+}
+
+func (d KartDynamics) Resolve(intent VehicleIntent, surface SurfaceMaterial) KartDynamicsResult {
+	cfg := NormalizeKartDynamicsConfig(d.Config)
+	surface = NormalizeSurfaceMaterial(surface)
+	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
+	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: intent.VehicleInput(), Surface: surface, Intent: intent.Normalized()}
+}
+
+func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
+	defaults := DefaultKartDynamicsConfig()
+	if len(config.Vehicle.Wheels) == 0 {
+		config.Vehicle = defaults.Vehicle
+	} else {
+		config.Vehicle = normalizeVehicleConfig(config.Vehicle)
+	}
+	if config.OffroadSpeedScale <= 0 {
+		config.OffroadSpeedScale = defaults.OffroadSpeedScale
+	}
+	if config.OffroadEngineScale <= 0 {
+		config.OffroadEngineScale = defaults.OffroadEngineScale
+	}
+	return config
+}
+
+func KartDynamicsConfigFromControllerConfig(config KartControllerConfig) KartDynamicsConfig {
+	config = normalizeKartControllerConfig(config)
+	return KartDynamicsConfig{Vehicle: config.Vehicle, OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale}
+}
+
+func ApplySurfaceMaterialToVehicleConfig(base VehicleConfig, surface SurfaceMaterial, dynamics KartDynamicsConfig) VehicleConfig {
+	cfg := normalizeVehicleConfig(base)
+	surface = NormalizeSurfaceMaterial(surface)
+	dynamics = NormalizeKartDynamicsConfig(dynamics)
+	if len(cfg.Wheels) > 0 {
+		wheels := make([]VehicleWheelConfig, len(cfg.Wheels))
+		for i := range cfg.Wheels {
+			wheels[i] = cfg.Wheels[i]
+		}
+		cfg.Wheels = wheels
+	}
+	speedScale := surface.SpeedScale
+	engineScale := surface.EngineScale
+	if !surface.OnRoad {
+		speedScale *= dynamics.OffroadSpeedScale
+		engineScale *= dynamics.OffroadEngineScale
+	}
+	cfg.MaxForwardSpeed *= speedScale
+	cfg.MaxReverseSpeed *= speedScale
+	cfg.EngineForce *= engineScale
+	cfg.ReverseEngineForce *= engineScale
+	for i := 0; i < len(cfg.Wheels); i++ {
+		cfg.Wheels[i].FrictionSlip *= surface.GripScale
+		cfg.Wheels[i].SideFrictionStiffness *= surface.GripScale
+	}
+	return cfg
+}

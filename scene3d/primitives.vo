@@ -1,6 +1,8 @@
 package scene3d
 
-import "github.com/vo-lang/voplay"
+import (
+	"github.com/vo-lang/voplay"
+)
 
 func PlaneMesh(width, depth float64, subX, subZ int) voplay.ModelID {
 	return voplay.CreatePlaneMesh(width, depth, subX, subZ)

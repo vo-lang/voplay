@@ -117,26 +117,8 @@ func spawnTrackGeneratedSurface(scene *Scene, name, kind string, material voplay
 		return nil, err
 	}
 	material = voplay.NormalizeMaterial(material)
-	detail := &TrackSurfaceDetail{
-		Model: model,
-		OwnedModel: true,
-		Name: name,
-		Kind: kind,
-		Material: material,
-		VertexCount: vertexCount,
-		IndexCount: indexCount,
-		DecalCount: decalCount,
-		Min: min,
-		Max: max,
-	}
-	detail.Entity = scene.Spawn(EntityDesc{
-		Model: model,
-		OwnedModel: model,
-		Material: material,
-		Tag: name,
-		StaticRenderable: true,
-		PickMode: PickDisabled,
-	})
+	detail := &TrackSurfaceDetail{Model: model, OwnedModel: true, Name: name, Kind: kind, Material: material, VertexCount: vertexCount, IndexCount: indexCount, DecalCount: decalCount, Min: min, Max: max}
+	detail.Entity = scene.Spawn(EntityDesc{Model: model, OwnedModel: model, Material: material, Tag: name, StaticRenderable: true, PickMode: PickDisabled})
 	detail.OwnedModel = false
 	return detail, nil
 }

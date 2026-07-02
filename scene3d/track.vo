@@ -1692,10 +1692,7 @@ func newTrackSegmentData(aPoint, bPoint TrackControlPoint, a, b voplay.Vec3, sta
 }
 
 func trackSegmentBoundsBetween(a, b voplay.Vec3) trackSegmentBounds {
-	return trackSegmentBounds{
-		Min: voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)},
-		Max: voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)},
-	}
+	return trackSegmentBounds{Min: voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)}, Max: voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)}}
 }
 
 func trackSegmentBoundsDistanceSq(bounds trackSegmentBounds, pos voplay.Vec3) float64 {

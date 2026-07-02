@@ -1,6 +1,8 @@
 package scene3d
 
-import "github.com/vo-lang/voplay"
+import (
+	"github.com/vo-lang/voplay"
+)
 
 const (
 	PresentationNeutral = 0
@@ -20,25 +22,11 @@ type PresentationStack struct {
 }
 
 func DefaultPresentationStack() PresentationStack {
-	return PresentationStack{
-		Name: "neutral",
-		Ambient: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1},
-		AmbientGround: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1},
-		Fog: FogConfig{Mode: FogNone},
-		ColorGrading: DefaultColorGradingConfig(),
-		PostProcess: DefaultPostProcessConfig(),
-	}
+	return PresentationStack{Name: "neutral", Ambient: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1}, AmbientGround: voplay.Color{R: 0.1, G: 0.1, B: 0.1, A: 1}, Fog: FogConfig{Mode: FogNone}, ColorGrading: DefaultColorGradingConfig(), PostProcess: DefaultPostProcessConfig()}
 }
 
 func KartRacingPresentationStack() PresentationStack {
-	return PresentationStack{
-		Name: "kart_racing_day",
-		Ambient: voplay.Color{R: 0.52, G: 0.64, B: 0.70, A: 1},
-		AmbientGround: voplay.Color{R: 0.22, G: 0.30, B: 0.30, A: 1},
-		Fog: FogConfig{Mode: FogLinear, Color: voplay.Hex(0xb8e3ef), Start: 180, End: 420},
-		ColorGrading: ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.04, Contrast: 1.04, Saturation: 1.08},
-		PostProcess: DefaultPostProcessConfig(),
-	}
+	return PresentationStack{Name: "kart_racing_day", Ambient: voplay.Color{R: 0.52, G: 0.64, B: 0.70, A: 1}, AmbientGround: voplay.Color{R: 0.22, G: 0.30, B: 0.30, A: 1}, Fog: FogConfig{Mode: FogLinear, Color: voplay.Hex(0xb8e3ef), Start: 180, End: 420}, ColorGrading: ColorGradingConfig{ToneMap: ToneMapNone, Exposure: 1.04, Contrast: 1.04, Saturation: 1.08}, PostProcess: DefaultPostProcessConfig()}
 }
 
 func PresentationStackPreset(preset int) PresentationStack {
@@ -87,15 +75,7 @@ func (s *Scene) CurrentPresentationStack() PresentationStack {
 	if s == nil {
 		return PresentationStack{}
 	}
-	return normalizePresentationStack(PresentationStack{
-		Name: "current",
-		Skybox: s.Skybox,
-		Ambient: s.Ambient,
-		AmbientGround: s.AmbientGround,
-		Fog: s.Fog,
-		ColorGrading: s.ColorGrading,
-		PostProcess: s.PostProcess,
-	})
+	return normalizePresentationStack(PresentationStack{Name: "current", Skybox: s.Skybox, Ambient: s.Ambient, AmbientGround: s.AmbientGround, Fog: s.Fog, ColorGrading: s.ColorGrading, PostProcess: s.PostProcess})
 }
 
 func normalizePresentationStack(stack PresentationStack) PresentationStack {

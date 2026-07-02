@@ -1,7 +1,9 @@
 package scene3d
 
-import "math"
-import "github.com/vo-lang/voplay"
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
 
 func sceneAABBSphereRadius(bounds voplay.AABB) float64 {
 	radius := bounds.Size().Length() * 0.5
@@ -30,12 +32,12 @@ func sceneDistanceToAABBSq(pos voplay.Vec3, bounds voplay.AABB) float64 {
 	} else if pos.Z > bounds.Max.Z {
 		dz = pos.Z - bounds.Max.Z
 	}
-	return dx*dx + dy*dy + dz*dz
+	return dx * dx + dy * dy + dz * dz
 }
 
 func sceneMaxDistanceToAABBSq(pos voplay.Vec3, bounds voplay.AABB) float64 {
 	dx := math.Max(math.Abs(pos.X - bounds.Min.X), math.Abs(pos.X - bounds.Max.X))
 	dy := math.Max(math.Abs(pos.Y - bounds.Min.Y), math.Abs(pos.Y - bounds.Max.Y))
 	dz := math.Max(math.Abs(pos.Z - bounds.Min.Z), math.Abs(pos.Z - bounds.Max.Z))
-	return dx*dx + dy*dy + dz*dz
+	return dx * dx + dy * dy + dz * dz
 }

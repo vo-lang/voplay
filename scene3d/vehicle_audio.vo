@@ -58,20 +58,7 @@ type VehicleAudio struct {
 }
 
 func DefaultVehicleAudioConfig() VehicleAudioConfig {
-	return VehicleAudioConfig{
-		EngineMinPitch: 0.72,
-		EngineMaxPitch: 1.85,
-		EngineMinVolume: 0.18,
-		EngineMaxVolume: 0.85,
-		EngineMaxSpeed: 42.0,
-		SkidSlipThreshold: 0.18,
-		SkidMaxSlip: 1.2,
-		SkidMaxVolume: 0.9,
-		BoostVolume: 0.8,
-		SurfaceVolume: 0.35,
-		RefDistance: 3.0,
-		MaxDistance: 80.0,
-	}
+	return VehicleAudioConfig{EngineMinPitch: 0.72, EngineMaxPitch: 1.85, EngineMinVolume: 0.18, EngineMaxVolume: 0.85, EngineMaxSpeed: 42.0, SkidSlipThreshold: 0.18, SkidMaxSlip: 1.2, SkidMaxVolume: 0.9, BoostVolume: 0.8, SurfaceVolume: 0.35, RefDistance: 3.0, MaxDistance: 80.0}
 }
 
 func AttachVehicleAudio(entity *Entity, clips VehicleAudioClips, config VehicleAudioConfig) (*VehicleAudio, error) {
@@ -169,22 +156,17 @@ func VehicleAudioInputFromVehicle(vehicle *Vehicle) VehicleAudioInput {
 			slip = s
 		}
 	}
-	return VehicleAudioInput{
-		Speed: vehicleAudioAbs(vehicle.Speed),
-		LongitudinalSlip: 0,
-		LateralSlip: slip,
-		Boost: false,
-	}
+	return VehicleAudioInput{Speed: vehicleAudioAbs(vehicle.Speed), LongitudinalSlip: 0, LateralSlip: slip, Boost: false}
 }
 
 func computeVehicleAudioState(input VehicleAudioInput, cfg VehicleAudioConfig) VehicleAudioState {
 	speedT := 0.0
 	if cfg.EngineMaxSpeed > 0 {
-		speedT = vehicleAudioClamp(vehicleAudioAbs(input.Speed)/cfg.EngineMaxSpeed, 0, 1)
+		speedT = vehicleAudioClamp(vehicleAudioAbs(input.Speed) / cfg.EngineMaxSpeed, 0, 1)
 	}
 	rpmT := 0.0
 	if input.MaxRPM > 0 {
-		rpmT = vehicleAudioClamp(input.RPM/input.MaxRPM, 0, 1)
+		rpmT = vehicleAudioClamp(input.RPM / input.MaxRPM, 0, 1)
 	}
 	t := speedT
 	if rpmT > 0 {
@@ -194,18 +176,12 @@ func computeVehicleAudioState(input VehicleAudioInput, cfg VehicleAudioConfig) V
 	if vehicleAudioAbs(input.LongitudinalSlip) > slip {
 		slip = vehicleAudioAbs(input.LongitudinalSlip)
 	}
-	skidT := vehicleAudioClamp((slip-cfg.SkidSlipThreshold)/(cfg.SkidMaxSlip-cfg.SkidSlipThreshold), 0, 1)
+	skidT := vehicleAudioClamp((slip - cfg.SkidSlipThreshold) / (cfg.SkidMaxSlip - cfg.SkidSlipThreshold), 0, 1)
 	boostVolume := 0.0
 	if input.Boost {
 		boostVolume = cfg.BoostVolume
 	}
-	return VehicleAudioState{
-		EngineVolume: vehicleAudioLerp(cfg.EngineMinVolume, cfg.EngineMaxVolume, t),
-		EnginePitch: vehicleAudioLerp(cfg.EngineMinPitch, cfg.EngineMaxPitch, t),
-		SkidVolume: skidT * cfg.SkidMaxVolume,
-		BoostVolume: boostVolume,
-		SurfaceVolume: vehicleAudioClamp(input.SurfaceAmount, 0, 1) * cfg.SurfaceVolume,
-	}
+	return VehicleAudioState{EngineVolume: vehicleAudioLerp(cfg.EngineMinVolume, cfg.EngineMaxVolume, t), EnginePitch: vehicleAudioLerp(cfg.EngineMinPitch, cfg.EngineMaxPitch, t), SkidVolume: skidT * cfg.SkidMaxVolume, BoostVolume: boostVolume, SurfaceVolume: vehicleAudioClamp(input.SurfaceAmount, 0, 1) * cfg.SurfaceVolume}
 }
 
 func normalizeVehicleAudioConfig(config VehicleAudioConfig) VehicleAudioConfig {
@@ -247,7 +223,7 @@ func normalizeVehicleAudioConfig(config VehicleAudioConfig) VehicleAudioConfig {
 }
 
 func vehicleAudioLerp(a, b, t float64) float64 {
-	return a + (b-a)*vehicleAudioClamp(t, 0, 1)
+	return a + (b - a) * vehicleAudioClamp(t, 0, 1)
 }
 
 func vehicleAudioClamp(v, lo, hi float64) float64 {

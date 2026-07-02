@@ -33,7 +33,6 @@ type RacingCamera struct {
 	CollisionEnabled bool
 	CollisionOffset float64
 	ShakeScale float64
-
 	currentPos voplay.Vec3
 	currentTarget voplay.Vec3
 	currentFov float64
@@ -42,25 +41,7 @@ type RacingCamera struct {
 }
 
 func NewRacingCamera() *RacingCamera {
-	return &RacingCamera{
-		BaseDistance: 7.5,
-		MaxDistance: 11.5,
-		Height: 3.0,
-		TargetHeight: 1.2,
-		LookaheadBase: 4.0,
-		LookaheadSpeedScale: 0.16,
-		DistanceSpeedScale: 0.055,
-		DriftOffset: 1.15,
-		Smoothing: 8.5,
-		TargetSmoothing: 12.0,
-		Fov: 58.0,
-		SpeedFov: 0.18,
-		BoostFovKick: 7.0,
-		BoostSmoothing: 10.0,
-		CollisionEnabled: true,
-		CollisionOffset: 0.35,
-		ShakeScale: 0.28,
-	}
+	return &RacingCamera{BaseDistance: 7.5, MaxDistance: 11.5, Height: 3.0, TargetHeight: 1.2, LookaheadBase: 4.0, LookaheadSpeedScale: 0.16, DistanceSpeedScale: 0.055, DriftOffset: 1.15, Smoothing: 8.5, TargetSmoothing: 12.0, Fov: 58.0, SpeedFov: 0.18, BoostFovKick: 7.0, BoostSmoothing: 10.0, CollisionEnabled: true, CollisionOffset: 0.35, ShakeScale: 0.28}
 }
 
 func RacingCameraTargetFromVehicle(vehicle *Vehicle) RacingCameraTarget {
@@ -68,14 +49,7 @@ func RacingCameraTargetFromVehicle(vehicle *Vehicle) RacingCameraTarget {
 		return RacingCameraTarget{Forward: voplay.Vec3{Z: -1}}
 	}
 	vel := vehicle.Body.Velocity()
-	return RacingCameraTarget{
-		Position: vehicle.Body.Position(),
-		Forward: vehicle.Forward(),
-		Velocity: vel,
-		Speed: math.Abs(vehicle.Speed),
-		Drift: racingCameraBoolAmount(vehicle.Drifting),
-		Boost: false,
-	}
+	return RacingCameraTarget{Position: vehicle.Body.Position(), Forward: vehicle.Forward(), Velocity: vel, Speed: math.Abs(vehicle.Speed), Drift: racingCameraBoolAmount(vehicle.Drifting), Boost: false}
 }
 
 func (c *RacingCamera) Update(scene *Scene, target RacingCameraTarget, dt float64) {
@@ -105,9 +79,9 @@ func (c *RacingCamera) Update(scene *Scene, target RacingCameraTarget, dt float6
 	c.boostAmount = racingCameraSmoothScalar(c.boostAmount, boostTarget, c.BoostSmoothing, dt)
 	drift := racingCameraClamp(target.Drift, -1, 1)
 	pivot := target.Position.Add(voplay.Vec3{Y: c.TargetHeight})
-	lookahead := c.LookaheadBase + speed*c.LookaheadSpeedScale
+	lookahead := c.LookaheadBase + speed * c.LookaheadSpeedScale
 	desiredTarget := pivot.Add(forward.Scale(lookahead)).Add(right.Scale(drift * c.DriftOffset * 0.35))
-	distance := c.BaseDistance + speed*c.DistanceSpeedScale + c.boostAmount*0.8
+	distance := c.BaseDistance + speed * c.DistanceSpeedScale + c.boostAmount * 0.8
 	if distance > c.MaxDistance {
 		distance = c.MaxDistance
 	}
@@ -116,7 +90,7 @@ func (c *RacingCamera) Update(scene *Scene, target RacingCameraTarget, dt float6
 	if c.CollisionEnabled && scene != nil {
 		desiredPos = c.resolveCollision(scene, pivot, desiredPos)
 	}
-	desiredFov := c.Fov + speed*c.SpeedFov + c.boostAmount*c.BoostFovKick
+	desiredFov := c.Fov + speed * c.SpeedFov + c.boostAmount * c.BoostFovKick
 	if !c.initialized || dt <= 0 {
 		c.currentPos = desiredPos
 		c.currentTarget = desiredTarget
@@ -218,7 +192,7 @@ func racingCameraSmoothT(smoothing, dt float64) float64 {
 	if smoothing <= 0 || dt <= 0 {
 		return 1
 	}
-	return 1.0 - math.Exp(-smoothing*dt)
+	return 1.0 - math.Exp(-smoothing * dt)
 }
 
 func racingCameraSmoothScalar(current, target, smoothing, dt float64) float64 {
@@ -226,7 +200,7 @@ func racingCameraSmoothScalar(current, target, smoothing, dt float64) float64 {
 }
 
 func racingCameraLerp(a, b, t float64) float64 {
-	return a + (b-a)*t
+	return a + (b - a) * t
 }
 
 func racingCameraClamp(v, lo, hi float64) float64 {

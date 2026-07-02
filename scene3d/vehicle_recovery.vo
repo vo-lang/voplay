@@ -5,44 +5,36 @@ import (
 	"github.com/vo-lang/voplay"
 )
 
-// VehicleRecoveryConfig controls generic vehicle recovery and respawn detection.
 type VehicleRecoveryConfig struct {
-	FallY             float64
+	FallY float64
 	UpsideDownSeconds float64
-	StuckSeconds      float64
-	StuckSpeed        float64
-	StuckThrottle     float64
+	StuckSeconds float64
+	StuckSpeed float64
+	StuckThrottle float64
 }
 
 type VehicleRecoveryInput struct {
 	Throttle float64
-	Reset    bool
+	Reset bool
 }
 
 type VehicleRecoveryState struct {
-	Stuck          bool
-	UpsideDown     bool
+	Stuck bool
+	UpsideDown bool
 	ShouldRespawn bool
 }
 
-// VehicleRecovery tracks fall, upside-down, and stuck conditions for any track-bound vehicle.
 type VehicleRecovery struct {
 	Vehicle *Vehicle
-	Track   *Track
-	Config  VehicleRecoveryConfig
+	Track *Track
+	Config VehicleRecoveryConfig
 	stuckTimer float64
 	upsideDownTimer float64
 	state VehicleRecoveryState
 }
 
 func DefaultVehicleRecoveryConfig() VehicleRecoveryConfig {
-	return VehicleRecoveryConfig{
-		FallY:             -25,
-		UpsideDownSeconds: 1.2,
-		StuckSeconds:      2.0,
-		StuckSpeed:        0.8,
-		StuckThrottle:     0.55,
-	}
+	return VehicleRecoveryConfig{FallY: -25, UpsideDownSeconds: 1.2, StuckSeconds: 2.0, StuckSpeed: 0.8, StuckThrottle: 0.55}
 }
 
 func NewVehicleRecovery(vehicle *Vehicle, track *Track, config VehicleRecoveryConfig) *VehicleRecovery {

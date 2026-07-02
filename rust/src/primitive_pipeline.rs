@@ -1714,11 +1714,19 @@ mod tests {
         else {
             return;
         };
+        let adapter_limits = adapter.limits();
+        if adapter_limits.max_inter_stage_shader_components < 44 {
+            return;
+        }
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        limits.max_inter_stage_shader_components = adapter_limits
+            .max_inter_stage_shader_components
+            .min(wgpu::Limits::default().max_inter_stage_shader_components);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("voplay_primitive_pipeline_test"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::default(),
             },
             None,
@@ -1747,11 +1755,19 @@ mod tests {
         else {
             return;
         };
+        let adapter_limits = adapter.limits();
+        if adapter_limits.max_inter_stage_shader_components < 44 {
+            return;
+        }
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        limits.max_inter_stage_shader_components = adapter_limits
+            .max_inter_stage_shader_components
+            .min(wgpu::Limits::default().max_inter_stage_shader_components);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("voplay_primitive_resident_chunk_test"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::default(),
             },
             None,

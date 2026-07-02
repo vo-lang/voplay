@@ -1,6 +1,8 @@
 package scene3d
 
-import "github.com/vo-lang/voplay"
+import (
+	"github.com/vo-lang/voplay"
+)
 
 const (
 	RacingActionSteerLeft = "racing.steer_left"
@@ -29,11 +31,7 @@ func NewRacingInputProfile(input *voplay.InputState) *RacingInputProfile {
 	if input == nil {
 		panic("scene3d.NewRacingInputProfile: input must not be nil")
 	}
-	p := &RacingInputProfile{
-		Actions: voplay.NewActionMap(input),
-		Gamepad: 0,
-		Deadzone: 0.18,
-	}
+	p := &RacingInputProfile{Actions: voplay.NewActionMap(input), Gamepad: 0, Deadzone: 0.18}
 	p.BindDefaults()
 	return p
 }
@@ -61,26 +59,15 @@ func (p *RacingInputProfile) Read() RacingInput {
 	if p == nil || p.Actions == nil {
 		panic("scene3d.RacingInputProfile.Read: profile is not initialized")
 	}
-	return RacingInput{
-		Steer: racingInputClamp(p.Actions.Axis(RacingActionSteerLeft, RacingActionSteerRight), -1, 1),
-		Throttle: racingInputClamp(p.Actions.Value(RacingActionThrottle), 0, 1),
-		Brake: racingInputClamp(p.Actions.Value(RacingActionBrake), 0, 1),
-		Drift: p.Actions.IsDown(RacingActionDrift),
-		Boost: p.Actions.IsDown(RacingActionBoost),
-	}
+	return RacingInput{Steer: racingInputClamp(p.Actions.Axis(RacingActionSteerLeft, RacingActionSteerRight), -1, 1), Throttle: racingInputClamp(p.Actions.Value(RacingActionThrottle), 0, 1), Brake: racingInputClamp(p.Actions.Value(RacingActionBrake), 0, 1), Drift: p.Actions.IsDown(RacingActionDrift), Boost: p.Actions.IsDown(RacingActionBoost)}
 }
 
 func (i RacingInput) VehicleInput() VehicleInput {
-	throttle := i.Throttle
-	if i.Brake > throttle {
-		throttle = -i.Brake
-	}
-	return VehicleInput{
-		Throttle: racingInputClamp(throttle, -1, 1),
-		Steer: racingInputClamp(i.Steer, -1, 1),
-		Drift: i.Drift,
-		Boost: i.Boost,
-	}
+	return i.VehicleIntent().VehicleInput()
+}
+
+func (i RacingInput) VehicleIntent() VehicleIntent {
+	return VehicleIntentFromRacingInput(i)
 }
 
 func racingInputClamp(v, lo, hi float64) float64 {

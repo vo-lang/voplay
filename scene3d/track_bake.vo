@@ -26,11 +26,7 @@ type TrackBakeOutput struct {
 }
 
 func BuildTrackBakeOutput(trackPath string, asset *TrackAsset) TrackBakeOutput {
-	out := TrackBakeOutput{
-		TrackPath: trackPath,
-		GeneratedManifestPath: TrackBakeManifestPath,
-		Resources: []TrackBakeResource{},
-	}
+	out := TrackBakeOutput{TrackPath: trackPath, GeneratedManifestPath: TrackBakeManifestPath, Resources: []TrackBakeResource{}}
 	if trackPath == "" || asset == nil {
 		return out
 	}

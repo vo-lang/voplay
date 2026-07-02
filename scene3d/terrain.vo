@@ -1,9 +1,11 @@
 package scene3d
 
-import "errors"
-import "math"
-import "github.com/vo-lang/voplay"
-import "github.com/vo-lang/voplay/codec"
+import (
+	"errors"
+	"math"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
 
 type TerrainLayer struct {
 	Texture voplay.TextureID
@@ -15,8 +17,8 @@ type TerrainLayer struct {
 
 type TerrainSplatMaterial struct {
 	Control voplay.TextureID
-	Layers  []TerrainLayer
-	Tuning  TerrainMaterialTuning
+	Layers []TerrainLayer
+	Tuning TerrainMaterialTuning
 }
 
 type TerrainMaterialTuning struct {
@@ -41,95 +43,91 @@ type TerrainMaterialTuning struct {
 type TerrainDesc struct {
 	HeightmapPath string
 	HeightmapData []byte
-	Texture       voplay.TextureID
-	Normal        voplay.TextureID
-	MetallicRoughness voplay.TextureID
-	NormalScale   float64
-	Roughness      float64
-	Metallic       float64
-	Splat         *TerrainSplatMaterial
-	Position      voplay.Vec3
-	Width         float64
-	Height        float64
-	Depth         float64
-	UVScale       float64
-	Tint          voplay.Color
-	TintSet       bool
-	Tag           string
-	Data          any
-	Physics       *Physics
-	CullDistance  float64
-	CullRadius    float64
-	FrustumCull   bool
-}
-
-const (
-	TerrainHeightSourceGenerated = 0
-	TerrainHeightSourcePath      = 1
-	TerrainHeightSourceBytes     = 2
-)
-
-type TerrainHeightSourceInfo struct {
-	SourceKind     int
-	SourcePath     string
-	SourceBytes    int
-	SourceChecksum int
-	HeightBytes    int
-	HeightChecksum int
-	Rows           int
-	Cols           int
-	Scale          voplay.Vec3
-	MinHeight      float64
-	MaxHeight      float64
-	HighPrecision  bool
-}
-
-type TerrainHeightDebugComparison struct {
-	Rows                 int
-	Cols                 int
-	VisualHeightBytes    int
-	PhysicsHeightBytes   int
-	VisualChecksum       int
-	PhysicsChecksum      int
-	ExpectedHeightBytes  int
-	Samples              int
-	MaxSampleDelta       float64
-	VisualPhysicsMatched bool
-}
-
-type Terrain struct {
-	entity     *Entity
-	rows       int
-	cols       int
-	heightData []byte
-	source     TerrainHeightSourceInfo
-}
-
-// TerrainCreateDesc groups all parameters for terrain mesh creation.
-type TerrainCreateDesc struct {
-	Path    string
-	Data    []byte
-	Scale   voplay.Vec3
-	UVScale float64
 	Texture voplay.TextureID
-	Normal  voplay.TextureID
+	Normal voplay.TextureID
 	MetallicRoughness voplay.TextureID
 	NormalScale float64
 	Roughness float64
 	Metallic float64
-	Splat   *TerrainSplatMaterial
+	Splat *TerrainSplatMaterial
+	Position voplay.Vec3
+	Width float64
+	Height float64
+	Depth float64
+	UVScale float64
+	Tint voplay.Color
+	TintSet bool
+	Tag string
+	Data any
+	Physics *Physics
+	CullDistance float64
+	CullRadius float64
+	FrustumCull bool
 }
 
-// TerrainCreateResult holds the outputs from terrain mesh creation.
+const (
+	TerrainHeightSourceGenerated = 0
+	TerrainHeightSourcePath = 1
+	TerrainHeightSourceBytes = 2
+)
+
+type TerrainHeightSourceInfo struct {
+	SourceKind int
+	SourcePath string
+	SourceBytes int
+	SourceChecksum int
+	HeightBytes int
+	HeightChecksum int
+	Rows int
+	Cols int
+	Scale voplay.Vec3
+	MinHeight float64
+	MaxHeight float64
+	HighPrecision bool
+}
+
+type TerrainHeightDebugComparison struct {
+	Rows int
+	Cols int
+	VisualHeightBytes int
+	PhysicsHeightBytes int
+	VisualChecksum int
+	PhysicsChecksum int
+	ExpectedHeightBytes int
+	Samples int
+	MaxSampleDelta float64
+	VisualPhysicsMatched bool
+}
+
+type Terrain struct {
+	entity *Entity
+	rows int
+	cols int
+	heightData []byte
+	source TerrainHeightSourceInfo
+}
+
+type TerrainCreateDesc struct {
+	Path string
+	Data []byte
+	Scale voplay.Vec3
+	UVScale float64
+	Texture voplay.TextureID
+	Normal voplay.TextureID
+	MetallicRoughness voplay.TextureID
+	NormalScale float64
+	Roughness float64
+	Metallic float64
+	Splat *TerrainSplatMaterial
+}
+
 type TerrainCreateResult struct {
-	ModelID    int
-	Rows       int
-	Cols       int
+	ModelID int
+	Rows int
+	Cols int
 	HeightData []byte
 }
 
-// TerrainBackend abstracts terrain resource creation and height queries so
-// they can be replaced in tests without per-function hook boilerplate.
 type TerrainBackend interface {
 	Create(desc TerrainCreateDesc) (TerrainCreateResult, error)
 	HeightAt(worldID, bodyID int, x, z float64) (float64, bool)
@@ -141,16 +139,10 @@ func (defaultTerrainBackend) Create(desc TerrainCreateDesc) (TerrainCreateResult
 	if desc.Splat != nil {
 		layerData := encodeTerrainSplatLayers(desc.Splat)
 		if desc.Path != "" {
-			modelID, rows, cols, hd := createTerrainSplat(
-				desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
-				int(desc.Splat.Control), layerData,
-			)?
+			modelID, rows, cols, hd := createTerrainSplat(desc.Path, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, int(desc.Splat.Control), layerData)?
 			return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 		}
-		modelID, rows, cols, hd := createTerrainBytesSplat(
-			desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z,
-			int(desc.Splat.Control), layerData,
-		)?
+		modelID, rows, cols, hd := createTerrainBytesSplat(desc.Data, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, int(desc.Splat.Control), layerData)?
 		return TerrainCreateResult{ModelID: modelID, Rows: rows, Cols: cols, HeightData: hd}, nil
 	}
 	if desc.Path != "" {
@@ -167,7 +159,6 @@ func (defaultTerrainBackend) HeightAt(worldID, bodyID int, x, z float64) (float6
 
 var terrBackend TerrainBackend = defaultTerrainBackend{}
 
-// SetTerrainBackend replaces the active terrain backend and returns the previous one.
 func SetTerrainBackend(b TerrainBackend) TerrainBackend {
 	prev := terrBackend
 	terrBackend = b
@@ -203,18 +194,7 @@ func (t *Terrain) HeightDebugComparison() TerrainHeightDebugComparison {
 	}
 	maxDelta, samples, matched := compareTerrainHeightData(t.heightData, physicsData)
 	expected := t.rows * t.cols * 4
-	return TerrainHeightDebugComparison{
-		Rows:                 t.rows,
-		Cols:                 t.cols,
-		VisualHeightBytes:    len(t.heightData),
-		PhysicsHeightBytes:   len(physicsData),
-		VisualChecksum:       terrainBytesChecksum(t.heightData),
-		PhysicsChecksum:      terrainBytesChecksum(physicsData),
-		ExpectedHeightBytes:  expected,
-		Samples:              samples,
-		MaxSampleDelta:       maxDelta,
-		VisualPhysicsMatched: matched && len(t.heightData) == expected && len(physicsData) == expected,
-	}
+	return TerrainHeightDebugComparison{Rows: t.rows, Cols: t.cols, VisualHeightBytes: len(t.heightData), PhysicsHeightBytes: len(physicsData), VisualChecksum: terrainBytesChecksum(t.heightData), PhysicsChecksum: terrainBytesChecksum(physicsData), ExpectedHeightBytes: expected, Samples: samples, MaxSampleDelta: maxDelta, VisualPhysicsMatched: matched && len(t.heightData) == expected && len(physicsData) == expected}
 }
 
 func (t *Terrain) HeightAt(x, z float64) (float64, bool) {
@@ -233,25 +213,8 @@ func spawnTerrain(scene *Scene, desc TerrainDesc, physics *Physics, modelID, row
 		return nil, sourceErr
 	}
 	heightData = append([]byte{}, heightData...)
-	physics.Heightfield = &Heightfield{
-		heightData: heightData,
-		rows:       rows,
-		cols:       cols,
-		scale:      voplay.Vec3{desc.Width, desc.Height, desc.Depth},
-	}
-	ent := scene.Spawn(EntityDesc{
-		Position:   desc.Position,
-		Model:      voplay.ModelID(modelID),
-		OwnedModel: voplay.ModelID(modelID),
-		Tint:       desc.Tint,
-		TintSet:    desc.TintSet,
-		Tag:        desc.Tag,
-		Data:       desc.Data,
-		Physics:    physics,
-		CullDistance: desc.CullDistance,
-		CullRadius:   terrainCullRadius(desc),
-		FrustumCull:  desc.FrustumCull,
-	})
+	physics.Heightfield = &Heightfield{heightData: heightData, rows: rows, cols: cols, scale: voplay.Vec3{desc.Width, desc.Height, desc.Depth}}
+	ent := scene.Spawn(EntityDesc{Position: desc.Position, Model: voplay.ModelID(modelID), OwnedModel: voplay.ModelID(modelID), Tint: desc.Tint, TintSet: desc.TintSet, Tag: desc.Tag, Data: desc.Data, Physics: physics, CullDistance: desc.CullDistance, CullRadius: terrainCullRadius(desc), FrustumCull: desc.FrustumCull})
 	return &Terrain{entity: ent, rows: rows, cols: cols, heightData: heightData, source: source}, nil
 }
 
@@ -259,7 +222,7 @@ func terrainCullRadius(desc TerrainDesc) float64 {
 	if desc.CullRadius > 0 {
 		return desc.CullRadius
 	}
-	return math.Sqrt(desc.Width*desc.Width + desc.Height*desc.Height + desc.Depth*desc.Depth) * 0.5
+	return math.Sqrt(desc.Width * desc.Width + desc.Height * desc.Height + desc.Depth * desc.Depth) * 0.5
 }
 
 func NewTerrain(scene *Scene, desc TerrainDesc) (*Terrain, error) {
@@ -288,17 +251,7 @@ func NewTerrain(scene *Scene, desc TerrainDesc) (*Terrain, error) {
 	if err != nil {
 		return nil, err
 	}
-	createDesc := TerrainCreateDesc{
-		Path:    desc.HeightmapPath,
-		Data:    desc.HeightmapData,
-		Scale:   voplay.Vec3{desc.Width, desc.Height, desc.Depth},
-		Texture: desc.Texture,
-		Normal:  desc.Normal,
-		MetallicRoughness: desc.MetallicRoughness,
-		NormalScale: desc.NormalScale,
-		Roughness: desc.Roughness,
-		Metallic: desc.Metallic,
-	}
+	createDesc := TerrainCreateDesc{Path: desc.HeightmapPath, Data: desc.HeightmapData, Scale: voplay.Vec3{desc.Width, desc.Height, desc.Depth}, Texture: desc.Texture, Normal: desc.Normal, MetallicRoughness: desc.MetallicRoughness, NormalScale: desc.NormalScale, Roughness: desc.Roughness, Metallic: desc.Metallic}
 	if desc.Splat != nil {
 		if desc.Normal != 0 || desc.MetallicRoughness != 0 || desc.NormalScale != 0 || desc.Roughness != 0 || desc.Metallic != 0 {
 			return nil, errors.New("scene3d.NewTerrain: single-material terrain fields cannot be mixed with Splat")
@@ -357,20 +310,7 @@ func buildTerrainHeightSourceInfo(desc TerrainDesc, rows, cols int, heightData [
 		sourceChecksum = terrainBytesChecksum(desc.HeightmapData)
 	}
 	minHeight, maxHeight := terrainHeightDataRange(heightData)
-	return TerrainHeightSourceInfo{
-		SourceKind:     sourceKind,
-		SourcePath:     sourcePath,
-		SourceBytes:    sourceBytes,
-		SourceChecksum: sourceChecksum,
-		HeightBytes:    len(heightData),
-		HeightChecksum: terrainBytesChecksum(heightData),
-		Rows:           rows,
-		Cols:           cols,
-		Scale:          voplay.Vec3{desc.Width, desc.Height, desc.Depth},
-		MinHeight:      minHeight,
-		MaxHeight:      maxHeight,
-		HighPrecision:  true,
-	}, nil
+	return TerrainHeightSourceInfo{SourceKind: sourceKind, SourcePath: sourcePath, SourceBytes: sourceBytes, SourceChecksum: sourceChecksum, HeightBytes: len(heightData), HeightChecksum: terrainBytesChecksum(heightData), Rows: rows, Cols: cols, Scale: voplay.Vec3{desc.Width, desc.Height, desc.Depth}, MinHeight: minHeight, MaxHeight: maxHeight, HighPrecision: true}, nil
 }
 
 func terrainBytesChecksum(data []byte) int {
@@ -405,7 +345,7 @@ func terrainHeightDataRange(data []byte) (float64, float64) {
 }
 
 func compareTerrainHeightData(a, b []byte) (float64, int, bool) {
-	if len(a) != len(b) || len(a)%4 != 0 {
+	if len(a) != len(b) || len(a) % 4 != 0 {
 		return 0, 0, false
 	}
 	ra := codec.NewByteReader(a)
@@ -435,11 +375,7 @@ func validateAndNormalizeSplat(splat *TerrainSplatMaterial) (*TerrainSplatMateri
 	if tuningErr != nil {
 		return nil, tuningErr
 	}
-	normalized := &TerrainSplatMaterial{
-		Control: splat.Control,
-		Layers:  append([]TerrainLayer{}, splat.Layers...),
-		Tuning:  tuning,
-	}
+	normalized := &TerrainSplatMaterial{Control: splat.Control, Layers: append([]TerrainLayer{}, splat.Layers...), Tuning: tuning}
 	for i := 0; i < 4; i++ {
 		if normalized.Layers[i].Texture == 0 {
 			return nil, errors.New("scene3d.NewTerrain: all 4 splat layers must define a non-zero texture")
@@ -458,24 +394,7 @@ func validateAndNormalizeSplat(splat *TerrainSplatMaterial) (*TerrainSplatMateri
 }
 
 func DefaultTerrainMaterialTuning() TerrainMaterialTuning {
-	return TerrainMaterialTuning{
-		MacroScale: 1,
-		MacroStrength: 1,
-		DetailNear: 130,
-		DetailFar: 560,
-		SlopeStart: 0.16,
-		SlopeEnd: 0.62,
-		SlopeDirtStrength: 0.38,
-		SlopeRockStrength: 0.62,
-		AntiTileStrength: 1,
-		DetailStrength: 1,
-		NormalNear: 120,
-		NormalFar: 520,
-		HeightBlendStrength: 0,
-		HeightLow: 0,
-		HeightHigh: 1,
-		CurvatureStrength: 0,
-	}
+	return TerrainMaterialTuning{MacroScale: 1, MacroStrength: 1, DetailNear: 130, DetailFar: 560, SlopeStart: 0.16, SlopeEnd: 0.62, SlopeDirtStrength: 0.38, SlopeRockStrength: 0.62, AntiTileStrength: 1, DetailStrength: 1, NormalNear: 120, NormalFar: 520, HeightBlendStrength: 0, HeightLow: 0, HeightHigh: 1, CurvatureStrength: 0}
 }
 
 func validateAndNormalizeTerrainMaterialTuning(tuning TerrainMaterialTuning) (TerrainMaterialTuning, error) {
@@ -576,7 +495,7 @@ func terrainFinite(value float64) bool {
 }
 
 func encodeTerrainSplatLayers(splat *TerrainSplatMaterial) []byte {
-	w := codec.NewByteWriter(4*(4+4+4+8+8) + 16*8)
+	w := codec.NewByteWriter(4 * (4 + 4 + 4 + 8 + 8) + 16 * 8)
 	for i := 0; i < 4; i++ {
 		layer := splat.Layers[i]
 		w.WriteU32(int(layer.Texture))
@@ -607,13 +526,7 @@ func encodeTerrainSplatLayers(splat *TerrainSplatMaterial) []byte {
 
 func buildTerrainPhysics(base *Physics) (*Physics, error) {
 	if base == nil {
-		return &Physics{
-			Type:        Static,
-			Layer:       voplay.CollisionLayerDefault,
-			Mask:        voplay.CollisionMaskAll,
-			Friction:    0.8,
-			Restitution: 0.0,
-		}, nil
+		return &Physics{Type: Static, Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 0.8, Restitution: 0.0}, nil
 	}
 	if base.Type != Static {
 		return nil, errors.New("scene3d.NewTerrain: terrain physics must use Static body type")
@@ -624,25 +537,15 @@ func buildTerrainPhysics(base *Physics) (*Physics, error) {
 	if base.Trimesh != nil || base.Heightfield != nil {
 		return nil, errors.New("scene3d.NewTerrain: terrain physics must not predefine trimesh or heightfield")
 	}
-	return &Physics{
-		Type:          base.Type,
-		Collider:      base.Collider,
-		Layer:         base.Layer,
-		Mask:          base.Mask,
-		Density:       base.Density,
-		Friction:      base.Friction,
-		Restitution:   base.Restitution,
-		LinearDamping: base.LinearDamping,
-		AngularDamping: base.AngularDamping,
-		FixedRotation: base.FixedRotation,
-		LockRotationX: base.LockRotationX,
-		LockRotationY: base.LockRotationY,
-		LockRotationZ: base.LockRotationZ,
-	}, nil
+	return &Physics{Type: base.Type, Collider: base.Collider, Layer: base.Layer, Mask: base.Mask, Density: base.Density, Friction: base.Friction, Restitution: base.Restitution, LinearDamping: base.LinearDamping, AngularDamping: base.AngularDamping, FixedRotation: base.FixedRotation, LockRotationX: base.LockRotationX, LockRotationY: base.LockRotationY, LockRotationZ: base.LockRotationZ}, nil
 }
 
 func createTerrain(path string, scaleX, scaleY, scaleZ, uvScale float64, textureID int, normalTextureID int, metallicRoughnessTextureID int, normalScale float64, roughness float64, metallic float64) (int, int, int, []byte, error)
+
 func createTerrainSplat(path string, scaleX, scaleY, scaleZ float64, controlTextureID int, layerData []byte) (int, int, int, []byte, error)
+
 func createTerrainBytes(data []byte, scaleX, scaleY, scaleZ, uvScale float64, textureID int, normalTextureID int, metallicRoughnessTextureID int, normalScale float64, roughness float64, metallic float64) (int, int, int, []byte, error)
+
 func createTerrainBytesSplat(data []byte, scaleX, scaleY, scaleZ float64, controlTextureID int, layerData []byte) (int, int, int, []byte, error)
+
 func terrainHeightAt(worldID, bodyID int, x, z float64) (float64, bool)

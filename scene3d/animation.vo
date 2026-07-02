@@ -1,23 +1,23 @@
 package scene3d
 
-import "github.com/vo-lang/voplay"
-import "github.com/vo-lang/voplay/codec"
+import (
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
 
 type AnimationClipID int
 
 type AnimationClipInfo struct {
-	Name     string
+	Name string
 	Duration float64
 }
 
 type AnimationModelInfo struct {
 	HasSkeleton bool
-	JointCount  int
-	Clips       []AnimationClipInfo
+	JointCount int
+	Clips []AnimationClipInfo
 }
 
-// AnimationBackend abstracts animation system operations so they can be
-// replaced in tests without per-function hook boilerplate.
 type AnimationBackend interface {
 	Init() int
 	Destroy(worldID int)
@@ -33,8 +33,13 @@ type AnimationBackend interface {
 
 type defaultAnimationBackend struct{}
 
-func (defaultAnimationBackend) Init() int                { return voplay.AnimationRuntimeInit() }
-func (defaultAnimationBackend) Destroy(worldID int)      { voplay.AnimationRuntimeDestroy(worldID) }
+func (defaultAnimationBackend) Init() int {
+	return voplay.AnimationRuntimeInit()
+}
+
+func (defaultAnimationBackend) Destroy(worldID int) {
+	voplay.AnimationRuntimeDestroy(worldID)
+}
 
 func (defaultAnimationBackend) Play(worldID, targetID int, clip AnimationClipID, loop bool, speed float64) {
 	voplay.AnimationRuntimePlay(worldID, targetID, int(clip), loop, speed)
@@ -70,7 +75,6 @@ func (defaultAnimationBackend) ModelInfo(model voplay.ModelID) AnimationModelInf
 
 var animBackend AnimationBackend = defaultAnimationBackend{}
 
-// SetAnimationBackend replaces the active animation backend and returns the previous one.
 func SetAnimationBackend(b AnimationBackend) AnimationBackend {
 	prev := animBackend
 	animBackend = b
@@ -110,10 +114,7 @@ func decodeAnimationModelInfo(data []byte) AnimationModelInfo {
 		duration := r.ReadF32()
 		nameLen := r.ReadU16()
 		name := string(r.ReadBytes(nameLen))
-		info.Clips = append(info.Clips, AnimationClipInfo{
-			Name:     name,
-			Duration: duration,
-		})
+		info.Clips = append(info.Clips, AnimationClipInfo{Name: name, Duration: duration})
 	}
 	return info
 }
@@ -216,7 +217,7 @@ func (s *Scene) serializeAnimatedEntityModelMap() []byte {
 			count++
 		}
 	}
-	w := codec.NewByteWriter(4 + count*8)
+	w := codec.NewByteWriter(4 + count * 8)
 	w.WriteU32(count)
 	for _, e := range s.entities {
 		if e.Active && e.Model != 0 && e.animationTargetID != 0 {
@@ -233,4 +234,3 @@ func (s *Scene) TickAnimations(dt float64) {
 	}
 	animBackend.Tick(s.animationWorldID, dt, s.serializeAnimatedEntityModelMap())
 }
-

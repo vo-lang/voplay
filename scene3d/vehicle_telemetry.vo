@@ -1,0 +1,163 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+const (
+	VehicleTelemetryIssueInvalidNumber = "vehicle.invalid_number"
+	VehicleTelemetryIssueInvalidQuaternion = "vehicle.invalid_quaternion"
+	VehicleTelemetryIssueExcessiveVelocity = "vehicle.excessive_velocity"
+	VehicleTelemetryIssueStuck = "vehicle.stuck"
+)
+
+type VehicleTelemetry struct {
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Velocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+	Speed float64
+	ForwardSpeed float64
+	LateralSpeed float64
+	Yaw float64
+	Grounded bool
+	GroundNormal voplay.Vec3
+	GroundPoint voplay.Vec3
+	WheelCount int
+	ContactCount int
+	MaxSuspensionCompression float64
+	MaxLongitudinalSlip float64
+	MaxLateralSlip float64
+	SurfaceID string
+	Surface SurfaceMaterial
+	Drifting bool
+	Boosting bool
+	Recovery VehicleRecoveryState
+}
+
+type VehicleTelemetryIssue struct {
+	Code string
+	Severity int
+	Detail string
+}
+
+type VehicleTelemetryBudget struct {
+	MaxVelocity float64
+	StuckSpeed float64
+	StuckThrottle float64
+}
+
+func DefaultVehicleTelemetryBudget() VehicleTelemetryBudget {
+	return VehicleTelemetryBudget{MaxVelocity: 120, StuckSpeed: 0.35, StuckThrottle: 0.75}
+}
+
+func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
+	if vehicle == nil {
+		return VehicleTelemetry{}
+	}
+	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: DefaultSurfaceMaterial(), Drifting: vehicle.Drifting}
+	if vehicle.Body != nil {
+		t.Position = vehicleCleanVec3(vehicle.Body.Position())
+		t.Rotation = vehicleCleanQuat(vehicle.Body.Rotation())
+		if vehicle.Body.Physics != nil {
+			t.Velocity = vehicleCleanVec3(vehicle.Body.Physics.velocity)
+			t.AngularVelocity = vehicleCleanVec3(vehicle.Body.Physics.angularVelocity)
+		}
+	}
+	forward, lateral := vehicle.localWheelSlipVelocity()
+	t.ForwardSpeed = vehicleFiniteOr(forward, 0)
+	t.LateralSpeed = vehicleFiniteOr(lateral, 0)
+	for i := 0; i < vehicle.WheelCount(); i++ {
+		wheel, ok := vehicle.WheelState(i)
+		if !ok {
+			continue
+		}
+		if wheel.InContact {
+			t.ContactCount++
+			if t.SurfaceID == "" && wheel.SurfaceID != "" {
+				t.SurfaceID = wheel.SurfaceID
+			}
+		}
+		if wheel.SuspensionCompression > t.MaxSuspensionCompression {
+			t.MaxSuspensionCompression = wheel.SuspensionCompression
+		}
+		if wheel.LongitudinalSlip > t.MaxLongitudinalSlip {
+			t.MaxLongitudinalSlip = wheel.LongitudinalSlip
+		}
+		if wheel.LateralSlip > t.MaxLateralSlip {
+			t.MaxLateralSlip = wheel.LateralSlip
+		}
+	}
+	if vehicle.Track != nil && vehicle.Body != nil {
+		t.Surface = SurfaceMaterialAtTrackPosition(vehicle.Track, vehicle.Body.Position())
+		if t.SurfaceID == "" {
+			t.SurfaceID = t.Surface.ID
+		}
+	}
+	return t
+}
+
+func (v *Vehicle) Telemetry() VehicleTelemetry {
+	return VehicleTelemetryFromVehicle(v)
+}
+
+func (t VehicleTelemetry) ValidationIssues(intent VehicleIntent, budget VehicleTelemetryBudget) []VehicleTelemetryIssue {
+	budget = normalizeVehicleTelemetryBudget(budget)
+	issues := []VehicleTelemetryIssue{}
+	if !vehicleVec3Finite(t.Position) || !vehicleVec3Finite(t.Velocity) || !vehicleVec3Finite(t.AngularVelocity) || !vehicleVec3Finite(t.GroundNormal) || !vehicleFinite(t.Speed) || !vehicleFinite(t.Yaw) {
+		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueInvalidNumber, Severity: 1, Detail: "non-finite vehicle telemetry"})
+	}
+	if !vehicleQuatFinite(t.Rotation) || !vehicleQuatUnit(t.Rotation) {
+		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueInvalidQuaternion, Severity: 1, Detail: "invalid vehicle orientation"})
+	}
+	if t.Velocity.Length() > budget.MaxVelocity || t.Speed > budget.MaxVelocity {
+		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueExcessiveVelocity, Severity: 1, Detail: "vehicle velocity exceeds budget"})
+	}
+	intent = intent.Normalized()
+	if t.Grounded && t.Speed <= budget.StuckSpeed && intent.Throttle >= budget.StuckThrottle {
+		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueStuck, Severity: 2, Detail: "vehicle is grounded but not moving under throttle"})
+	}
+	return issues
+}
+
+func (t VehicleTelemetry) IsHealthy(intent VehicleIntent, budget VehicleTelemetryBudget) bool {
+	return len(t.ValidationIssues(intent, budget)) == 0
+}
+
+func normalizeVehicleTelemetryBudget(budget VehicleTelemetryBudget) VehicleTelemetryBudget {
+	defaults := DefaultVehicleTelemetryBudget()
+	if budget.MaxVelocity <= 0 {
+		budget.MaxVelocity = defaults.MaxVelocity
+	}
+	if budget.StuckSpeed <= 0 {
+		budget.StuckSpeed = defaults.StuckSpeed
+	}
+	if budget.StuckThrottle <= 0 {
+		budget.StuckThrottle = defaults.StuckThrottle
+	}
+	return budget
+}
+
+func vehicleCleanQuat(q voplay.Quat) voplay.Quat {
+	if !vehicleQuatFinite(q) || q.X * q.X + q.Y * q.Y + q.Z * q.Z + q.W * q.W == 0 {
+		return voplay.QuatIdentity()
+	}
+	return q.Normalize()
+}
+
+func vehicleFinite(v float64) bool {
+	return vehicleFiniteOr(v, 42) == v
+}
+
+func vehicleVec3Finite(v voplay.Vec3) bool {
+	return vehicleFinite(v.X) && vehicleFinite(v.Y) && vehicleFinite(v.Z)
+}
+
+func vehicleQuatFinite(q voplay.Quat) bool {
+	return vehicleFinite(q.X) && vehicleFinite(q.Y) && vehicleFinite(q.Z) && vehicleFinite(q.W)
+}
+
+func vehicleQuatUnit(q voplay.Quat) bool {
+	lengthSq := q.X * q.X + q.Y * q.Y + q.Z * q.Z + q.W * q.W
+	return lengthSq > 0.98 && lengthSq < 1.02
+}

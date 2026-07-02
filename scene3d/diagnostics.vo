@@ -1,6 +1,8 @@
 package scene3d
 
-import "github.com/vo-lang/voplay/primitive3d"
+import (
+	"github.com/vo-lang/voplay/primitive3d"
+)
 
 type SceneDiagnostics struct {
 	Render SceneRenderStats
@@ -10,6 +12,9 @@ type SceneDiagnostics struct {
 	StaticRenderableEntities int
 	PhysicsBodies int
 	TerrainBodies int
+	Vehicles int
+	ContactEvents int
+	VehicleTelemetryIssues int
 	PrimitiveLayers int
 	ShadowEnabled bool
 	ShadowResolution int
@@ -26,20 +31,7 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 	if s == nil {
 		return SceneDiagnostics{}
 	}
-	diag := SceneDiagnostics{
-		Render: s.RenderStats(),
-		Primitive: s.PrimitiveStats(),
-		PrimitiveLayers: len(s.primitiveLayers),
-		ShadowEnabled: s.ShadowsEnabled,
-		ShadowResolution: s.ShadowResolution,
-		ShadowStrength: normalizeShadowStrength(s.ShadowStrength),
-		ShadowSoftness: normalizeShadowSoftness(s.ShadowSoftness),
-		ShadowDistance: normalizeShadowDistance(s.ShadowDistance),
-		ShadowFade: normalizeShadowFade(s.ShadowFade),
-		ShadowQuality: normalizeShadowQuality(s.ShadowQuality),
-		RenderingQuality: normalizeSceneQuality(s.RenderingQuality),
-		RenderDebugMode: s.RenderDebugMode,
-	}
+	diag := SceneDiagnostics{Render: s.RenderStats(), Primitive: s.PrimitiveStats(), PrimitiveLayers: len(s.primitiveLayers), ShadowEnabled: s.ShadowsEnabled, ShadowResolution: s.ShadowResolution, ShadowStrength: normalizeShadowStrength(s.ShadowStrength), ShadowSoftness: normalizeShadowSoftness(s.ShadowSoftness), ShadowDistance: normalizeShadowDistance(s.ShadowDistance), ShadowFade: normalizeShadowFade(s.ShadowFade), ShadowQuality: normalizeShadowQuality(s.ShadowQuality), RenderingQuality: normalizeSceneQuality(s.RenderingQuality), RenderDebugMode: s.RenderDebugMode}
 	for _, entity := range s.entities {
 		if entity == nil || !entity.Active {
 			continue
@@ -57,6 +49,14 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 				diag.TerrainBodies++
 			}
 		}
+	}
+	diag.Vehicles = len(s.vehicles)
+	diag.ContactEvents = len(s.ContactEvents())
+	for _, vehicle := range s.vehicles {
+		if vehicle == nil {
+			continue
+		}
+		diag.VehicleTelemetryIssues += len(vehicle.Telemetry().ValidationIssues(VehicleIntent{}, VehicleTelemetryBudget{}))
 	}
 	return diag
 }

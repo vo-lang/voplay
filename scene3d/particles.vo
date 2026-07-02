@@ -1,83 +1,61 @@
 package scene3d
 
-import "math"
-import "math/rand"
-import "github.com/vo-lang/voplay"
+import (
+	"math"
+	"math/rand"
+	"github.com/vo-lang/voplay"
+)
 
 type EmitterShape int
 
 const (
 	EmitPoint EmitterShape = 0
-	EmitCone  EmitterShape = 1
+	EmitCone EmitterShape = 1
 )
 
 type Particle struct {
 	position voplay.Vec3
 	velocity voplay.Vec3
-	age      float64
+	age float64
 	lifetime float64
-	size0    float64
-	size1    float64
-	color0   voplay.Color
-	color1   voplay.Color
-	alive    bool
+	size0 float64
+	size1 float64
+	color0 voplay.Color
+	color1 voplay.Color
+	alive bool
 }
 
 type ParticleEmitter struct {
 	Position voplay.Vec3
 	Attached *Entity
-
-	Rate      float64
-	Shape     EmitterShape
+	Rate float64
+	Shape EmitterShape
 	Direction voplay.Vec3
-	Spread    float64
-
+	Spread float64
 	LifetimeMin float64
 	LifetimeMax float64
-	SpeedMin    float64
-	SpeedMax    float64
-
+	SpeedMin float64
+	SpeedMax float64
 	StartColor voplay.Color
-	EndColor   voplay.Color
-	StartSize  float64
-	EndSize    float64
-
+	EndColor voplay.Color
+	StartSize float64
+	EndSize float64
 	Gravity voplay.Vec3
 	Damping float64
 	Texture voplay.TextureID
-
 	MaxParticles int
-	Enabled      bool
-
-	particles   []Particle
-	cursor      int
+	Enabled bool
+	particles []Particle
+	cursor int
 	accumulator float64
-	scene       *Scene
+	scene *Scene
 }
 
 func NewParticleEmitter(maxParticles int) *ParticleEmitter {
 	if maxParticles <= 0 {
 		panic("NewParticleEmitter: maxParticles must be > 0")
 	}
-	return &ParticleEmitter{
-		Rate:         50,
-		Shape:        EmitPoint,
-		Direction:    voplay.Vec3{Y: 1},
-		Spread:       0.5,
-		LifetimeMin:  0.5,
-		LifetimeMax:  1.5,
-		SpeedMin:     1.0,
-		SpeedMax:     3.0,
-		StartColor:   voplay.White,
-		EndColor:     voplay.Color{R: 1, G: 1, B: 1, A: 0},
-		StartSize:    0.2,
-		EndSize:      0.05,
-		Gravity:      voplay.Vec3{Y: -9.8},
-		Damping:      1.0,
-		MaxParticles: maxParticles,
-		Enabled:      true,
-		particles:    make([]Particle, maxParticles),
-	}
+	return &ParticleEmitter{Rate: 50, Shape: EmitPoint, Direction: voplay.Vec3{Y: 1}, Spread: 0.5, LifetimeMin: 0.5, LifetimeMax: 1.5, SpeedMin: 1.0, SpeedMax: 3.0, StartColor: voplay.White, EndColor: voplay.Color{R: 1, G: 1, B: 1, A: 0}, StartSize: 0.2, EndSize: 0.05, Gravity: voplay.Vec3{Y: -9.8}, Damping: 1.0, MaxParticles: maxParticles, Enabled: true, particles: make([]Particle, maxParticles)}
 }
 
 func FireEmitter(texture voplay.TextureID, pos voplay.Vec3) *ParticleEmitter {
@@ -186,18 +164,12 @@ func (e *ParticleEmitter) Draw(d *voplay.DrawCtx) {
 			continue
 		}
 		t := p.age / p.lifetime
-		size := p.size0 + (p.size1-p.size0)*t
+		size := p.size0 + (p.size1 - p.size0) * t
 		color := p.color0.Lerp(p.color1, t)
 		if size <= 0 || color.A <= 0 {
 			continue
 		}
-		d.DrawBillboardEx(voplay.BillboardParams{
-			Tex:      e.Texture,
-			WorldPos: p.position,
-			Width:    size,
-			Height:   size,
-			Tint:     color,
-		})
+		d.DrawBillboardEx(voplay.BillboardParams{Tex: e.Texture, WorldPos: p.position, Width: size, Height: size, Tint: color})
 	}
 }
 
@@ -267,25 +239,21 @@ func randRange(lo, hi float64) float64 {
 	if hi == lo {
 		return lo
 	}
-	return lo + rand.Float64()*(hi-lo)
+	return lo + rand.Float64() * (hi - lo)
 }
 
 func randomUnitSphere() voplay.Vec3 {
 	z := randRange(-1, 1)
 	phi := rand.Float64() * math.Pi * 2
-	r := math.Sqrt(1 - z*z)
-	return voplay.Vec3{
-		X: r * math.Cos(phi),
-		Y: z,
-		Z: r * math.Sin(phi),
-	}
+	r := math.Sqrt(1 - z * z)
+	return voplay.Vec3{X: r * math.Cos(phi), Y: z, Z: r * math.Sin(phi)}
 }
 
 func randomInCone(axis voplay.Vec3, halfAngle float64) voplay.Vec3 {
 	axis = axis.Normalize()
 	cosMin := math.Cos(halfAngle)
-	cosTheta := 1 - rand.Float64()*(1-cosMin)
-	sinTheta := math.Sqrt(1 - cosTheta*cosTheta)
+	cosTheta := 1 - rand.Float64() * (1 - cosMin)
+	sinTheta := math.Sqrt(1 - cosTheta * cosTheta)
 	phi := rand.Float64() * math.Pi * 2
 	helper := voplay.Vec3{Y: 1}
 	if math.Abs(axis.Y) > 0.999 {
@@ -293,8 +261,5 @@ func randomInCone(axis voplay.Vec3, halfAngle float64) voplay.Vec3 {
 	}
 	tangent := helper.Cross(axis).Normalize()
 	bitangent := axis.Cross(tangent)
-	return tangent.Scale(math.Cos(phi) * sinTheta).
-		Add(bitangent.Scale(math.Sin(phi) * sinTheta)).
-		Add(axis.Scale(cosTheta)).
-		Normalize()
+	return tangent.Scale(math.Cos(phi) * sinTheta).Add(bitangent.Scale(math.Sin(phi) * sinTheta)).Add(axis.Scale(cosTheta)).Normalize()
 }

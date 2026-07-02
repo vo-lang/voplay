@@ -153,10 +153,10 @@ func (s *Scene) flushRenderScene(d *voplay.DrawCtx) {
 		if culled {
 			stats.CulledEntities++
 		}
-			if visible && n.StaticRenderable && !n.hasSkeleton {
-				stats.BatchEligibleObjects++
-				sceneBatchGroups[n.sceneRenderBatchKey(renderModel)] = true
-			}
+		if visible && n.StaticRenderable && !n.hasSkeleton {
+			stats.BatchEligibleObjects++
+			sceneBatchGroups[n.sceneRenderBatchKey(renderModel)] = true
+		}
 		if !n.renderObjectNeedsUpsert(renderModel, visible, animationWorldID, animationTargetID) {
 			continue
 		}

@@ -1,0 +1,76 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type VehicleIntent struct {
+	Throttle float64
+	Brake float64
+	Steering float64
+	Drift bool
+	BoostRequest bool
+	ResetRequest bool
+	AirPitch float64
+	AirYaw float64
+	AirRoll float64
+	AssistHint string
+}
+
+func (i VehicleIntent) Normalized() VehicleIntent {
+	i.Throttle = vehicleClamp(i.Throttle, 0, 1)
+	i.Brake = vehicleClamp(i.Brake, 0, 1)
+	i.Steering = vehicleClamp(i.Steering, -1, 1)
+	i.AirPitch = vehicleClamp(i.AirPitch, -1, 1)
+	i.AirYaw = vehicleClamp(i.AirYaw, -1, 1)
+	i.AirRoll = vehicleClamp(i.AirRoll, -1, 1)
+	return i
+}
+
+func (i VehicleIntent) VehicleInput() VehicleInput {
+	i = i.Normalized()
+	throttle := i.Throttle
+	if i.Brake > throttle {
+		throttle = -i.Brake
+	}
+	return VehicleInput{Throttle: throttle, Steer: i.Steering, Drift: i.Drift, Boost: i.BoostRequest}
+}
+
+func (i VehicleIntent) KartInput() KartInput {
+	i = i.Normalized()
+	throttle := i.Throttle
+	if i.Brake > throttle {
+		throttle = -i.Brake
+	}
+	return KartInput{Throttle: throttle, Steer: i.Steering, Drift: i.Drift, Boost: i.BoostRequest, Reset: i.ResetRequest}
+}
+
+func VehicleIntentFromVehicleInput(input VehicleInput) VehicleIntent {
+	throttle := vehicleClamp(input.Throttle, -1, 1)
+	intent := VehicleIntent{Steering: vehicleClamp(input.Steer, -1, 1), Drift: input.Drift, BoostRequest: input.Boost}
+	if throttle >= 0 {
+		intent.Throttle = throttle
+	} else {
+		intent.Brake = -throttle
+	}
+	return intent
+}
+
+func VehicleIntentFromKartInput(input KartInput) VehicleIntent {
+	intent := VehicleIntentFromVehicleInput(VehicleInput{Throttle: input.Throttle, Steer: input.Steer, Drift: input.Drift, Boost: input.Boost})
+	intent.ResetRequest = input.Reset
+	return intent
+}
+
+func VehicleIntentFromRacingInput(input RacingInput) VehicleIntent {
+	return VehicleIntent{Throttle: vehicleClamp(input.Throttle, 0, 1), Brake: vehicleClamp(input.Brake, 0, 1), Steering: vehicleClamp(input.Steer, -1, 1), Drift: input.Drift, BoostRequest: input.Boost}
+}
+
+func VehicleIntentFromAxes(throttle, brake, steering float64) VehicleIntent {
+	return VehicleIntent{Throttle: throttle, Brake: brake, Steering: steering}.Normalized()
+}
+
+func (i VehicleIntent) AirControl() voplay.Vec3 {
+	i = i.Normalized()
+	return voplay.Vec3{X: i.AirPitch, Y: i.AirYaw, Z: i.AirRoll}
+}

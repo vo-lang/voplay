@@ -56,6 +56,10 @@ pub(crate) fn set_renderer_perf_stats_enabled(enabled: bool) -> Result<(), Strin
     crate::renderer_runtime::set_renderer_perf_stats_enabled(enabled)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+vo_ext::export_extensions!();
+
+#[cfg(target_arch = "wasm32")]
 vo_ext::export_extensions!(
     render::__EXT_voplay_initSurface,
     render::__EXT_voplay_submitFrame,
@@ -144,7 +148,7 @@ vo_ext::export_extensions!(
 pub fn vo_ext_register(registry: &mut ExternRegistry, externs: &[ExternDef]) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        registry.register_from_linkme(externs);
+        let _ = registry.register_from_linkme(externs);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -160,6 +164,34 @@ pub fn vo_ext_register(registry: &mut ExternRegistry, externs: &[ExternDef]) {
             if let Some(id) = find_id(externs, entry.name()) {
                 entry.register(registry, id);
             }
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::collections::HashSet;
+
+    #[test]
+    fn native_extension_table_names_are_unique() {
+        let table = super::vo_ext_get_entries();
+        let entries = if table.entry_count == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(table.entries, table.entry_count as usize) }
+        };
+        let mut seen = HashSet::with_capacity(entries.len());
+        for entry in entries {
+            let name = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    entry.name_ptr,
+                    entry.name_len as usize,
+                ))
+            };
+            assert!(
+                seen.insert(name.to_string()),
+                "duplicate extern entry {name}"
+            );
         }
     }
 }

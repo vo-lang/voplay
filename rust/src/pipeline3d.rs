@@ -8,6 +8,11 @@ use crate::material::{MaterialSamplerKey, MATERIAL_SAMPLER_KEYS};
 use crate::model_loader::{
     MeshMaterial, MeshVertex, ModelId, ModelManager, SkinnedMeshVertex, TerrainMaterialTuning,
 };
+use crate::pipeline3d_batches::{
+    InstanceBatch, InstanceBatchDraw, InstanceBatchKey, InstanceData, MainTextureKey,
+    TerrainBindGroupEntry, TerrainTextureKey,
+};
+pub use crate::pipeline3d_material::MaterialOverride;
 use crate::texture::TextureManager;
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -132,57 +137,6 @@ pub struct ModelDraw {
     pub animation_target_id: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct MaterialOverride {
-    pub id: u32,
-    pub base_color: [f32; 4],
-    pub albedo_texture_id: u32,
-    pub normal_texture_id: u32,
-    pub metallic_roughness_texture_id: u32,
-    pub emissive_texture_id: u32,
-    pub mask_texture_id: u32,
-    pub emissive_color: [f32; 4],
-    pub roughness: f32,
-    pub metallic: f32,
-    pub normal_scale: f32,
-    pub uv_scale: f32,
-    pub toon_ramp_texture_id: u32,
-    pub detail_strength: f32,
-    pub macro_blend: f32,
-    pub roughness_response: f32,
-    pub toon_ramp_response: f32,
-    pub shading_mode: u32,
-    pub wrap_mode: u32,
-    pub filter_mode: u32,
-}
-
-impl Default for MaterialOverride {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            base_color: [1.0, 1.0, 1.0, 1.0],
-            albedo_texture_id: 0,
-            normal_texture_id: 0,
-            metallic_roughness_texture_id: 0,
-            emissive_texture_id: 0,
-            mask_texture_id: 0,
-            emissive_color: [0.0, 0.0, 0.0, 0.0],
-            roughness: 0.55,
-            metallic: 0.0,
-            normal_scale: 0.0,
-            uv_scale: 1.0,
-            toon_ramp_texture_id: 0,
-            detail_strength: 1.0,
-            macro_blend: 0.0,
-            roughness_response: 1.0,
-            toon_ramp_response: 1.0,
-            shading_mode: 0,
-            wrap_mode: 0,
-            filter_mode: 0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::material::{
@@ -297,11 +251,19 @@ mod tests {
         else {
             return;
         };
+        let adapter_limits = adapter.limits();
+        if adapter_limits.max_inter_stage_shader_components < 44 {
+            return;
+        }
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        limits.max_inter_stage_shader_components = adapter_limits
+            .max_inter_stage_shader_components
+            .min(wgpu::Limits::default().max_inter_stage_shader_components);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("voplay_pipeline3d_test"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::default(),
             },
             None,
@@ -317,248 +279,6 @@ mod tests {
             1,
         );
     }
-}
-
-impl MaterialOverride {
-    pub fn base_color_multiplier(&self) -> [f32; 4] {
-        let base = self.base_color;
-        if base == [0.0, 0.0, 0.0, 0.0] && self.id == 0 {
-            [1.0, 1.0, 1.0, 1.0]
-        } else {
-            base
-        }
-    }
-
-    pub fn uv_scale_or(&self, fallback: f32) -> f32 {
-        if self.uv_scale > 0.0 {
-            self.uv_scale
-        } else {
-            fallback
-        }
-    }
-
-    fn roughness_value(&self, fallback: f32) -> f32 {
-        if self.roughness > 0.0 {
-            self.roughness.clamp(0.04, 1.0)
-        } else {
-            fallback.clamp(0.04, 1.0)
-        }
-    }
-
-    fn metallic_value(&self, fallback: f32) -> f32 {
-        if self.metallic != 0.0 {
-            self.metallic.clamp(0.0, 1.0)
-        } else {
-            fallback.clamp(0.0, 1.0)
-        }
-    }
-
-    fn normal_scale_value(&self, fallback: f32) -> f32 {
-        if self.normal_scale > 0.0 {
-            self.normal_scale
-        } else if self.normal_texture_id != 0 {
-            1.0
-        } else {
-            fallback.max(0.0)
-        }
-    }
-
-    fn shading_mode_value(&self) -> f32 {
-        if self.shading_mode == 0 {
-            0.0
-        } else {
-            self.shading_mode as f32
-        }
-    }
-
-    fn sampler_key(&self, fallback: MaterialSamplerKey) -> MaterialSamplerKey {
-        MaterialSamplerKey::resolve(self.wrap_mode, self.filter_mode, fallback)
-    }
-
-    fn mesh_material_params(&self, uv_scale: f32, roughness: f32, metallic: f32) -> [f32; 4] {
-        [
-            self.uv_scale_or(uv_scale),
-            self.roughness_value(roughness),
-            self.metallic_value(metallic),
-            self.shading_mode_value(),
-        ]
-    }
-
-    fn material_response_values(&self, mesh_material: &MeshMaterial) -> [f32; 4] {
-        [
-            if self.detail_strength > 0.0 {
-                self.detail_strength
-            } else if mesh_material.detail_strength > 0.0 {
-                mesh_material.detail_strength
-            } else {
-                1.0
-            },
-            if self.macro_blend > 0.0 {
-                self.macro_blend
-            } else {
-                mesh_material.macro_blend.max(0.0)
-            },
-            if self.roughness_response > 0.0 {
-                self.roughness_response
-            } else if mesh_material.roughness_response > 0.0 {
-                mesh_material.roughness_response
-            } else {
-                1.0
-            },
-            if self.toon_ramp_response > 0.0 {
-                self.toon_ramp_response
-            } else if mesh_material.toon_ramp_response > 0.0 {
-                mesh_material.toon_ramp_response
-            } else {
-                1.0
-            },
-        ]
-    }
-
-    fn emissive_color_value(
-        &self,
-        source_factor: [f32; 3],
-        override_texture_active: bool,
-    ) -> [f32; 4] {
-        let e = self.emissive_color;
-        if e[0] == 0.0 && e[1] == 0.0 && e[2] == 0.0 && e[3] == 0.0 {
-            if source_factor != [0.0, 0.0, 0.0] {
-                [source_factor[0], source_factor[1], source_factor[2], 1.0]
-            } else if override_texture_active {
-                [1.0, 1.0, 1.0, 1.0]
-            } else {
-                [0.0, 0.0, 0.0, 0.0]
-            }
-        } else {
-            e
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct InstanceData {
-    model_0: [f32; 4],
-    model_1: [f32; 4],
-    model_2: [f32; 4],
-    model_3: [f32; 4],
-    base_color: [f32; 4],
-    material_params: [f32; 4],
-    emissive_color: [f32; 4],
-    texture_flags: [f32; 4],
-    material_response: [f32; 4],
-    texture_flags2: [f32; 4],
-    instance_params: [f32; 4],
-}
-
-impl InstanceData {
-    const ATTRIBS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
-        5 => Float32x4,
-        6 => Float32x4,
-        7 => Float32x4,
-        8 => Float32x4,
-        9 => Float32x4,
-        10 => Float32x4,
-        11 => Float32x4,
-        12 => Float32x4,
-        13 => Float32x4,
-        14 => Float32x4,
-        15 => Float32x4,
-    ];
-
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-
-    fn from_uniform(uniform: &ModelUniform) -> Self {
-        Self {
-            model_0: uniform.model[0],
-            model_1: uniform.model[1],
-            model_2: uniform.model[2],
-            model_3: uniform.model[3],
-            base_color: uniform.base_color,
-            material_params: uniform.material_params,
-            emissive_color: uniform.emissive_color,
-            texture_flags: uniform.texture_flags,
-            material_response: uniform.material_response,
-            texture_flags2: uniform.texture_flags2,
-            instance_params: [0.0; 4],
-        }
-    }
-}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct MainTextureKey {
-    albedo: u32,
-    normal: u32,
-    metallic_roughness: u32,
-    emissive: u32,
-    toon_ramp: u32,
-    mask: u32,
-    sampler: MaterialSamplerKey,
-}
-
-impl MainTextureKey {
-    fn has_albedo(self) -> bool {
-        self.albedo != 0
-    }
-
-    fn texture_flags(self, normal_scale: f32) -> [f32; 4] {
-        [
-            if self.normal != 0 {
-                normal_scale.max(0.0)
-            } else {
-                0.0
-            },
-            if self.metallic_roughness != 0 {
-                1.0
-            } else {
-                0.0
-            },
-            if self.emissive != 0 { 1.0 } else { 0.0 },
-            if self.toon_ramp != 0 { 1.0 } else { 0.0 },
-        ]
-    }
-
-    fn texture_flags2(self) -> [f32; 4] {
-        [if self.mask != 0 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]
-    }
-}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct InstanceBatchKey {
-    model_id: ModelId,
-    mesh_index: usize,
-    textures: MainTextureKey,
-}
-
-struct InstanceBatch {
-    key: InstanceBatchKey,
-    instances: Vec<InstanceData>,
-}
-
-struct InstanceBatchDraw {
-    key: InstanceBatchKey,
-    start: u32,
-    count: u32,
-}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct TerrainTextureKey {
-    control: u32,
-    albedo_layers: [u32; 4],
-    normal_layers: [u32; 4],
-    metallic_roughness_layers: [u32; 4],
-    material: [u32; 16],
-}
-
-struct TerrainBindGroupEntry {
-    bind_group: wgpu::BindGroup,
-    _material_buffer: wgpu::Buffer,
 }
 
 fn color_targets(

@@ -1,0 +1,82 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+const (
+	ContactEventKindBody = "body"
+	ContactEventKindSurface = "surface"
+)
+
+type ContactEvent struct {
+	A *Entity
+	B *Entity
+	AID int
+	BID int
+	Kind string
+	Position voplay.Vec3
+	Normal voplay.Vec3
+	RelativeVelocity voplay.Vec3
+	RelativeSpeed float64
+	Severity float64
+	Surface SurfaceMaterial
+}
+
+func ContactEventFromPair(contact Contact) ContactEvent {
+	event := ContactEvent{A: contact.A, B: contact.B, Kind: ContactEventKindBody, Surface: DefaultSurfaceMaterial()}
+	if contact.A != nil {
+		event.AID = contact.A.ID()
+	}
+	if contact.B != nil {
+		event.BID = contact.B.ID()
+	}
+	posA := contactEntityPosition(contact.A)
+	posB := contactEntityPosition(contact.B)
+	event.Position = posA.Add(posB).Scale(0.5)
+	normal := posB.Sub(posA)
+	if normal.LengthSq() == 0 {
+		normal = voplay.Vec3{Y: 1}
+	} else {
+		normal = normal.Normalize()
+	}
+	event.Normal = normal
+	velA := contactEntityVelocity(contact.A)
+	velB := contactEntityVelocity(contact.B)
+	event.RelativeVelocity = velB.Sub(velA)
+	event.RelativeSpeed = event.RelativeVelocity.Length()
+	event.Severity = event.RelativeSpeed
+	if contact.A != nil && contact.A.scene != nil {
+		for _, vehicle := range contact.A.scene.vehicles {
+			if vehicle != nil && (vehicle.Body == contact.A || vehicle.Body == contact.B) && vehicle.Track != nil {
+				event.Kind = ContactEventKindSurface
+				event.Surface = SurfaceMaterialAtTrackPosition(vehicle.Track, event.Position)
+				break
+			}
+		}
+	}
+	return event
+}
+
+func (s *Scene) ContactEvents() []ContactEvent {
+	contacts := s.Contacts()
+	events := make([]ContactEvent, 0, len(contacts))
+	for _, contact := range contacts {
+		events = append(events, ContactEventFromPair(contact))
+	}
+	return events
+}
+
+func contactEntityPosition(entity *Entity) voplay.Vec3 {
+	if entity == nil {
+		return voplay.Vec3{}
+	}
+	return entity.Position()
+}
+
+func contactEntityVelocity(entity *Entity) voplay.Vec3 {
+	if entity == nil || entity.Physics == nil {
+		return voplay.Vec3{}
+	}
+	return entity.Physics.velocity
+}

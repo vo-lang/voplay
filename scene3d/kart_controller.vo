@@ -50,9 +50,7 @@ type KartController struct {
 	Recovery *VehicleRecovery
 	BoostTimer float64
 	DriftCharge float64
-	wasDrifting bool
 	state KartControllerState
-	adjustedWheels []VehicleWheelConfig
 }
 
 func DefaultKartControllerConfig() KartControllerConfig {
@@ -105,24 +103,23 @@ func (k *KartController) UpdateIntentFromSyncedState(intent VehicleIntent, dt fl
 	intent = intent.Normalized()
 	k.Vehicle.BindTrack(k.Track)
 	surface := k.currentSurface()
-	resolved := k.resolveDynamics(intent, surface)
+	k.Dynamics.Config = KartDynamicsConfigFromControllerConfig(k.Config)
+	k.Dynamics.BoostTimer = k.BoostTimer
+	k.Dynamics.DriftCharge = k.DriftCharge
+	resolved := k.Dynamics.Step(intent, SurfaceMaterialFromTrackHit(surface), k.Vehicle.Speed, k.Vehicle.Grounded, dt)
+	k.BoostTimer = k.Dynamics.BoostTimer
+	k.DriftCharge = k.Dynamics.DriftCharge
 	k.Vehicle.Config = resolved.VehicleConfig
-	if intent.BoostRequest {
-		k.ActivateBoost(k.Config.BoostDuration)
-	}
-	boosting := k.BoostTimer > 0
-	controlIntent := intent
-	controlIntent.BoostRequest = boosting
-	k.Vehicle.applyControls(controlIntent.VehicleInput(), dt)
-	k.updateDriftIntent(intent, dt)
-	recovery := k.updateRecoveryIntent(intent, dt)
-	k.BoostTimer = vehicleMoveTowards(k.BoostTimer, 0, dt)
+	k.Vehicle.applyControls(resolved.VehicleInput, dt)
+	recovery := k.updateRecovery(resolved.RecoveryInput, dt)
 	k.state.SurfaceID = surface.Name
 	k.state.SurfaceFriction = surface.Friction
 	k.state.SurfaceOnRoad = surface.OnRoad
-	k.state.Boosting = boosting
+	k.state.Boosting = resolved.Boosting
 	k.state.Drifting = k.Vehicle.Drifting
 	k.state.DriftCharge = k.DriftCharge
+	k.state.MiniTurboReleased = resolved.MiniTurboReleased
+	k.state.SuperTurboReleased = resolved.SuperTurboReleased
 	k.state.Speed = math.Abs(k.Vehicle.Speed)
 	k.state.Stuck = recovery.Stuck
 	k.state.UpsideDown = recovery.UpsideDown
@@ -141,9 +138,8 @@ func (k *KartController) ActivateBoost(duration float64) {
 	if k == nil || duration <= 0 {
 		return
 	}
-	if duration > k.BoostTimer {
-		k.BoostTimer = duration
-	}
+	k.Dynamics.ActivateBoost(duration)
+	k.BoostTimer = k.Dynamics.BoostTimer
 }
 
 func (k *KartController) Respawn(pose TrackPose) {
@@ -151,9 +147,9 @@ func (k *KartController) Respawn(pose TrackPose) {
 		return
 	}
 	k.Vehicle.SetPose(pose.Position, pose.Yaw)
+	k.Dynamics.Reset()
 	k.BoostTimer = 0
 	k.DriftCharge = 0
-	k.wasDrifting = false
 	if k.Recovery != nil {
 		k.Recovery.Reset()
 	}
@@ -174,91 +170,12 @@ func (k *KartController) currentSurface() TrackSurfaceHit {
 	return k.Track.SurfaceAt(k.Vehicle.Body.Position())
 }
 
-func (k *KartController) adjustedVehicleConfig(surface TrackSurfaceHit) VehicleConfig {
-	return k.adjustedVehicleConfigForMaterial(SurfaceMaterialFromTrackHit(surface), KartDynamicsConfigFromControllerConfig(k.Config))
-}
-
-func (k *KartController) resolveDynamics(intent VehicleIntent, surface TrackSurfaceHit) KartDynamicsResult {
-	k.Dynamics = NewKartDynamics(KartDynamicsConfigFromControllerConfig(k.Config))
-	material := SurfaceMaterialFromTrackHit(surface)
-	cfg := k.adjustedVehicleConfigForMaterial(material, k.Dynamics.Config)
-	return KartDynamicsResult{VehicleConfig: cfg, VehicleInput: intent.VehicleInput(), Surface: material, Intent: intent.Normalized()}
-}
-
-func (k *KartController) adjustedVehicleConfigForMaterial(surface SurfaceMaterial, dynamics KartDynamicsConfig) VehicleConfig {
-	cfg := k.Config.Vehicle
-	if len(cfg.Wheels) > 0 {
-		if cap(k.adjustedWheels) < len(cfg.Wheels) {
-			k.adjustedWheels = make([]VehicleWheelConfig, len(cfg.Wheels))
-		} else {
-			k.adjustedWheels = k.adjustedWheels[:len(cfg.Wheels)]
-		}
-		for i := range cfg.Wheels {
-			k.adjustedWheels[i] = cfg.Wheels[i]
-		}
-		cfg.Wheels = k.adjustedWheels
-	}
-	surface = NormalizeSurfaceMaterial(surface)
-	dynamics = NormalizeKartDynamicsConfig(dynamics)
-	speedScale := surface.SpeedScale
-	engineScale := surface.EngineScale
-	if !surface.OnRoad {
-		speedScale *= dynamics.OffroadSpeedScale
-		engineScale *= dynamics.OffroadEngineScale
-	}
-	cfg.MaxForwardSpeed *= speedScale
-	cfg.MaxReverseSpeed *= speedScale
-	cfg.EngineForce *= engineScale
-	cfg.ReverseEngineForce *= engineScale
-	for i := 0; i < len(cfg.Wheels); i++ {
-		cfg.Wheels[i].FrictionSlip *= surface.GripScale
-		cfg.Wheels[i].SideFrictionStiffness *= surface.GripScale
-	}
-	return cfg
-}
-
-func (k *KartController) updateDrift(input KartInput, dt float64) {
-	k.updateDriftIntent(VehicleIntentFromKartInput(input), dt)
-}
-
-func (k *KartController) updateDriftIntent(intent VehicleIntent, dt float64) {
-	k.state.MiniTurboReleased = false
-	k.state.SuperTurboReleased = false
-	drifting := k.Vehicle.Drifting
-	charging := drifting && math.Abs(intent.Steering) > 0.08 && intent.Throttle > 0
-	if drifting {
-		if charging {
-			gain := k.Config.DriftChargeRate * (0.55 + math.Abs(intent.Steering) * 0.65) * dt
-			k.DriftCharge = vehicleClamp(k.DriftCharge + gain, 0, k.Config.MaxDriftCharge)
-		}
-		k.wasDrifting = true
-		return
-	}
-	if k.wasDrifting {
-		if k.DriftCharge >= k.Config.SuperTurboCharge {
-			k.ActivateBoost(k.Config.SuperTurboDuration)
-			k.state.SuperTurboReleased = true
-		} else if k.DriftCharge >= k.Config.MinTurboCharge {
-			k.ActivateBoost(k.Config.MiniTurboDuration)
-			k.state.MiniTurboReleased = true
-		}
-		k.DriftCharge = 0
-		k.wasDrifting = false
-		return
-	}
-	k.DriftCharge = vehicleMoveTowards(k.DriftCharge, 0, dt * 1.5)
-}
-
-func (k *KartController) updateRecovery(input KartInput, dt float64) VehicleRecoveryState {
-	return k.updateRecoveryIntent(VehicleIntentFromKartInput(input), dt)
-}
-
-func (k *KartController) updateRecoveryIntent(intent VehicleIntent, dt float64) VehicleRecoveryState {
+func (k *KartController) updateRecovery(input VehicleRecoveryInput, dt float64) VehicleRecoveryState {
 	if k.Recovery == nil {
-		return VehicleRecoveryState{ShouldRespawn: intent.ResetRequest}
+		return VehicleRecoveryState{ShouldRespawn: input.Reset}
 	}
 	k.Recovery.Config = normalizeVehicleRecoveryConfig(k.Config.Recovery)
-	return k.Recovery.Update(VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, dt)
+	return k.Recovery.Update(input, dt)
 }
 
 func normalizeKartControllerConfig(config KartControllerConfig) KartControllerConfig {

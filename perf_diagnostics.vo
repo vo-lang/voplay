@@ -137,6 +137,10 @@ type PerfRendererWorkloadStats struct {
 	VisibleObjects int
 	CulledObjects int
 	DiagnosticFlags int
+	FrameGraphPasses int
+	FrameGraphResources int
+	FrameGraphTargets int
+	FrameGraphReadyTargets int
 	AsyncWindow bool
 }
 
@@ -456,6 +460,10 @@ type perfRendererPacketStats struct {
 	VisibleObjects int
 	CulledObjects int
 	DiagnosticFlags int
+	FrameGraphPasses int
+	FrameGraphResources int
+	FrameGraphTargets int
+	FrameGraphReadyTargets int
 	AsyncWindow bool
 }
 
@@ -1315,12 +1323,15 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	}
 	r := codec.NewByteReader(payload)
 	version := r.ReadU32()
-	if version != 1 && version != 2 && version != 3 {
+	if version != 1 && version != 2 && version != 3 && version != 4 {
 		return perfRendererPacketStats{}
 	}
 	minRemaining := 11 * 8 + 20 * 4
 	if version >= 3 {
 		minRemaining += 5 * 8
+	}
+	if version >= 4 {
+		minRemaining += 4 * 4
 	}
 	if r.Remaining() < minRemaining {
 		return perfRendererPacketStats{}
@@ -1366,6 +1377,12 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	stats.CulledObjects = r.ReadU32()
 	if version >= 2 && r.Remaining() >= 4 {
 		stats.DiagnosticFlags = r.ReadU32()
+	}
+	if version >= 4 && r.Remaining() >= 16 {
+		stats.FrameGraphPasses = r.ReadU32()
+		stats.FrameGraphResources = r.ReadU32()
+		stats.FrameGraphTargets = r.ReadU32()
+		stats.FrameGraphReadyTargets = r.ReadU32()
 	}
 	return stats
 }
@@ -1552,6 +1569,10 @@ func (o *DebugOverlay) recordPerfFrame() {
 			VisibleObjects: renderer.VisibleObjects,
 			CulledObjects: renderer.CulledObjects,
 			DiagnosticFlags: renderer.DiagnosticFlags,
+			FrameGraphPasses: renderer.FrameGraphPasses,
+			FrameGraphResources: renderer.FrameGraphResources,
+			FrameGraphTargets: renderer.FrameGraphTargets,
+			FrameGraphReadyTargets: renderer.FrameGraphReadyTargets,
 			UploadBytes: uploadBytes,
 			AsyncWindow: true,
 		},

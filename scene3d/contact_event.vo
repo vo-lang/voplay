@@ -7,6 +7,7 @@ import (
 const (
 	ContactEventKindBody = "body"
 	ContactEventKindSurface = "surface"
+	ContactEventSourceBackendPairFallback = "physics.backend_pair_fallback"
 )
 
 type ContactEvent struct {
@@ -20,11 +21,16 @@ type ContactEvent struct {
 	RelativeVelocity voplay.Vec3
 	RelativeSpeed float64
 	Severity float64
+	NormalImpulse float64
+	HasImpulse bool
 	Surface SurfaceMaterial
+	Source string
+	Fallback bool
 }
 
 func ContactEventFromPair(contact Contact) ContactEvent {
-	event := ContactEvent{A: contact.A, B: contact.B, Kind: ContactEventKindBody, Surface: DefaultSurfaceMaterial()}
+	// The current backend exposes active body pairs only. Manifold point and impulse export can fill this event without changing callers later.
+	event := ContactEvent{A: contact.A, B: contact.B, Kind: ContactEventKindBody, Surface: DefaultSurfaceMaterial(), Source: ContactEventSourceBackendPairFallback, Fallback: true}
 	if contact.A != nil {
 		event.AID = contact.A.ID()
 	}

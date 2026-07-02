@@ -1,25 +1,46 @@
 package scene3d
 
+import (
+	"math"
+)
+
 type KartDynamics struct {
 	Config KartDynamicsConfig
+	BoostTimer float64
+	DriftCharge float64
+	wasDrifting bool
 }
 
 type KartDynamicsConfig struct {
 	Vehicle VehicleConfig
 	OffroadSpeedScale float64
 	OffroadEngineScale float64
+	MinTurboCharge float64
+	SuperTurboCharge float64
+	MaxDriftCharge float64
+	DriftChargeRate float64
+	MiniTurboDuration float64
+	SuperTurboDuration float64
+	BoostDuration float64
 }
 
 type KartDynamicsResult struct {
 	VehicleConfig VehicleConfig
 	VehicleInput VehicleInput
+	RecoveryInput VehicleRecoveryInput
 	Surface SurfaceMaterial
 	Intent VehicleIntent
+	Boosting bool
+	BoostTimer float64
+	Drifting bool
+	DriftCharge float64
+	MiniTurboReleased bool
+	SuperTurboReleased bool
 }
 
 func DefaultKartDynamicsConfig() KartDynamicsConfig {
 	kart := DefaultKartControllerConfig()
-	return KartDynamicsConfig{Vehicle: kart.Vehicle, OffroadSpeedScale: kart.OffroadSpeedScale, OffroadEngineScale: kart.OffroadEngineScale}
+	return KartDynamicsConfig{Vehicle: kart.Vehicle, OffroadSpeedScale: kart.OffroadSpeedScale, OffroadEngineScale: kart.OffroadEngineScale, MinTurboCharge: kart.MinTurboCharge, SuperTurboCharge: kart.SuperTurboCharge, MaxDriftCharge: kart.MaxDriftCharge, DriftChargeRate: kart.DriftChargeRate, MiniTurboDuration: kart.MiniTurboDuration, SuperTurboDuration: kart.SuperTurboDuration, BoostDuration: kart.BoostDuration}
 }
 
 func NewKartDynamics(config KartDynamicsConfig) KartDynamics {
@@ -30,7 +51,75 @@ func (d KartDynamics) Resolve(intent VehicleIntent, surface SurfaceMaterial) Kar
 	cfg := NormalizeKartDynamicsConfig(d.Config)
 	surface = NormalizeSurfaceMaterial(surface)
 	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
-	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: intent.VehicleInput(), Surface: surface, Intent: intent.Normalized()}
+	intent = intent.Normalized()
+	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: intent.VehicleInput(), RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent}
+}
+
+func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed float64, grounded bool, dt float64) KartDynamicsResult {
+	if d == nil {
+		dynamics := NewKartDynamics(KartDynamicsConfig{})
+		return dynamics.Step(intent, surface, speed, grounded, dt)
+	}
+	cfg := NormalizeKartDynamicsConfig(d.Config)
+	d.Config = cfg
+	intent = intent.Normalized()
+	surface = NormalizeSurfaceMaterial(surface)
+	if dt < 0 {
+		dt = 0
+	}
+	if intent.BoostRequest {
+		d.ActivateBoost(cfg.BoostDuration)
+	}
+	if surface.Boost > 0 {
+		d.ActivateBoost(cfg.BoostDuration * math.Max(1, surface.Boost))
+	}
+	drifting := intent.Drift && math.Abs(speed) >= cfg.Vehicle.DriftMinSpeed && grounded
+	miniReleased := false
+	superReleased := false
+	if drifting {
+		if math.Abs(intent.Steering) > 0.08 && intent.Throttle > 0 {
+			gain := cfg.DriftChargeRate * (0.55 + math.Abs(intent.Steering) * 0.65) * dt
+			d.DriftCharge = vehicleClamp(d.DriftCharge + gain, 0, cfg.MaxDriftCharge)
+		}
+		d.wasDrifting = true
+	} else if d.wasDrifting {
+		if d.DriftCharge >= cfg.SuperTurboCharge {
+			d.ActivateBoost(cfg.SuperTurboDuration)
+			superReleased = true
+		} else if d.DriftCharge >= cfg.MinTurboCharge {
+			d.ActivateBoost(cfg.MiniTurboDuration)
+			miniReleased = true
+		}
+		d.DriftCharge = 0
+		d.wasDrifting = false
+	} else {
+		d.DriftCharge = vehicleMoveTowards(d.DriftCharge, 0, dt * 1.5)
+	}
+	boosting := d.BoostTimer > 0
+	controlIntent := intent
+	controlIntent.BoostRequest = boosting
+	result := KartDynamicsResult{VehicleConfig: ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg), VehicleInput: controlIntent.VehicleInput(), RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
+	d.BoostTimer = vehicleMoveTowards(d.BoostTimer, 0, dt)
+	result.BoostTimer = d.BoostTimer
+	return result
+}
+
+func (d *KartDynamics) ActivateBoost(duration float64) {
+	if d == nil || duration <= 0 {
+		return
+	}
+	if duration > d.BoostTimer {
+		d.BoostTimer = duration
+	}
+}
+
+func (d *KartDynamics) Reset() {
+	if d == nil {
+		return
+	}
+	d.BoostTimer = 0
+	d.DriftCharge = 0
+	d.wasDrifting = false
 }
 
 func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
@@ -46,12 +135,33 @@ func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
 	if config.OffroadEngineScale <= 0 {
 		config.OffroadEngineScale = defaults.OffroadEngineScale
 	}
+	if config.MinTurboCharge <= 0 {
+		config.MinTurboCharge = defaults.MinTurboCharge
+	}
+	if config.SuperTurboCharge <= 0 {
+		config.SuperTurboCharge = defaults.SuperTurboCharge
+	}
+	if config.MaxDriftCharge <= 0 {
+		config.MaxDriftCharge = defaults.MaxDriftCharge
+	}
+	if config.DriftChargeRate <= 0 {
+		config.DriftChargeRate = defaults.DriftChargeRate
+	}
+	if config.MiniTurboDuration <= 0 {
+		config.MiniTurboDuration = defaults.MiniTurboDuration
+	}
+	if config.SuperTurboDuration <= 0 {
+		config.SuperTurboDuration = defaults.SuperTurboDuration
+	}
+	if config.BoostDuration <= 0 {
+		config.BoostDuration = defaults.BoostDuration
+	}
 	return config
 }
 
 func KartDynamicsConfigFromControllerConfig(config KartControllerConfig) KartDynamicsConfig {
 	config = normalizeKartControllerConfig(config)
-	return KartDynamicsConfig{Vehicle: config.Vehicle, OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale}
+	return KartDynamicsConfig{Vehicle: config.Vehicle, OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale, MinTurboCharge: config.MinTurboCharge, SuperTurboCharge: config.SuperTurboCharge, MaxDriftCharge: config.MaxDriftCharge, DriftChargeRate: config.DriftChargeRate, MiniTurboDuration: config.MiniTurboDuration, SuperTurboDuration: config.SuperTurboDuration, BoostDuration: config.BoostDuration}
 }
 
 func ApplySurfaceMaterialToVehicleConfig(base VehicleConfig, surface SurfaceMaterial, dynamics KartDynamicsConfig) VehicleConfig {

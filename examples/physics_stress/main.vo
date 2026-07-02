@@ -1,0 +1,409 @@
+package main
+
+import (
+	"encoding/json"
+	"math"
+	"strconv"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/scene3d"
+)
+
+const (
+	stressMarker = "__VOPLAY_PHYSICS_STRESS_JSON__"
+	stressDt = 1.0 / 120.0
+	stressSteps = 240
+	stressMaxVelocity = 90.0
+	stressMaxAngularVelocity = 60.0
+	stressMaxStuckSeconds = 1.2
+)
+
+type StressReport struct {
+	SchemaVersion int `json:"schemaVersion"`
+	Kind string `json:"kind"`
+	FixedDt float64 `json:"fixedDt"`
+	Scenarios []ScenarioReport `json:"scenarios"`
+	Replay ReplayReport `json:"replay"`
+	Summary StressSummary `json:"summary"`
+}
+
+type StressSummary struct {
+	ScenarioCount int `json:"scenarioCount"`
+	PassCount int `json:"passCount"`
+	P0 int `json:"p0"`
+	P1 int `json:"p1"`
+}
+
+type ScenarioReport struct {
+	Name string `json:"name"`
+	Steps int `json:"steps"`
+	VehicleCount int `json:"vehicleCount"`
+	Status string `json:"status"`
+	MaxSpeed float64 `json:"maxSpeed"`
+	MaxAngularVelocity float64 `json:"maxAngularVelocity"`
+	MaxLandingImpulse float64 `json:"maxLandingImpulse"`
+	MaxContactCount int `json:"maxContactCount"`
+	MaxContactEvents int `json:"maxContactEvents"`
+	MaxStuckSeconds float64 `json:"maxStuckSeconds"`
+	InvalidSamples int `json:"invalidSamples"`
+	RecoveryRequests int `json:"recoveryRequests"`
+	SurfaceSamples map[string]int `json:"surfaceSamples"`
+	Samples []TelemetrySample `json:"samples"`
+	Final []TelemetrySample `json:"final"`
+	Issues []StressIssue `json:"issues"`
+}
+
+type ReplayReport struct {
+	Name string `json:"name"`
+	ReferenceScenario string `json:"referenceScenario"`
+	DriftMeters float64 `json:"driftMeters"`
+	ThresholdMeters float64 `json:"thresholdMeters"`
+	Status string `json:"status"`
+	Issues []StressIssue `json:"issues"`
+}
+
+type TelemetrySample struct {
+	Step int `json:"step"`
+	Time float64 `json:"time"`
+	Vehicle int `json:"vehicle"`
+	Speed float64 `json:"speed"`
+	Grounded bool `json:"grounded"`
+	ContactCount int `json:"contactCount"`
+	SurfaceID string `json:"surfaceId"`
+	SurfaceKind string `json:"surfaceKind"`
+	Drifting bool `json:"drifting"`
+	Boosting bool `json:"boosting"`
+	Stuck bool `json:"stuck"`
+	ShouldRespawn bool `json:"shouldRespawn"`
+	Position voplay.Vec3 `json:"position"`
+	Velocity voplay.Vec3 `json:"velocity"`
+	AngularVelocity voplay.Vec3 `json:"angularVelocity"`
+	Rotation voplay.Quat `json:"rotation"`
+}
+
+type StressIssue struct {
+	Code string `json:"code"`
+	Severity int `json:"severity"`
+	Detail string `json:"detail"`
+}
+
+type ScenarioDefinition struct {
+	Name string
+	VehicleCount int
+}
+
+type ScenarioRuntime struct {
+	Scene *scene3d.Scene
+	Track *scene3d.Track
+	Vehicles []*scene3d.Vehicle
+	Controllers []*scene3d.KartController
+	LastStates []scene3d.KartControllerState
+	PrevVelY []float64
+	StuckSeconds []float64
+	Definition ScenarioDefinition
+}
+
+func main() {
+	report := StressReport{SchemaVersion: 1, Kind: "voplay.physicsStressReport", FixedDt: stressDt}
+	defs := scenarioDefinitions()
+	for _, def := range defs {
+		println("__VOPLAY_PHYSICS_STRESS_SCENARIO__" + def.Name)
+		scenario := runScenario(def)
+		report.Scenarios = append(report.Scenarios, scenario)
+	}
+	report.Replay = replayDrift(defs[1])
+	report.Summary.ScenarioCount = len(report.Scenarios)
+	for _, scenario := range report.Scenarios {
+		if scenario.Status == "pass" {
+			report.Summary.PassCount++
+		}
+		for _, issue := range scenario.Issues {
+			if issue.Severity == 0 {
+				report.Summary.P0++
+			} else if issue.Severity == 1 {
+				report.Summary.P1++
+			}
+		}
+	}
+	if report.Replay.Status == "pass" {
+		report.Summary.PassCount++
+	}
+	for _, issue := range report.Replay.Issues {
+		if issue.Severity == 0 {
+			report.Summary.P0++
+		} else if issue.Severity == 1 {
+			report.Summary.P1++
+		}
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		panic(err)
+	}
+	println(stressMarker + string(data))
+}
+
+func scenarioDefinitions() []ScenarioDefinition {
+	return []ScenarioDefinition{
+		ScenarioDefinition{Name: "skidpad", VehicleCount: 1},
+		ScenarioDefinition{Name: "slalom", VehicleCount: 1},
+		ScenarioDefinition{Name: "jump-landing", VehicleCount: 1},
+		ScenarioDefinition{Name: "wall-impact", VehicleCount: 1},
+		ScenarioDefinition{Name: "surface-transition", VehicleCount: 1},
+		ScenarioDefinition{Name: "recovery", VehicleCount: 1},
+		ScenarioDefinition{Name: "multi-vehicle-scripted-soak", VehicleCount: 4},
+	}
+}
+
+func runScenario(def ScenarioDefinition) ScenarioReport {
+	runtime := newScenarioRuntime(def)
+	defer runtime.Scene.Close()
+	setupScenario(def.Name, runtime)
+	report := ScenarioReport{Name: def.Name, Steps: stressSteps, VehicleCount: len(runtime.Vehicles), SurfaceSamples: map[string]int{}, Status: "pass"}
+	for step := 0; step < stressSteps; step++ {
+		for i, controller := range runtime.Controllers {
+			intent := scenarioIntent(def.Name, step, i, runtime)
+			runtime.LastStates[i] = controller.UpdateIntent(intent, stressDt)
+		}
+		afterScenarioStep(def.Name, step, runtime)
+		runtime.Scene.StepAndSyncPhysics(stressDt)
+		contacts := runtime.Scene.ContactEvents()
+		if len(contacts) > report.MaxContactEvents {
+			report.MaxContactEvents = len(contacts)
+		}
+		for i, vehicle := range runtime.Vehicles {
+			telemetry := vehicle.Telemetry()
+			state := runtime.LastStates[i]
+			report.recordTelemetry(step, i, telemetry, state)
+			report.recordHealth(step, i, telemetry, state, runtime)
+			if step % 60 == 0 {
+				report.Samples = append(report.Samples, makeSample(step, i, telemetry, state))
+			}
+		}
+	}
+	for i, vehicle := range runtime.Vehicles {
+		report.Final = append(report.Final, makeSample(stressSteps, i, vehicle.Telemetry(), runtime.LastStates[i]))
+	}
+	report.validate()
+	if len(report.Issues) > 0 {
+		report.Status = "fail"
+	}
+	return report
+}
+
+func setupScenario(name string, r *ScenarioRuntime) {
+	if name == "wall-impact" {
+		r.Scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: 1, Z: -28}, Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(12, 2, 1), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 0.9}})
+		return
+	}
+	if name == "surface-transition" && len(r.Vehicles) > 0 {
+		r.Vehicles[0].SetPose(voplay.Vec3{X: -8, Y: 1.2, Z: -12}, 0)
+	}
+}
+
+func scenarioIntent(name string, step int, vehicle int, r *ScenarioRuntime) scene3d.VehicleIntent {
+	if name == "skidpad" {
+		return scene3d.VehicleIntent{Throttle: 0.86, Steering: 0.72, Drift: step > 120}
+	}
+	if name == "slalom" {
+		t := float64(step) * stressDt
+		return scene3d.VehicleIntent{Throttle: 0.92, Steering: math.Sin(t * 3.1) * 0.88}
+	}
+	if name == "jump-landing" {
+		return scene3d.VehicleIntent{Throttle: 0.74}
+	}
+	if name == "wall-impact" {
+		if step < 180 {
+			return scene3d.VehicleIntent{Throttle: 1}
+		}
+		return scene3d.VehicleIntent{Brake: 0.9}
+	}
+	if name == "surface-transition" {
+		steer := 0.12
+		if step > 120 {
+			steer = -0.45
+		}
+		return scene3d.VehicleIntent{Throttle: 0.82, Steering: steer}
+	}
+	if name == "recovery" {
+		reset := step > 190 && step < 198
+		return scene3d.VehicleIntent{Throttle: 0.9, ResetRequest: reset}
+	}
+	if name == "multi-vehicle-scripted-soak" {
+		t := float64(step) * stressDt
+		offset := float64(vehicle) * 0.37
+		return scene3d.VehicleIntent{Throttle: 0.72 + math.Sin(t + offset) * 0.08, Steering: math.Sin(t * 2.2 + offset) * 0.55, BoostRequest: step % 180 < 20}
+	}
+	return scene3d.VehicleIntent{Throttle: 0.5}
+}
+
+func afterScenarioStep(name string, step int, r *ScenarioRuntime) {
+	if name == "jump-landing" && step == 90 && len(r.Vehicles) > 0 && r.Vehicles[0].Body != nil {
+		r.Vehicles[0].Body.SetVelocity(voplay.Vec3{Y: 9, Z: -12})
+		return
+	}
+	if name == "surface-transition" && step == 140 && len(r.Vehicles) > 0 {
+		pos := r.Vehicles[0].Body.Position()
+		r.Vehicles[0].SetPose(voplay.Vec3{X: 0, Y: pos.Y, Z: pos.Z}, r.Vehicles[0].Yaw)
+		return
+	}
+	if name == "recovery" && step == 120 && len(r.Vehicles) > 0 {
+		r.Vehicles[0].Body.SetPosition(voplay.Vec3{Y: -32, Z: -14})
+		return
+	}
+	if name == "recovery" && step == 210 && len(r.Controllers) > 0 {
+		r.Controllers[0].Respawn(r.Track.PoseAt(0))
+	}
+}
+
+func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
+	count := def.VehicleCount
+	if count <= 0 {
+		count = 1
+	}
+	scene := scene3d.New()
+	scene.Gravity = voplay.Vec3{Y: -18}
+	track, err := scene3d.NewTrack(stressTrackAsset())
+	if err != nil {
+		panic(err)
+	}
+	scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: -0.35}, Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(90, 0.7, 180), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 1.0}})
+	r := &ScenarioRuntime{Scene: scene, Track: track, Definition: def}
+	config := scene3d.DefaultKartControllerConfig()
+	config.Recovery.StuckSeconds = 0.35
+	for i := 0; i < count; i++ {
+		x := float64(i % 4) * 3 - 4.5
+		z := float64(i / 4) * 4
+		body := scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: x, Y: 1.2, Z: z}, Physics: &scene3d.Physics{Type: scene3d.Dynamic, Collider: scene3d.Box(1.3, 0.55, 1.9), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Density: 1.0, Friction: 0.9, LinearDamping: 0.08, AngularDamping: 0.35}})
+		vehicle := scene3d.NewVehicle(body, config.Vehicle)
+		controller := scene3d.NewKartController(vehicle, track, config)
+		r.Vehicles = append(r.Vehicles, vehicle)
+		r.Controllers = append(r.Controllers, controller)
+		r.LastStates = append(r.LastStates, scene3d.KartControllerState{})
+		r.PrevVelY = append(r.PrevVelY, 0)
+		r.StuckSeconds = append(r.StuckSeconds, 0)
+	}
+	return r
+}
+
+func stressTrackAsset() *scene3d.TrackAsset {
+	return &scene3d.TrackAsset{Version: 1, Name: "physics-stress-track", Centerline: []scene3d.TrackControlPoint{
+		scene3d.TrackControlPoint{Name: "a", Position: scene3d.MapVec3{Z: 20}, Width: 12},
+		scene3d.TrackControlPoint{Name: "b", Position: scene3d.MapVec3{Z: -80}, Width: 12},
+	}, Surfaces: []scene3d.TrackSurface{
+		scene3d.TrackSurface{Name: "road", Kind: scene3d.TrackSurfaceRoad, Start: 0, End: 100, Friction: 1.0},
+		scene3d.TrackSurface{Name: "offroad-left", Kind: scene3d.TrackSurfaceOffroad, Start: 0, End: 100, Left: -40, Right: -6, Priority: 2, Friction: 0.48},
+		scene3d.TrackSurface{Name: "boost-strip", Kind: scene3d.TrackSurfaceBoost, Start: 22, End: 34, Left: -2, Right: 2, Priority: 3, Friction: 1.05, Boost: 1.35},
+	}, Spawns: []scene3d.TrackSpawn{
+		scene3d.TrackSpawn{Name: "start", Distance: 0},
+	}, Respawns: []scene3d.TrackRespawn{
+		scene3d.TrackRespawn{Name: "respawn", Distance: 0},
+	}}
+}
+
+func (r *ScenarioReport) recordTelemetry(step, index int, telemetry scene3d.VehicleTelemetry, state scene3d.KartControllerState) {
+	speed := telemetry.Velocity.Length()
+	if math.Abs(telemetry.Speed) > speed {
+		speed = math.Abs(telemetry.Speed)
+	}
+	if speed > r.MaxSpeed {
+		r.MaxSpeed = speed
+	}
+	angular := telemetry.AngularVelocity.Length()
+	if angular > r.MaxAngularVelocity {
+		r.MaxAngularVelocity = angular
+	}
+	if telemetry.ContactCount > r.MaxContactCount {
+		r.MaxContactCount = telemetry.ContactCount
+	}
+	if state.SurfaceID != "" {
+		r.SurfaceSamples[state.SurfaceID] = r.SurfaceSamples[state.SurfaceID] + 1
+	}
+	if state.ShouldRespawn {
+		r.RecoveryRequests++
+	}
+}
+
+func (r *ScenarioReport) recordHealth(step, index int, telemetry scene3d.VehicleTelemetry, state scene3d.KartControllerState, runtime *ScenarioRuntime) {
+	if !sampleFinite(telemetry) {
+		r.InvalidSamples++
+	}
+	velY := telemetry.Velocity.Y
+	if telemetry.Grounded && runtime.PrevVelY[index] < -1 {
+		impulse := math.Abs(runtime.PrevVelY[index] - velY)
+		if impulse > r.MaxLandingImpulse {
+			r.MaxLandingImpulse = impulse
+		}
+	}
+	runtime.PrevVelY[index] = velY
+	if telemetry.Grounded && math.Abs(telemetry.Speed) < 0.35 && scenarioIntent(runtime.Definition.Name, step, index, runtime).Throttle > 0.75 {
+		runtime.StuckSeconds[index] += stressDt
+	} else {
+		runtime.StuckSeconds[index] = 0
+	}
+	if runtime.StuckSeconds[index] > r.MaxStuckSeconds {
+		r.MaxStuckSeconds = runtime.StuckSeconds[index]
+	}
+}
+
+func (r *ScenarioReport) validate() {
+	if r.InvalidSamples > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.invalid_number", Severity: 0, Detail: strconv.Itoa(r.InvalidSamples) + " invalid telemetry samples"})
+	}
+	if r.MaxSpeed > stressMaxVelocity {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.excessive_velocity", Severity: 1, Detail: formatFloat(r.MaxSpeed)})
+	}
+	if r.MaxAngularVelocity > stressMaxAngularVelocity {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.excessive_angular_velocity", Severity: 1, Detail: formatFloat(r.MaxAngularVelocity)})
+	}
+	if r.MaxStuckSeconds > stressMaxStuckSeconds {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.stuck", Severity: 1, Detail: formatFloat(r.MaxStuckSeconds)})
+	}
+	if r.Name == "surface-transition" && (r.SurfaceSamples["offroad-left"] == 0 || r.SurfaceSamples["road"] == 0) {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.surface_transition", Severity: 1, Detail: "expected road and offroad surface samples"})
+	}
+	if r.Name == "wall-impact" && r.MaxContactEvents <= 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.contact_events", Severity: 1, Detail: "expected at least one contact event"})
+	}
+	if r.Name == "recovery" && r.RecoveryRequests <= 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.recovery", Severity: 1, Detail: "expected recovery request"})
+	}
+}
+
+func makeSample(step, vehicleIndex int, telemetry scene3d.VehicleTelemetry, state scene3d.KartControllerState) TelemetrySample {
+	return TelemetrySample{Step: step, Time: float64(step) * stressDt, Vehicle: vehicleIndex, Speed: telemetry.Speed, Grounded: telemetry.Grounded, ContactCount: telemetry.ContactCount, SurfaceID: state.SurfaceID, SurfaceKind: telemetry.Surface.Kind, Drifting: state.Drifting, Boosting: state.Boosting, Stuck: state.Stuck, ShouldRespawn: state.ShouldRespawn, Position: telemetry.Position, Velocity: telemetry.Velocity, AngularVelocity: telemetry.AngularVelocity, Rotation: telemetry.Rotation}
+}
+
+func replayDrift(def ScenarioDefinition) ReplayReport {
+	a := runScenario(def)
+	b := runScenario(def)
+	drift := 0.0
+	if len(a.Final) > 0 && len(b.Final) > 0 {
+		drift = a.Final[0].Position.Distance(b.Final[0].Position)
+	}
+	report := ReplayReport{Name: "same-runtime-replay-drift", ReferenceScenario: def.Name, DriftMeters: drift, ThresholdMeters: 0.02, Status: "pass"}
+	if drift > report.ThresholdMeters {
+		report.Status = "fail"
+		report.Issues = append(report.Issues, StressIssue{Code: "physics.replay_drift", Severity: 1, Detail: formatFloat(drift)})
+	}
+	return report
+}
+
+func sampleFinite(t scene3d.VehicleTelemetry) bool {
+	return vecFinite(t.Position) && vecFinite(t.Velocity) && vecFinite(t.AngularVelocity) && quatFinite(t.Rotation) && finite(t.Speed) && finite(t.Yaw)
+}
+
+func vecFinite(v voplay.Vec3) bool {
+	return finite(v.X) && finite(v.Y) && finite(v.Z)
+}
+
+func quatFinite(q voplay.Quat) bool {
+	lengthSq := q.X*q.X + q.Y*q.Y + q.Z*q.Z + q.W*q.W
+	return finite(q.X) && finite(q.Y) && finite(q.Z) && finite(q.W) && lengthSq > 0.5 && lengthSq < 1.5
+}
+
+func finite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+func formatFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', 4, 64)
+}

@@ -8,7 +8,7 @@ pub(crate) const PERF_PACKET_MAGIC: u8 = 0xf9;
 pub(crate) const PERF_PACKET_VERSION: u8 = 1;
 pub(crate) const PERF_PACKET_SCHEMA_VERSION: u32 = 1;
 pub(crate) const PERF_PACKET_SOURCE_RENDERER: u32 = 2;
-pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 3;
+pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 4;
 
 pub(crate) const RENDERER_DIAG_DISABLE_SHADOWS: u32 = 1 << 0;
 pub(crate) const RENDERER_DIAG_DISABLE_POST_EFFECTS: u32 = 1 << 1;
@@ -147,6 +147,10 @@ pub(crate) struct RendererPerfStats {
     pub(crate) visible_objects: u32,
     pub(crate) culled_objects: u32,
     pub(crate) diagnostic_flags: u32,
+    pub(crate) graph_pass_count: u32,
+    pub(crate) graph_resource_count: u32,
+    pub(crate) graph_target_count: u32,
+    pub(crate) graph_ready_target_count: u32,
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -194,7 +198,7 @@ fn push_f64(out: &mut Vec<u8>, value: f64) {
 }
 
 pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 16 * 8 + 21 * 4);
+    let mut out = Vec::with_capacity(4 + 16 * 8 + 25 * 4);
     push_u32(&mut out, RENDERER_PERF_PAYLOAD_VERSION);
     push_f64(&mut out, stats.submit_frame_ms);
     push_f64(&mut out, stats.surface_acquire_ms);
@@ -233,6 +237,10 @@ pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8>
     push_u32(&mut out, stats.visible_objects);
     push_u32(&mut out, stats.culled_objects);
     push_u32(&mut out, stats.diagnostic_flags);
+    push_u32(&mut out, stats.graph_pass_count);
+    push_u32(&mut out, stats.graph_resource_count);
+    push_u32(&mut out, stats.graph_target_count);
+    push_u32(&mut out, stats.graph_ready_target_count);
     out
 }
 

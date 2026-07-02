@@ -137,7 +137,7 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 			loopMs = float64(loopNow.Sub(lastLoopTime).Nanoseconds()) / 1e6
 		}
 		lastLoopTime = loopNow
-		if frameSeq > 1 && lastDrawBytes > 0 && loopMs >= 50 {
+		if frameSeq > 1 && lastDrawBytes > 0 && shouldRecordRenderLoopSlow(loopMs, displayPulse, frameDivisor, config.UncappedFrameRate) {
 			slowLog.record(frameSeq, "loop", loopMs, 0, 0)
 		}
 
@@ -216,6 +216,27 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 
 func formatRenderSlowMs(value float64) string {
 	return strconv.FormatFloat(value, 'f', 2, 64) + "ms"
+}
+
+func shouldRecordRenderLoopSlow(loopMs float64, displayPulse time.Duration, frameDivisor int, uncapped bool) bool {
+	if loopMs < 50 {
+		return false
+	}
+	expectedLoopMs := expectedRenderLoopMs(displayPulse, frameDivisor)
+	if uncapped || expectedLoopMs <= 0 {
+		return true
+	}
+	return loopMs - expectedLoopMs >= 50
+}
+
+func expectedRenderLoopMs(displayPulse time.Duration, frameDivisor int) float64 {
+	if displayPulse <= 0 {
+		return 0
+	}
+	if frameDivisor <= 0 {
+		frameDivisor = 1
+	}
+	return durationMs(displayPulse * time.Duration(frameDivisor))
 }
 
 type renderDisplayPacer struct {

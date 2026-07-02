@@ -44,9 +44,9 @@ digest = "sha256:83d90c148f58851ffed12ceec24cc641889456c1ffcab3ea40b8f66d4e3aab8
 
 [[resolved]]
 path = "github.com/vo-lang/vopack"
-version = "v0.1.2"
+version = "v0.1.3"
 vo = "^0.1.0"
-commit = "d2063001e66405ad800bdabe0c7e7ff6343149de"
-release_manifest = "sha256:dbac1aac7641ff2d61abe05d902c215ba31aa7dac0b67da825c6810ffb05ce33"
-source = "sha256:a9018288c427c06c434c623504591ef32a666568de6524ca84af27dd2e6f0f45"
+commit = "63a82992d8b75bbf9e5d0267e8ad6e8ad0c01bb8"
+release_manifest = "sha256:84cb48cc0c5ccace34dd9ed9c44adaf3b0ed1b958a1f1837be8d05148566f144"
+source = "sha256:0ce5aef812b1bc388566b132d1800bff4a91e7cc2b7671b87d56d70aec1fa6b7"
 deps = []

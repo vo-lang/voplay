@@ -72,6 +72,43 @@ func NewLayer(desc LayerDesc) *Layer {
 	return &Layer{kind: kind, shapes: shapes, materials: materials, chunking: desc.Chunking, preloadChunks: desc.PreloadChunks, name: desc.Name, nextObjectID: 1, instances: map[int]Instance{}, order: []ObjectID{}, dirty: map[int]bool{}, chunksDirty: true, shapeMaterialGroupsDirty: true}
 }
 
+// Clone returns an independent layer with the same immutable shape/material
+// registries and copied instances/chunks. The clone is marked dirty so a new
+// scene attachment uploads the copied content on its first render pass.
+func (l *Layer) Clone() *Layer {
+	l.ensureReady()
+	l.ensureChunks()
+	groups := l.shapeMaterialGroupCount()
+	clone := &Layer{
+		kind: l.kind,
+		shapes: l.shapes,
+		materials: l.materials,
+		chunking: l.chunking,
+		preloadChunks: l.preloadChunks,
+		name: l.name,
+		nextObjectID: l.nextObjectID,
+		instances: map[int]Instance{},
+		order: make([]ObjectID, len(l.order)),
+		dirty: map[int]bool{},
+		dirtyAll: len(l.order) > 0,
+		built: l.built,
+		chunks: make([]Chunk, 0, len(l.chunks)),
+		chunksDirty: false,
+		shapeMaterialGroups: groups,
+		shapeMaterialGroupsDirty: false,
+	}
+	for key, instance := range l.instances {
+		clone.instances[key] = instance
+	}
+	copy(clone.order, l.order)
+	for _, chunk := range l.chunks {
+		objects := make([]ObjectID, len(chunk.Objects))
+		copy(objects, chunk.Objects)
+		clone.chunks = append(clone.chunks, Chunk{ID: chunk.ID, Bounds: chunk.Bounds, Objects: objects})
+	}
+	return clone
+}
+
 func (l *Layer) Kind() LayerKind {
 	l.ensureReady()
 	return l.kind

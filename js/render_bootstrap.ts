@@ -10,8 +10,8 @@ export interface VoVm {
   runScheduled(): string;
   pushIslandCommand(frame: Uint8Array): void;
   takeOutboundCommands(): Uint8Array[];
-  takePendingHostEvents(): Array<{ token: string; delayMs: number; replay: boolean }>;
-  wakeHostEvent(token: string): void;
+  takePendingHostEvents(): Array<{ key: string; delayMs: number; replay: boolean }>;
+  wakeHostEvent(key: string): void;
   takeOutput(): string;
 }
 
@@ -896,21 +896,21 @@ export class RenderIsland {
     if (!this.vm || this.stopped) return;
     const events = this.vm.takePendingHostEvents();
     for (const ev of events) {
-      if (this.hostTimers.has(ev.token)) continue;
+      if (this.hostTimers.has(ev.key)) continue;
       this.scheduledHostEventCount += 1;
       this.lastHostEventDelayMs = ev.delayMs;
       if (ev.delayMs === DISPLAY_PULSE_DELAY_MS) {
         this.scheduledDisplayPulseCount += 1;
-        this.displayPulseWaiters.set(ev.token, {
+        this.displayPulseWaiters.set(ev.key, {
           afterSerial: this.displayPulseSerial,
           scheduledAtMs: performance.now(),
         });
-        this.hostTimers.set(ev.token, { kind: "displayPulse" });
+        this.hostTimers.set(ev.key, { kind: "displayPulse" });
         this.ensureDisplayPulseTicker();
       } else {
         this.scheduledTimeoutCount += 1;
-        const id = window.setTimeout(() => this.wakeHostEvent(ev.token, ev.delayMs), ev.delayMs);
-        this.hostTimers.set(ev.token, { kind: "timeout", id });
+        const id = window.setTimeout(() => this.wakeHostEvent(ev.key, ev.delayMs), ev.delayMs);
+        this.hostTimers.set(ev.key, { kind: "timeout", id });
       }
     }
   }
@@ -1040,18 +1040,18 @@ export class RenderIsland {
       this.recordTimerPulse(nowMs, previousWakeMs);
     }
     this.displayPulseLastWakeMs = nowMs;
-    const readyTokens: string[] = [];
-    for (const [token, waiter] of this.displayPulseWaiters) {
+    const readyKeys: string[] = [];
+    for (const [key, waiter] of this.displayPulseWaiters) {
       if (this.displayPulseSerial > waiter.afterSerial) {
-        readyTokens.push(token);
+        readyKeys.push(key);
       }
     }
-    for (const token of readyTokens) {
-      const waiter = this.displayPulseWaiters.get(token);
+    for (const key of readyKeys) {
+      const waiter = this.displayPulseWaiters.get(key);
       if (!waiter) continue;
-      this.displayPulseWaiters.delete(token);
+      this.displayPulseWaiters.delete(key);
       this.recordDisplayPulseWait(nowMs - waiter.scheduledAtMs);
-      this.wakeHostEvent(token, DISPLAY_PULSE_DELAY_MS);
+      this.wakeHostEvent(key, DISPLAY_PULSE_DELAY_MS);
     }
     if (this.displayPulseWaiters.size > 0) {
       this.ensureDisplayPulseTicker();
@@ -1095,9 +1095,9 @@ export class RenderIsland {
     this.displayPulseTimerLeadMs = Math.max(0, Math.min(DISPLAY_PULSE_TIMER_LEAD_MAX_MS, nextLeadMs));
   }
 
-  private wakeHostEvent(token: string, delayMs: number): void {
+  private wakeHostEvent(key: string, delayMs: number): void {
     try {
-      this.hostTimers.delete(token);
+      this.hostTimers.delete(key);
       if (this.stopped || !this.vm) return;
       this.wakeCount += 1;
       this.debugFrameStatus(
@@ -1105,13 +1105,13 @@ export class RenderIsland {
         this.wakeCount,
       );
       const vmRunStartMs = performance.now();
-      this.vm.wakeHostEvent(token);
+      this.vm.wakeHostEvent(key);
       this.vm.runScheduled();
       this.recordVmWakeRun(performance.now() - vmRunStartMs);
       this.flush();
       this.scheduleHostEvents();
     } catch (error) {
-      this.fail(`wakeHostEvent token=${token}`, error);
+      this.fail(`wakeHostEvent key=${key}`, error);
     }
   }
 

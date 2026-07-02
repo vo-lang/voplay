@@ -6,11 +6,11 @@ export interface VoVm {
     pushIslandCommand(frame: Uint8Array): void;
     takeOutboundCommands(): Uint8Array[];
     takePendingHostEvents(): Array<{
-        token: string;
+        key: string;
         delayMs: number;
         replay: boolean;
     }>;
-    wakeHostEvent(token: string): void;
+    wakeHostEvent(key: string): void;
     takeOutput(): string;
 }
 export interface VoWebModule {

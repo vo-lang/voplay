@@ -1,0 +1,98 @@
+package voplay
+
+import (
+	"os"
+	"strings"
+)
+
+const (
+	SettingsStatusPending = "persistent-pending"
+	SettingsStatusPersistent = "persistent"
+	SettingsStatusEmpty = "persistent-empty"
+	SettingsStatusError = "persistent-error"
+
+	DefaultSettingsRoot = "/persist/voplay/settings"
+)
+
+type SettingsStore struct {
+	Root string
+}
+
+type SettingsReadResult struct {
+	Data string
+	Found bool
+	Status string
+	Error string
+	Path string
+}
+
+type SettingsWriteResult struct {
+	Status string
+	Error string
+	Path string
+}
+
+func NewSettingsStore(root string) SettingsStore {
+	if root == "" {
+		root = DefaultSettingsRoot
+	}
+	return SettingsStore{Root: root}
+}
+
+func (s SettingsStore) Path(key string) string {
+	root := settingsTrimRightSlash(s.Root)
+	if root == "" {
+		root = DefaultSettingsRoot
+	}
+	key = settingsTrimSlashes(key)
+	if key == "" {
+		key = "settings.v1"
+	}
+	return root + "/" + key
+}
+
+func (s SettingsStore) ReadText(key string) SettingsReadResult {
+	path := s.Path(key)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) || strings.Contains(err.Error(), "does not exist") {
+			return SettingsReadResult{Status: SettingsStatusEmpty, Path: path}
+		}
+		return SettingsReadResult{Status: SettingsStatusError, Error: err.Error(), Path: path}
+	}
+	return SettingsReadResult{Data: string(data), Found: true, Status: SettingsStatusPersistent, Path: path}
+}
+
+func (s SettingsStore) WriteText(key, data string) SettingsWriteResult {
+	path := s.Path(key)
+	root := settingsTrimRightSlash(s.Root)
+	if root == "" {
+		root = DefaultSettingsRoot
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return SettingsWriteResult{Status: SettingsStatusError, Error: err.Error(), Path: path}
+	}
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		return SettingsWriteResult{Status: SettingsStatusError, Error: err.Error(), Path: path}
+	}
+	return SettingsWriteResult{Status: SettingsStatusPersistent, Path: path}
+}
+
+func settingsTrimSlashes(value string) string {
+	value = strings.TrimSpace(value)
+	for len(value) > 0 && value[0] == '/' {
+		value = value[1:]
+	}
+	for len(value) > 0 && value[len(value)-1] == '/' {
+		value = value[:len(value)-1]
+	}
+	return value
+}
+
+func settingsTrimRightSlash(value string) string {
+	value = strings.TrimSpace(value)
+	for len(value) > 1 && value[len(value)-1] == '/' {
+		value = value[:len(value)-1]
+	}
+	return value
+}

@@ -56,14 +56,14 @@ pub(crate) fn set_renderer_perf_stats_enabled(enabled: bool) -> Result<(), Strin
     crate::renderer_runtime::set_renderer_perf_stats_enabled(enabled)
 }
 
-#[cfg(target_arch = "wasm32")]
-const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
+vo_ext::export_extensions!(
     render::__EXT_voplay_initSurface,
     render::__EXT_voplay_submitFrame,
     render::__EXT_voplay_setRendererPerfStatsEnabled,
     render::__EXT_voplay_lastRendererPerfPacket,
     render::__EXT_voplay_lastWebGpuPerfPacket,
     render::__EXT_voplay_pollInput,
+    render::__EXT_voplay_waitDisplayPulse,
     render::__EXT_voplay_loadTexture,
     render::__EXT_voplay_loadTextureBytes,
     render::__EXT_voplay_loadTextureLinear,
@@ -129,12 +129,17 @@ const VO_EXT_ENTRIES: &[vo_runtime::ffi::StdlibEntry] = &[
     physics3d::__EXT_voplay_scene3d_physicsSpawnTrimeshBodyData,
     physics3d::__EXT_voplay_scene3d_physicsSpawnHeightfield,
     physics3d::__EXT_voplay_scene3d_physicsDestroyBody,
+    physics3d::__EXT_voplay_scene3d_physicsCreateRaycastVehicle,
+    physics3d::__EXT_voplay_scene3d_physicsDestroyRaycastVehicle,
+    physics3d::__EXT_voplay_scene3d_physicsAddRaycastVehicleWheel,
+    physics3d::__EXT_voplay_scene3d_physicsSetRaycastVehicleWheelControl,
+    physics3d::__EXT_voplay_scene3d_physicsRaycastVehicleState,
     physics3d::__EXT_voplay_scene3d_physicsStep,
     physics3d::__EXT_voplay_scene3d_physicsSetGravity,
     physics3d::__EXT_voplay_scene3d_physicsContacts,
     physics3d::__EXT_voplay_scene3d_physicsRayCast,
     physics3d::__EXT_voplay_scene3d_physicsQueryAABB,
-];
+);
 
 pub fn vo_ext_register(registry: &mut ExternRegistry, externs: &[ExternDef]) {
     #[cfg(not(target_arch = "wasm32"))]

@@ -57,6 +57,30 @@ func (m ScreenMetrics) LayoutWithInsets(insets ScreenInsets) ScreenLayout {
 	return NewScreenLayoutWithInsets(m.Width, m.Height, insets)
 }
 
+const (
+	LifecycleBoot = "Boot"
+	LifecycleLoading = "Loading"
+	LifecycleReady = "Ready"
+	LifecycleRunning = "Running"
+	LifecyclePaused = "Paused"
+	LifecycleRestarting = "Restarting"
+	LifecycleFailed = "Failed"
+	LifecycleClosed = "Closed"
+)
+
+type GameIssue struct {
+	Owner string
+	Subsystem string
+	DeveloperMessage string
+	PlayerMessage string
+}
+
+type GameDiagnostics struct {
+	LifecycleState string
+	LifecyclePhase string
+	Issues []GameIssue
+}
+
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
 	Input   *InputState
@@ -73,6 +97,9 @@ type GameCtx struct {
 	// Internal lifecycle state (managed by host, not for game code).
 	gameInitialized  bool
 	closed           bool
+	lifecycleState   string
+	lifecyclePhase   string
+	issues           []GameIssue
 	accumulator      float64
 	lastFixedSteps   int
 	overlay          *DebugOverlay
@@ -122,6 +149,58 @@ func (g *GameCtx) DebugOverlayStats() DebugOverlayStats {
 	return g.overlay.snapshot()
 }
 
+func (g *GameCtx) SetLifecycle(state, phase string) {
+	if g == nil {
+		return
+	}
+	g.lifecycleState = state
+	g.lifecyclePhase = phase
+}
+
+func (g *GameCtx) LifecycleState() string {
+	if g == nil {
+		return ""
+	}
+	return g.lifecycleState
+}
+
+func (g *GameCtx) LifecyclePhase() string {
+	if g == nil {
+		return ""
+	}
+	return g.lifecyclePhase
+}
+
+func (g *GameCtx) ReportIssue(issue GameIssue) {
+	if g == nil {
+		return
+	}
+	g.issues = append(g.issues, issue)
+}
+
+func (g *GameCtx) ClearIssues() {
+	if g == nil {
+		return
+	}
+	g.issues = nil
+}
+
+func (g *GameCtx) Issues() []GameIssue {
+	if g == nil || len(g.issues) == 0 {
+		return nil
+	}
+	out := make([]GameIssue, len(g.issues))
+	copy(out, g.issues)
+	return out
+}
+
+func (g *GameCtx) Diagnostics() GameDiagnostics {
+	if g == nil {
+		return GameDiagnostics{}
+	}
+	return GameDiagnostics{LifecycleState: g.lifecycleState, LifecyclePhase: g.lifecyclePhase, Issues: g.Issues()}
+}
+
 func resolveFixedStep(step float64) float64 {
 	if step == 0 {
 		return 1.0 / 60.0
@@ -152,6 +231,8 @@ func (g *GameCtx) start(initial State) {
 		panic("Run: InitialState must not be nil")
 	}
 	g.closed = false
+	g.SetLifecycle(LifecycleBoot, "start")
+	g.ClearIssues()
 	g.accumulator = 0
 	g.Alpha = 0
 	g.States.Reset(initial)
@@ -159,6 +240,7 @@ func (g *GameCtx) start(initial State) {
 }
 
 func (g *GameCtx) Quit() {
+	g.SetLifecycle(LifecycleClosed, "quit")
 	g.closed = true
 }
 
@@ -246,6 +328,8 @@ func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
 		Screen:          screen,
 		FixedStep:       resolveFixedStep(game.FixedStep),
 		MaxCatchUpSteps: game.MaxCatchUpSteps,
+		lifecycleState:  LifecycleBoot,
+		lifecyclePhase:  "init",
 		overlay:         newDebugOverlay(game.TargetFrameRate),
 	}
 	ctx.Actions = NewActionMap(ctx.Input)

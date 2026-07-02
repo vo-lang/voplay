@@ -75,9 +75,6 @@ pub use host_api::{
     vo_voplay_push_pointer_up, vo_voplay_push_scroll_event, vo_voplay_set_host_api,
 };
 
-#[cfg(feature = "native")]
-vo_ext::export_extensions!();
-
 #[cfg(feature = "wasm-island")]
 mod island_bindgen;
 

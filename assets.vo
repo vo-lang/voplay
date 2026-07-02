@@ -76,6 +76,18 @@ type Assets struct {
 	audio      *assetStore
 }
 
+type AssetReport struct {
+	MountCount int
+	GroupCount int
+	ActiveGroupDepth int
+	TextureCount int
+	LinearTextureCount int
+	CubemapCount int
+	FontCount int
+	ModelCount int
+	AudioCount int
+}
+
 // BytesAssetKey builds a deterministic content-addressed key for generated assets.
 // Use it with *Bytes loaders when the same logical generated asset can change
 // contents during development or procedural rebuilds.
@@ -214,6 +226,9 @@ func (a *Assets) Mount(path string, priority int) error {
 
 // Unmount removes and closes the archive at the given path.
 func (a *Assets) Unmount(path string) error {
+	if a.mounts == nil {
+		return os.ErrNotExist
+	}
 	return a.mounts.Unmount(path)
 }
 
@@ -237,6 +252,41 @@ func (a *Assets) CurrentGroup() string {
 		return ""
 	}
 	return a.groupStack[len(a.groupStack)-1]
+}
+
+func (a *Assets) Report() AssetReport {
+	if a == nil {
+		return AssetReport{}
+	}
+	mountCount := 0
+	if a.mounts != nil {
+		mountCount = a.mounts.Count()
+	}
+	return AssetReport{
+		MountCount: mountCount,
+		GroupCount: len(a.groupNames),
+		ActiveGroupDepth: len(a.groupStack),
+		TextureCount: assetStoreEntryCount(a.textures),
+		LinearTextureCount: assetStoreEntryCount(a.linearTextures),
+		CubemapCount: cubemapStoreEntryCount(a.cubemaps),
+		FontCount: assetStoreEntryCount(a.fonts),
+		ModelCount: assetStoreEntryCount(a.models),
+		AudioCount: assetStoreEntryCount(a.audio),
+	}
+}
+
+func assetStoreEntryCount(store *assetStore) int {
+	if store == nil {
+		return 0
+	}
+	return len(store.entries)
+}
+
+func cubemapStoreEntryCount(store *cubemapStore) int {
+	if store == nil {
+		return 0
+	}
+	return len(store.entries)
 }
 
 func (a *Assets) ReleaseGroup(name string) {

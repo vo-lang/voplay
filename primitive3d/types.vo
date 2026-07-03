@@ -22,6 +22,7 @@ const (
 	InstanceBillboard InstanceFlags = voplay.Primitive3DFlagBillboard
 	InstanceYBillboard InstanceFlags = voplay.Primitive3DFlagYBillboard
 	InstanceAtlasUV InstanceFlags = voplay.Primitive3DFlagAtlasUV
+	InstanceWaterSurface InstanceFlags = voplay.Primitive3DFlagWaterSurface
 )
 
 const (

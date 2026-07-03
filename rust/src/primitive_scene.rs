@@ -7,6 +7,7 @@ pub const PRIMITIVE_FLAG_NO_SHADOW: u32 = 1;
 pub const PRIMITIVE_FLAG_BILLBOARD: u32 = 4;
 pub const PRIMITIVE_FLAG_Y_BILLBOARD: u32 = 8;
 pub const PRIMITIVE_FLAG_ATLAS_UV: u32 = 16;
+pub const PRIMITIVE_FLAG_WATER_SURFACE: u32 = 32;
 
 #[derive(Clone, Copy)]
 pub struct PrimitiveDraw {
@@ -31,6 +32,14 @@ impl PrimitiveDraw {
             ),
             instance_params2: primitive_instance_params2(update.atlas_uv),
         }
+    }
+
+    pub fn flags(&self) -> u32 {
+        (self.instance_params[0].max(0.0) + 0.5) as u32
+    }
+
+    pub fn is_water_surface(&self) -> bool {
+        (self.flags() & PRIMITIVE_FLAG_WATER_SURFACE) != 0
     }
 }
 
@@ -547,7 +556,9 @@ impl PrimitiveLayer {
                 None => object_bounds,
             });
             meta.has_main_draws = true;
-            if !primitive_has_alpha_card_flags(object.flags) {
+            if !primitive_has_alpha_card_flags(object.flags)
+                && (object.flags & PRIMITIVE_FLAG_WATER_SURFACE) == 0
+            {
                 meta.has_depth_draws = true;
                 if (object.flags & PRIMITIVE_FLAG_NO_SHADOW) == 0 {
                     meta.has_shadow_draws = true;

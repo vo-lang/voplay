@@ -9,7 +9,9 @@ use crate::pipeline3d::{Camera3DUniform, LightUniform, MaterialOverride, ModelUn
 use crate::primitive_scene::{
     PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate, PRIMITIVE_FLAG_ATLAS_UV,
     PRIMITIVE_FLAG_BILLBOARD, PRIMITIVE_FLAG_NO_SHADOW, PRIMITIVE_FLAG_Y_BILLBOARD,
+    PRIMITIVE_FLAG_WATER_SURFACE,
 };
+use crate::renderer_perf::{elapsed_ms, perf_now};
 use crate::texture::TextureManager;
 
 #[repr(C)]
@@ -103,6 +105,27 @@ enum PrimitiveRenderMode {
     Opaque,
     Cutout,
     Translucent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitiveRenderFilter {
+    Main,
+    Water,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrimitiveDrawStats {
+    pub batch_count: u32,
+    pub instance_count: u32,
+    pub triangle_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PrimitiveLayeredDrawStats {
+    pub main: PrimitiveDrawStats,
+    pub water: PrimitiveDrawStats,
+    pub main_cpu_ms: f64,
+    pub water_cpu_ms: f64,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -1012,20 +1035,28 @@ impl PrimitivePipeline {
         textures: &'a TextureManager,
         shadow_view: &'a wgpu::TextureView,
         aux_targets_enabled: bool,
-    ) {
+        filter: PrimitiveRenderFilter,
+    ) -> PrimitiveDrawStats {
+        let mut stats = PrimitiveDrawStats::default();
         self.last_main_batch_count = 0;
         self.last_main_instance_count = 0;
         self.last_main_triangle_count = 0;
         if draws.is_empty() && chunk_refs.is_empty() {
-            return;
+            return stats;
         }
         let mut batch_draws: Vec<PrimitiveBatchDraw> = Vec::new();
         let mut batches: Vec<PrimitiveBatch> = Vec::new();
         let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
         let mut instance_count = 0u32;
         for draw in draws {
-            instance_count +=
-                self.push_draw_batches(draw, models, textures, &mut batches, &mut batch_index);
+            instance_count += self.push_draw_batches(
+                draw,
+                models,
+                textures,
+                &mut batches,
+                &mut batch_index,
+                filter,
+            );
         }
         for chunk_ref in chunk_refs {
             let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
@@ -1038,6 +1069,7 @@ impl PrimitivePipeline {
                     textures,
                     &mut batches,
                     &mut batch_index,
+                    filter,
                 );
             }
         }
@@ -1055,9 +1087,12 @@ impl PrimitivePipeline {
                     count: batch.instances.len() as u32,
                 });
             }
-            self.last_main_batch_count = batch_draws.len() as u32;
-            self.last_main_instance_count = instance_count;
-            self.last_main_triangle_count = primitive_batch_triangle_count(&batch_draws, models);
+            stats.batch_count = batch_draws.len() as u32;
+            stats.instance_count = instance_count;
+            stats.triangle_count = primitive_batch_triangle_count(&batch_draws, models);
+            self.last_main_batch_count = stats.batch_count;
+            self.last_main_instance_count = stats.instance_count;
+            self.last_main_triangle_count = stats.triangle_count;
             queue.write_buffer(
                 &self.instance_buffer,
                 0,
@@ -1093,6 +1128,149 @@ impl PrimitivePipeline {
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
         }
+        stats
+    }
+
+    pub fn draw_main_and_water<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pass: &mut wgpu::RenderPass<'a>,
+        draws: &[PrimitiveDraw],
+        chunk_refs: &[PrimitiveChunkRef],
+        models: &'a ModelManager,
+        textures: &'a TextureManager,
+        shadow_view: &'a wgpu::TextureView,
+        aux_targets_enabled: bool,
+    ) -> PrimitiveLayeredDrawStats {
+        self.last_main_batch_count = 0;
+        self.last_main_instance_count = 0;
+        self.last_main_triangle_count = 0;
+        if draws.is_empty() && chunk_refs.is_empty() {
+            return PrimitiveLayeredDrawStats::default();
+        }
+
+        let mut main_batches: Vec<PrimitiveBatch> = Vec::new();
+        let mut main_batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
+        let mut water_batches: Vec<PrimitiveBatch> = Vec::new();
+        let mut water_batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
+        let mut main_instance_count = 0u32;
+        let mut water_instance_count = 0u32;
+
+        for draw in draws {
+            main_instance_count += self.push_draw_batches(
+                draw,
+                models,
+                textures,
+                &mut main_batches,
+                &mut main_batch_index,
+                PrimitiveRenderFilter::Main,
+            );
+            water_instance_count += self.push_draw_batches(
+                draw,
+                models,
+                textures,
+                &mut water_batches,
+                &mut water_batch_index,
+                PrimitiveRenderFilter::Water,
+            );
+        }
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            for instance in &chunk.instances {
+                main_instance_count += self.push_draw_batches(
+                    &instance.draw,
+                    models,
+                    textures,
+                    &mut main_batches,
+                    &mut main_batch_index,
+                    PrimitiveRenderFilter::Main,
+                );
+                water_instance_count += self.push_draw_batches(
+                    &instance.draw,
+                    models,
+                    textures,
+                    &mut water_batches,
+                    &mut water_batch_index,
+                    PrimitiveRenderFilter::Water,
+                );
+            }
+        }
+
+        let total_instance_count = main_instance_count.saturating_add(water_instance_count);
+        if total_instance_count == 0 {
+            return PrimitiveLayeredDrawStats::default();
+        }
+
+        self.ensure_instance_capacity(device, total_instance_count);
+        let mut instance_data = Vec::with_capacity(total_instance_count as usize);
+        let main_batch_draws = append_primitive_batch_draws(&mut main_batches, &mut instance_data);
+        let water_batch_draws =
+            append_primitive_batch_draws(&mut water_batches, &mut instance_data);
+        let main = PrimitiveDrawStats {
+            batch_count: main_batch_draws.len() as u32,
+            instance_count: main_instance_count,
+            triangle_count: primitive_batch_triangle_count(&main_batch_draws, models),
+        };
+        let water = PrimitiveDrawStats {
+            batch_count: water_batch_draws.len() as u32,
+            instance_count: water_instance_count,
+            triangle_count: primitive_batch_triangle_count(&water_batch_draws, models),
+        };
+        self.last_main_batch_count = main.batch_count;
+        self.last_main_instance_count = main.instance_count;
+        self.last_main_triangle_count = main.triangle_count;
+        queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&instance_data),
+        );
+
+        for batch in main_batch_draws.iter().chain(water_batch_draws.iter()) {
+            self.ensure_texture_bind_group(device, textures, batch.key.textures, shadow_view);
+        }
+
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.model_bind_group, &[0]);
+        pass.set_bind_group(2, &self.light_bind_group, &[]);
+
+        let main_start = perf_now();
+        self.draw_batch_draws(pass, &main_batch_draws, models, aux_targets_enabled);
+        let main_cpu_ms = elapsed_ms(main_start);
+        let water_start = perf_now();
+        self.draw_batch_draws(pass, &water_batch_draws, models, aux_targets_enabled);
+        let water_cpu_ms = elapsed_ms(water_start);
+        PrimitiveLayeredDrawStats {
+            main,
+            water,
+            main_cpu_ms,
+            water_cpu_ms,
+        }
+    }
+
+    pub fn has_water_surface(
+        &self,
+        draws: &[PrimitiveDraw],
+        chunk_refs: &[PrimitiveChunkRef],
+    ) -> bool {
+        if draws.iter().any(PrimitiveDraw::is_water_surface) {
+            return true;
+        }
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                continue;
+            };
+            if chunk
+                .instances
+                .iter()
+                .any(|instance| instance.draw.is_water_surface())
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn pipeline_for_batch(
@@ -1122,6 +1300,37 @@ impl PrimitivePipeline {
         }
     }
 
+    fn draw_batch_draws<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        batch_draws: &[PrimitiveBatchDraw],
+        models: &'a ModelManager,
+        aux_targets_enabled: bool,
+    ) {
+        let instance_stride = std::mem::size_of::<PrimitiveInstanceGpu>() as u64;
+        for batch in batch_draws {
+            let Some(gpu_model) = models.get(batch.key.model_id) else {
+                continue;
+            };
+            let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
+                continue;
+            };
+            let texture_key = batch.key.textures;
+            let texture_bind_group = self
+                .texture_bind_groups
+                .get(&texture_key)
+                .expect("primitive texture bind group cache missing");
+            pass.set_pipeline(self.pipeline_for_batch(batch.key, aux_targets_enabled));
+            pass.set_bind_group(3, texture_bind_group, &[]);
+            let start = batch.start as u64 * instance_stride;
+            let end = start + batch.count as u64 * instance_stride;
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
+        }
+    }
+
     fn push_draw_batches(
         &self,
         draw: &PrimitiveDraw,
@@ -1129,7 +1338,11 @@ impl PrimitivePipeline {
         textures: &TextureManager,
         batches: &mut Vec<PrimitiveBatch>,
         batch_index: &mut HashMap<PrimitiveBatchKey, usize>,
+        filter: PrimitiveRenderFilter,
     ) -> u32 {
+        if !primitive_draw_matches_filter(draw, filter) {
+            return 0;
+        }
         let Some(gpu_model) = models.get(draw.model_id) else {
             return 0;
         };
@@ -1573,6 +1786,9 @@ fn normal_scale_value(material: &MaterialOverride, fallback: f32) -> f32 {
 
 fn primitive_participates_in_depth_pass(draw: &PrimitiveDraw, shadow_only: bool) -> bool {
     let flags = primitive_draw_flags(draw);
+    if (flags & PRIMITIVE_FLAG_WATER_SURFACE) != 0 {
+        return false;
+    }
     if (flags & (PRIMITIVE_FLAG_BILLBOARD | PRIMITIVE_FLAG_Y_BILLBOARD | PRIMITIVE_FLAG_ATLAS_UV))
         != 0
     {
@@ -1597,8 +1813,36 @@ fn primitive_render_mode(draw: &PrimitiveDraw, base_color: [f32; 4]) -> Primitiv
     PrimitiveRenderMode::Opaque
 }
 
+fn primitive_draw_matches_filter(draw: &PrimitiveDraw, filter: PrimitiveRenderFilter) -> bool {
+    match filter {
+        PrimitiveRenderFilter::Main => !draw.is_water_surface(),
+        PrimitiveRenderFilter::Water => draw.is_water_surface(),
+    }
+}
+
 fn sort_primitive_batches(batches: &mut [PrimitiveBatch]) {
     batches.sort_by(|a, b| compare_primitive_batch_key(a.key, b.key));
+}
+
+fn append_primitive_batch_draws(
+    batches: &mut [PrimitiveBatch],
+    instance_data: &mut Vec<PrimitiveInstanceGpu>,
+) -> Vec<PrimitiveBatchDraw> {
+    if batches.is_empty() {
+        return Vec::new();
+    }
+    sort_primitive_batches(batches);
+    let mut batch_draws = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let start = instance_data.len() as u32;
+        instance_data.extend_from_slice(&batch.instances);
+        batch_draws.push(PrimitiveBatchDraw {
+            key: batch.key,
+            start,
+            count: batch.instances.len() as u32,
+        });
+    }
+    batch_draws
 }
 
 fn primitive_batch_triangle_count(batches: &[PrimitiveBatchDraw], models: &ModelManager) -> u32 {
@@ -1664,7 +1908,7 @@ fn primitive_render_mode_order(mode: PrimitiveRenderMode) -> u8 {
 }
 
 fn primitive_draw_flags(draw: &PrimitiveDraw) -> u32 {
-    (draw.instance_params[0].max(0.0) + 0.5) as u32
+    draw.flags()
 }
 
 fn emissive_color_value(

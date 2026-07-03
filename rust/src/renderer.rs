@@ -21,7 +21,7 @@ use crate::pipeline_post::{
 use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
 use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
-use crate::primitive_pipeline::PrimitivePipeline;
+use crate::primitive_pipeline::{PrimitiveDrawStats, PrimitivePipeline};
 use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
 use crate::render_world::{RenderObjectUpdate, RenderWorld};
 use crate::renderer_frame::{
@@ -1286,6 +1286,8 @@ impl Renderer {
         let mut primitive_depth_draw_calls = 0u32;
         let mut primitive_shadow_draw_calls = 0u32;
         let mut primitive_main_submitted = false;
+        let mut primitive_main_stats = PrimitiveDrawStats::default();
+        let mut primitive_water_stats = PrimitiveDrawStats::default();
         let mut projected_decals: Vec<PostDecalGpu> = Vec::new();
         let mut projected_decal_atlas_bindings: Vec<ProjectedDecalAtlasBinding> = Vec::new();
         let mut current_projected_decal_atlas_id: Option<u32> = None;
@@ -2210,6 +2212,11 @@ impl Renderer {
             }
         }
         perf.scene_update_ms = elapsed_ms_opt(scene_update_start);
+        let water_pass_active = primitives_enabled
+            && camera3d_uniform.is_some()
+            && self
+                .primitive_pipeline
+                .has_water_surface(&primitive_draws, &primitive_chunks);
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
         self.font_manager
@@ -2328,7 +2335,7 @@ impl Renderer {
             RenderPassKind::Water,
             &[RES_DEPTH, RES_MAIN_COLOR],
             &[RES_WATER_COLOR, RES_MAIN_COLOR],
-            false,
+            water_pass_active,
         );
         frame_graph.plan_pass(
             RenderPassKind::Post,
@@ -2849,7 +2856,7 @@ impl Renderer {
                             &light_uniform,
                         );
                         let shadow_view = self.pipeline_shadow.shadow_texture_view();
-                        self.primitive_pipeline.draw(
+                        let layered_stats = self.primitive_pipeline.draw_main_and_water(
                             &self.device,
                             &self.queue,
                             &mut render_pass,
@@ -2860,8 +2867,15 @@ impl Renderer {
                             shadow_view,
                             main_aux_targets_enabled,
                         );
-                        primitive_main_submitted = true;
-                        perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
+                        primitive_main_stats = layered_stats.main;
+                        primitive_water_stats = layered_stats.water;
+                        primitive_main_submitted = primitive_main_stats.batch_count > 0;
+                        perf.main_primitive_ms += if perf_enabled {
+                            layered_stats.main_cpu_ms
+                        } else {
+                            elapsed_ms_opt(primitive_start)
+                        };
+                        perf.water_pass_ms += layered_stats.water_cpu_ms;
                     }
                 }
                 let main_close_start = if perf_enabled { Some(perf_now()) } else { None };
@@ -2871,8 +2885,15 @@ impl Renderer {
             })?
             .unwrap_or(0.0);
         if primitive_main_submitted {
-            primitive_main_draw_calls = self.primitive_pipeline.last_main_batch_count();
+            primitive_main_draw_calls = primitive_main_stats.batch_count;
         }
+        let _transparent_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::MainTransparent, || Ok::<f64, String>(0.0))?;
+        perf.water_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::Water, || Ok::<f64, String>(perf.water_pass_ms))?
+            .unwrap_or(0.0);
 
         perf.post_pass_ms = frame_graph
             .executor()
@@ -3048,6 +3069,9 @@ impl Renderer {
             perf.text_draws = text_count;
             perf.sprite_draws = sprite_count;
             perf.primitive_draws = primitive_main_draw_calls;
+            perf.water_draws = primitive_water_stats.batch_count;
+            perf.water_instances = primitive_water_stats.instance_count;
+            perf.water_triangles = primitive_water_stats.triangle_count;
             perf.primitive_chunks = saturating_u32(primitive_chunks.len());
             perf.retained_scene_upserts = scene_upsert_count;
             perf.retained_scene_removals = scene_removal_count;
@@ -3083,10 +3107,10 @@ impl Renderer {
                     triangle_count = triangle_count.saturating_add(mesh.index_count / 3);
                 }
             }
-            instance_count =
-                instance_count.saturating_add(self.primitive_pipeline.last_main_instance_count());
-            triangle_count =
-                triangle_count.saturating_add(self.primitive_pipeline.last_main_triangle_count());
+            instance_count = instance_count.saturating_add(primitive_main_stats.instance_count);
+            triangle_count = triangle_count.saturating_add(primitive_main_stats.triangle_count);
+            instance_count = instance_count.saturating_add(primitive_water_stats.instance_count);
+            triangle_count = triangle_count.saturating_add(primitive_water_stats.triangle_count);
             perf.model_draws = model_mesh_draws;
             perf.skinned_draws = skinned_mesh_draws;
             perf.instances = instance_count;
@@ -3094,6 +3118,7 @@ impl Renderer {
             perf.draw_calls = saturating_u32(frame.draw_calls.len())
                 .saturating_add(model_mesh_draws)
                 .saturating_add(perf.primitive_draws)
+                .saturating_add(perf.water_draws)
                 .saturating_add(
                     perf.shadow_cascades
                         .saturating_mul(model_mesh_draws)

@@ -8,7 +8,7 @@ pub(crate) const PERF_PACKET_MAGIC: u8 = 0xf9;
 pub(crate) const PERF_PACKET_VERSION: u8 = 1;
 pub(crate) const PERF_PACKET_SCHEMA_VERSION: u32 = 1;
 pub(crate) const PERF_PACKET_SOURCE_RENDERER: u32 = 2;
-pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 5;
+pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 6;
 
 pub(crate) const RENDERER_DIAG_DISABLE_SHADOWS: u32 = 1 << 0;
 pub(crate) const RENDERER_DIAG_DISABLE_POST_EFFECTS: u32 = 1 << 1;
@@ -122,6 +122,7 @@ pub(crate) struct RendererPerfStats {
     pub(crate) main_model_ms: f64,
     pub(crate) main_primitive_ms: f64,
     pub(crate) main_pass_close_ms: f64,
+    pub(crate) water_pass_ms: f64,
     pub(crate) post_pass_ms: f64,
     pub(crate) overlay_pass_ms: f64,
     pub(crate) queue_submit_cpu_ms: f64,
@@ -130,6 +131,9 @@ pub(crate) struct RendererPerfStats {
     pub(crate) model_draws: u32,
     pub(crate) skinned_draws: u32,
     pub(crate) primitive_draws: u32,
+    pub(crate) water_draws: u32,
+    pub(crate) water_instances: u32,
+    pub(crate) water_triangles: u32,
     pub(crate) sprite_draws: u32,
     pub(crate) text_draws: u32,
     pub(crate) instances: u32,
@@ -207,7 +211,7 @@ fn push_f64(out: &mut Vec<u8>, value: f64) {
 }
 
 pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 16 * 8 + 25 * 4);
+    let mut out = Vec::with_capacity(4 + 17 * 8 + 28 * 4);
     push_u32(&mut out, RENDERER_PERF_PAYLOAD_VERSION);
     push_f64(&mut out, stats.submit_frame_ms);
     push_f64(&mut out, stats.surface_acquire_ms);
@@ -221,6 +225,7 @@ pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8>
     push_f64(&mut out, stats.main_model_ms);
     push_f64(&mut out, stats.main_primitive_ms);
     push_f64(&mut out, stats.main_pass_close_ms);
+    push_f64(&mut out, stats.water_pass_ms);
     push_f64(&mut out, stats.post_pass_ms);
     push_f64(&mut out, stats.overlay_pass_ms);
     push_f64(&mut out, stats.queue_submit_cpu_ms);
@@ -229,6 +234,9 @@ pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8>
     push_u32(&mut out, stats.model_draws);
     push_u32(&mut out, stats.skinned_draws);
     push_u32(&mut out, stats.primitive_draws);
+    push_u32(&mut out, stats.water_draws);
+    push_u32(&mut out, stats.water_instances);
+    push_u32(&mut out, stats.water_triangles);
     push_u32(&mut out, stats.sprite_draws);
     push_u32(&mut out, stats.text_draws);
     push_u32(&mut out, stats.instances);

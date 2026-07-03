@@ -132,6 +132,7 @@ func (l *Layer) SetPreloadChunks(enabled bool) {
 func (l *Layer) Add(instance Instance) ObjectID {
 	l.ensureReady()
 	l.validateInstance(instance)
+	instance = l.normalizeInstance(instance)
 	id := instance.Object
 	if id == 0 {
 		id = ObjectID(l.nextObjectID)
@@ -184,6 +185,7 @@ func (b *LayerBulkAdd) Add(instance Instance) ObjectID {
 		l.materials.Desc(instance.Material)
 		b.validMaterials[materialKey] = true
 	}
+	instance = l.normalizeInstance(instance)
 	id := instance.Object
 	if id == 0 {
 		id = ObjectID(l.nextObjectID)
@@ -228,6 +230,7 @@ func (l *Layer) Set(id ObjectID, instance Instance) {
 		panic("primitive3d.Layer.Set: unknown object id")
 	}
 	l.validateInstance(instance)
+	instance = l.normalizeInstance(instance)
 	instance.Object = id
 	l.instances[int(id)] = instance
 	l.dirty[int(id)] = true
@@ -477,6 +480,13 @@ func (l *Layer) validateInstanceShapeMaterial(instance Instance) {
 	if instance.Material == 0 {
 		panic("primitive3d.Layer: instance material must not be zero")
 	}
+}
+
+func (l *Layer) normalizeInstance(instance Instance) Instance {
+	if l.materials.Preset(instance.Material) == MaterialWater {
+		instance.Flags = instance.Flags | InstanceWaterSurface
+	}
+	return instance
 }
 
 func (l *Layer) removeFromOrder(id ObjectID) {

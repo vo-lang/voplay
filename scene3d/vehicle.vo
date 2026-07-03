@@ -203,58 +203,6 @@ func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt flo
 	}
 }
 
-func (v *Vehicle) applyControls(input VehicleInput, dt float64) {
-	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
-		return
-	}
-	scene := v.scene
-	if scene == nil || scene.worldID == 0 {
-		return
-	}
-	input.Throttle = vehicleClamp(input.Throttle, -1, 1)
-	input.Steer = vehicleClamp(input.Steer, -1, 1)
-	v.Drifting = input.Drift && math.Abs(v.Speed) >= v.Config.DriftMinSpeed && v.Grounded
-	steerTarget := input.Steer * v.Config.MaxSteerAngle
-	if v.Drifting {
-		steerTarget *= v.Config.DriftSteerScale
-	}
-	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, steerTarget, v.Config.SteerRate * dt)
-	engineForce := 0.0
-	brake := v.Config.CoastBrake
-	if input.Throttle > 0 {
-		if v.Speed < v.Config.MaxForwardSpeed {
-			engineForce = input.Throttle * v.Config.EngineForce
-			if input.Boost {
-				engineForce += v.Config.BoostEngineForce
-			}
-		}
-		brake = 0
-	} else if input.Throttle < 0 {
-		if v.Speed > 1.5 {
-			brake = -input.Throttle * v.Config.BrakeForce
-		} else if math.Abs(v.Speed) < v.Config.MaxReverseSpeed {
-			engineForce = input.Throttle * v.Config.ReverseEngineForce
-			brake = 0
-		}
-	}
-	driveWheelCount := vehicleDriveWheelCount(v.Config.Wheels)
-	for i, wheel := range v.Config.Wheels {
-		steering := 0.0
-		force := 0.0
-		wheelBrake := 0.0
-		if wheel.Steer {
-			steering = -v.SteerAngle
-		}
-		if wheel.Drive {
-			force = engineForce / driveWheelCount
-		}
-		if wheel.Brake {
-			wheelBrake = brake
-		}
-		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, i, steering, force, wheelBrake)
-	}
-}
-
 func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
 	if v == nil {
 		return DefaultSurfaceMaterial()

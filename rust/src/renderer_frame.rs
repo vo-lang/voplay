@@ -103,6 +103,60 @@ pub(crate) struct RenderFrameSnapshot {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RenderFrameDecode {
+    pub(crate) frame_id: u32,
+    pub(crate) command_count: u32,
+    pub(crate) scene_mutation_count: u32,
+    pub(crate) overlay_command_count: u32,
+    pub(crate) elapsed_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RenderSceneSnapshot {
+    pub(crate) frame_id: u32,
+    pub(crate) view_count: u32,
+    pub(crate) visible_object_count: u32,
+    pub(crate) visible_chunk_count: u32,
+    pub(crate) material_group_count: u32,
+    pub(crate) diagnostic_flags: u32,
+    pub(crate) immutable: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FrameGraphBuild {
+    pub(crate) frame_id: u32,
+    pub(crate) planned_pass_count: u32,
+    pub(crate) resource_count: u32,
+    pub(crate) target_count: u32,
+    pub(crate) elapsed_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FrameGraphExecute {
+    pub(crate) frame_id: u32,
+    pub(crate) executed_pass_count: u32,
+    pub(crate) slowest_pass: &'static str,
+    pub(crate) slowest_pass_ms: f64,
+    pub(crate) elapsed_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PerfPacketEncode {
+    pub(crate) frame_id: u32,
+    pub(crate) payload_version: u32,
+    pub(crate) elapsed_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RenderFramePipeline {
+    pub(crate) decode: RenderFrameDecode,
+    pub(crate) snapshot: RenderSceneSnapshot,
+    pub(crate) graph_build: FrameGraphBuild,
+    pub(crate) graph_execute: FrameGraphExecute,
+    pub(crate) perf_packet: PerfPacketEncode,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FrameGraphReport {
     pub(crate) frame_id: u32,
     pub(crate) planned_pass_count: u32,

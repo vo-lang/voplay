@@ -87,6 +87,25 @@ func ContactEventFromPair(contact Contact) ContactEvent {
 	return event
 }
 
+func (event ContactEvent) IndustrialReady() bool {
+	if event.Fallback {
+		return false
+	}
+	if event.Source != ContactEventSourceBackendManifold {
+		return false
+	}
+	if event.Normal.LengthSq() == 0 {
+		return false
+	}
+	if !event.HasImpulse {
+		return false
+	}
+	if event.Surface.ID == "" || event.Surface.Kind == "" {
+		return false
+	}
+	return true
+}
+
 func (s *Scene) ContactEvents() []ContactEvent {
 	contacts := s.Contacts()
 	events := make([]ContactEvent, 0, len(contacts))
@@ -94,6 +113,17 @@ func (s *Scene) ContactEvents() []ContactEvent {
 		events = append(events, ContactEventFromPair(contact))
 	}
 	return events
+}
+
+func (s *Scene) IndustrialContactEvents() []ContactEvent {
+	events := s.ContactEvents()
+	filtered := []ContactEvent{}
+	for _, event := range events {
+		if event.IndustrialReady() {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 func contactEntityPosition(entity *Entity) voplay.Vec3 {

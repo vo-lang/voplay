@@ -161,6 +161,7 @@ const (
 	Primitive3DFlagBillboard = 4
 	Primitive3DFlagYBillboard = 8
 	Primitive3DFlagAtlasUV = 16
+	Primitive3DFlagWaterSurface = 32
 )
 
 // NewDrawCtx creates a new draw command context.

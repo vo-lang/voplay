@@ -1,0 +1,68 @@
+package scene3d
+
+import (
+	"math"
+	"github.com/vo-lang/voplay"
+)
+
+type VehicleIdleSleepConfig struct {
+	WarmupFrames int
+	IntentEpsilon float64
+	KartSpeedEpsilon float64
+	LinearSleepSpeedSq float64
+	AngularSleepSpeedSq float64
+}
+
+type VehicleIdleSleepSample struct {
+	Intent VehicleIntent
+	Velocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+	KartSpeed float64
+	Grounded bool
+	IdleFrames int
+	Boosting bool
+	Drifting bool
+	AssistActive bool
+}
+
+func DefaultVehicleIdleSleepConfig() VehicleIdleSleepConfig {
+	return VehicleIdleSleepConfig{
+		WarmupFrames: 30,
+		IntentEpsilon: 0.001,
+		KartSpeedEpsilon: 0.05,
+		LinearSleepSpeedSq: 0.0025,
+		AngularSleepSpeedSq: 0.0004,
+	}
+}
+
+func VehicleShouldSleepIdlePhysics(sample VehicleIdleSleepSample, config VehicleIdleSleepConfig) bool {
+	if config.WarmupFrames <= 0 {
+		config.WarmupFrames = 1
+	}
+	if config.IntentEpsilon <= 0 {
+		config.IntentEpsilon = 0.001
+	}
+	if config.KartSpeedEpsilon <= 0 {
+		config.KartSpeedEpsilon = 0.05
+	}
+	intent := sample.Intent.Normalized()
+	if sample.Boosting || sample.Drifting || sample.AssistActive {
+		return false
+	}
+	if intent.Throttle > config.IntentEpsilon || intent.Brake > config.IntentEpsilon || math.Abs(intent.Steering) > config.IntentEpsilon || intent.Drift || intent.BoostRequest {
+		return false
+	}
+	if math.Abs(sample.KartSpeed) > config.KartSpeedEpsilon {
+		return false
+	}
+	if !sample.Grounded && sample.IdleFrames < config.WarmupFrames {
+		return false
+	}
+	if sample.Velocity.LengthSq() > config.LinearSleepSpeedSq {
+		return false
+	}
+	if sample.AngularVelocity.LengthSq() > config.AngularSleepSpeedSq {
+		return false
+	}
+	return true
+}

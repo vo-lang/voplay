@@ -7,6 +7,7 @@ import (
 type SceneDiagnostics struct {
 	Render SceneRenderStats
 	Primitive primitive3d.Stats
+	PrimitiveContent primitive3d.Stats
 	ActiveEntities int
 	ModelEntities int
 	StaticRenderableEntities int
@@ -31,7 +32,7 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 	if s == nil {
 		return SceneDiagnostics{}
 	}
-	diag := SceneDiagnostics{Render: s.RenderStats(), Primitive: s.PrimitiveStats(), PrimitiveLayers: len(s.primitiveLayers), ShadowEnabled: s.ShadowsEnabled, ShadowResolution: s.ShadowResolution, ShadowStrength: normalizeShadowStrength(s.ShadowStrength), ShadowSoftness: normalizeShadowSoftness(s.ShadowSoftness), ShadowDistance: normalizeShadowDistance(s.ShadowDistance), ShadowFade: normalizeShadowFade(s.ShadowFade), ShadowQuality: normalizeShadowQuality(s.ShadowQuality), RenderingQuality: normalizeSceneQuality(s.RenderingQuality), RenderDebugMode: s.RenderDebugMode}
+	diag := SceneDiagnostics{Render: s.RenderStats(), Primitive: s.PrimitiveStats(), PrimitiveContent: s.PrimitiveContentStats(), PrimitiveLayers: len(s.primitiveLayers), ShadowEnabled: s.ShadowsEnabled, ShadowResolution: s.ShadowResolution, ShadowStrength: normalizeShadowStrength(s.ShadowStrength), ShadowSoftness: normalizeShadowSoftness(s.ShadowSoftness), ShadowDistance: normalizeShadowDistance(s.ShadowDistance), ShadowFade: normalizeShadowFade(s.ShadowFade), ShadowQuality: normalizeShadowQuality(s.ShadowQuality), RenderingQuality: normalizeSceneQuality(s.RenderingQuality), RenderDebugMode: s.RenderDebugMode}
 	for _, entity := range s.entities {
 		if entity == nil || !entity.Active {
 			continue

@@ -141,7 +141,29 @@ func (v *Vehicle) UpdateIntent(intent VehicleIntent, dt float64) {
 		return
 	}
 	v.syncState()
-	v.applyControls(intent.VehicleInput(), dt)
+	command := BuildVehicleForceCommand(intent, v.Config, DefaultKartVehicleModel(), DefaultSurfaceMaterial(), v.Speed, v.Grounded, intent.BoostRequest, intent.Drift)
+	v.ApplyForceCommand(command, dt)
+}
+
+func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
+	if v == nil || dt <= 0 {
+		return
+	}
+	v.applyControls(command.VehicleInput, dt)
+	if v.Body == nil || v.Body.Physics == nil {
+		return
+	}
+	vel := v.Body.Physics.velocity
+	speed := vel.Length()
+	if command.DragForce > 0 && speed > 0 {
+		v.Body.ApplyForce(vel.Normalize().Scale(-command.DragForce))
+	}
+	if command.Downforce > 0 {
+		v.Body.ApplyForce(voplay.Vec3{Y: -command.Downforce})
+	}
+	if command.WaterLift > 0 {
+		v.Body.ApplyForce(voplay.Vec3{Y: command.WaterLift})
+	}
 }
 
 func (v *Vehicle) applyControls(input VehicleInput, dt float64) {

@@ -2,6 +2,7 @@ package scene3d
 
 import (
 	"math"
+	"github.com/vo-lang/voplay"
 )
 
 type KartDynamics struct {
@@ -13,6 +14,7 @@ type KartDynamics struct {
 
 type KartDynamicsConfig struct {
 	Vehicle VehicleConfig
+	Model KartVehicleModel
 	OffroadSpeedScale float64
 	OffroadEngineScale float64
 	MinTurboCharge float64
@@ -24,12 +26,80 @@ type KartDynamicsConfig struct {
 	BoostDuration float64
 }
 
+type TireFrictionCurve struct {
+	ExtremumSlip float64
+	ExtremumValue float64
+	AsymptoteSlip float64
+	AsymptoteValue float64
+	Stiffness float64
+}
+
+type KartWheelModel struct {
+	Connection voplay.Vec3
+	Radius float64
+	Steer bool
+	Drive bool
+	Brake bool
+	SuspensionSpring float64
+	SuspensionDamper float64
+	SuspensionTravel float64
+	ForwardFriction TireFrictionCurve
+	SideFriction TireFrictionCurve
+}
+
+type KartVehicleModel struct {
+	Mass float64
+	CenterOfMass voplay.Vec3
+	Wheels []KartWheelModel
+	EngineForce float64
+	BrakeForce float64
+	DragCoefficient float64
+	DownforceCoefficient float64
+	AirControl float64
+	WaterDrag float64
+	WaterLift float64
+	WallRideGrip float64
+	RailRideGrip float64
+}
+
+type WheelContactSample struct {
+	WheelIndex int
+	HitPoint voplay.Vec3
+	Normal voplay.Vec3
+	Compression float64
+	Surface SurfaceMaterial
+	ForwardSlip float64
+	SideSlip float64
+	Load float64
+	Grip float64
+	InContact bool
+}
+
+type VehicleForceCommand struct {
+	VehicleInput VehicleInput
+	SteeringAngle float64
+	EngineForce float64
+	BrakeForce float64
+	DragForce float64
+	Downforce float64
+	AirControl float64
+	WaterLift float64
+	WallGrip float64
+	RailGrip float64
+	Boosting bool
+	Drifting bool
+	Grounded bool
+	Surface SurfaceMaterial
+}
+
 type KartDynamicsResult struct {
 	VehicleConfig VehicleConfig
 	VehicleInput VehicleInput
+	ForceCommand VehicleForceCommand
 	RecoveryInput VehicleRecoveryInput
 	Surface SurfaceMaterial
 	Intent VehicleIntent
+	WheelContacts []WheelContactSample
 	Boosting bool
 	BoostTimer float64
 	Drifting bool
@@ -40,7 +110,7 @@ type KartDynamicsResult struct {
 
 func DefaultKartDynamicsConfig() KartDynamicsConfig {
 	kart := DefaultKartControllerConfig()
-	return KartDynamicsConfig{Vehicle: kart.Vehicle, OffroadSpeedScale: kart.OffroadSpeedScale, OffroadEngineScale: kart.OffroadEngineScale, MinTurboCharge: kart.MinTurboCharge, SuperTurboCharge: kart.SuperTurboCharge, MaxDriftCharge: kart.MaxDriftCharge, DriftChargeRate: kart.DriftChargeRate, MiniTurboDuration: kart.MiniTurboDuration, SuperTurboDuration: kart.SuperTurboDuration, BoostDuration: kart.BoostDuration}
+	return KartDynamicsConfig{Vehicle: kart.Vehicle, Model: DefaultKartVehicleModel(), OffroadSpeedScale: kart.OffroadSpeedScale, OffroadEngineScale: kart.OffroadEngineScale, MinTurboCharge: kart.MinTurboCharge, SuperTurboCharge: kart.SuperTurboCharge, MaxDriftCharge: kart.MaxDriftCharge, DriftChargeRate: kart.DriftChargeRate, MiniTurboDuration: kart.MiniTurboDuration, SuperTurboDuration: kart.SuperTurboDuration, BoostDuration: kart.BoostDuration}
 }
 
 func NewKartDynamics(config KartDynamicsConfig) KartDynamics {
@@ -52,7 +122,8 @@ func (d KartDynamics) Resolve(intent VehicleIntent, surface SurfaceMaterial) Kar
 	surface = NormalizeSurfaceMaterial(surface)
 	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
 	intent = intent.Normalized()
-	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: intent.VehicleInput(), RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent}
+	force := BuildVehicleForceCommand(intent, vehicleConfig, cfg.Model, surface, 0, true, false, false)
+	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent}
 }
 
 func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed float64, grounded bool, dt float64) KartDynamicsResult {
@@ -98,10 +169,112 @@ func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed
 	boosting := d.BoostTimer > 0
 	controlIntent := intent
 	controlIntent.BoostRequest = boosting
-	result := KartDynamicsResult{VehicleConfig: ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg), VehicleInput: controlIntent.VehicleInput(), RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
+	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
+	force := BuildVehicleForceCommand(controlIntent, vehicleConfig, cfg.Model, surface, speed, grounded, boosting, drifting)
+	result := KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
 	d.BoostTimer = vehicleMoveTowards(d.BoostTimer, 0, dt)
 	result.BoostTimer = d.BoostTimer
 	return result
+}
+
+func DefaultTireFrictionCurve() TireFrictionCurve {
+	return TireFrictionCurve{ExtremumSlip: 0.18, ExtremumValue: 1, AsymptoteSlip: 0.82, AsymptoteValue: 0.58, Stiffness: 1}
+}
+
+func DefaultKartVehicleModel() KartVehicleModel {
+	cfg := DefaultKartVehicleConfig()
+	wheels := make([]KartWheelModel, len(cfg.Wheels))
+	for i := range cfg.Wheels {
+		wheel := cfg.Wheels[i]
+		wheels[i] = KartWheelModel{Connection: wheel.Connection, Radius: wheel.Radius, Steer: wheel.Steer, Drive: wheel.Drive, Brake: wheel.Brake, SuspensionSpring: wheel.SuspensionStiffness, SuspensionDamper: wheel.SuspensionDamping, SuspensionTravel: wheel.MaxSuspensionTravel, ForwardFriction: DefaultTireFrictionCurve(), SideFriction: DefaultTireFrictionCurve()}
+	}
+	return KartVehicleModel{Mass: 240, CenterOfMass: voplay.Vec3{Y: -0.18}, Wheels: wheels, EngineForce: cfg.EngineForce, BrakeForce: cfg.BrakeForce, DragCoefficient: 0.018, DownforceCoefficient: 0.32, AirControl: 0.36, WaterDrag: 0.42, WaterLift: 0.18, WallRideGrip: 0.62, RailRideGrip: 0.9}
+}
+
+func BuildVehicleForceCommand(intent VehicleIntent, vehicle VehicleConfig, model KartVehicleModel, surface SurfaceMaterial, speed float64, grounded bool, boosting bool, drifting bool) VehicleForceCommand {
+	intent = intent.Normalized()
+	vehicle = normalizeVehicleConfig(vehicle)
+	model = NormalizeKartVehicleModel(model, vehicle)
+	surface = NormalizeSurfaceMaterial(surface)
+	input := intent.VehicleInput()
+	input.Boost = boosting
+	engineForce := 0.0
+	if input.Throttle > 0 && math.Abs(speed) < vehicle.MaxForwardSpeed {
+		engineForce = input.Throttle * vehicle.EngineForce
+		if boosting {
+			engineForce += vehicle.BoostEngineForce
+		}
+	} else if input.Throttle < 0 && math.Abs(speed) < vehicle.MaxReverseSpeed {
+		engineForce = input.Throttle * vehicle.ReverseEngineForce
+	}
+	brake := vehicle.CoastBrake
+	if input.Throttle > 0 {
+		brake = 0
+	} else if input.Throttle < 0 && speed > 1.5 {
+		brake = -input.Throttle * vehicle.BrakeForce
+	}
+	absSpeed := math.Abs(speed)
+	drag := absSpeed * absSpeed * model.DragCoefficient + surface.Drag * absSpeed * model.Mass
+	downforce := 0.0
+	if grounded {
+		downforce = absSpeed * absSpeed * model.DownforceCoefficient
+	}
+	waterLift := 0.0
+	if surface.Kind == SurfaceMaterialWater {
+		drag += absSpeed * model.WaterDrag * model.Mass
+		waterLift = absSpeed * model.WaterLift
+	}
+	wallGrip := 0.0
+	if surface.Kind == SurfaceMaterialWall {
+		wallGrip = model.WallRideGrip
+	}
+	railGrip := 0.0
+	if surface.Kind == SurfaceMaterialRail {
+		railGrip = model.RailRideGrip
+	}
+	steer := input.Steer * vehicle.MaxSteerAngle
+	if drifting {
+		steer *= vehicle.DriftSteerScale
+	}
+	return VehicleForceCommand{VehicleInput: input, SteeringAngle: steer, EngineForce: engineForce, BrakeForce: brake, DragForce: drag, Downforce: downforce, AirControl: model.AirControl, WaterLift: waterLift, WallGrip: wallGrip, RailGrip: railGrip, Boosting: boosting, Drifting: drifting, Grounded: grounded, Surface: surface}
+}
+
+func NormalizeKartVehicleModel(model KartVehicleModel, vehicle VehicleConfig) KartVehicleModel {
+	defaults := DefaultKartVehicleModel()
+	if model.Mass <= 0 {
+		model.Mass = defaults.Mass
+	}
+	if len(model.Wheels) == 0 {
+		model.Wheels = defaults.Wheels
+	}
+	if model.EngineForce <= 0 {
+		model.EngineForce = vehicle.EngineForce
+	}
+	if model.BrakeForce <= 0 {
+		model.BrakeForce = vehicle.BrakeForce
+	}
+	if model.DragCoefficient <= 0 {
+		model.DragCoefficient = defaults.DragCoefficient
+	}
+	if model.DownforceCoefficient <= 0 {
+		model.DownforceCoefficient = defaults.DownforceCoefficient
+	}
+	if model.AirControl <= 0 {
+		model.AirControl = defaults.AirControl
+	}
+	if model.WaterDrag <= 0 {
+		model.WaterDrag = defaults.WaterDrag
+	}
+	if model.WaterLift <= 0 {
+		model.WaterLift = defaults.WaterLift
+	}
+	if model.WallRideGrip <= 0 {
+		model.WallRideGrip = defaults.WallRideGrip
+	}
+	if model.RailRideGrip <= 0 {
+		model.RailRideGrip = defaults.RailRideGrip
+	}
+	return model
 }
 
 func (d *KartDynamics) ActivateBoost(duration float64) {
@@ -129,6 +302,7 @@ func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
 	} else {
 		config.Vehicle = normalizeVehicleConfig(config.Vehicle)
 	}
+	config.Model = NormalizeKartVehicleModel(config.Model, config.Vehicle)
 	if config.OffroadSpeedScale <= 0 {
 		config.OffroadSpeedScale = defaults.OffroadSpeedScale
 	}
@@ -161,7 +335,7 @@ func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
 
 func KartDynamicsConfigFromControllerConfig(config KartControllerConfig) KartDynamicsConfig {
 	config = normalizeKartControllerConfig(config)
-	return KartDynamicsConfig{Vehicle: config.Vehicle, OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale, MinTurboCharge: config.MinTurboCharge, SuperTurboCharge: config.SuperTurboCharge, MaxDriftCharge: config.MaxDriftCharge, DriftChargeRate: config.DriftChargeRate, MiniTurboDuration: config.MiniTurboDuration, SuperTurboDuration: config.SuperTurboDuration, BoostDuration: config.BoostDuration}
+	return KartDynamicsConfig{Vehicle: config.Vehicle, Model: DefaultKartVehicleModel(), OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale, MinTurboCharge: config.MinTurboCharge, SuperTurboCharge: config.SuperTurboCharge, MaxDriftCharge: config.MaxDriftCharge, DriftChargeRate: config.DriftChargeRate, MiniTurboDuration: config.MiniTurboDuration, SuperTurboDuration: config.SuperTurboDuration, BoostDuration: config.BoostDuration}
 }
 
 func ApplySurfaceMaterialToVehicleConfig(base VehicleConfig, surface SurfaceMaterial, dynamics KartDynamicsConfig) VehicleConfig {

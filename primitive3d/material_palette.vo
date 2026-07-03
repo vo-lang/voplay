@@ -8,6 +8,7 @@ type MaterialPalette struct {
 	revision int
 	keys      map[string]MaterialID
 	materials map[int]voplay.MaterialDesc
+	presets   map[int]MaterialPreset
 	names     map[int]string
 }
 
@@ -16,14 +17,16 @@ func NewMaterialPalette() *MaterialPalette {
 		nextID: 1,
 		keys:      map[string]MaterialID{},
 		materials: map[int]voplay.MaterialDesc{},
+		presets:   map[int]MaterialPreset{},
 		names:     map[int]string{},
 	}
 }
 
 func (p *MaterialPalette) Material(desc MaterialDesc) MaterialID {
 	p.ensureReady()
+	preset := normalizePrimitiveMaterialPreset(desc.Preset)
 	material := normalizePrimitiveMaterial(desc)
-	key := materialKey(material)
+	key := strconv.Itoa(int(preset)) + ":" + materialKey(material)
 	if id, ok := p.keys[key]; ok {
 		return id
 	}
@@ -31,6 +34,7 @@ func (p *MaterialPalette) Material(desc MaterialDesc) MaterialID {
 	p.nextID++
 	p.keys[key] = id
 	p.materials[int(id)] = material
+	p.presets[int(id)] = preset
 	p.names[int(id)] = desc.Name
 	p.revision++
 	return id
@@ -50,6 +54,18 @@ func (p *MaterialPalette) Name(id MaterialID) string {
 	return p.names[int(id)]
 }
 
+func (p *MaterialPalette) Preset(id MaterialID) MaterialPreset {
+	p.ensureReady()
+	preset, ok := p.presets[int(id)]
+	if !ok {
+		if _, hasMaterial := p.materials[int(id)]; hasMaterial {
+			return MaterialToyPlastic
+		}
+		panic("primitive3d.MaterialPalette.Preset: unknown material")
+	}
+	return preset
+}
+
 func (p *MaterialPalette) Revision() int {
 	p.ensureReady()
 	return p.revision
@@ -63,7 +79,7 @@ func (p *MaterialPalette) Entries() []MaterialEntry {
 		if !ok {
 			continue
 		}
-		entries = append(entries, MaterialEntry{ID: MaterialID(id), Material: material, Name: p.names[id]})
+		entries = append(entries, MaterialEntry{ID: MaterialID(id), Material: material, Preset: p.Preset(MaterialID(id)), Name: p.names[id]})
 	}
 	return entries
 }
@@ -81,21 +97,28 @@ func (p *MaterialPalette) ensureReady() {
 	if p.materials == nil {
 		p.materials = map[int]voplay.MaterialDesc{}
 	}
+	if p.presets == nil {
+		p.presets = map[int]MaterialPreset{}
+	}
 	if p.names == nil {
 		p.names = map[int]string{}
 	}
 }
 
 func normalizePrimitiveMaterial(desc MaterialDesc) voplay.MaterialDesc {
-	preset := desc.Preset
-	if preset == 0 {
-		preset = MaterialToyPlastic
-	}
+	preset := normalizePrimitiveMaterialPreset(desc.Preset)
 	base := presetMaterial(preset)
 	if desc.Base != (voplay.MaterialDesc{}) {
 		base = mergeMaterial(base, desc.Base)
 	}
 	return voplay.NormalizeMaterial(base)
+}
+
+func normalizePrimitiveMaterialPreset(preset MaterialPreset) MaterialPreset {
+	if preset == 0 {
+		return MaterialToyPlastic
+	}
+	return preset
 }
 
 func mergeMaterial(base, override voplay.MaterialDesc) voplay.MaterialDesc {

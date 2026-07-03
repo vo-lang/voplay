@@ -3695,9 +3695,11 @@ func testPrimitive3DModuleContract() {
 	redAgain := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.Red), Name: "debug name ignored"})
 	assert(red == redAgain, "primitive3d material palette reuses identical material entries")
 	assert(materials.Revision() == 1, "primitive3d material palette revision changes on new material")
-	assert(len(materials.Entries()) == 1 && materials.Entries()[0].ID == red, "primitive3d material palette exposes table entries")
+	assert(len(materials.Entries()) == 1 && materials.Entries()[0].ID == red && materials.Entries()[0].Preset == primitive3d.MaterialToyPlastic, "primitive3d material palette exposes table entries")
 	rubber := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialRubber})
 	assert(materials.Desc(rubber).Roughness > 0.8, "primitive3d rubber preset is high roughness")
+	water := materials.Material(primitive3d.MaterialDesc{Preset: primitive3d.MaterialWater, Base: voplay.MaterialColor(voplay.Red)})
+	assert(water != red && materials.Preset(water) == primitive3d.MaterialWater, "primitive3d material palette preserves semantic presets")
 	builder := primitive3d.NewBuilder(primitive3d.BuilderDesc{Kind: primitive3d.StaticLayer, Chunking: primitive3d.ChunkingDesc{CellSize: 4}, Name: "builder_contract"})
 	builderMat := primitive3d.MaterialDesc{Preset: primitive3d.MaterialToyPlastic, Base: voplay.MaterialColor(voplay.Red)}
 	builder.AddPart(primitive3d.PartDesc{Shape: primitive3d.ShapeDesc{Kind: primitive3d.ShapeRoundedBox, BevelRadius: 0.1}, Material: builderMat, Position: voplay.Vec3{X: 0}})
@@ -3796,8 +3798,19 @@ func testPrimitive3DModuleContract() {
 	assert(s.PrimitiveStats().DirtyRanges == 0, "scene3d primitive clean second draw has no dirty ranges")
 	s.RemovePrimitiveLayer(handle)
 	s.Close()
+	liveLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials})
+	liveLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{X: 0}})
+	s = scene3d.New()
+	s.AddPrimitiveLayer(liveLayer)
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	liveLayer.Add(primitive3d.Instance{Shape: rounded, Material: water, Position: voplay.Vec3{X: 4}})
+	diag = s.Diagnostics()
+	assert(s.PrimitiveStats().TotalInstances == 1, "scene3d primitive render stats remain last-frame scoped")
+	assert(diag.PrimitiveContent.TotalInstances == 2 && diag.PrimitiveContent.WaterInstances == 1, "scene3d diagnostics expose live primitive content stats")
+	s.Close()
 	culledLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 10}})
-	culledLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{Z: -5}})
+	culledLayer.Add(primitive3d.Instance{Shape: rounded, Material: water, Position: voplay.Vec3{Z: -5}})
 	culledLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{Z: -2000}})
 	culledLayer.Build()
 	s = scene3d.New()
@@ -3811,18 +3824,21 @@ func testPrimitive3DModuleContract() {
 	assert(pstats.TotalChunks == 2, "scene3d primitive stats keep total chunks")
 	assert(pstats.VisibleChunks == 1, "scene3d primitive stats frustum-cull static chunks")
 	assert(pstats.VisibleInstances == 1, "scene3d primitive stats count only visible static chunk instances")
+	assert(pstats.WaterInstances == 1 && pstats.VisibleWaterInstances == 1, "scene3d primitive stats count visible water instances")
 	assert(s.RenderStats().UpsertedObjects == 1, "scene3d primitive first draw uploads only visible content chunks")
 	s.Camera.Target = voplay.Vec3{X: 80, Y: 2, Z: 0}
 	d = voplay.NewDrawCtx()
 	s.Draw(d)
 	assert(s.RenderStats().UpsertedObjects == 0, "scene3d primitive camera move emits no content upload")
 	assert(s.PrimitiveStats().VisibleChunks == 0 && s.PrimitiveStats().VisibleInstances == 0, "scene3d primitive camera move culls static chunks at Vo layer")
+	assert(s.PrimitiveStats().WaterInstances == 1 && s.PrimitiveStats().VisibleWaterInstances == 0, "scene3d primitive camera move culls visible water stats")
 	assert(bytesContainByte(d.Bytes(), 0x3D), "scene3d primitive camera move emits chunk visibility opcode")
 	s.Camera.Target = voplay.Vec3{X: 0, Y: 2, Z: 0}
 	d = voplay.NewDrawCtx()
 	s.Draw(d)
 	assert(s.RenderStats().UpsertedObjects == 0, "scene3d primitive visible static chunk reuses resident upload")
 	assert(s.PrimitiveStats().VisibleChunks == 1 && s.PrimitiveStats().VisibleInstances == 1, "scene3d primitive visible static chunk returns without rebuild")
+	assert(s.PrimitiveStats().VisibleWaterInstances == 1, "scene3d primitive visible static chunk restores visible water stats")
 	s.Close()
 	stress := primitive3d.NewStressFixture(primitive3d.StressConfig{Count: 256, ShapeVariants: 4, MaterialVariants: 8, ChunkCellSize: 16})
 	s = scene3d.New()
@@ -4050,9 +4066,10 @@ func testPerfDiagnosticsApiContract() {
 	ctx.DisablePerfStats()
 	snapshot = ctx.GetPerfSnapshot()
 	assert(!snapshot.Enabled && snapshot.Mode == voplay.PerfModeOff, "perf stats disable returns to off")
-	okSnapshot := voplay.PerfSnapshot{Enabled: true, ThirtySecond: voplay.PerfWindowSummary{Frames: 120, SlowFrames: 0, FrameP99Ms: 8.3334, FrameMaxMs: 10, GpuWorkDoneP90Ms: 0.5, HudP90Ms: 0.08}}
+	okSnapshot := voplay.PerfSnapshot{Enabled: true, ThirtySecond: voplay.PerfWindowSummary{Frames: 120, SlowFrames: 0, FrameP99Ms: 8.3334, FrameMaxMs: 10, RenderWorkP90Ms: 0.7, GpuWorkDoneP90Ms: 0.5, ActiveWorkP90Ms: 0.7, ActiveWorkP99Ms: 0.9, HudP90Ms: 0.08}}
 	okGate := voplay.EvaluatePerfGate(okSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxFrameP99Ms: 9, MaxFrameMaxMs: 12, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0, MaxHudP90Ms: 0.2, MaxProbeOverheadMs: 0.05})
 	assert(okGate.Passed && okGate.CheckedFrames == 120, "perf gate passes clean snapshot")
+	assert(okGate.ActiveWorkP90Ms == 0.7 && okGate.ActiveWorkP99Ms == 0.9, "perf gate exposes active work percentiles")
 	slowSnapshot := okSnapshot
 	slowSnapshot.ThirtySecond.SlowFrames = 2
 	slowGate := voplay.EvaluatePerfGate(slowSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
@@ -4069,6 +4086,24 @@ func testPerfDiagnosticsApiContract() {
 	probeSnapshot.Overhead.ProbeOverheadMs = 0.2
 	probeGate := voplay.EvaluatePerfGate(probeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})
 	assert(!probeGate.Passed && probeGate.PrimaryFailure == voplay.PerfGateFailureProbeOverhead, "perf gate fails probe overhead")
+}
+
+func testFrameClockAdvanceDt() {
+	targetDt := voplay.FrameClockAdvanceDt(60, 0.055, 0.016)
+	assert(targetDt > 0.016 && targetDt < 0.017, "target-rate frame clock uses stable simulation dt")
+	displayDt := voplay.FrameClockAdvanceDt(0, 0.055, 0.008)
+	assert(displayDt == 0.008, "uncapped frame clock follows display pulse dt")
+	wallDt := voplay.FrameClockAdvanceDt(0, 0.055, 0)
+	assert(wallDt == 0.055, "frame clock falls back to wall dt")
+}
+
+func testResolveRenderFrameRate() {
+	defaultRate := voplay.ResolveRenderFrameRate(voplay.Game{TargetFrameRate: 60})
+	assert(defaultRate == 60, "render frame rate falls back to target frame rate")
+	overrideRate := voplay.ResolveRenderFrameRate(voplay.Game{TargetFrameRate: 60, RenderFrameRate: 120})
+	assert(overrideRate == 120, "render frame rate can exceed simulation target")
+	uncappedRate := voplay.ResolveRenderFrameRate(voplay.Game{})
+	assert(uncappedRate == 0, "zero render frame rate remains uncapped")
 }
 
 func main() {
@@ -4139,6 +4174,8 @@ func main() {
 	testScene2DPhysicsBackend()
 	testDrawStatsContract()
 	testPerfDiagnosticsApiContract()
+	testFrameClockAdvanceDt()
+	testResolveRenderFrameRate()
 	testInputNormalization()
 	testPointerContactsAndTouchUI()
 	testThirdPersonCameraRotationSemantics()

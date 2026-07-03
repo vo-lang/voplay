@@ -116,6 +116,19 @@ pub struct RayHit3D {
     pub toi: f32,
 }
 
+/// Detailed contact data exported from Rapier manifolds for Vo diagnostics.
+pub struct ContactInfo3D {
+    pub body1: u32,
+    pub body2: u32,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub relative_velocity: Vec3,
+    pub relative_speed: f32,
+    pub normal_impulse: f32,
+    pub tangent_impulse: f32,
+    pub has_impulse: bool,
+}
+
 struct RaycastVehicle3D {
     controller: DynamicRayCastVehicleController,
 }
@@ -742,8 +755,8 @@ impl PhysicsWorld3D {
         result
     }
 
-    /// Return active collision pairs as (body_id_a, body_id_b).
-    pub fn get_contacts(&self) -> Vec<(u32, u32)> {
+    /// Return active collision contacts with manifold-derived diagnostics.
+    pub fn get_contacts(&self) -> Vec<ContactInfo3D> {
         let mut contacts = Vec::new();
         for pair in self.narrow_phase.contact_pairs() {
             if !pair.has_any_active_contact {
@@ -757,7 +770,73 @@ impl PhysicsWorld3D {
                 if let (Some(id1), Some(id2)) =
                     (self.reverse_map.get(&h1), self.reverse_map.get(&h2))
                 {
-                    contacts.push((*id1, *id2));
+                    let vel1 = self
+                        .rigid_body_set
+                        .get(h1)
+                        .map(|body| *body.linvel())
+                        .unwrap_or_else(Vector::zeros);
+                    let vel2 = self
+                        .rigid_body_set
+                        .get(h2)
+                        .map(|body| *body.linvel())
+                        .unwrap_or_else(Vector::zeros);
+                    let relative_velocity = vel2 - vel1;
+                    let (normal_impulse, normal_from_impulse) = pair.max_impulse();
+                    let mut normal = normal_from_impulse;
+                    if normal.norm_squared() <= f32::EPSILON {
+                        if let Some(manifold) = pair.manifolds.first() {
+                            normal = manifold.data.normal;
+                        }
+                    }
+                    if normal.norm_squared() <= f32::EPSILON {
+                        normal = vector![0.0, 1.0, 0.0];
+                    } else {
+                        normal = normal.normalize();
+                    }
+                    let mut point = None;
+                    let mut tangent_impulse = 0.0f32;
+                    for manifold in &pair.manifolds {
+                        for solver_contact in &manifold.data.solver_contacts {
+                            if point.is_none() {
+                                point = Some(solver_contact.point);
+                            }
+                            tangent_impulse += solver_contact.warmstart_tangent_impulse.norm();
+                        }
+                    }
+                    if point.is_none() {
+                        if let Some((manifold, contact)) = pair.find_deepest_contact() {
+                            let world_p1 = self
+                                .collider_set
+                                .get(c1)
+                                .map(|collider| collider.position() * contact.local_p1);
+                            let world_p2 = self
+                                .collider_set
+                                .get(c2)
+                                .map(|collider| collider.position() * contact.local_p2);
+                            point = match (world_p1, world_p2) {
+                                (Some(p1), Some(p2)) => Some(p1 + (p2 - p1) * 0.5),
+                                (Some(p1), None) => Some(p1),
+                                (None, Some(p2)) => Some(p2),
+                                _ => manifold.data.solver_contacts.first().map(|c| c.point),
+                            };
+                        }
+                    }
+                    let point = point.unwrap_or_else(Point::origin);
+                    contacts.push(ContactInfo3D {
+                        body1: *id1,
+                        body2: *id2,
+                        point: Vec3::new(point.x, point.y, point.z),
+                        normal: Vec3::new(normal.x, normal.y, normal.z),
+                        relative_velocity: Vec3::new(
+                            relative_velocity.x,
+                            relative_velocity.y,
+                            relative_velocity.z,
+                        ),
+                        relative_speed: relative_velocity.norm(),
+                        normal_impulse,
+                        tangent_impulse,
+                        has_impulse: normal_impulse.abs() > 0.0 || tangent_impulse.abs() > 0.0,
+                    });
                 }
             }
         }

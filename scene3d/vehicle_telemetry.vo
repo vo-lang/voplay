@@ -17,6 +17,7 @@ type VehicleTelemetry struct {
 	Velocity voplay.Vec3
 	AngularVelocity voplay.Vec3
 	Speed float64
+	SignedSpeed float64
 	ForwardSpeed float64
 	LateralSpeed float64
 	Yaw float64
@@ -30,6 +31,12 @@ type VehicleTelemetry struct {
 	MaxLateralSlip float64
 	SurfaceID string
 	Surface SurfaceMaterial
+	SurfaceBlend SurfaceMaterialBlend
+	WheelContacts []WheelContactSample
+	AirborneTime float64
+	LastImpulse float64
+	LastTangentImpulse float64
+	InvalidSampleCount int
 	Drifting bool
 	Boosting bool
 	Recovery VehicleRecoveryState
@@ -55,7 +62,7 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 	if vehicle == nil {
 		return VehicleTelemetry{}
 	}
-	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: DefaultSurfaceMaterial(), Drifting: vehicle.Drifting}
+	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), SignedSpeed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: DefaultSurfaceMaterial(), SurfaceBlend: SurfaceMaterialBlend{Primary: DefaultSurfaceMaterial()}, Drifting: vehicle.Drifting}
 	if vehicle.Body != nil {
 		t.Position = vehicleCleanVec3(vehicle.Body.Position())
 		t.Rotation = vehicleCleanQuat(vehicle.Body.Rotation())
@@ -72,6 +79,11 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 		if !ok {
 			continue
 		}
+		surface := t.Surface
+		if vehicle.Track != nil && wheel.SurfaceID != "" {
+			surface = SurfaceMaterialAtTrackPosition(vehicle.Track, wheel.ContactPoint)
+		}
+		t.WheelContacts = append(t.WheelContacts, WheelContactSample{WheelIndex: i, HitPoint: wheel.ContactPoint, Normal: wheel.ContactNormal, Compression: wheel.SuspensionCompression, Surface: surface, ForwardSlip: wheel.LongitudinalSlip, SideSlip: wheel.LateralSlip, Load: wheel.NormalLoad, Grip: surface.GripScale, InContact: wheel.InContact})
 		if wheel.InContact {
 			t.ContactCount++
 			if t.SurfaceID == "" && wheel.SurfaceID != "" {
@@ -90,9 +102,31 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 	}
 	if vehicle.Track != nil && vehicle.Body != nil {
 		t.Surface = SurfaceMaterialAtTrackPosition(vehicle.Track, vehicle.Body.Position())
+		t.SurfaceBlend.Primary = t.Surface
 		if t.SurfaceID == "" {
 			t.SurfaceID = t.Surface.ID
 		}
+	}
+	if !t.Grounded {
+		t.AirborneTime = 1.0 / 60.0
+	}
+	if vehicle.Body != nil && vehicle.Body.scene != nil {
+		for _, event := range vehicle.Body.scene.ContactEvents() {
+			if event.A == vehicle.Body || event.B == vehicle.Body {
+				t.LastImpulse = event.NormalImpulse
+				t.LastTangentImpulse = event.TangentImpulse
+				break
+			}
+		}
+	}
+	if !vehicleVec3Finite(t.Position) {
+		t.InvalidSampleCount++
+	}
+	if !vehicleVec3Finite(t.Velocity) {
+		t.InvalidSampleCount++
+	}
+	if !vehicleVec3Finite(t.AngularVelocity) {
+		t.InvalidSampleCount++
 	}
 	return t
 }
@@ -106,6 +140,9 @@ func (t VehicleTelemetry) ValidationIssues(intent VehicleIntent, budget VehicleT
 	issues := []VehicleTelemetryIssue{}
 	if !vehicleVec3Finite(t.Position) || !vehicleVec3Finite(t.Velocity) || !vehicleVec3Finite(t.AngularVelocity) || !vehicleVec3Finite(t.GroundNormal) || !vehicleFinite(t.Speed) || !vehicleFinite(t.Yaw) {
 		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueInvalidNumber, Severity: 1, Detail: "non-finite vehicle telemetry"})
+	}
+	if t.InvalidSampleCount > 0 {
+		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueInvalidNumber, Severity: 1, Detail: "invalid telemetry sample count"})
 	}
 	if !vehicleQuatFinite(t.Rotation) || !vehicleQuatUnit(t.Rotation) {
 		issues = append(issues, VehicleTelemetryIssue{Code: VehicleTelemetryIssueInvalidQuaternion, Severity: 1, Detail: "invalid vehicle orientation"})

@@ -7,6 +7,7 @@ import (
 const (
 	ContactEventKindBody = "body"
 	ContactEventKindSurface = "surface"
+	ContactEventSourceBackendManifold = "physics.backend_manifold"
 	ContactEventSourceBackendPairFallback = "physics.backend_pair_fallback"
 )
 
@@ -22,6 +23,7 @@ type ContactEvent struct {
 	RelativeSpeed float64
 	Severity float64
 	NormalImpulse float64
+	TangentImpulse float64
 	HasImpulse bool
 	Surface SurfaceMaterial
 	Source string
@@ -29,29 +31,50 @@ type ContactEvent struct {
 }
 
 func ContactEventFromPair(contact Contact) ContactEvent {
-	// The current backend exposes active body pairs only. Manifold point and impulse export can fill this event without changing callers later.
-	event := ContactEvent{A: contact.A, B: contact.B, Kind: ContactEventKindBody, Surface: DefaultSurfaceMaterial(), Source: ContactEventSourceBackendPairFallback, Fallback: true}
+	source := ContactEventSourceBackendManifold
+	if contact.Fallback {
+		source = ContactEventSourceBackendPairFallback
+	}
+	event := ContactEvent{A: contact.A, B: contact.B, Kind: ContactEventKindBody, Surface: DefaultSurfaceMaterial(), Source: source, Fallback: contact.Fallback}
 	if contact.A != nil {
 		event.AID = contact.A.ID()
 	}
 	if contact.B != nil {
 		event.BID = contact.B.ID()
 	}
-	posA := contactEntityPosition(contact.A)
-	posB := contactEntityPosition(contact.B)
-	event.Position = posA.Add(posB).Scale(0.5)
-	normal := posB.Sub(posA)
-	if normal.LengthSq() == 0 {
-		normal = voplay.Vec3{Y: 1}
+	if contact.Fallback {
+		posA := contactEntityPosition(contact.A)
+		posB := contactEntityPosition(contact.B)
+		event.Position = posA.Add(posB).Scale(0.5)
+		normal := posB.Sub(posA)
+		if normal.LengthSq() == 0 {
+			normal = voplay.Vec3{Y: 1}
+		} else {
+			normal = normal.Normalize()
+		}
+		event.Normal = normal
+		velA := contactEntityVelocity(contact.A)
+		velB := contactEntityVelocity(contact.B)
+		event.RelativeVelocity = velB.Sub(velA)
+		event.RelativeSpeed = event.RelativeVelocity.Length()
 	} else {
-		normal = normal.Normalize()
+		event.Position = contact.Position
+		event.Normal = contact.Normal
+		if event.Normal.LengthSq() == 0 {
+			event.Normal = voplay.Vec3{Y: 1}
+		} else {
+			event.Normal = event.Normal.Normalize()
+		}
+		event.RelativeVelocity = contact.RelativeVelocity
+		event.RelativeSpeed = contact.RelativeSpeed
+		event.NormalImpulse = contact.NormalImpulse
+		event.TangentImpulse = contact.TangentImpulse
+		event.HasImpulse = contact.HasImpulse
 	}
-	event.Normal = normal
-	velA := contactEntityVelocity(contact.A)
-	velB := contactEntityVelocity(contact.B)
-	event.RelativeVelocity = velB.Sub(velA)
-	event.RelativeSpeed = event.RelativeVelocity.Length()
 	event.Severity = event.RelativeSpeed
+	if event.HasImpulse && event.NormalImpulse > event.Severity {
+		event.Severity = event.NormalImpulse
+	}
 	if contact.A != nil && contact.A.scene != nil {
 		for _, vehicle := range contact.A.scene.vehicles {
 			if vehicle != nil && (vehicle.Body == contact.A || vehicle.Body == contact.B) && vehicle.Track != nil {

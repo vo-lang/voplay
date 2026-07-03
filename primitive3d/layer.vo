@@ -389,13 +389,14 @@ func (l *Layer) Stats() Stats {
 	l.ensureReady()
 	l.ensureChunks()
 	total := len(l.order)
+	water := l.waterInstanceCount()
 	chunkCount := len(l.chunks)
 	dirtyRanges := len(l.dirty) + len(l.removed)
 	if l.dirtyAll && total > 0 {
 		dirtyRanges = chunkCount + len(l.removed)
 	}
 	groups := l.shapeMaterialGroupCount()
-	return Stats{TotalInstances: total, VisibleInstances: total, TotalChunks: chunkCount, VisibleChunks: chunkCount, DirtyRanges: dirtyRanges, ShapeMaterialGroups: groups, DrawCalls: groups, UploadBytes: dirtyRanges * primitiveInstanceUploadBytes}
+	return Stats{TotalInstances: total, VisibleInstances: total, WaterInstances: water, VisibleWaterInstances: water, TotalChunks: chunkCount, VisibleChunks: chunkCount, DirtyRanges: dirtyRanges, ShapeMaterialGroups: groups, DrawCalls: groups, UploadBytes: dirtyRanges * primitiveInstanceUploadBytes}
 }
 
 func (l *Layer) Model(shape ShapeID) voplay.ModelID {
@@ -416,6 +417,11 @@ func (l *Layer) ShapeEntries() []ShapeEntry {
 func (l *Layer) Material(material MaterialID) voplay.MaterialDesc {
 	l.ensureReady()
 	return l.materials.Desc(material)
+}
+
+func (l *Layer) MaterialPreset(material MaterialID) MaterialPreset {
+	l.ensureReady()
+	return l.materials.Preset(material)
 }
 
 func (l *Layer) MaterialRevision() int {
@@ -501,6 +507,20 @@ func (l *Layer) shapeMaterialGroupCount() int {
 	l.shapeMaterialGroups = len(groups)
 	l.shapeMaterialGroupsDirty = false
 	return l.shapeMaterialGroups
+}
+
+func (l *Layer) waterInstanceCount() int {
+	count := 0
+	for _, id := range l.order {
+		instance, ok := l.instances[int(id)]
+		if !ok {
+			continue
+		}
+		if l.materials.Preset(instance.Material) == MaterialWater {
+			count++
+		}
+	}
+	return count
 }
 
 func (l *Layer) ensureChunks() {

@@ -8,6 +8,11 @@ const (
 	SurfaceMaterialRoad = TrackSurfaceRoad
 	SurfaceMaterialOffroad = TrackSurfaceOffroad
 	SurfaceMaterialBoost = TrackSurfaceBoost
+	SurfaceMaterialWater = "water"
+	SurfaceMaterialRail = "rail"
+	SurfaceMaterialWall = "wall"
+	SurfaceMaterialIce = "ice"
+	SurfaceMaterialMud = "mud"
 )
 
 type SurfaceMaterial struct {
@@ -20,6 +25,12 @@ type SurfaceMaterial struct {
 	Drag float64
 	Boost float64
 	OnRoad bool
+}
+
+type SurfaceMaterialBlend struct {
+	Primary SurfaceMaterial
+	Secondary SurfaceMaterial
+	Weight float64
 }
 
 func DefaultSurfaceMaterial() SurfaceMaterial {
@@ -76,8 +87,51 @@ func NormalizeSurfaceMaterial(m SurfaceMaterial) SurfaceMaterial {
 	}
 	m.Drag = vehicleFiniteOr(m.Drag, 0)
 	m.Boost = vehicleFiniteOr(m.Boost, 0)
-	if m.Kind == TrackSurfaceRoad || m.Kind == TrackSurfaceBoost {
+	if m.Kind == SurfaceMaterialRoad || m.Kind == SurfaceMaterialBoost || m.Kind == SurfaceMaterialRail {
 		m.OnRoad = true
 	}
+	if m.Kind == SurfaceMaterialWater {
+		if m.SpeedScale == defaults.SpeedScale {
+			m.SpeedScale = 0.82
+		}
+		if m.EngineScale == defaults.EngineScale {
+			m.EngineScale = 0.78
+		}
+		if m.Drag <= 0 {
+			m.Drag = 0.32
+		}
+	}
+	if m.Kind == SurfaceMaterialIce {
+		m.GripScale *= 0.55
+	}
+	if m.Kind == SurfaceMaterialMud {
+		m.SpeedScale *= 0.68
+		m.EngineScale *= 0.7
+		if m.Drag <= 0 {
+			m.Drag = 0.22
+		}
+	}
 	return m
+}
+
+func BlendSurfaceMaterial(primary, secondary SurfaceMaterial, weight float64) SurfaceMaterial {
+	primary = NormalizeSurfaceMaterial(primary)
+	secondary = NormalizeSurfaceMaterial(secondary)
+	weight = vehicleClamp(vehicleFiniteOr(weight, 0), 0, 1)
+	inv := 1 - weight
+	blended := primary
+	blended.ID = primary.ID
+	blended.Kind = primary.Kind
+	blended.Friction = primary.Friction * inv + secondary.Friction * weight
+	blended.GripScale = primary.GripScale * inv + secondary.GripScale * weight
+	blended.SpeedScale = primary.SpeedScale * inv + secondary.SpeedScale * weight
+	blended.EngineScale = primary.EngineScale * inv + secondary.EngineScale * weight
+	blended.Drag = primary.Drag * inv + secondary.Drag * weight
+	blended.Boost = primary.Boost * inv + secondary.Boost * weight
+	blended.OnRoad = primary.OnRoad && (weight < 0.5 || secondary.OnRoad)
+	return NormalizeSurfaceMaterial(blended)
+}
+
+func (b SurfaceMaterialBlend) Resolve() SurfaceMaterial {
+	return BlendSurfaceMaterial(b.Primary, b.Secondary, b.Weight)
 }

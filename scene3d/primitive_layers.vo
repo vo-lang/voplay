@@ -44,6 +44,7 @@ type primitiveCachedChunk struct {
 	bounds voplay.AABB
 	objects []primitive3d.ObjectID
 	instanceCount int
+	waterInstances int
 	batchKeys []primitiveBatchGroupKey
 	minLodNear float64
 	maxLodFar float64
@@ -113,6 +114,10 @@ func (s *Scene) RemovePrimitiveLayer(handle primitive3d.LayerHandle) {
 
 func (s *Scene) PrimitiveStats() primitive3d.Stats {
 	return s.primitiveStats
+}
+
+func (s *Scene) PrimitiveContentStats() primitive3d.Stats {
+	return s.aggregatePrimitiveStats()
 }
 
 func (s *Scene) invalidatePrimitiveLayers() {
@@ -384,7 +389,7 @@ func (attachment *primitiveLayerAttachment) rebuildStaticChunkCache(layer *primi
 	attachment.cachedLayerStats = layer.Stats()
 	for _, chunk := range layer.ChunkView() {
 		minLodNear, maxLodFar, allHaveFarLod := primitiveChunkLodMetadata(layer, chunk.Objects)
-		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), batchKeys: primitiveChunkBatchKeys(layer, chunk.Objects), minLodNear: minLodNear, maxLodFar: maxLodFar, allHaveFarLod: allHaveFarLod}
+		cached := primitiveCachedChunk{id: chunk.ID, bounds: chunk.Bounds, objects: chunk.Objects, instanceCount: len(chunk.Objects), waterInstances: primitiveChunkWaterInstanceCount(layer, chunk.Objects), batchKeys: primitiveChunkBatchKeys(layer, chunk.Objects), minLodNear: minLodNear, maxLodFar: maxLodFar, allHaveFarLod: allHaveFarLod}
 		attachment.cachedChunks = append(attachment.cachedChunks, cached)
 	}
 	attachment.cachedChunkFrameValid = true
@@ -399,6 +404,7 @@ func (s *Scene) collectStaticPrimitiveFrame(attachment *primitiveLayerAttachment
 	frame := primitiveStaticFrame{stats: base}
 	frame.stats.VisibleChunks = 0
 	frame.stats.VisibleInstances = 0
+	frame.stats.VisibleWaterInstances = 0
 	attachment.staticFrameChunkScratch = attachment.staticFrameChunkScratch[:0]
 	attachment.staticFrameBatchScratch = attachment.staticFrameBatchScratch[:0]
 	if attachment.visibleGroupScratch == nil {
@@ -413,6 +419,7 @@ func (s *Scene) collectStaticPrimitiveFrame(attachment *primitiveLayerAttachment
 		attachment.staticFrameChunkScratch = append(attachment.staticFrameChunkScratch, chunk)
 		frame.stats.VisibleChunks++
 		frame.stats.VisibleInstances += chunk.instanceCount
+		frame.stats.VisibleWaterInstances += chunk.waterInstances
 		for _, key := range chunk.batchKeys {
 			attachment.visibleGroupScratch[key] = true
 		}
@@ -473,6 +480,7 @@ func (s *Scene) collectPrimitiveLayerFrame(attachment *primitiveLayerAttachment,
 	frame := primitiveLayerFrame{stats: base, visible: attachment.dynamicVisibleScratch}
 	frame.stats.VisibleChunks = 0
 	frame.stats.VisibleInstances = 0
+	frame.stats.VisibleWaterInstances = 0
 	visibleGroups := attachment.dynamicGroupScratch
 	for _, chunk := range layer.ChunkView() {
 		if !s.primitiveAABBVisible(chunk.Bounds) {
@@ -489,6 +497,9 @@ func (s *Scene) collectPrimitiveLayerFrame(attachment *primitiveLayerAttachment,
 			}
 			frame.visible[int(objectID)] = instance
 			frame.stats.VisibleInstances++
+			if primitiveLayerInstanceIsWater(layer, instance) {
+				frame.stats.VisibleWaterInstances++
+			}
 			chunkVisible = true
 			visibleGroups[primitiveInstanceBatchKey(instance)] = true
 		}
@@ -574,6 +585,20 @@ func primitiveChunkBatchKeys(layer *primitive3d.Layer, objects []primitive3d.Obj
 		out = append(out, key)
 	}
 	return out
+}
+
+func primitiveChunkWaterInstanceCount(layer *primitive3d.Layer, objects []primitive3d.ObjectID) int {
+	count := 0
+	for _, objectID := range objects {
+		instance, ok := layer.Instance(objectID)
+		if !ok {
+			continue
+		}
+		if primitiveLayerInstanceIsWater(layer, instance) {
+			count++
+		}
+	}
+	return count
 }
 
 func primitiveChunkLodMetadata(layer *primitive3d.Layer, objects []primitive3d.ObjectID) (float64, float64, bool) {
@@ -688,7 +713,11 @@ func primitiveLayerMaterialDraws(layer *primitive3d.Layer) []voplay.Primitive3DM
 }
 
 func addPrimitiveStats(a, b primitive3d.Stats) primitive3d.Stats {
-	return primitive3d.Stats{TotalInstances: a.TotalInstances + b.TotalInstances, VisibleInstances: a.VisibleInstances + b.VisibleInstances, TotalChunks: a.TotalChunks + b.TotalChunks, VisibleChunks: a.VisibleChunks + b.VisibleChunks, DirtyRanges: a.DirtyRanges + b.DirtyRanges, ShapeMaterialGroups: a.ShapeMaterialGroups + b.ShapeMaterialGroups, DrawCalls: a.DrawCalls + b.DrawCalls, UploadBytes: a.UploadBytes + b.UploadBytes}
+	return primitive3d.Stats{TotalInstances: a.TotalInstances + b.TotalInstances, VisibleInstances: a.VisibleInstances + b.VisibleInstances, WaterInstances: a.WaterInstances + b.WaterInstances, VisibleWaterInstances: a.VisibleWaterInstances + b.VisibleWaterInstances, TotalChunks: a.TotalChunks + b.TotalChunks, VisibleChunks: a.VisibleChunks + b.VisibleChunks, DirtyRanges: a.DirtyRanges + b.DirtyRanges, ShapeMaterialGroups: a.ShapeMaterialGroups + b.ShapeMaterialGroups, DrawCalls: a.DrawCalls + b.DrawCalls, UploadBytes: a.UploadBytes + b.UploadBytes}
+}
+
+func primitiveLayerInstanceIsWater(layer *primitive3d.Layer, instance primitive3d.Instance) bool {
+	return layer.MaterialPreset(instance.Material) == primitive3d.MaterialWater
 }
 
 func materialForPrimitiveInstance(layer *primitive3d.Layer, instance primitive3d.Instance) voplay.MaterialDesc {

@@ -42,6 +42,7 @@ type splitWidgetEvent struct {
 type renderWorkerConfig struct {
 	UncappedFrameRate bool
 	TargetFrameRate int
+	RenderFrameRate int
 }
 
 func useRenderIslandHost() bool {
@@ -57,6 +58,7 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 	go @(renderIsland) runRenderWorker(canvasId, renderWorkerConfig{
 		UncappedFrameRate: game.UncappedFrameRate,
 		TargetFrameRate: game.TargetFrameRate,
+		RenderFrameRate: ResolveRenderFrameRate(*game),
 	}, renderWorkerPorts{
 		frameSetup: ports.frameSetup,
 		resReq:     ports.resReq,
@@ -153,28 +155,20 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		}
 
 		// Compute wall-frame dt from the render worker. The render loop interval
-		// is still recorded for diagnostics, but simulation advances from the
-		// display pulse interval so submit/present backpressure does not turn
-		// into a large gameplay time jump on the next frame.
+		// is still recorded for diagnostics, but target-rate games advance from
+		// a stable simulation dt so display-pulse jitter does not pollute physics
+		// replay or vehicle control.
 		now := time.Now()
 		frameDt := 0.0
 		advanceDt := 0.0
 		if !firstFrame {
+			fallbackDt := float64(now.Sub(lastTime).Nanoseconds()) / 1e9
 			if req.HasRenderTiming {
 				frameDt = req.RenderTiming.LoopMs / 1000.0
-				advanceDt = frameDt
-				if game.TargetFrameRate > 0 {
-					targetDt := 1.0 / float64(game.TargetFrameRate)
-					advanceDt = targetDt
-					if frameDt > advanceDt {
-						advanceDt = frameDt
-					}
-				} else if req.RenderTiming.DisplayPulseMs > 0 {
-					advanceDt = req.RenderTiming.DisplayPulseMs / 1000.0
-				}
+				advanceDt = FrameClockAdvanceDt(game.TargetFrameRate, frameDt, req.RenderTiming.DisplayPulseMs / 1000.0)
 			} else {
-				frameDt = float64(now.Sub(lastTime).Nanoseconds()) / 1e9
-				advanceDt = frameDt
+				frameDt = fallbackDt
+				advanceDt = FrameClockAdvanceDt(game.TargetFrameRate, frameDt, 0)
 			}
 		}
 		firstFrame = false
@@ -241,6 +235,19 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 			ctx.Input.endFrame()
 		}
 	}
+}
+
+func FrameClockAdvanceDt(targetFrameRate int, frameDt float64, displayPulseDt float64) float64 {
+	if targetFrameRate > 0 {
+		return 1.0 / float64(targetFrameRate)
+	}
+	if displayPulseDt > 0 {
+		return displayPulseDt
+	}
+	if frameDt > 0 {
+		return frameDt
+	}
+	return 0
 }
 
 // --- Extern declarations for the render island (implemented in Rust) ---

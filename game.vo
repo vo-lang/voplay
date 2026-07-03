@@ -8,7 +8,8 @@ type Game struct {
 	Title           string
 	FixedStep       float64
 	MaxCatchUpSteps int
-	TargetFrameRate int // 0 = render every display pulse; >0 = cap to stable/adaptive cadence
+	TargetFrameRate int // 0 = advance from display pulses; >0 = stable simulation/budget rate
+	RenderFrameRate int // 0 = use TargetFrameRate; >0 = cap render submits independently
 	UncappedFrameRate bool
 	InitialState    State
 	OnClose         func(g *GameCtx) // optional; called when the game loop exits
@@ -209,6 +210,13 @@ func resolveFixedStep(step float64) float64 {
 		panic("Game.FixedStep must be > 0")
 	}
 	return step
+}
+
+func ResolveRenderFrameRate(game Game) int {
+	if game.RenderFrameRate > 0 {
+		return game.RenderFrameRate
+	}
+	return game.TargetFrameRate
 }
 
 // handleResize checks for size change and updates GameCtx dimensions.

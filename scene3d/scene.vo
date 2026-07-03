@@ -922,6 +922,7 @@ func (s *Scene) Contacts() []Contact {
 		return nil
 	}
 	count := r.ReadU32()
+	detailed := r.Remaining() >= count * physicsContactDetailBytes
 	var contacts []Contact
 	for i := 0; i < count; i++ {
 		if r.Remaining() < 8 {
@@ -931,8 +932,22 @@ func (s *Scene) Contacts() []Contact {
 		idB := r.ReadU32()
 		a, okA := s.bodyMap[idA]
 		b, okB := s.bodyMap[idB]
+		contact := Contact{A: a, B: b, Fallback: true}
+		if detailed {
+			if r.Remaining() < physicsContactDetailBytes - 8 {
+				break
+			}
+			contact.Position = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+			contact.Normal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+			contact.RelativeVelocity = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+			contact.RelativeSpeed = r.ReadF64()
+			contact.NormalImpulse = r.ReadF64()
+			contact.TangentImpulse = r.ReadF64()
+			contact.HasImpulse = r.ReadBool()
+			contact.Fallback = false
+		}
 		if okA && okB && a.Active && b.Active {
-			contacts = append(contacts, Contact{A: a, B: b})
+			contacts = append(contacts, contact)
 		}
 	}
 	return contacts

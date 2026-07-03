@@ -7,6 +7,7 @@ pub(crate) enum RenderResourceKind {
     SurfaceProps,
     ShadowMap,
     PostColor,
+    WaterColor,
     Overlay,
 }
 
@@ -26,7 +27,9 @@ pub(crate) struct RenderView {
 pub(crate) enum RenderPassKind {
     DepthPrepass,
     Shadow,
-    Main,
+    MainOpaque,
+    MainTransparent,
+    Water,
     Post,
     Overlay,
     BackendSubmit,
@@ -37,7 +40,9 @@ impl RenderPassKind {
         match self {
             RenderPassKind::DepthPrepass => "depth",
             RenderPassKind::Shadow => "shadow",
-            RenderPassKind::Main => "main",
+            RenderPassKind::MainOpaque => "main-opaque",
+            RenderPassKind::MainTransparent => "main-transparent",
+            RenderPassKind::Water => "water",
             RenderPassKind::Post => "post",
             RenderPassKind::Overlay => "overlay",
             RenderPassKind::BackendSubmit => "backend-submit",
@@ -70,6 +75,16 @@ pub(crate) struct FrameGraphPassPlan {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenderPassNode {
+    pub(crate) kind: RenderPassKind,
+    pub(crate) name: &'static str,
+    pub(crate) reads: Vec<RenderResource>,
+    pub(crate) writes: Vec<RenderResource>,
+    pub(crate) enabled: bool,
+    pub(crate) diagnostics: Vec<RenderPassDiagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderFrameSnapshot {
     pub(crate) frame_id: u32,
     pub(crate) views: Vec<RenderView>,
@@ -79,6 +94,7 @@ pub(crate) struct RenderFrameSnapshot {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FrameGraphReport {
     pub(crate) frame_id: u32,
+    pub(crate) planned_pass_count: u32,
     pub(crate) pass_count: u32,
     pub(crate) resource_count: u32,
     pub(crate) target_count: u32,
@@ -94,6 +110,10 @@ pub(crate) struct FrameGraph {
     targets: Vec<RenderTargetStatus>,
     planned_passes: Vec<FrameGraphPassPlan>,
     passes: Vec<RenderPassDiagnostic>,
+}
+
+pub(crate) struct FrameGraphExecutor<'a> {
+    graph: &'a mut FrameGraph,
 }
 
 impl FrameGraph {
@@ -141,6 +161,29 @@ impl FrameGraph {
         });
     }
 
+    pub(crate) fn executor(&mut self) -> FrameGraphExecutor<'_> {
+        FrameGraphExecutor { graph: self }
+    }
+
+    pub(crate) fn nodes(&self) -> Vec<RenderPassNode> {
+        self.planned_passes
+            .iter()
+            .map(|plan| RenderPassNode {
+                kind: plan.kind,
+                name: plan.name,
+                reads: plan.reads.clone(),
+                writes: plan.writes.clone(),
+                enabled: plan.enabled,
+                diagnostics: self
+                    .passes
+                    .iter()
+                    .filter(|pass| pass.kind == plan.kind)
+                    .cloned()
+                    .collect(),
+            })
+            .collect()
+    }
+
     pub(crate) fn has_pass(&self, kind: RenderPassKind) -> bool {
         self.planned_passes
             .iter()
@@ -160,18 +203,11 @@ impl FrameGraph {
                 writes: plan.writes.clone(),
                 elapsed_ms: elapsed_ms.max(0.0),
             });
+            let writes = plan.writes.clone();
+            for resource in writes {
+                self.declare_target(resource, true);
+            }
         }
-    }
-
-    pub(crate) fn add_pass(
-        &mut self,
-        kind: RenderPassKind,
-        reads: &[RenderResource],
-        writes: &[RenderResource],
-        elapsed_ms: f64,
-    ) {
-        self.plan_pass(kind, reads, writes, true);
-        self.record_pass(kind, elapsed_ms);
     }
 
     pub(crate) fn report(&self) -> FrameGraphReport {
@@ -198,6 +234,7 @@ impl FrameGraph {
         }
         FrameGraphReport {
             frame_id: self.frame.frame_id,
+            planned_pass_count: self.nodes().len().min(u32::MAX as usize) as u32,
             pass_count: self.passes.len().min(u32::MAX as usize) as u32,
             resource_count: resources.len().min(u32::MAX as usize) as u32,
             target_count: self.targets.len().min(u32::MAX as usize) as u32,
@@ -211,6 +248,16 @@ impl FrameGraph {
             slowest_pass_ms,
             total_pass_ms,
         }
+    }
+}
+
+impl FrameGraphExecutor<'_> {
+    pub(crate) fn execute_recorded(&mut self, kind: RenderPassKind, elapsed_ms: f64) -> bool {
+        if !self.graph.has_pass(kind) {
+            return false;
+        }
+        self.graph.record_pass(kind, elapsed_ms);
+        true
     }
 }
 
@@ -242,6 +289,10 @@ pub(crate) const RES_POST_COLOR: RenderResource = RenderResource {
     name: "post-color",
     kind: RenderResourceKind::PostColor,
 };
+pub(crate) const RES_WATER_COLOR: RenderResource = RenderResource {
+    name: "water-color",
+    kind: RenderResourceKind::WaterColor,
+};
 pub(crate) const RES_OVERLAY: RenderResource = RenderResource {
     name: "overlay",
     kind: RenderResourceKind::Overlay,
@@ -258,26 +309,37 @@ mod tests {
         graph.declare_target(RES_SHADOW_MAP, true);
         graph.declare_target(RES_MAIN_COLOR, true);
         graph.declare_target(RES_SURFACE_COLOR, true);
-        graph.add_pass(RenderPassKind::Shadow, &[RES_DEPTH], &[RES_SHADOW_MAP], 0.8);
-        graph.add_pass(
-            RenderPassKind::Main,
+        graph.plan_pass(
+            RenderPassKind::Shadow,
+            &[RES_DEPTH],
+            &[RES_SHADOW_MAP],
+            true,
+        );
+        graph.plan_pass(
+            RenderPassKind::MainOpaque,
             &[RES_SHADOW_MAP],
             &[RES_MAIN_COLOR, RES_DEPTH, RES_RECEIVER_MASK],
-            2.4,
+            true,
         );
-        graph.add_pass(
+        graph.plan_pass(
             RenderPassKind::Post,
             &[RES_MAIN_COLOR],
             &[RES_SURFACE_COLOR],
-            1.1,
+            true,
         );
+        {
+            let mut executor = graph.executor();
+            assert!(executor.execute_recorded(RenderPassKind::Shadow, 0.8));
+            assert!(executor.execute_recorded(RenderPassKind::MainOpaque, 2.4));
+            assert!(executor.execute_recorded(RenderPassKind::Post, 1.1));
+        }
         let report = graph.report();
         assert_eq!(report.frame_id, 42);
         assert_eq!(report.pass_count, 3);
         assert_eq!(report.resource_count, 5);
-        assert_eq!(report.target_count, 4);
-        assert_eq!(report.ready_target_count, 4);
-        assert_eq!(report.slowest_pass, "main");
+        assert_eq!(report.target_count, 5);
+        assert_eq!(report.ready_target_count, 5);
+        assert_eq!(report.slowest_pass, "main-opaque");
         assert_eq!(report.slowest_pass_ms, 2.4);
     }
 
@@ -285,13 +347,47 @@ mod tests {
     fn frame_graph_pass_plan_controls_execution() {
         let mut graph = FrameGraph::single_view(7, 0);
         graph.plan_pass(RenderPassKind::DepthPrepass, &[], &[RES_DEPTH], false);
-        graph.plan_pass(RenderPassKind::Main, &[RES_DEPTH], &[RES_MAIN_COLOR], true);
+        graph.plan_pass(
+            RenderPassKind::MainOpaque,
+            &[RES_DEPTH],
+            &[RES_MAIN_COLOR],
+            true,
+        );
         assert!(!graph.has_pass(RenderPassKind::DepthPrepass));
-        assert!(graph.has_pass(RenderPassKind::Main));
+        assert!(graph.has_pass(RenderPassKind::MainOpaque));
         graph.record_pass(RenderPassKind::DepthPrepass, 4.0);
-        graph.record_pass(RenderPassKind::Main, 1.25);
+        graph.record_pass(RenderPassKind::MainOpaque, 1.25);
         let report = graph.report();
         assert_eq!(report.pass_count, 1);
-        assert_eq!(report.slowest_pass, "main");
+        assert_eq!(report.slowest_pass, "main-opaque");
+    }
+
+    #[test]
+    fn frame_graph_executor_records_nodes_and_marks_targets_ready() {
+        let mut graph = FrameGraph::single_view(8, 0);
+        graph.declare_target(RES_MAIN_COLOR, false);
+        graph.plan_pass(
+            RenderPassKind::MainTransparent,
+            &[RES_MAIN_COLOR],
+            &[RES_SURFACE_COLOR],
+            false,
+        );
+        graph.plan_pass(
+            RenderPassKind::Water,
+            &[RES_DEPTH],
+            &[RES_WATER_COLOR],
+            true,
+        );
+        {
+            let mut executor = graph.executor();
+            assert!(!executor.execute_recorded(RenderPassKind::MainTransparent, 0.5));
+            assert!(executor.execute_recorded(RenderPassKind::Water, 0.7));
+        }
+        let nodes = graph.nodes();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[1].diagnostics.len(), 1);
+        let report = graph.report();
+        assert_eq!(report.pass_count, 1);
+        assert_eq!(report.ready_target_count, 1);
     }
 }

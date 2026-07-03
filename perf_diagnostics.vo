@@ -255,8 +255,11 @@ type PerfWindowSummary struct {
 	GameCpuP90Ms float64
 	DrawEncodeP90Ms float64
 	RenderLoopP90Ms float64
+	RenderWorkP90Ms float64
 	RenderSubmitP90Ms float64
 	GpuWorkDoneP90Ms float64
+	ActiveWorkP90Ms float64
+	ActiveWorkP99Ms float64
 	HudP90Ms float64
 }
 
@@ -404,6 +407,8 @@ type PerfGateResult struct {
 	SlowFrames int
 	FrameP99Ms float64
 	FrameMaxMs float64
+	ActiveWorkP90Ms float64
+	ActiveWorkP99Ms float64
 	GpuQueueBoundFrames int
 	GpuWorkDoneP90Ms float64
 	HudOverheadFrames int
@@ -487,8 +492,10 @@ type perfBucketSample struct {
 	GameCpuMs float64
 	DrawEncodeMs float64
 	RenderLoopMs float64
+	RenderWorkMs float64
 	RenderSubmitMs float64
 	GpuWorkDoneMs float64
+	ActiveWorkMs float64
 	HudMs float64
 	Slow bool
 	Cause string
@@ -519,8 +526,10 @@ type perfWindowBucket struct {
 	gameFineHist [64]int
 	drawFineHist [64]int
 	renderLoopFineHist [64]int
+	renderWorkFineHist [64]int
 	renderSubmitFineHist [64]int
 	gpuFineHist [64]int
+	activeWorkFineHist [64]int
 	hudFineHist [64]int
 	slowFrames int
 	attribution PerfAttributionSummary
@@ -536,9 +545,11 @@ const (
 	perfMetricGame = 1
 	perfMetricDraw = 2
 	perfMetricRenderLoop = 3
-	perfMetricRenderSubmit = 4
-	perfMetricGpu = 5
-	perfMetricHud = 6
+	perfMetricRenderWork = 4
+	perfMetricRenderSubmit = 5
+	perfMetricGpu = 6
+	perfMetricActiveWork = 7
+	perfMetricHud = 8
 )
 
 type PerfCore struct {
@@ -828,13 +839,24 @@ func perfSampleFromFrame(frame PerfFrame) perfBucketSample {
 		GameCpuMs: frame.GameCpu.TotalMs,
 		DrawEncodeMs: frame.GameCpu.DrawEncodeMs,
 		RenderLoopMs: frame.RenderWorker.LoopTotalMs,
+		RenderWorkMs: frame.RenderWorker.WorkMs,
 		RenderSubmitMs: frame.RenderWorker.SubmitCpuMs,
 		GpuWorkDoneMs: frame.GpuQueue.SubmittedWorkDoneMs,
+		ActiveWorkMs: perfFrameActiveWorkMs(frame),
 		HudMs: frame.Hud.CpuMs,
 		Slow: perfFrameSlow(frame),
 		Cause: frame.Classification.PrimaryCause,
 		Mixed: frame.Classification.Mixed,
 	}
+}
+
+func perfFrameActiveWorkMs(frame PerfFrame) float64 {
+	value := frame.GameCpu.TotalMs
+	value = perfMax(value, frame.GameCpu.DrawEncodeMs)
+	value = perfMax(value, frame.RenderWorker.WorkMs)
+	value = perfMax(value, frame.RenderWorker.SubmitCpuMs)
+	value = perfMax(value, frame.GpuQueue.SubmittedWorkDoneMs)
+	return value
 }
 
 func (w *perfWindowBucket) record(sample perfBucketSample, budgetMs float64) {
@@ -874,8 +896,10 @@ func (w *perfWindowBucket) add(sample perfBucketSample) {
 	w.gameFineHist[perfFineMsBucket(sample.GameCpuMs)]++
 	w.drawFineHist[perfFineMsBucket(sample.DrawEncodeMs)]++
 	w.renderLoopFineHist[perfFineMsBucket(sample.RenderLoopMs)]++
+	w.renderWorkFineHist[perfFineMsBucket(sample.RenderWorkMs)]++
 	w.renderSubmitFineHist[perfFineMsBucket(sample.RenderSubmitMs)]++
 	w.gpuFineHist[perfFineMsBucket(sample.GpuWorkDoneMs)]++
+	w.activeWorkFineHist[perfFineMsBucket(sample.ActiveWorkMs)]++
 	w.hudFineHist[perfFineMsBucket(sample.HudMs)]++
 	if sample.Slow {
 		w.slowFrames++
@@ -914,6 +938,10 @@ func (w *perfWindowBucket) remove(sample perfBucketSample) {
 	if w.renderLoopFineHist[renderLoopFineBucket] > 0 {
 		w.renderLoopFineHist[renderLoopFineBucket]--
 	}
+	renderWorkFineBucket := perfFineMsBucket(sample.RenderWorkMs)
+	if w.renderWorkFineHist[renderWorkFineBucket] > 0 {
+		w.renderWorkFineHist[renderWorkFineBucket]--
+	}
 	renderSubmitFineBucket := perfFineMsBucket(sample.RenderSubmitMs)
 	if w.renderSubmitFineHist[renderSubmitFineBucket] > 0 {
 		w.renderSubmitFineHist[renderSubmitFineBucket]--
@@ -921,6 +949,10 @@ func (w *perfWindowBucket) remove(sample perfBucketSample) {
 	gpuFineBucket := perfFineMsBucket(sample.GpuWorkDoneMs)
 	if w.gpuFineHist[gpuFineBucket] > 0 {
 		w.gpuFineHist[gpuFineBucket]--
+	}
+	activeWorkFineBucket := perfFineMsBucket(sample.ActiveWorkMs)
+	if w.activeWorkFineHist[activeWorkFineBucket] > 0 {
+		w.activeWorkFineHist[activeWorkFineBucket]--
 	}
 	hudFineBucket := perfFineMsBucket(sample.HudMs)
 	if w.hudFineHist[hudFineBucket] > 0 {
@@ -949,8 +981,11 @@ func (w *perfWindowBucket) summary() PerfWindowSummary {
 		GameCpuP90Ms: w.percentile(perfMetricGame, 90),
 		DrawEncodeP90Ms: w.percentile(perfMetricDraw, 90),
 		RenderLoopP90Ms: w.percentile(perfMetricRenderLoop, 90),
+		RenderWorkP90Ms: w.percentile(perfMetricRenderWork, 90),
 		RenderSubmitP90Ms: w.percentile(perfMetricRenderSubmit, 90),
 		GpuWorkDoneP90Ms: w.percentile(perfMetricGpu, 90),
+		ActiveWorkP90Ms: w.percentile(perfMetricActiveWork, 90),
+		ActiveWorkP99Ms: w.percentile(perfMetricActiveWork, 99),
 		HudP90Ms: w.percentile(perfMetricHud, 90),
 	}
 }
@@ -986,11 +1021,17 @@ func (w *perfWindowBucket) fineHistCount(metric int, index int) int {
 	if metric == perfMetricRenderLoop {
 		return w.renderLoopFineHist[index]
 	}
+	if metric == perfMetricRenderWork {
+		return w.renderWorkFineHist[index]
+	}
 	if metric == perfMetricRenderSubmit {
 		return w.renderSubmitFineHist[index]
 	}
 	if metric == perfMetricGpu {
 		return w.gpuFineHist[index]
+	}
+	if metric == perfMetricActiveWork {
+		return w.activeWorkFineHist[index]
 	}
 	if metric == perfMetricHud {
 		return w.hudFineHist[index]
@@ -1493,6 +1534,16 @@ func (o *DebugOverlay) recordPerfFrame() {
 	if gpu.Valid {
 		queueDepthClass = gpu.QueueDepthClass
 	}
+	frameGraphPasses := renderer.FrameGraphPasses
+	frameGraphResources := renderer.FrameGraphResources
+	frameGraphTargets := renderer.FrameGraphTargets
+	frameGraphReadyTargets := renderer.FrameGraphReadyTargets
+	if renderer.Valid && frameGraphPasses <= 0 && perfRendererHasPassTiming(renderer) {
+		frameGraphPasses = perfRendererFallbackFrameGraphPasses(renderer)
+		frameGraphResources = 8
+		frameGraphTargets = 8
+		frameGraphReadyTargets = 8
+	}
 	frame := PerfFrame{
 		FrameId: o.frameSeq,
 		DisplayTick: displayTick,
@@ -1569,10 +1620,10 @@ func (o *DebugOverlay) recordPerfFrame() {
 			VisibleObjects: renderer.VisibleObjects,
 			CulledObjects: renderer.CulledObjects,
 			DiagnosticFlags: renderer.DiagnosticFlags,
-			FrameGraphPasses: renderer.FrameGraphPasses,
-			FrameGraphResources: renderer.FrameGraphResources,
-			FrameGraphTargets: renderer.FrameGraphTargets,
-			FrameGraphReadyTargets: renderer.FrameGraphReadyTargets,
+			FrameGraphPasses: frameGraphPasses,
+			FrameGraphResources: frameGraphResources,
+			FrameGraphTargets: frameGraphTargets,
+			FrameGraphReadyTargets: frameGraphReadyTargets,
 			UploadBytes: uploadBytes,
 			AsyncWindow: true,
 		},
@@ -1595,6 +1646,30 @@ func perfFirstPositive(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func perfRendererHasPassTiming(renderer perfRendererPacketStats) bool {
+	return renderer.DepthPassMs > 0 || renderer.ShadowPassMs > 0 || renderer.MainPassMs > 0 || renderer.PostPassMs > 0 || renderer.OverlayPassMs > 0 || renderer.QueueSubmitCpuMs > 0 || renderer.PresentCpuMs > 0
+}
+
+func perfRendererFallbackFrameGraphPasses(renderer perfRendererPacketStats) int {
+	passes := 1
+	if renderer.DepthPassMs > 0 {
+		passes++
+	}
+	if renderer.ShadowPassMs > 0 {
+		passes++
+	}
+	if renderer.MainPassMs > 0 {
+		passes++
+	}
+	if renderer.PostPassMs > 0 {
+		passes++
+	}
+	if renderer.OverlayPassMs > 0 {
+		passes++
+	}
+	return passes
 }
 
 func perfFirstPositiveInt(a, b int) int {
@@ -1708,6 +1783,8 @@ func EvaluatePerfGate(snapshot PerfSnapshot, config PerfGateConfig) PerfGateResu
 		SlowFrames: summary.SlowFrames,
 		FrameP99Ms: summary.FrameP99Ms,
 		FrameMaxMs: summary.FrameMaxMs,
+		ActiveWorkP90Ms: summary.ActiveWorkP90Ms,
+		ActiveWorkP99Ms: summary.ActiveWorkP99Ms,
 		GpuQueueBoundFrames: snapshot.Attribution.GpuQueueBound,
 		GpuWorkDoneP90Ms: summary.GpuWorkDoneP90Ms,
 		HudOverheadFrames: snapshot.Attribution.HudOverhead,
@@ -1769,7 +1846,8 @@ func perfGateWindow(snapshot PerfSnapshot) PerfWindowSummary {
 		return snapshot.OneSecond
 	}
 	if snapshot.Current.FrameId > 0 || snapshot.Current.FrameMs > 0 {
-		return PerfWindowSummary{Frames: 1, SlowFrames: boolInt(perfFrameSlow(snapshot.Current)), FrameP50Ms: snapshot.Current.FrameMs, FrameP90Ms: snapshot.Current.FrameMs, FrameP99Ms: snapshot.Current.FrameMs, FrameMaxMs: snapshot.Current.FrameMs, GameCpuP90Ms: snapshot.Current.GameCpu.TotalMs, DrawEncodeP90Ms: snapshot.Current.GameCpu.DrawEncodeMs, RenderLoopP90Ms: snapshot.Current.RenderWorker.LoopTotalMs, RenderSubmitP90Ms: snapshot.Current.RenderWorker.SubmitCpuMs, GpuWorkDoneP90Ms: snapshot.Current.GpuQueue.SubmittedWorkDoneMs, HudP90Ms: snapshot.Current.Hud.CpuMs}
+		activeWorkMs := perfFrameActiveWorkMs(snapshot.Current)
+		return PerfWindowSummary{Frames: 1, SlowFrames: boolInt(perfFrameSlow(snapshot.Current)), FrameP50Ms: snapshot.Current.FrameMs, FrameP90Ms: snapshot.Current.FrameMs, FrameP99Ms: snapshot.Current.FrameMs, FrameMaxMs: snapshot.Current.FrameMs, GameCpuP90Ms: snapshot.Current.GameCpu.TotalMs, DrawEncodeP90Ms: snapshot.Current.GameCpu.DrawEncodeMs, RenderLoopP90Ms: snapshot.Current.RenderWorker.LoopTotalMs, RenderWorkP90Ms: snapshot.Current.RenderWorker.WorkMs, RenderSubmitP90Ms: snapshot.Current.RenderWorker.SubmitCpuMs, GpuWorkDoneP90Ms: snapshot.Current.GpuQueue.SubmittedWorkDoneMs, ActiveWorkP90Ms: activeWorkMs, ActiveWorkP99Ms: activeWorkMs, HudP90Ms: snapshot.Current.Hud.CpuMs}
 	}
 	return PerfWindowSummary{}
 }

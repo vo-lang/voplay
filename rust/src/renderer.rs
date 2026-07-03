@@ -27,6 +27,7 @@ use crate::render_world::{RenderObjectUpdate, RenderWorld};
 use crate::renderer_frame::{
     FrameGraph, FrameGraphReport, RenderPassKind, RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY,
     RES_POST_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
+    RES_WATER_COLOR,
 };
 use crate::renderer_perf::{
     elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
@@ -2284,6 +2285,7 @@ impl Renderer {
         frame_graph.declare_target(RES_DEPTH, self.depth_view.is_some());
         frame_graph.declare_target(RES_SHADOW_MAP, true);
         frame_graph.declare_target(RES_POST_COLOR, self.post_color_view.is_some());
+        frame_graph.declare_target(RES_WATER_COLOR, false);
         frame_graph.declare_target(RES_OVERLAY, true);
         if post_depth_active {
             frame_graph.declare_target(RES_RECEIVER_MASK, self.receiver_mask_view.is_some());
@@ -2306,7 +2308,7 @@ impl Renderer {
                     || !primitive_shadow_chunks.is_empty()),
         );
         frame_graph.plan_pass(
-            RenderPassKind::Main,
+            RenderPassKind::MainOpaque,
             &[RES_SHADOW_MAP],
             &[
                 RES_MAIN_COLOR,
@@ -2315,6 +2317,18 @@ impl Renderer {
                 RES_SURFACE_PROPS,
             ],
             true,
+        );
+        frame_graph.plan_pass(
+            RenderPassKind::MainTransparent,
+            &[RES_MAIN_COLOR, RES_DEPTH],
+            &[RES_MAIN_COLOR],
+            false,
+        );
+        frame_graph.plan_pass(
+            RenderPassKind::Water,
+            &[RES_DEPTH, RES_MAIN_COLOR],
+            &[RES_WATER_COLOR, RES_MAIN_COLOR],
+            false,
         );
         frame_graph.plan_pass(
             RenderPassKind::Post,
@@ -2379,7 +2393,9 @@ impl Renderer {
             primitive_depth_draw_calls = self.pipeline_depth.last_primitive_batch_count();
         }
         perf.depth_pass_ms = elapsed_ms_opt(depth_start);
-        frame_graph.record_pass(RenderPassKind::DepthPrepass, perf.depth_pass_ms);
+        frame_graph
+            .executor()
+            .execute_recorded(RenderPassKind::DepthPrepass, perf.depth_pass_ms);
 
         let mut shadow_active = false;
         let shadow_start = if perf_enabled { Some(perf_now()) } else { None };
@@ -2576,7 +2592,9 @@ impl Renderer {
                 [shadow_distance, shadow_fade, shadow_quality as f32, 0.0];
         }
         perf.shadow_pass_ms = elapsed_ms_opt(shadow_start);
-        frame_graph.record_pass(RenderPassKind::Shadow, perf.shadow_pass_ms);
+        frame_graph
+            .executor()
+            .execute_recorded(RenderPassKind::Shadow, perf.shadow_pass_ms);
 
         // Render pass
         let main_aux_targets_enabled = post_depth_active;
@@ -2850,7 +2868,9 @@ impl Renderer {
             primitive_main_draw_calls = self.primitive_pipeline.last_main_batch_count();
         }
         perf.main_pass_ms = elapsed_ms_opt(main_start);
-        frame_graph.record_pass(RenderPassKind::Main, perf.main_pass_ms);
+        frame_graph
+            .executor()
+            .execute_recorded(RenderPassKind::MainOpaque, perf.main_pass_ms);
 
         let post_start = if perf_enabled { Some(perf_now()) } else { None };
         {
@@ -2937,7 +2957,9 @@ impl Renderer {
             self.pipeline_post.draw(&mut post_pass, &post_bind_group);
         }
         perf.post_pass_ms = elapsed_ms_opt(post_start);
-        frame_graph.record_pass(RenderPassKind::Post, perf.post_pass_ms);
+        frame_graph
+            .executor()
+            .execute_recorded(RenderPassKind::Post, perf.post_pass_ms);
 
         let overlay_start = if perf_enabled { Some(perf_now()) } else { None };
         {
@@ -2987,7 +3009,9 @@ impl Renderer {
             }
         }
         perf.overlay_pass_ms = elapsed_ms_opt(overlay_start);
-        frame_graph.record_pass(RenderPassKind::Overlay, perf.overlay_pass_ms);
+        frame_graph
+            .executor()
+            .execute_recorded(RenderPassKind::Overlay, perf.overlay_pass_ms);
 
         let queue_submit_start = if perf_enabled { Some(perf_now()) } else { None };
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -2995,7 +3019,7 @@ impl Renderer {
         let present_start = if perf_enabled { Some(perf_now()) } else { None };
         output.present();
         perf.present_cpu_ms = elapsed_ms_opt(present_start);
-        frame_graph.record_pass(
+        frame_graph.executor().execute_recorded(
             RenderPassKind::BackendSubmit,
             perf.queue_submit_cpu_ms + perf.present_cpu_ms,
         );
@@ -3205,7 +3229,7 @@ mod tests {
             true,
         );
         graph.plan_pass(
-            RenderPassKind::Main,
+            RenderPassKind::MainOpaque,
             &[RES_SHADOW_MAP],
             &[RES_MAIN_COLOR, RES_DEPTH],
             true,
@@ -3219,12 +3243,12 @@ mod tests {
         assert!(!graph.has_pass(RenderPassKind::DepthPrepass));
         graph.record_pass(RenderPassKind::DepthPrepass, 9.0);
         graph.record_pass(RenderPassKind::Shadow, 1.0);
-        graph.record_pass(RenderPassKind::Main, 3.0);
+        graph.record_pass(RenderPassKind::MainOpaque, 3.0);
         graph.record_pass(RenderPassKind::BackendSubmit, 0.6);
         let report = graph.report();
         assert_eq!(report.frame_id, 11);
         assert_eq!(report.pass_count, 3);
-        assert_eq!(report.slowest_pass, "main");
+        assert_eq!(report.slowest_pass, "main-opaque");
         assert_eq!(report.target_count, 4);
         assert!(report.resource_count >= 4);
     }

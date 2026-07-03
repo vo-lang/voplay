@@ -111,6 +111,14 @@ func (c Collider) WithOffset(offset voplay.Vec3) Collider {
 type Contact struct {
 	A *Entity
 	B *Entity
+	Position voplay.Vec3
+	Normal voplay.Vec3
+	RelativeVelocity voplay.Vec3
+	RelativeSpeed float64
+	NormalImpulse float64
+	TangentImpulse float64
+	HasImpulse bool
+	Fallback bool
 }
 
 type RayCastHit struct {
@@ -127,6 +135,7 @@ const (
 	physicsCmdSetPos byte = 4
 	physicsCmdSetRot byte = 5
 	physicsCmdSetAngVel byte = 6
+	physicsContactDetailBytes = 8 + 12 * 8 + 1
 )
 
 func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2, v3 float64) {

@@ -68,10 +68,11 @@ type renderWorkerPorts struct {
 // the loop to the display refresh rate.
 func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWorkerPorts) {
 	// Phase 1: Init surface (may be async on WASM).
+	renderFrameRate := config.RenderFrameRate
 	// The render worker owns pacing. For explicit fixed-rate web games, avoid
 	// adding a second surface-vsync throttle on top of the display pulse pacer;
 	// uncapped stress runs also use no-vsync by definition.
-	noVsyncPresent := config.UncappedFrameRate || config.TargetFrameRate > 0
+	noVsyncPresent := config.UncappedFrameRate || renderFrameRate > 0
 	initSurface(canvasRef, noVsyncPresent)?
 
 	// Wait for renderer async init without hammering the browser main thread.
@@ -108,7 +109,7 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	// Each iteration: sample input → request → wait reply → submit → present.
 	// The request always carries the render clock delta, so logic advances
 	// from the display pulse cadence rather than host-island scheduling jitter.
-	pacer := newRenderDisplayPacer(config.TargetFrameRate)
+	pacer := newRenderDisplayPacer(renderFrameRate)
 	frameSeq := 0
 	lastLoopTime := time.Now()
 		lastReplyWaitMs := 0.0

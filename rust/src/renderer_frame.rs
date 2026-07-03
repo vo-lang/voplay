@@ -274,8 +274,10 @@ impl FrameGraph {
             enabled,
             transient: true,
         });
-        for resource in writes {
-            self.declare_transient_target(*resource, false);
+        if enabled {
+            for resource in writes {
+                self.declare_transient_target(*resource, false);
+            }
         }
     }
 
@@ -592,6 +594,12 @@ mod tests {
     fn frame_graph_pass_plan_controls_execution() {
         let mut graph = FrameGraph::single_view(7, 0);
         graph.plan_pass(RenderPassKind::DepthPrepass, &[], &[RES_DEPTH], false);
+        graph.plan_transient_pass(
+            RenderPassKind::Water,
+            &[RES_DEPTH],
+            &[RES_WATER_COLOR],
+            false,
+        );
         graph.plan_pass(
             RenderPassKind::MainOpaque,
             &[RES_DEPTH],
@@ -604,6 +612,7 @@ mod tests {
         graph.record_pass(RenderPassKind::MainOpaque, 1.25);
         let report = graph.report();
         assert_eq!(report.pass_count, 1);
+        assert_eq!(report.transient_target_count, 0);
         assert_eq!(report.slowest_pass, "main-opaque");
     }
 

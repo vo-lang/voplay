@@ -2292,7 +2292,6 @@ impl Renderer {
         frame_graph.declare_target(RES_DEPTH, self.depth_view.is_some());
         frame_graph.declare_target(RES_SHADOW_MAP, true);
         frame_graph.declare_target(RES_POST_COLOR, self.post_color_view.is_some());
-        frame_graph.declare_transient_target(RES_WATER_COLOR, false);
         frame_graph.declare_external_target(RES_OVERLAY, true);
         if post_depth_active {
             frame_graph.declare_target(RES_RECEIVER_MASK, self.receiver_mask_view.is_some());

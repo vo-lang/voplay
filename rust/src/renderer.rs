@@ -2277,7 +2277,7 @@ impl Renderer {
             debug_frame_count.min(u32::MAX as u64) as u32,
             perf_overrides.flags(),
         );
-        frame_graph.declare_target(RES_SURFACE_COLOR, true);
+        frame_graph.declare_external_target(RES_SURFACE_COLOR, true);
         frame_graph.declare_target(
             RES_MAIN_COLOR,
             self.post_color_view.is_some() || self.msaa_color_view.is_some(),
@@ -2285,8 +2285,8 @@ impl Renderer {
         frame_graph.declare_target(RES_DEPTH, self.depth_view.is_some());
         frame_graph.declare_target(RES_SHADOW_MAP, true);
         frame_graph.declare_target(RES_POST_COLOR, self.post_color_view.is_some());
-        frame_graph.declare_target(RES_WATER_COLOR, false);
-        frame_graph.declare_target(RES_OVERLAY, true);
+        frame_graph.declare_transient_target(RES_WATER_COLOR, false);
+        frame_graph.declare_external_target(RES_OVERLAY, true);
         if post_depth_active {
             frame_graph.declare_target(RES_RECEIVER_MASK, self.receiver_mask_view.is_some());
             frame_graph.declare_target(RES_SURFACE_PROPS, self.surface_props_view.is_some());
@@ -2324,7 +2324,7 @@ impl Renderer {
             &[RES_MAIN_COLOR],
             false,
         );
-        frame_graph.plan_pass(
+        frame_graph.plan_transient_pass(
             RenderPassKind::Water,
             &[RES_DEPTH, RES_MAIN_COLOR],
             &[RES_WATER_COLOR, RES_MAIN_COLOR],
@@ -2354,52 +2354,54 @@ impl Renderer {
             true,
         );
 
-        let depth_start = if perf_enabled { Some(perf_now()) } else { None };
-        if frame_graph.has_pass(RenderPassKind::DepthPrepass) {
-            let empty_model_draws: &[ModelDraw] = &[];
-            let empty_primitive_draws: &[PrimitiveDraw] = &[];
-            let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
-            if !primitive_depth_chunks.is_empty() {
-                self.primitive_pipeline.append_resident_depth_draws(
-                    &primitive_depth_chunks,
-                    &mut primitive_depth_draws,
-                );
-            }
-            let (depth_model_draws, depth_primitive_draws, depth_view_proj) =
-                if let Some(ref cam3d) = camera3d_uniform {
-                    (
-                        &model_draws[..],
-                        &primitive_depth_draws[..],
-                        cam3d.view_proj,
-                    )
-                } else {
-                    (
-                        empty_model_draws,
-                        empty_primitive_draws,
-                        math3d::MAT4_IDENTITY,
-                    )
-                };
-            self.pipeline_depth.render_depth_pass(
-                &self.device,
-                &mut encoder,
-                &self.queue,
-                &depth_view_proj,
-                depth_model_draws,
-                depth_primitive_draws,
-                empty_primitive_chunks,
-                &self.primitive_pipeline,
-                &self.model_manager,
-            );
-            primitive_depth_draw_calls = self.pipeline_depth.last_primitive_batch_count();
-        }
-        perf.depth_pass_ms = elapsed_ms_opt(depth_start);
-        frame_graph
+        perf.depth_pass_ms = frame_graph
             .executor()
-            .execute_recorded(RenderPassKind::DepthPrepass, perf.depth_pass_ms);
+            .execute_pass(RenderPassKind::DepthPrepass, || {
+                let depth_start = if perf_enabled { Some(perf_now()) } else { None };
+                let empty_model_draws: &[ModelDraw] = &[];
+                let empty_primitive_draws: &[PrimitiveDraw] = &[];
+                let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
+                if !primitive_depth_chunks.is_empty() {
+                    self.primitive_pipeline.append_resident_depth_draws(
+                        &primitive_depth_chunks,
+                        &mut primitive_depth_draws,
+                    );
+                }
+                let (depth_model_draws, depth_primitive_draws, depth_view_proj) =
+                    if let Some(ref cam3d) = camera3d_uniform {
+                        (
+                            &model_draws[..],
+                            &primitive_depth_draws[..],
+                            cam3d.view_proj,
+                        )
+                    } else {
+                        (
+                            empty_model_draws,
+                            empty_primitive_draws,
+                            math3d::MAT4_IDENTITY,
+                        )
+                    };
+                self.pipeline_depth.render_depth_pass(
+                    &self.device,
+                    &mut encoder,
+                    &self.queue,
+                    &depth_view_proj,
+                    depth_model_draws,
+                    depth_primitive_draws,
+                    empty_primitive_chunks,
+                    &self.primitive_pipeline,
+                    &self.model_manager,
+                );
+                primitive_depth_draw_calls = self.pipeline_depth.last_primitive_batch_count();
+                Ok(elapsed_ms_opt(depth_start))
+            })?
+            .unwrap_or(0.0);
 
         let mut shadow_active = false;
-        let shadow_start = if perf_enabled { Some(perf_now()) } else { None };
-        if frame_graph.has_pass(RenderPassKind::Shadow) {
+        perf.shadow_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::Shadow, || {
+                let shadow_start = if perf_enabled { Some(perf_now()) } else { None };
             if let Some(ref cam3d) = camera3d_uniform {
                 if light_uniform.count[0] > 0 && light_uniform.lights[0].position_or_dir[3] == 0.0 {
                     let shadow_to_light = Vec3::new(
@@ -2582,7 +2584,9 @@ impl Renderer {
                     }
                 }
             }
-        }
+                Ok(elapsed_ms_opt(shadow_start))
+            })?
+            .unwrap_or(0.0);
         if !shadow_active {
             light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
             light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
@@ -2591,11 +2595,6 @@ impl Renderer {
             light_uniform.shadow_params2 =
                 [shadow_distance, shadow_fade, shadow_quality as f32, 0.0];
         }
-        perf.shadow_pass_ms = elapsed_ms_opt(shadow_start);
-        frame_graph
-            .executor()
-            .execute_recorded(RenderPassKind::Shadow, perf.shadow_pass_ms);
-
         // Render pass
         let main_aux_targets_enabled = post_depth_active;
 
@@ -2669,360 +2668,365 @@ impl Renderer {
                 projected_decal_atlas_bindings.len() as u32,
             )),
         );
-        let main_start = if perf_enabled { Some(perf_now()) } else { None };
-        {
-            let main_setup_start = if perf_enabled { Some(perf_now()) } else { None };
-            let post_color_view = self
-                .post_color_view
-                .as_ref()
-                .ok_or_else(|| "voplay: missing post color target".to_string())?;
-            let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
-                self.msaa_color_view
+        perf.main_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::MainOpaque, || {
+                let main_start = if perf_enabled { Some(perf_now()) } else { None };
+                let main_setup_start = if perf_enabled { Some(perf_now()) } else { None };
+                let post_color_view = self
+                    .post_color_view
                     .as_ref()
-                    .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
-            } else {
-                post_color_view
-            };
-            let receiver_mask_view = if main_aux_targets_enabled {
-                Some(
-                    self.receiver_mask_view
+                    .ok_or_else(|| "voplay: missing post color target".to_string())?;
+                let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
+                    self.msaa_color_view
                         .as_ref()
-                        .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
-                )
-            } else {
-                None
-            };
-            let surface_props_view = if main_aux_targets_enabled {
-                Some(
-                    self.surface_props_view
-                        .as_ref()
-                        .ok_or_else(|| "voplay: missing surface props target".to_string())?,
-                )
-            } else {
-                None
-            };
-            let main_receiver_mask_view = if main_aux_targets_enabled {
-                Some(if MAIN_SAMPLE_COUNT > 1 {
-                    self.msaa_receiver_mask_view
-                        .as_ref()
-                        .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
+                        .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
                 } else {
-                    receiver_mask_view.expect("receiver mask view present")
-                })
-            } else {
-                None
-            };
-            let main_surface_props_view = if main_aux_targets_enabled {
-                Some(if MAIN_SAMPLE_COUNT > 1 {
-                    self.msaa_surface_props_view
-                        .as_ref()
-                        .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
+                    post_color_view
+                };
+                let receiver_mask_view = if main_aux_targets_enabled {
+                    Some(
+                        self.receiver_mask_view
+                            .as_ref()
+                            .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
+                    )
                 } else {
-                    surface_props_view.expect("surface props view present")
-                })
-            } else {
-                None
-            };
-            let resolve_target = if MAIN_SAMPLE_COUNT > 1 {
-                Some(post_color_view)
-            } else {
-                None
-            };
-            let receiver_mask_resolve_target = if main_aux_targets_enabled && MAIN_SAMPLE_COUNT > 1
-            {
-                receiver_mask_view
-            } else {
-                None
-            };
-            let surface_props_resolve_target = if main_aux_targets_enabled && MAIN_SAMPLE_COUNT > 1
-            {
-                surface_props_view
-            } else {
-                None
-            };
-            let color_store = if MAIN_SAMPLE_COUNT > 1 {
-                wgpu::StoreOp::Discard
-            } else {
-                wgpu::StoreOp::Store
-            };
-            let receiver_mask_store = if MAIN_SAMPLE_COUNT > 1 {
-                wgpu::StoreOp::Discard
-            } else {
-                wgpu::StoreOp::Store
-            };
-            let surface_props_store = if MAIN_SAMPLE_COUNT > 1 {
-                wgpu::StoreOp::Discard
-            } else {
-                wgpu::StoreOp::Store
-            };
-            let color_attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: main_color_view,
-                    resolve_target,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear_color),
-                        store: color_store,
-                    },
-                }),
-                main_receiver_mask_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: receiver_mask_resolve_target,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: receiver_mask_store,
-                    },
-                }),
-                main_surface_props_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: surface_props_resolve_target,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: surface_props_store,
-                    },
-                }),
-            ];
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voplay_main"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view: dv,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Discard,
-                        }),
-                        stencil_ops: None,
+                    None
+                };
+                let surface_props_view = if main_aux_targets_enabled {
+                    Some(
+                        self.surface_props_view
+                            .as_ref()
+                            .ok_or_else(|| "voplay: missing surface props target".to_string())?,
+                    )
+                } else {
+                    None
+                };
+                let main_receiver_mask_view = if main_aux_targets_enabled {
+                    Some(if MAIN_SAMPLE_COUNT > 1 {
+                        self.msaa_receiver_mask_view.as_ref().ok_or_else(|| {
+                            "voplay: missing MSAA receiver mask target".to_string()
+                        })?
+                    } else {
+                        receiver_mask_view.expect("receiver mask view present")
+                    })
+                } else {
+                    None
+                };
+                let main_surface_props_view = if main_aux_targets_enabled {
+                    Some(if MAIN_SAMPLE_COUNT > 1 {
+                        self.msaa_surface_props_view.as_ref().ok_or_else(|| {
+                            "voplay: missing MSAA surface props target".to_string()
+                        })?
+                    } else {
+                        surface_props_view.expect("surface props view present")
+                    })
+                } else {
+                    None
+                };
+                let resolve_target = if MAIN_SAMPLE_COUNT > 1 {
+                    Some(post_color_view)
+                } else {
+                    None
+                };
+                let receiver_mask_resolve_target =
+                    if main_aux_targets_enabled && MAIN_SAMPLE_COUNT > 1 {
+                        receiver_mask_view
+                    } else {
+                        None
+                    };
+                let surface_props_resolve_target =
+                    if main_aux_targets_enabled && MAIN_SAMPLE_COUNT > 1 {
+                        surface_props_view
+                    } else {
+                        None
+                    };
+                let color_store = if MAIN_SAMPLE_COUNT > 1 {
+                    wgpu::StoreOp::Discard
+                } else {
+                    wgpu::StoreOp::Store
+                };
+                let receiver_mask_store = if MAIN_SAMPLE_COUNT > 1 {
+                    wgpu::StoreOp::Discard
+                } else {
+                    wgpu::StoreOp::Store
+                };
+                let surface_props_store = if MAIN_SAMPLE_COUNT > 1 {
+                    wgpu::StoreOp::Discard
+                } else {
+                    wgpu::StoreOp::Store
+                };
+                let color_attachments = [
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: main_color_view,
+                        resolve_target,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clear_color),
+                            store: color_store,
+                        },
+                    }),
+                    main_receiver_mask_view.map(|view| wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: receiver_mask_resolve_target,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: receiver_mask_store,
+                        },
+                    }),
+                    main_surface_props_view.map(|view| wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: surface_props_resolve_target,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: surface_props_store,
+                        },
+                    }),
+                ];
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("voplay_main"),
+                    color_attachments: &color_attachments,
+                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| {
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Discard,
+                            }),
+                            stencil_ops: None,
+                        }
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                perf.main_pass_setup_ms = elapsed_ms_opt(main_setup_start);
+
+                if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
+                    (skybox_cubemap_id, camera3d_state)
+                {
+                    if let Some(cubemap) = self.texture_manager.get_cubemap(cubemap_id) {
+                        let skybox_start = if perf_enabled { Some(perf_now()) } else { None };
+                        let view_rot = math3d::view_rotation_only(eye, target, up);
+                        let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
+                        let vp = math3d::mat4_mul(&proj, &view_rot);
+                        let inv_vp = math3d::mat4_inverse(&vp).unwrap_or(math3d::MAT4_IDENTITY);
+                        self.pipeline_skybox.set_camera(&self.queue, &inv_vp);
+                        self.pipeline_skybox.draw(
+                            &mut render_pass,
+                            cubemap,
+                            main_aux_targets_enabled,
+                        );
+                        perf.main_skybox_ms += elapsed_ms_opt(skybox_start);
                     }
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            perf.main_pass_setup_ms = elapsed_ms_opt(main_setup_start);
-
-            if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
-                (skybox_cubemap_id, camera3d_state)
-            {
-                if let Some(cubemap) = self.texture_manager.get_cubemap(cubemap_id) {
-                    let skybox_start = if perf_enabled { Some(perf_now()) } else { None };
-                    let view_rot = math3d::view_rotation_only(eye, target, up);
-                    let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
-                    let vp = math3d::mat4_mul(&proj, &view_rot);
-                    let inv_vp = math3d::mat4_inverse(&vp).unwrap_or(math3d::MAT4_IDENTITY);
-                    self.pipeline_skybox.set_camera(&self.queue, &inv_vp);
-                    self.pipeline_skybox
-                        .draw(&mut render_pass, cubemap, main_aux_targets_enabled);
-                    perf.main_skybox_ms += elapsed_ms_opt(skybox_start);
                 }
-            }
 
-            // Draw 3D models first (depth tested)
-            if !model_draws.is_empty() {
-                if let Some(ref cam3d) = camera3d_uniform {
-                    let model_start = if perf_enabled { Some(perf_now()) } else { None };
-                    self.pipeline3d
-                        .set_camera_and_lights(&self.queue, cam3d, &light_uniform);
-                    let shadow_view = self.pipeline_shadow.shadow_texture_view();
-                    self.pipeline3d.draw_models(
-                        &self.device,
-                        &self.queue,
-                        &mut render_pass,
-                        &model_draws,
-                        &self.model_manager,
-                        &self.texture_manager,
-                        shadow_view,
-                        main_aux_targets_enabled,
-                    );
-                    perf.main_model_ms += elapsed_ms_opt(model_start);
+                // Draw 3D models first (depth tested)
+                if !model_draws.is_empty() {
+                    if let Some(ref cam3d) = camera3d_uniform {
+                        let model_start = if perf_enabled { Some(perf_now()) } else { None };
+                        self.pipeline3d
+                            .set_camera_and_lights(&self.queue, cam3d, &light_uniform);
+                        let shadow_view = self.pipeline_shadow.shadow_texture_view();
+                        self.pipeline3d.draw_models(
+                            &self.device,
+                            &self.queue,
+                            &mut render_pass,
+                            &model_draws,
+                            &self.model_manager,
+                            &self.texture_manager,
+                            shadow_view,
+                            main_aux_targets_enabled,
+                        );
+                        perf.main_model_ms += elapsed_ms_opt(model_start);
+                    }
                 }
-            }
 
-            if !primitive_draws.is_empty() || !primitive_chunks.is_empty() {
-                if let Some(ref cam3d) = camera3d_uniform {
-                    let primitive_start = if perf_enabled { Some(perf_now()) } else { None };
-                    self.primitive_pipeline.set_camera_and_lights(
-                        &self.queue,
-                        cam3d,
-                        &light_uniform,
-                    );
-                    let shadow_view = self.pipeline_shadow.shadow_texture_view();
-                    self.primitive_pipeline.draw(
-                        &self.device,
-                        &self.queue,
-                        &mut render_pass,
-                        &primitive_draws,
-                        &primitive_chunks,
-                        &self.model_manager,
-                        &self.texture_manager,
-                        shadow_view,
-                        main_aux_targets_enabled,
-                    );
-                    primitive_main_submitted = true;
-                    perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
+                if !primitive_draws.is_empty() || !primitive_chunks.is_empty() {
+                    if let Some(ref cam3d) = camera3d_uniform {
+                        let primitive_start = if perf_enabled { Some(perf_now()) } else { None };
+                        self.primitive_pipeline.set_camera_and_lights(
+                            &self.queue,
+                            cam3d,
+                            &light_uniform,
+                        );
+                        let shadow_view = self.pipeline_shadow.shadow_texture_view();
+                        self.primitive_pipeline.draw(
+                            &self.device,
+                            &self.queue,
+                            &mut render_pass,
+                            &primitive_draws,
+                            &primitive_chunks,
+                            &self.model_manager,
+                            &self.texture_manager,
+                            shadow_view,
+                            main_aux_targets_enabled,
+                        );
+                        primitive_main_submitted = true;
+                        perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
+                    }
                 }
-            }
-            let main_close_start = if perf_enabled { Some(perf_now()) } else { None };
-            drop(render_pass);
-            perf.main_pass_close_ms = elapsed_ms_opt(main_close_start);
-        }
+                let main_close_start = if perf_enabled { Some(perf_now()) } else { None };
+                drop(render_pass);
+                perf.main_pass_close_ms = elapsed_ms_opt(main_close_start);
+                Ok(elapsed_ms_opt(main_start))
+            })?
+            .unwrap_or(0.0);
         if primitive_main_submitted {
             primitive_main_draw_calls = self.primitive_pipeline.last_main_batch_count();
         }
-        perf.main_pass_ms = elapsed_ms_opt(main_start);
-        frame_graph
-            .executor()
-            .execute_recorded(RenderPassKind::MainOpaque, perf.main_pass_ms);
 
-        let post_start = if perf_enabled { Some(perf_now()) } else { None };
-        {
-            let post_color_view = self
-                .post_color_view
-                .as_ref()
-                .ok_or_else(|| "voplay: missing post color target".to_string())?;
-            let receiver_mask_view = self
-                .receiver_mask_view
-                .as_ref()
-                .ok_or_else(|| "voplay: missing receiver mask target".to_string())?;
-            let surface_props_view = self
-                .surface_props_view
-                .as_ref()
-                .ok_or_else(|| "voplay: missing surface props target".to_string())?;
-            let dynamic_post_bind_group;
-            let post_bind_group = if projected_decal_atlas_bindings.is_empty() {
-                self.post_bind_group
+        perf.post_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::Post, || {
+                let post_start = if perf_enabled { Some(perf_now()) } else { None };
+                let post_color_view = self
+                    .post_color_view
                     .as_ref()
-                    .ok_or_else(|| "voplay: missing post bind group".to_string())?
-            } else {
-                let fallback_decal_atlas = self.pipeline_post.decal_fallback_view();
-                let fallback_decal_normal_atlas = self.pipeline_post.decal_normal_fallback_view();
-                let fallback_decal_roughness_atlas =
-                    self.pipeline_post.decal_roughness_fallback_view();
-                let fallback_decal_mask_atlas = self.pipeline_post.decal_mask_fallback_view();
-                let mut decal_atlas_views = [fallback_decal_atlas; MAX_POST_DECAL_ATLASES];
-                let mut decal_normal_atlas_views =
-                    [fallback_decal_normal_atlas; MAX_POST_DECAL_ATLASES];
-                let mut decal_roughness_atlas_views =
-                    [fallback_decal_roughness_atlas; MAX_POST_DECAL_ATLASES];
-                let mut decal_mask_atlas_views =
-                    [fallback_decal_mask_atlas; MAX_POST_DECAL_ATLASES];
-                for (slot, binding) in projected_decal_atlas_bindings.iter().enumerate() {
-                    if let Some(texture) = self.texture_manager.get(binding.albedo_id) {
-                        decal_atlas_views[slot] = &texture.view;
-                    }
-                    if let Some(texture) = self.texture_manager.get(binding.normal_id) {
-                        decal_normal_atlas_views[slot] = &texture.view;
-                    }
-                    if let Some(texture) = self.texture_manager.get(binding.roughness_id) {
-                        decal_roughness_atlas_views[slot] = &texture.view;
-                    }
-                    if let Some(texture) = self.texture_manager.get(binding.mask_id) {
-                        decal_mask_atlas_views[slot] = &texture.view;
-                    }
-                }
-                let post_depth_view = if MAIN_SAMPLE_COUNT > 1 {
-                    self.pipeline_depth.depth_texture_view()
-                } else {
-                    self.depth_view
+                    .ok_or_else(|| "voplay: missing post color target".to_string())?;
+                let receiver_mask_view = self
+                    .receiver_mask_view
+                    .as_ref()
+                    .ok_or_else(|| "voplay: missing receiver mask target".to_string())?;
+                let surface_props_view = self
+                    .surface_props_view
+                    .as_ref()
+                    .ok_or_else(|| "voplay: missing surface props target".to_string())?;
+                let dynamic_post_bind_group;
+                let post_bind_group = if projected_decal_atlas_bindings.is_empty() {
+                    self.post_bind_group
                         .as_ref()
-                        .ok_or_else(|| "voplay: missing depth target".to_string())?
-                };
-                dynamic_post_bind_group = self.pipeline_post.create_bind_group(
-                    &self.device,
-                    post_color_view,
-                    post_depth_view,
-                    &self.post_uniform_buffer,
-                    &self.post_decal_uniform_buffer,
-                    decal_atlas_views,
-                    decal_normal_atlas_views,
-                    decal_roughness_atlas_views,
-                    decal_mask_atlas_views,
-                    receiver_mask_view,
-                    surface_props_view,
-                );
-                &dynamic_post_bind_group
-            };
-            let mut post_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voplay_post"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            self.pipeline_post.draw(&mut post_pass, &post_bind_group);
-        }
-        perf.post_pass_ms = elapsed_ms_opt(post_start);
-        frame_graph
-            .executor()
-            .execute_recorded(RenderPassKind::Post, perf.post_pass_ms);
-
-        let overlay_start = if perf_enabled { Some(perf_now()) } else { None };
-        {
-            let mut overlay_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voplay_overlay_2d"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            for dc in &frame.draw_calls {
-                let cam_offset = dc.camera_idx as u32 * align;
-                match &dc.kind {
-                    DrawCallKind::Shapes { start, count } => {
-                        self.pipeline2d.draw_range(
-                            &mut overlay_pass,
-                            &self.camera_bind_group,
-                            &[cam_offset],
-                            *start,
-                            *count,
-                        );
+                        .ok_or_else(|| "voplay: missing post bind group".to_string())?
+                } else {
+                    let fallback_decal_atlas = self.pipeline_post.decal_fallback_view();
+                    let fallback_decal_normal_atlas =
+                        self.pipeline_post.decal_normal_fallback_view();
+                    let fallback_decal_roughness_atlas =
+                        self.pipeline_post.decal_roughness_fallback_view();
+                    let fallback_decal_mask_atlas = self.pipeline_post.decal_mask_fallback_view();
+                    let mut decal_atlas_views = [fallback_decal_atlas; MAX_POST_DECAL_ATLASES];
+                    let mut decal_normal_atlas_views =
+                        [fallback_decal_normal_atlas; MAX_POST_DECAL_ATLASES];
+                    let mut decal_roughness_atlas_views =
+                        [fallback_decal_roughness_atlas; MAX_POST_DECAL_ATLASES];
+                    let mut decal_mask_atlas_views =
+                        [fallback_decal_mask_atlas; MAX_POST_DECAL_ATLASES];
+                    for (slot, binding) in projected_decal_atlas_bindings.iter().enumerate() {
+                        if let Some(texture) = self.texture_manager.get(binding.albedo_id) {
+                            decal_atlas_views[slot] = &texture.view;
+                        }
+                        if let Some(texture) = self.texture_manager.get(binding.normal_id) {
+                            decal_normal_atlas_views[slot] = &texture.view;
+                        }
+                        if let Some(texture) = self.texture_manager.get(binding.roughness_id) {
+                            decal_roughness_atlas_views[slot] = &texture.view;
+                        }
+                        if let Some(texture) = self.texture_manager.get(binding.mask_id) {
+                            decal_mask_atlas_views[slot] = &texture.view;
+                        }
                     }
-                    DrawCallKind::Sprites {
-                        texture_id,
-                        start,
-                        count,
-                    } => {
-                        if let Some(tex) = self.texture_manager.get(*texture_id) {
-                            self.pipeline_sprite.draw_range(
+                    let post_depth_view = if MAIN_SAMPLE_COUNT > 1 {
+                        self.pipeline_depth.depth_texture_view()
+                    } else {
+                        self.depth_view
+                            .as_ref()
+                            .ok_or_else(|| "voplay: missing depth target".to_string())?
+                    };
+                    dynamic_post_bind_group = self.pipeline_post.create_bind_group(
+                        &self.device,
+                        post_color_view,
+                        post_depth_view,
+                        &self.post_uniform_buffer,
+                        &self.post_decal_uniform_buffer,
+                        decal_atlas_views,
+                        decal_normal_atlas_views,
+                        decal_roughness_atlas_views,
+                        decal_mask_atlas_views,
+                        receiver_mask_view,
+                        surface_props_view,
+                    );
+                    &dynamic_post_bind_group
+                };
+                let mut post_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("voplay_post"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                self.pipeline_post.draw(&mut post_pass, &post_bind_group);
+                Ok(elapsed_ms_opt(post_start))
+            })?
+            .unwrap_or(0.0);
+
+        perf.overlay_pass_ms = frame_graph
+            .executor()
+            .execute_pass(RenderPassKind::Overlay, || {
+                let overlay_start = if perf_enabled { Some(perf_now()) } else { None };
+                let mut overlay_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("voplay_overlay_2d"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                for dc in &frame.draw_calls {
+                    let cam_offset = dc.camera_idx as u32 * align;
+                    match &dc.kind {
+                        DrawCallKind::Shapes { start, count } => {
+                            self.pipeline2d.draw_range(
                                 &mut overlay_pass,
                                 &self.camera_bind_group,
                                 &[cam_offset],
-                                &tex.bind_group,
                                 *start,
                                 *count,
                             );
                         }
+                        DrawCallKind::Sprites {
+                            texture_id,
+                            start,
+                            count,
+                        } => {
+                            if let Some(tex) = self.texture_manager.get(*texture_id) {
+                                self.pipeline_sprite.draw_range(
+                                    &mut overlay_pass,
+                                    &self.camera_bind_group,
+                                    &[cam_offset],
+                                    &tex.bind_group,
+                                    *start,
+                                    *count,
+                                );
+                            }
+                        }
                     }
                 }
-            }
-        }
-        perf.overlay_pass_ms = elapsed_ms_opt(overlay_start);
+                Ok(elapsed_ms_opt(overlay_start))
+            })?
+            .unwrap_or(0.0);
+
         frame_graph
             .executor()
-            .execute_recorded(RenderPassKind::Overlay, perf.overlay_pass_ms);
-
-        let queue_submit_start = if perf_enabled { Some(perf_now()) } else { None };
-        self.queue.submit(std::iter::once(encoder.finish()));
-        perf.queue_submit_cpu_ms = elapsed_ms_opt(queue_submit_start);
-        let present_start = if perf_enabled { Some(perf_now()) } else { None };
-        output.present();
-        perf.present_cpu_ms = elapsed_ms_opt(present_start);
-        frame_graph.executor().execute_recorded(
-            RenderPassKind::BackendSubmit,
-            perf.queue_submit_cpu_ms + perf.present_cpu_ms,
-        );
+            .execute_pass(RenderPassKind::BackendSubmit, || {
+                let queue_submit_start = if perf_enabled { Some(perf_now()) } else { None };
+                self.queue.submit(std::iter::once(encoder.finish()));
+                perf.queue_submit_cpu_ms = elapsed_ms_opt(queue_submit_start);
+                let present_start = if perf_enabled { Some(perf_now()) } else { None };
+                output.present();
+                perf.present_cpu_ms = elapsed_ms_opt(present_start);
+                Ok(perf.queue_submit_cpu_ms + perf.present_cpu_ms)
+            })?;
         self.last_frame_graph_report = frame_graph.report();
         if perf_enabled {
             perf.submit_frame_ms = elapsed_ms_opt(frame_start);
@@ -3030,6 +3034,17 @@ impl Renderer {
             perf.graph_resource_count = self.last_frame_graph_report.resource_count;
             perf.graph_target_count = self.last_frame_graph_report.target_count;
             perf.graph_ready_target_count = self.last_frame_graph_report.ready_target_count;
+            perf.graph_transient_target_count = self.last_frame_graph_report.transient_target_count;
+            perf.graph_persistent_target_count =
+                self.last_frame_graph_report.persistent_target_count;
+            perf.graph_external_target_count = self.last_frame_graph_report.external_target_count;
+            perf.graph_missing_read_count = self.last_frame_graph_report.missing_read_count;
+            perf.graph_resize_generation = self.last_frame_graph_report.resize_generation;
+            perf.graph_target_creates = self.last_frame_graph_report.resource_churn.target_creates;
+            perf.graph_target_reuses = self.last_frame_graph_report.resource_churn.target_reuses;
+            perf.graph_target_recreates =
+                self.last_frame_graph_report.resource_churn.target_recreates;
+            perf.graph_alias_reuses = self.last_frame_graph_report.resource_churn.alias_reuses;
             perf.text_draws = text_count;
             perf.sprite_draws = sprite_count;
             perf.primitive_draws = primitive_main_draw_calls;

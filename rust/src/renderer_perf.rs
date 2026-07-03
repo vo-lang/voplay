@@ -8,7 +8,7 @@ pub(crate) const PERF_PACKET_MAGIC: u8 = 0xf9;
 pub(crate) const PERF_PACKET_VERSION: u8 = 1;
 pub(crate) const PERF_PACKET_SCHEMA_VERSION: u32 = 1;
 pub(crate) const PERF_PACKET_SOURCE_RENDERER: u32 = 2;
-pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 4;
+pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 5;
 
 pub(crate) const RENDERER_DIAG_DISABLE_SHADOWS: u32 = 1 << 0;
 pub(crate) const RENDERER_DIAG_DISABLE_POST_EFFECTS: u32 = 1 << 1;
@@ -151,6 +151,15 @@ pub(crate) struct RendererPerfStats {
     pub(crate) graph_resource_count: u32,
     pub(crate) graph_target_count: u32,
     pub(crate) graph_ready_target_count: u32,
+    pub(crate) graph_transient_target_count: u32,
+    pub(crate) graph_persistent_target_count: u32,
+    pub(crate) graph_external_target_count: u32,
+    pub(crate) graph_missing_read_count: u32,
+    pub(crate) graph_resize_generation: u32,
+    pub(crate) graph_target_creates: u32,
+    pub(crate) graph_target_reuses: u32,
+    pub(crate) graph_target_recreates: u32,
+    pub(crate) graph_alias_reuses: u32,
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -241,6 +250,15 @@ pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8>
     push_u32(&mut out, stats.graph_resource_count);
     push_u32(&mut out, stats.graph_target_count);
     push_u32(&mut out, stats.graph_ready_target_count);
+    push_u32(&mut out, stats.graph_transient_target_count);
+    push_u32(&mut out, stats.graph_persistent_target_count);
+    push_u32(&mut out, stats.graph_external_target_count);
+    push_u32(&mut out, stats.graph_missing_read_count);
+    push_u32(&mut out, stats.graph_resize_generation);
+    push_u32(&mut out, stats.graph_target_creates);
+    push_u32(&mut out, stats.graph_target_reuses);
+    push_u32(&mut out, stats.graph_target_recreates);
+    push_u32(&mut out, stats.graph_alias_reuses);
     out
 }
 

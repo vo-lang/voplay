@@ -33,8 +33,58 @@ type SurfaceMaterialBlend struct {
 	Weight float64
 }
 
+type SurfaceMaterialTable struct {
+	Materials []SurfaceMaterial
+	defaultMaterial SurfaceMaterial
+}
+
 func DefaultSurfaceMaterial() SurfaceMaterial {
 	return SurfaceMaterial{ID: TrackSurfaceRoad, Kind: TrackSurfaceRoad, Friction: 1, GripScale: 1, SpeedScale: 1, EngineScale: 1, OnRoad: true}
+}
+
+func DefaultSurfaceMaterialTable() SurfaceMaterialTable {
+	road := DefaultSurfaceMaterial()
+	offroad := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialOffroad, Kind: SurfaceMaterialOffroad, Friction: 0.72, GripScale: 0.72, SpeedScale: 0.72, EngineScale: 0.72})
+	boost := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialBoost, Kind: SurfaceMaterialBoost, Friction: 1, GripScale: 1.05, SpeedScale: 1, EngineScale: 1, Boost: 1, OnRoad: true})
+	water := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialWater, Kind: SurfaceMaterialWater, Friction: 0.82, GripScale: 0.78, SpeedScale: 0.82, EngineScale: 0.78, Drag: 0.32})
+	rail := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialRail, Kind: SurfaceMaterialRail, Friction: 1, GripScale: 1.15, SpeedScale: 1, EngineScale: 1, OnRoad: true})
+	wall := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialWall, Kind: SurfaceMaterialWall, Friction: 0.9, GripScale: 0.82, SpeedScale: 0.92, EngineScale: 0.9})
+	ice := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialIce, Kind: SurfaceMaterialIce, Friction: 0.62, GripScale: 0.42, SpeedScale: 0.95, EngineScale: 0.86})
+	mud := NormalizeSurfaceMaterial(SurfaceMaterial{ID: SurfaceMaterialMud, Kind: SurfaceMaterialMud, Friction: 0.68, GripScale: 0.62, SpeedScale: 0.68, EngineScale: 0.7, Drag: 0.22})
+	return SurfaceMaterialTable{Materials: []SurfaceMaterial{road, offroad, boost, water, rail, wall, ice, mud}, defaultMaterial: road}
+}
+
+func (t SurfaceMaterialTable) Material(id string) SurfaceMaterial {
+	if len(t.Materials) == 0 {
+		t = DefaultSurfaceMaterialTable()
+	}
+	for _, material := range t.Materials {
+		if material.ID == id || material.Kind == id {
+			return NormalizeSurfaceMaterial(material)
+		}
+	}
+	if t.defaultMaterial.ID != "" {
+		return NormalizeSurfaceMaterial(t.defaultMaterial)
+	}
+	return DefaultSurfaceMaterial()
+}
+
+func (t SurfaceMaterialTable) With(material SurfaceMaterial) SurfaceMaterialTable {
+	if len(t.Materials) == 0 {
+		t = DefaultSurfaceMaterialTable()
+	}
+	material = NormalizeSurfaceMaterial(material)
+	replaced := false
+	for i := range t.Materials {
+		if t.Materials[i].ID == material.ID {
+			t.Materials[i] = material
+			replaced = true
+		}
+	}
+	if !replaced {
+		t.Materials = append(t.Materials, material)
+	}
+	return t
 }
 
 func SurfaceMaterialFromTrackHit(hit TrackSurfaceHit) SurfaceMaterial {

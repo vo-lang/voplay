@@ -141,6 +141,15 @@ type PerfRendererWorkloadStats struct {
 	FrameGraphResources int
 	FrameGraphTargets int
 	FrameGraphReadyTargets int
+	FrameGraphTransientTargets int
+	FrameGraphPersistentTargets int
+	FrameGraphExternalTargets int
+	FrameGraphMissingReads int
+	FrameGraphResizeGeneration int
+	FrameGraphTargetCreates int
+	FrameGraphTargetReuses int
+	FrameGraphTargetRecreates int
+	FrameGraphAliasReuses int
 	AsyncWindow bool
 }
 
@@ -469,6 +478,15 @@ type perfRendererPacketStats struct {
 	FrameGraphResources int
 	FrameGraphTargets int
 	FrameGraphReadyTargets int
+	FrameGraphTransientTargets int
+	FrameGraphPersistentTargets int
+	FrameGraphExternalTargets int
+	FrameGraphMissingReads int
+	FrameGraphResizeGeneration int
+	FrameGraphTargetCreates int
+	FrameGraphTargetReuses int
+	FrameGraphTargetRecreates int
+	FrameGraphAliasReuses int
 	AsyncWindow bool
 }
 
@@ -1364,7 +1382,7 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	}
 	r := codec.NewByteReader(payload)
 	version := r.ReadU32()
-	if version != 1 && version != 2 && version != 3 && version != 4 {
+	if version != 1 && version != 2 && version != 3 && version != 4 && version != 5 {
 		return perfRendererPacketStats{}
 	}
 	minRemaining := 11 * 8 + 20 * 4
@@ -1373,6 +1391,9 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	}
 	if version >= 4 {
 		minRemaining += 4 * 4
+	}
+	if version >= 5 {
+		minRemaining += 9 * 4
 	}
 	if r.Remaining() < minRemaining {
 		return perfRendererPacketStats{}
@@ -1424,6 +1445,17 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 		stats.FrameGraphResources = r.ReadU32()
 		stats.FrameGraphTargets = r.ReadU32()
 		stats.FrameGraphReadyTargets = r.ReadU32()
+	}
+	if version >= 5 && r.Remaining() >= 36 {
+		stats.FrameGraphTransientTargets = r.ReadU32()
+		stats.FrameGraphPersistentTargets = r.ReadU32()
+		stats.FrameGraphExternalTargets = r.ReadU32()
+		stats.FrameGraphMissingReads = r.ReadU32()
+		stats.FrameGraphResizeGeneration = r.ReadU32()
+		stats.FrameGraphTargetCreates = r.ReadU32()
+		stats.FrameGraphTargetReuses = r.ReadU32()
+		stats.FrameGraphTargetRecreates = r.ReadU32()
+		stats.FrameGraphAliasReuses = r.ReadU32()
 	}
 	return stats
 }
@@ -1624,6 +1656,15 @@ func (o *DebugOverlay) recordPerfFrame() {
 			FrameGraphResources: frameGraphResources,
 			FrameGraphTargets: frameGraphTargets,
 			FrameGraphReadyTargets: frameGraphReadyTargets,
+			FrameGraphTransientTargets: renderer.FrameGraphTransientTargets,
+			FrameGraphPersistentTargets: renderer.FrameGraphPersistentTargets,
+			FrameGraphExternalTargets: renderer.FrameGraphExternalTargets,
+			FrameGraphMissingReads: renderer.FrameGraphMissingReads,
+			FrameGraphResizeGeneration: renderer.FrameGraphResizeGeneration,
+			FrameGraphTargetCreates: renderer.FrameGraphTargetCreates,
+			FrameGraphTargetReuses: renderer.FrameGraphTargetReuses,
+			FrameGraphTargetRecreates: renderer.FrameGraphTargetRecreates,
+			FrameGraphAliasReuses: renderer.FrameGraphAliasReuses,
 			UploadBytes: uploadBytes,
 			AsyncWindow: true,
 		},

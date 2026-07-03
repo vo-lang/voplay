@@ -239,6 +239,32 @@ func BuildVehicleForceCommand(intent VehicleIntent, vehicle VehicleConfig, model
 	return VehicleForceCommand{VehicleInput: input, SteeringAngle: steer, EngineForce: engineForce, BrakeForce: brake, DragForce: drag, Downforce: downforce, AirControl: model.AirControl, WaterLift: waterLift, WallGrip: wallGrip, RailGrip: railGrip, Boosting: boosting, Drifting: drifting, Grounded: grounded, Surface: surface}
 }
 
+func NormalizeVehicleForceCommand(command VehicleForceCommand, vehicle VehicleConfig) VehicleForceCommand {
+	vehicle = normalizeVehicleConfig(vehicle)
+	command.VehicleInput = command.VehicleInput
+	command.VehicleInput.Throttle = vehicleClamp(command.VehicleInput.Throttle, -1, 1)
+	command.VehicleInput.Steer = vehicleClamp(command.VehicleInput.Steer, -1, 1)
+	command.SteeringAngle = vehicleFiniteOr(command.SteeringAngle, 0)
+	maxSteer := vehicle.MaxSteerAngle * vehicle.DriftSteerScale
+	if maxSteer <= 0 {
+		maxSteer = vehicle.MaxSteerAngle
+	}
+	command.SteeringAngle = vehicleClamp(command.SteeringAngle, -maxSteer, maxSteer)
+	command.EngineForce = vehicleFiniteOr(command.EngineForce, 0)
+	command.BrakeForce = vehicleFiniteOr(command.BrakeForce, 0)
+	if command.BrakeForce < 0 {
+		command.BrakeForce = 0
+	}
+	command.DragForce = math.Max(0, vehicleFiniteOr(command.DragForce, 0))
+	command.Downforce = math.Max(0, vehicleFiniteOr(command.Downforce, 0))
+	command.AirControl = math.Max(0, vehicleFiniteOr(command.AirControl, 0))
+	command.WaterLift = math.Max(0, vehicleFiniteOr(command.WaterLift, 0))
+	command.WallGrip = math.Max(0, vehicleFiniteOr(command.WallGrip, 0))
+	command.RailGrip = math.Max(0, vehicleFiniteOr(command.RailGrip, 0))
+	command.Surface = NormalizeSurfaceMaterial(command.Surface)
+	return command
+}
+
 func NormalizeKartVehicleModel(model KartVehicleModel, vehicle VehicleConfig) KartVehicleModel {
 	defaults := DefaultKartVehicleModel()
 	if model.Mass <= 0 {

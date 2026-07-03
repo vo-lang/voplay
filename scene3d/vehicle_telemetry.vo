@@ -62,7 +62,8 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 	if vehicle == nil {
 		return VehicleTelemetry{}
 	}
-	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), SignedSpeed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: DefaultSurfaceMaterial(), SurfaceBlend: SurfaceMaterialBlend{Primary: DefaultSurfaceMaterial()}, Drifting: vehicle.Drifting}
+	currentSurface := vehicle.CurrentSurfaceMaterial()
+	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), SignedSpeed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: currentSurface, SurfaceBlend: SurfaceMaterialBlend{Primary: currentSurface}, Drifting: vehicle.Drifting || vehicle.LastForceCommand.Drifting, Boosting: vehicle.LastForceCommand.Boosting}
 	if vehicle.Body != nil {
 		t.Position = vehicleCleanVec3(vehicle.Body.Position())
 		t.Rotation = vehicleCleanQuat(vehicle.Body.Rotation())
@@ -100,12 +101,8 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 			t.MaxLateralSlip = wheel.LateralSlip
 		}
 	}
-	if vehicle.Track != nil && vehicle.Body != nil {
-		t.Surface = SurfaceMaterialAtTrackPosition(vehicle.Track, vehicle.Body.Position())
-		t.SurfaceBlend.Primary = t.Surface
-		if t.SurfaceID == "" {
-			t.SurfaceID = t.Surface.ID
-		}
+	if t.SurfaceID == "" {
+		t.SurfaceID = t.Surface.ID
 	}
 	if !t.Grounded {
 		t.AirborneTime = 1.0 / 60.0

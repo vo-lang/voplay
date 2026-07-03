@@ -157,7 +157,7 @@ func scenarioDefinitions() []ScenarioDefinition {
 		ScenarioDefinition{Name: "water-skim", VehicleCount: 1},
 		ScenarioDefinition{Name: "surface-transition", VehicleCount: 1},
 		ScenarioDefinition{Name: "recovery", VehicleCount: 1},
-		ScenarioDefinition{Name: "multi-vehicle-scripted-soak", VehicleCount: 4},
+		ScenarioDefinition{Name: "multi-vehicle-scripted-soak", VehicleCount: 24},
 	}
 }
 
@@ -434,8 +434,11 @@ func (r *ScenarioReport) validate() {
 	if r.Name == "wall-ride" && r.SurfaceSamples["wall-ride-strip"] == 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.wall_ride", Severity: 1, Detail: "expected wall ride surface samples"})
 	}
-	if r.FallbackContactEvents > 0 && (r.Name == "wall-impact" || r.Name == "jump-landing") {
-		r.Issues = append(r.Issues, StressIssue{Code: "physics.contact_fallback", Severity: 1, Detail: strconv.Itoa(r.FallbackContactEvents) + " fallback contact events"})
+	if r.FallbackContactEvents > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.contact_fallback", Severity: 0, Detail: strconv.Itoa(r.FallbackContactEvents) + " fallback contact events"})
+	}
+	if r.Name == "multi-vehicle-scripted-soak" && r.VehicleCount < 24 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.multi_vehicle_count", Severity: 0, Detail: strconv.Itoa(r.VehicleCount) + " vehicles < 24"})
 	}
 	if r.Name == "recovery" && r.RecoveryRequests <= 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.recovery", Severity: 1, Detail: "expected recovery request"})

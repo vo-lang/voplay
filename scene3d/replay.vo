@@ -36,8 +36,30 @@ type RacingReplayCheckpoint struct {
 	Distance float64 `json:"distance,omitempty"`
 }
 
+type PhysicsReplayTrace struct {
+	FormatVersion int `json:"formatVersion"`
+	EngineVersion string `json:"engineVersion"`
+	FixedStep float64 `json:"fixedStep"`
+	Samples []PhysicsReplaySample `json:"samples"`
+}
+
+type PhysicsReplaySample struct {
+	Step int `json:"step"`
+	Intent VehicleIntent `json:"intent"`
+	Position voplay.Vec3 `json:"position"`
+	Rotation voplay.Quat `json:"rotation"`
+	Velocity voplay.Vec3 `json:"velocity"`
+	SurfaceID string `json:"surfaceId"`
+	ContactCount int `json:"contactCount"`
+	TelemetryHash float64 `json:"telemetryHash"`
+}
+
 type RacingReplayRecorder struct {
 	replay RacingReplay
+}
+
+type PhysicsReplayTraceRecorder struct {
+	trace PhysicsReplayTrace
 }
 
 type RacingReplayCursor struct {
@@ -87,6 +109,54 @@ func (r *RacingReplayRecorder) requireStep(step int) {
 	if step < 0 {
 		panic("scene3d.RacingReplayRecorder: step must be >= 0")
 	}
+}
+
+func NewPhysicsReplayTraceRecorder(fixedStep float64) *PhysicsReplayTraceRecorder {
+	if fixedStep <= 0 {
+		panic("scene3d.NewPhysicsReplayTraceRecorder: fixedStep must be > 0")
+	}
+	return &PhysicsReplayTraceRecorder{trace: PhysicsReplayTrace{FormatVersion: RacingReplayFormatVersion, EngineVersion: RacingReplayEngineVersion, FixedStep: fixedStep, Samples: []PhysicsReplaySample{}}}
+}
+
+func (r *PhysicsReplayTraceRecorder) RecordVehicle(step int, intent VehicleIntent, telemetry VehicleTelemetry) {
+	if r == nil {
+		panic("scene3d.PhysicsReplayTraceRecorder: recorder is nil")
+	}
+	if step < 0 {
+		panic("scene3d.PhysicsReplayTraceRecorder: step must be >= 0")
+	}
+	r.trace.Samples = append(r.trace.Samples, PhysicsReplaySample{Step: step, Intent: intent.Normalized(), Position: telemetry.Position, Rotation: telemetry.Rotation, Velocity: telemetry.Velocity, SurfaceID: telemetry.SurfaceID, ContactCount: telemetry.ContactCount, TelemetryHash: PhysicsTelemetryHash(telemetry)})
+}
+
+func (r *PhysicsReplayTraceRecorder) Trace() PhysicsReplayTrace {
+	if r == nil {
+		return PhysicsReplayTrace{}
+	}
+	return clonePhysicsReplayTrace(r.trace)
+}
+
+func ValidatePhysicsReplayTrace(trace PhysicsReplayTrace) error {
+	if trace.FormatVersion != RacingReplayFormatVersion {
+		return errors.New("scene3d.ValidatePhysicsReplayTrace: unsupported format version")
+	}
+	if trace.EngineVersion == "" {
+		return errors.New("scene3d.ValidatePhysicsReplayTrace: engineVersion must not be empty")
+	}
+	if trace.FixedStep <= 0 {
+		return errors.New("scene3d.ValidatePhysicsReplayTrace: fixedStep must be > 0")
+	}
+	prev := -1
+	for _, sample := range trace.Samples {
+		if sample.Step < prev {
+			return errors.New("scene3d.ValidatePhysicsReplayTrace: sample steps must be non-decreasing")
+		}
+		prev = sample.Step
+	}
+	return nil
+}
+
+func PhysicsTelemetryHash(t VehicleTelemetry) float64 {
+	return t.Position.X*0.31 + t.Position.Y*0.37 + t.Position.Z*0.41 + t.Velocity.X*0.43 + t.Velocity.Y*0.47 + t.Velocity.Z*0.53 + float64(t.ContactCount)*0.59 + t.Speed*0.61
 }
 
 func MarshalRacingReplay(replay RacingReplay) ([]byte, error) {
@@ -185,6 +255,12 @@ func cloneRacingReplay(replay RacingReplay) RacingReplay {
 	out.Inputs = append([]RacingReplayInputSample{}, replay.Inputs...)
 	out.Transforms = append([]RacingReplayTransformSample{}, replay.Transforms...)
 	out.Checkpoints = append([]RacingReplayCheckpoint{}, replay.Checkpoints...)
+	return out
+}
+
+func clonePhysicsReplayTrace(trace PhysicsReplayTrace) PhysicsReplayTrace {
+	out := trace
+	out.Samples = append([]PhysicsReplaySample{}, trace.Samples...)
 	return out
 }
 

@@ -79,6 +79,9 @@ type Vehicle struct {
 	SteerAngle float64
 	WheelSpin float64
 	Wheels []VehicleWheelState
+	Dynamics KartDynamics
+	LastIntent VehicleIntent
+	LastForceCommand VehicleForceCommand
 	scene *Scene
 	vehicleID int
 }
@@ -109,7 +112,7 @@ func NewVehicle(body *Entity, config VehicleConfig) *Vehicle {
 	config = normalizeVehicleConfig(config)
 	vehicleID := scene.nextVehicleID
 	scene.nextVehicleID++
-	v := &Vehicle{Body: body, Config: config, Yaw: vehicleYawFromRotation(body.Rotation()), GroundNormal: voplay.Vec3{Y: 1}, scene: scene, vehicleID: vehicleID}
+	v := &Vehicle{Body: body, Config: config, Yaw: vehicleYawFromRotation(body.Rotation()), GroundNormal: voplay.Vec3{Y: 1}, Dynamics: NewKartDynamics(KartDynamicsConfig{Vehicle: config, Model: DefaultKartVehicleModel()}), scene: scene, vehicleID: vehicleID}
 	physBackend.CreateRaycastVehicle(scene.worldID, vehicleID, body.Physics.bodyID)
 	for _, wheel := range config.Wheels {
 		physBackend.AddRaycastVehicleWheel(scene.worldID, vehicleID, serializeVehicleWheelConfig(wheel))
@@ -141,15 +144,20 @@ func (v *Vehicle) UpdateIntent(intent VehicleIntent, dt float64) {
 		return
 	}
 	v.syncState()
-	command := BuildVehicleForceCommand(intent, v.Config, DefaultKartVehicleModel(), DefaultSurfaceMaterial(), v.Speed, v.Grounded, intent.BoostRequest, intent.Drift)
-	v.ApplyForceCommand(command, dt)
+	intent = intent.Normalized()
+	surface := v.CurrentSurfaceMaterial()
+	result := v.Dynamics.Step(intent, surface, v.Speed, v.Grounded, dt)
+	v.LastIntent = result.Intent
+	v.Drifting = result.Drifting
+	v.LastForceCommand = result.ForceCommand
+	v.ApplyForceCommand(result.ForceCommand, dt)
 }
 
 func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
 	if v == nil || dt <= 0 {
 		return
 	}
-	v.applyControls(command.VehicleInput, dt)
+	v.applyForceCommandToBackend(command, dt)
 	if v.Body == nil || v.Body.Physics == nil {
 		return
 	}
@@ -163,6 +171,35 @@ func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
 	}
 	if command.WaterLift > 0 {
 		v.Body.ApplyForce(voplay.Vec3{Y: command.WaterLift})
+	}
+}
+
+func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt float64) {
+	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		return
+	}
+	scene := v.scene
+	if scene == nil || scene.worldID == 0 {
+		return
+	}
+	command = NormalizeVehicleForceCommand(command, v.Config)
+	v.Drifting = command.Drifting
+	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, command.SteeringAngle, v.Config.SteerRate * dt)
+	driveWheelCount := vehicleDriveWheelCount(v.Config.Wheels)
+	for i, wheel := range v.Config.Wheels {
+		steering := 0.0
+		force := 0.0
+		wheelBrake := 0.0
+		if wheel.Steer {
+			steering = -v.SteerAngle
+		}
+		if wheel.Drive {
+			force = command.EngineForce / driveWheelCount
+		}
+		if wheel.Brake {
+			wheelBrake = command.BrakeForce
+		}
+		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, i, steering, force, wheelBrake)
 	}
 }
 
@@ -216,6 +253,40 @@ func (v *Vehicle) applyControls(input VehicleInput, dt float64) {
 		}
 		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, i, steering, force, wheelBrake)
 	}
+}
+
+func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
+	if v == nil {
+		return DefaultSurfaceMaterial()
+	}
+	if len(v.Wheels) > 0 {
+		primarySet := false
+		primary := DefaultSurfaceMaterial()
+		for _, wheel := range v.Wheels {
+			if !wheel.InContact {
+				continue
+			}
+			surface := DefaultSurfaceMaterial()
+			if wheel.SurfaceID != "" && v.Track != nil {
+				surface = SurfaceMaterialAtTrackPosition(v.Track, wheel.ContactPoint)
+			} else if v.Track != nil {
+				surface = SurfaceMaterialAtTrackPosition(v.Track, wheel.ContactPoint)
+			}
+			if !primarySet {
+				primary = surface
+				primarySet = true
+			} else {
+				primary = BlendSurfaceMaterial(primary, surface, 0.5)
+			}
+		}
+		if primarySet {
+			return NormalizeSurfaceMaterial(primary)
+		}
+	}
+	if v.Track != nil && v.Body != nil {
+		return SurfaceMaterialAtTrackPosition(v.Track, v.Body.Position())
+	}
+	return DefaultSurfaceMaterial()
 }
 
 func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {

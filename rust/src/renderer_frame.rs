@@ -342,6 +342,7 @@ impl FrameGraph {
 
     pub(crate) fn report(&self) -> FrameGraphReport {
         let mut resources = Vec::<RenderResource>::new();
+        let mut active_targets = Vec::<RenderResource>::new();
         let mut slowest_pass = "";
         let mut slowest_pass_ms = 0.0;
         let mut total_pass_ms = 0.0;
@@ -360,6 +361,15 @@ impl FrameGraph {
                 if !resources.contains(resource) {
                     resources.push(*resource);
                 }
+                if self
+                    .registry
+                    .targets()
+                    .iter()
+                    .any(|target| target.resource == *resource)
+                    && !active_targets.contains(resource)
+                {
+                    active_targets.push(*resource);
+                }
             }
         }
         FrameGraphReport {
@@ -367,12 +377,10 @@ impl FrameGraph {
             planned_pass_count: self.nodes().len().min(u32::MAX as usize) as u32,
             pass_count: self.passes.len().min(u32::MAX as usize) as u32,
             resource_count: resources.len().min(u32::MAX as usize) as u32,
-            target_count: self.registry.targets().len().min(u32::MAX as usize) as u32,
-            ready_target_count: self
-                .registry
-                .targets()
+            target_count: active_targets.len().min(u32::MAX as usize) as u32,
+            ready_target_count: active_targets
                 .iter()
-                .filter(|target| target.ready)
+                .filter(|resource| self.registry.is_ready(**resource))
                 .count()
                 .min(u32::MAX as usize) as u32,
             slowest_pass,
@@ -655,6 +663,24 @@ mod tests {
         assert_eq!(report.ready_target_count, 1);
         assert_eq!(report.transient_target_count, 1);
         assert_eq!(report.missing_read_count, 1);
+    }
+
+    #[test]
+    fn frame_graph_target_readiness_counts_executed_pass_targets() {
+        let mut graph = FrameGraph::single_view(10, 0);
+        graph.declare_target(RES_POST_COLOR, false);
+        graph.declare_target(RES_MAIN_COLOR, true);
+        graph.plan_pass(
+            RenderPassKind::MainOpaque,
+            &[RES_MAIN_COLOR],
+            &[RES_SURFACE_COLOR],
+            true,
+        );
+        graph.record_pass(RenderPassKind::MainOpaque, 0.3);
+        let report = graph.report();
+        assert_eq!(report.target_count, 2);
+        assert_eq!(report.ready_target_count, 2);
+        assert_eq!(report.persistent_target_count, 3);
     }
 
     #[test]

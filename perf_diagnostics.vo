@@ -568,6 +568,7 @@ type perfWindowBucket struct {
 const (
 	perfFineHistBucketCount = 64
 	perfFineHistScale = 1.0
+	perfFineSixtyHzBudgetMs = 16.7
 
 	perfMetricFrame = 0
 	perfMetricGame = 1
@@ -1161,6 +1162,9 @@ func perfFineMsBucket(value float64) int {
 	if value <= 0 {
 		return 0
 	}
+	if value > perfFineSixtyHzBudgetMs && value < 17 {
+		return 17
+	}
 	index := int(value * perfFineHistScale)
 	if index < 0 {
 		return 0
@@ -1177,6 +1181,9 @@ func perfFineBucketUpperMs(index int) float64 {
 	}
 	if index < 0 {
 		index = 0
+	}
+	if index == 16 {
+		return perfFineSixtyHzBudgetMs
 	}
 	return float64(index + 1) / perfFineHistScale
 }

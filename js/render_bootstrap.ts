@@ -983,10 +983,10 @@ export class RenderIsland {
   private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
     if (!visible) return true;
     if (this.displayPulseMode === "timer") return true;
-    // Hybrid visible cadence treats rAF as the display clock. The timer is a
-    // long lost-rAF guard, so it cannot race normal vsync and inject cadence
-    // jitter into the game clock.
-    return this.displayPulseMode === "hybrid";
+    // Visible hybrid cadence treats rAF as the sole display clock. Hidden pages
+    // and explicit timer mode keep timer fallback; visible timer cadence remains
+    // opt-in through pulse-mode=timer.
+    return false;
   }
 
   private displayPulseFallbackDelayMs(nowMs: number): number {

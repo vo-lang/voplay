@@ -63,6 +63,22 @@ type VehicleWheelState struct {
 	LongitudinalSlip float64
 	LateralSlip float64
 	SurfaceID string
+	Surface SurfaceMaterial
+	InContact bool
+}
+
+type VehiclePoseResetCommand struct {
+	Position voplay.Vec3
+	Yaw float64
+	LinearVelocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+}
+
+type VehicleWheelVisualSample struct {
+	WheelIndex int
+	Center voplay.Vec3
+	Steering float64
+	Rotation float64
 	InContact bool
 }
 
@@ -82,6 +98,7 @@ type Vehicle struct {
 	Dynamics KartDynamics
 	LastIntent VehicleIntent
 	LastForceCommand VehicleForceCommand
+	LastBackendApplyCommand PhysicsBackendApplyCommand
 	scene *Scene
 	vehicleID int
 }
@@ -159,6 +176,7 @@ func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
 	}
 	command = NormalizeVehicleForceCommand(command, v.Config)
 	backendCommand := v.applyForceCommandToBackend(command, dt)
+	v.LastBackendApplyCommand = backendCommand
 	if v.Body == nil || v.Body.Physics == nil {
 		return
 	}
@@ -203,12 +221,7 @@ func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
 			if !wheel.InContact {
 				continue
 			}
-			surface := DefaultSurfaceMaterial()
-			if wheel.SurfaceID != "" && v.Track != nil {
-				surface = SurfaceMaterialAtTrackPosition(v.Track, wheel.ContactPoint)
-			} else if v.Track != nil {
-				surface = SurfaceMaterialAtTrackPosition(v.Track, wheel.ContactPoint)
-			}
+			surface := v.surfaceMaterialForWheel(wheel)
 			if !primarySet {
 				primary = surface
 				primarySet = true
@@ -224,21 +237,63 @@ func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
 }
 
 func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {
+	if v == nil {
+		return
+	}
+	v.applyPoseResetToBackend(VehiclePoseResetCommand{Position: position, Yaw: yaw})
+}
+
+func ResetVehiclePose(vehicle *Vehicle, position voplay.Vec3, yaw float64) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.SetPose(position, yaw)
+}
+
+func ResetVehicleMotionState(vehicle *Vehicle) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.Speed = 0
+	vehicle.SteerAngle = 0
+	vehicle.WheelSpin = 0
+	vehicle.Drifting = false
+}
+
+func (v *Vehicle) VisualWheelSample(index int) (VehicleWheelVisualSample, bool) {
+	if v == nil || index < 0 || index >= v.WheelCount() {
+		return VehicleWheelVisualSample{}, false
+	}
+	if wheel, ok := v.WheelState(index); ok {
+		return VehicleWheelVisualSample{WheelIndex: index, Center: wheel.Center, Steering: wheel.Steering, Rotation: wheel.Rotation, InContact: wheel.InContact}, true
+	}
+	steering := 0.0
+	if index == 0 || index == 1 {
+		steering = v.SteerAngle
+	}
+	center := voplay.Vec3{}
+	if v.Body != nil {
+		center = v.Body.Position()
+	}
+	return VehicleWheelVisualSample{WheelIndex: index, Center: center, Steering: steering, Rotation: v.WheelSpin}, true
+}
+
+func (v *Vehicle) applyPoseResetToBackend(command VehiclePoseResetCommand) {
 	if v == nil || v.Body == nil {
 		return
 	}
-	v.Yaw = yaw
+	v.Yaw = command.Yaw
 	v.Speed = 0
 	v.SteerAngle = 0
 	v.WheelSpin = 0
 	v.Drifting = false
-	v.Body.SetPosition(position)
-	v.Body.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw))
+	v.Body.SetPosition(command.Position)
+	v.Body.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Yaw))
 	if v.Body.Physics != nil {
-		v.Body.SetVelocity(voplay.Vec3{})
-		v.Body.SetAngularVelocity(voplay.Vec3{})
-		v.Body.Physics.velocity = voplay.Vec3{}
-		v.Body.Physics.angularVelocity = voplay.Vec3{}
+		v.Body.SetVelocity(command.LinearVelocity)
+		v.Body.SetAngularVelocity(command.AngularVelocity)
+		v.Body.Physics.velocity = command.LinearVelocity
+		v.Body.Physics.angularVelocity = command.AngularVelocity
 	}
 	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
 		v.applyForceCommandToBackend(VehicleForceCommand{BrakeForce: v.Config.BrakeForce, Surface: v.CurrentSurfaceMaterial()}, 1.0 / 60.0)
@@ -290,6 +345,16 @@ func (v *Vehicle) WheelCount() int {
 		return len(v.Wheels)
 	}
 	return len(v.Config.Wheels)
+}
+
+func (v *Vehicle) surfaceMaterialForWheel(wheel VehicleWheelState) SurfaceMaterial {
+	if wheel.Surface.ID != "" || wheel.Surface.Kind != "" {
+		return NormalizeSurfaceMaterial(wheel.Surface)
+	}
+	if wheel.SurfaceID != "" {
+		return DefaultSurfaceMaterialTable().Material(wheel.SurfaceID)
+	}
+	return DefaultSurfaceMaterial()
 }
 
 func (v *Vehicle) syncState() {
@@ -352,8 +417,9 @@ func (v *Vehicle) syncState() {
 		state.LongitudinalSlip = vehicleFiniteOr(state.LongitudinalSlip, 0)
 		state.LateralSlip = vehicleFiniteOr(state.LateralSlip, 0)
 		if state.InContact && v.Track != nil {
-			surface := v.Track.SurfaceAt(state.ContactPoint)
-			state.SurfaceID = surface.Name
+			surface := SurfaceMaterialFromTrackHit(v.Track.SurfaceAt(state.ContactPoint))
+			state.SurfaceID = surface.ID
+			state.Surface = surface
 		}
 		v.Wheels[i] = state
 		if state.InContact {

@@ -3,13 +3,36 @@ use std::collections::HashMap;
 use crate::math3d::{self, Quat, Vec3};
 use crate::pipeline3d::{Camera3DUniform, MaterialOverride, ModelDraw, ModelUniform};
 use crate::primitive_scene::{
-    PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate, PrimitiveRenderWorld,
+    PrimitiveChunkBatchInfo, PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate,
+    PrimitiveRenderWorld,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderChunkBounds {
     pub center: Vec3,
     pub radius: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderBatchQualityProfile {
+    pub lod1_distance: f32,
+    pub lod1_projected_radius: f32,
+}
+
+impl Default for RenderBatchQualityProfile {
+    fn default() -> Self {
+        Self {
+            lod1_distance: 160.0,
+            lod1_projected_radius: 0.012,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct RenderLodRange {
+    near: f32,
+    far: f32,
+    far_applies_to_all: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,23 +179,28 @@ impl RenderBatchPlanner {
         model_draws: &[ModelDraw],
         primitive_draws: &[PrimitiveDraw],
         primitive_chunks: &[PrimitiveChunkRef],
+        primitive_chunk_info: &[PrimitiveChunkBatchInfo],
+        camera: Option<&Camera3DUniform>,
+        quality: RenderBatchQualityProfile,
     ) -> RenderBatchPlan {
         let mut plan = RenderBatchPlan {
             frame_id,
-            visible_objects: (model_draws.len() + primitive_draws.len()) as u32,
             ..Default::default()
         };
         for (index, draw) in model_draws.iter().enumerate() {
+            let bounds = Self::model_draw_bounds(draw);
+            if Self::outside_camera(camera, bounds) {
+                plan.frustum_culled_chunks += 1;
+                continue;
+            }
             plan.model_batch_indices.push(index);
+            plan.visible_objects = plan.visible_objects.saturating_add(1);
             plan.push_chunk(RenderWorldChunk {
                 scene_id,
                 chunk_id: draw.model_id,
                 kind: RenderBatchKind::Mesh,
-                bounds: RenderChunkBounds {
-                    center: Vec3::ZERO,
-                    radius: 0.0,
-                },
-                lod_level: Self::select_lod(index as u32, 1),
+                bounds,
+                lod_level: Self::select_lod(camera, bounds, RenderLodRange::default(), quality),
                 material_group: draw.material.id,
                 instance_start: index as u32,
                 instance_count: 1,
@@ -183,17 +211,39 @@ impl RenderBatchPlanner {
             });
         }
         for (index, chunk) in primitive_chunks.iter().enumerate() {
+            let Some(info) = primitive_chunk_info
+                .get(index)
+                .filter(|info| info.chunk == *chunk)
+                .or_else(|| {
+                    primitive_chunk_info
+                        .iter()
+                        .find(|info| info.chunk == *chunk)
+                })
+            else {
+                continue;
+            };
+            let bounds = Self::primitive_chunk_bounds(*info);
+            if Self::outside_camera(camera, bounds) {
+                plan.frustum_culled_chunks += 1;
+                continue;
+            }
+            let lod_range = RenderLodRange {
+                near: info.min_lod_near,
+                far: info.max_lod_far,
+                far_applies_to_all: info.all_have_far_lod,
+            };
+            if Self::outside_distance(camera, bounds, lod_range) {
+                plan.distance_culled_chunks += 1;
+                continue;
+            }
             plan.primitive_chunk_indices.push(index);
             plan.water_chunk_indices.push(index);
             plan.push_chunk(RenderWorldChunk {
                 scene_id: chunk.scene_id,
                 chunk_id: chunk.chunk_id,
                 kind: RenderBatchKind::Primitive,
-                bounds: RenderChunkBounds {
-                    center: Vec3::ZERO,
-                    radius: 0.0,
-                },
-                lod_level: Self::select_lod(chunk.chunk_id, primitive_draws.len() as u32),
+                bounds,
+                lod_level: Self::select_lod(camera, bounds, lod_range, quality),
                 material_group: chunk.layer_id,
                 instance_start: index as u32,
                 instance_count: 1,
@@ -204,39 +254,209 @@ impl RenderBatchPlanner {
             });
         }
         for (index, draw) in primitive_draws.iter().enumerate() {
-            if draw.is_water_surface() {
-                plan.water_draw_indices.push(index);
-            } else {
-                plan.primitive_draw_indices.push(index);
+            let bounds = Self::primitive_draw_bounds(draw);
+            if Self::outside_camera(camera, bounds) {
+                plan.frustum_culled_chunks += 1;
                 continue;
             }
-            plan.push_chunk(RenderWorldChunk {
-                scene_id,
-                chunk_id: 0x8000_0000 | index as u32,
-                kind: RenderBatchKind::Water,
-                bounds: RenderChunkBounds {
-                    center: Vec3::ZERO,
-                    radius: 0.0,
-                },
-                lod_level: 0,
-                material_group: draw.material.id,
-                instance_start: index as u32,
-                instance_count: 1,
-                dirty_start: 0,
-                dirty_count: 0,
-                resident_state: RenderWorldChunkResidentState::Resident,
-                last_upload_frame: frame_id,
-            });
+            let lod_range = Self::primitive_draw_lod_range(draw);
+            if Self::outside_distance(camera, bounds, lod_range) {
+                plan.distance_culled_chunks += 1;
+                continue;
+            }
+            let lod_level = Self::select_lod(camera, bounds, lod_range, quality);
+            plan.visible_objects = plan.visible_objects.saturating_add(1);
+            if draw.is_water_surface() {
+                plan.water_draw_indices.push(index);
+                plan.push_chunk(RenderWorldChunk {
+                    scene_id,
+                    chunk_id: 0x8000_0000 | index as u32,
+                    kind: RenderBatchKind::Water,
+                    bounds,
+                    lod_level,
+                    material_group: draw.material.id,
+                    instance_start: index as u32,
+                    instance_count: 1,
+                    dirty_start: 0,
+                    dirty_count: 0,
+                    resident_state: RenderWorldChunkResidentState::Resident,
+                    last_upload_frame: frame_id,
+                });
+            } else {
+                plan.primitive_draw_indices.push(index);
+                plan.push_chunk(RenderWorldChunk {
+                    scene_id,
+                    chunk_id: 0x4000_0000 | index as u32,
+                    kind: RenderBatchKind::Primitive,
+                    bounds,
+                    lod_level,
+                    material_group: draw.material.id,
+                    instance_start: index as u32,
+                    instance_count: 1,
+                    dirty_start: 0,
+                    dirty_count: 0,
+                    resident_state: RenderWorldChunkResidentState::Resident,
+                    last_upload_frame: frame_id,
+                });
+            }
         }
         plan
     }
 
-    fn select_lod(seed: u32, workload: u32) -> u8 {
-        if workload > 4096 && seed % 3 != 0 {
+    fn select_lod(
+        camera: Option<&Camera3DUniform>,
+        bounds: RenderChunkBounds,
+        range: RenderLodRange,
+        quality: RenderBatchQualityProfile,
+    ) -> u8 {
+        let Some(camera) = camera else {
+            return 0;
+        };
+        let camera_pos = Self::camera_position(camera);
+        let distance = (bounds.center - camera_pos).length().max(0.001);
+        let projected_radius = bounds.radius / distance;
+        if range.far > 0.0 && distance > range.far * 0.72 {
+            return 1;
+        }
+        if distance >= quality.lod1_distance || projected_radius <= quality.lod1_projected_radius {
             1
         } else {
             0
         }
+    }
+
+    fn model_draw_bounds(draw: &ModelDraw) -> RenderChunkBounds {
+        Self::bounds_from_model_matrix(&draw.model_uniform.model)
+    }
+
+    fn primitive_draw_bounds(draw: &PrimitiveDraw) -> RenderChunkBounds {
+        Self::bounds_from_model_matrix(&draw.model_uniform.model)
+    }
+
+    fn primitive_chunk_bounds(info: PrimitiveChunkBatchInfo) -> RenderChunkBounds {
+        let center = Vec3::new(
+            (info.bounds_min.x + info.bounds_max.x) * 0.5,
+            (info.bounds_min.y + info.bounds_max.y) * 0.5,
+            (info.bounds_min.z + info.bounds_max.z) * 0.5,
+        );
+        let radius = (info.bounds_max - center).length().max(0.001);
+        RenderChunkBounds { center, radius }
+    }
+
+    fn bounds_from_model_matrix(model: &math3d::Mat4) -> RenderChunkBounds {
+        let center = Vec3::new(model[3][0], model[3][1], model[3][2]);
+        let axis_x = Vec3::new(model[0][0], model[0][1], model[0][2]);
+        let axis_y = Vec3::new(model[1][0], model[1][1], model[1][2]);
+        let axis_z = Vec3::new(model[2][0], model[2][1], model[2][2]);
+        let radius = ((axis_x.length() + axis_y.length() + axis_z.length()) * 0.5).max(0.001);
+        RenderChunkBounds { center, radius }
+    }
+
+    fn primitive_draw_lod_range(draw: &PrimitiveDraw) -> RenderLodRange {
+        RenderLodRange {
+            near: draw.instance_params[1].max(0.0),
+            far: draw.instance_params[2].max(0.0),
+            far_applies_to_all: draw.instance_params[2] > 0.0,
+        }
+    }
+
+    fn outside_camera(camera: Option<&Camera3DUniform>, bounds: RenderChunkBounds) -> bool {
+        let Some(camera) = camera else {
+            return false;
+        };
+        !Self::bounds_visible(camera, bounds)
+    }
+
+    fn outside_distance(
+        camera: Option<&Camera3DUniform>,
+        bounds: RenderChunkBounds,
+        range: RenderLodRange,
+    ) -> bool {
+        let Some(camera) = camera else {
+            return false;
+        };
+        let camera_pos = Self::camera_position(camera);
+        if range.far_applies_to_all && range.far > 0.0 {
+            let far = range.far;
+            if Self::distance_to_bounds_sq(camera_pos, bounds) > far * far {
+                return true;
+            }
+        }
+        if range.near > 0.0 {
+            let near = range.near;
+            if Self::max_distance_to_bounds_sq(camera_pos, bounds) < near * near {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn bounds_visible(camera: &Camera3DUniform, bounds: RenderChunkBounds) -> bool {
+        let half = Vec3::new(bounds.radius, bounds.radius, bounds.radius);
+        let min = bounds.center - half;
+        let max = bounds.center + half;
+        let corners = [
+            [min.x, min.y, min.z, 1.0],
+            [max.x, min.y, min.z, 1.0],
+            [min.x, max.y, min.z, 1.0],
+            [max.x, max.y, min.z, 1.0],
+            [min.x, min.y, max.z, 1.0],
+            [max.x, min.y, max.z, 1.0],
+            [min.x, max.y, max.z, 1.0],
+            [max.x, max.y, max.z, 1.0],
+        ];
+        let mut outside_left = 0;
+        let mut outside_right = 0;
+        let mut outside_bottom = 0;
+        let mut outside_top = 0;
+        let mut outside_near = 0;
+        let mut outside_far = 0;
+        for corner in corners {
+            let clip = math3d::mat4_mul_vec4(&camera.view_proj, corner);
+            let w = clip[3];
+            if clip[0] < -w {
+                outside_left += 1;
+            }
+            if clip[0] > w {
+                outside_right += 1;
+            }
+            if clip[1] < -w {
+                outside_bottom += 1;
+            }
+            if clip[1] > w {
+                outside_top += 1;
+            }
+            if clip[2] < 0.0 {
+                outside_near += 1;
+            }
+            if clip[2] > w {
+                outside_far += 1;
+            }
+        }
+        outside_left < 8
+            && outside_right < 8
+            && outside_bottom < 8
+            && outside_top < 8
+            && outside_near < 8
+            && outside_far < 8
+    }
+
+    fn camera_position(camera: &Camera3DUniform) -> Vec3 {
+        Vec3::new(
+            camera.camera_pos[0],
+            camera.camera_pos[1],
+            camera.camera_pos[2],
+        )
+    }
+
+    fn distance_to_bounds_sq(pos: Vec3, bounds: RenderChunkBounds) -> f32 {
+        let d = (bounds.center - pos).length() - bounds.radius;
+        d.max(0.0) * d.max(0.0)
+    }
+
+    fn max_distance_to_bounds_sq(pos: Vec3, bounds: RenderChunkBounds) -> f32 {
+        let d = (bounds.center - pos).length() + bounds.radius;
+        d * d
     }
 }
 
@@ -398,6 +618,18 @@ impl RenderWorld {
             .collect_draws(scene_id, camera, draws, chunks);
     }
 
+    pub fn collect_scene_primitive_draws_with_chunk_info(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        draws: &mut Vec<PrimitiveDraw>,
+        chunks: &mut Vec<PrimitiveChunkRef>,
+        chunk_info: &mut Vec<PrimitiveChunkBatchInfo>,
+    ) {
+        self.primitive_scenes
+            .collect_draws_with_chunk_info(scene_id, camera, draws, chunks, chunk_info);
+    }
+
     pub fn collect_scene_primitive_shadow_objects(
         &self,
         scene_id: u32,
@@ -475,12 +707,14 @@ impl RenderWorld {
         let mut model_draws = Vec::new();
         let mut primitive_draws = Vec::new();
         let mut primitive_chunks = Vec::new();
+        let mut primitive_chunk_info = Vec::new();
         self.collect_scene_draws(scene_id, &mut model_draws);
-        self.collect_scene_primitive_draws(
+        self.collect_scene_primitive_draws_with_chunk_info(
             scene_id,
-            camera,
+            None,
             &mut primitive_draws,
             &mut primitive_chunks,
+            &mut primitive_chunk_info,
         );
         RenderBatchPlanner::build(
             frame_id,
@@ -488,6 +722,9 @@ impl RenderWorld {
             &model_draws,
             &primitive_draws,
             &primitive_chunks,
+            &primitive_chunk_info,
+            camera,
+            RenderBatchQualityProfile::default(),
         )
     }
 }
@@ -519,6 +756,23 @@ mod tests {
             lod_far: 1000.0,
             wind_strength: 0.0,
             atlas_uv: [0.0, 0.0, 1.0, 1.0],
+        }
+    }
+
+    fn primitive_chunk_info(
+        chunk: PrimitiveChunkRef,
+        min: Vec3,
+        max: Vec3,
+        near: f32,
+        far: f32,
+    ) -> PrimitiveChunkBatchInfo {
+        PrimitiveChunkBatchInfo {
+            chunk,
+            bounds_min: min,
+            bounds_max: max,
+            min_lod_near: near,
+            max_lod_far: far,
+            all_have_far_lod: far > 0.0,
         }
     }
 
@@ -557,16 +811,31 @@ mod tests {
             layer_id: 3,
             chunk_id: 9,
         }];
+        let primitive_chunk_info = vec![primitive_chunk_info(
+            primitive_chunks[0],
+            Vec3::new(-2.0, -0.5, -2.0),
+            Vec3::new(2.0, 0.5, 2.0),
+            0.0,
+            0.0,
+        )];
 
-        let plan =
-            RenderBatchPlanner::build(120, 7, &model_draws, &primitive_draws, &primitive_chunks);
+        let plan = RenderBatchPlanner::build(
+            120,
+            7,
+            &model_draws,
+            &primitive_draws,
+            &primitive_chunks,
+            &primitive_chunk_info,
+            None,
+            RenderBatchQualityProfile::default(),
+        );
 
         assert_eq!(plan.frame_id, 120);
         assert_eq!(plan.visible_objects, 3);
         assert_eq!(plan.mesh_batches, 1);
-        assert_eq!(plan.primitive_batches, 1);
+        assert_eq!(plan.primitive_batches, 2);
         assert_eq!(plan.water_batches, 1);
-        assert_eq!(plan.total_batches(), 3);
+        assert_eq!(plan.total_batches(), 4);
         assert!(plan
             .visible_chunks
             .iter()
@@ -579,6 +848,10 @@ mod tests {
             .visible_chunks
             .iter()
             .any(|chunk| chunk.kind == RenderBatchKind::Water));
+        assert!(plan
+            .visible_chunks
+            .iter()
+            .all(|chunk| chunk.bounds.radius > 0.0));
 
         let world_plan = world.build_batch_plan(7, 121, None);
         assert_eq!(world_plan.frame_id, 121);
@@ -587,26 +860,85 @@ mod tests {
     }
 
     #[test]
-    fn batch_planner_selects_lod_for_large_chunk_workloads() {
-        let primitive_chunks = vec![
-            PrimitiveChunkRef {
-                scene_id: 1,
-                layer_id: 2,
-                chunk_id: 1,
-            },
-            PrimitiveChunkRef {
-                scene_id: 1,
-                layer_id: 2,
-                chunk_id: 2,
-            },
-        ];
+    fn batch_planner_selects_lod_from_distance_and_metadata() {
+        let primitive_chunks = vec![PrimitiveChunkRef {
+            scene_id: 1,
+            layer_id: 2,
+            chunk_id: 1,
+        }];
+        let primitive_chunk_info = vec![primitive_chunk_info(
+            primitive_chunks[0],
+            Vec3::new(-1.0, -1.0, -1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.0,
+            400.0,
+        )];
         let primitive_draw = PrimitiveDraw::from_update(primitive_update(1, 2, 3, 4, 0));
-        let primitive_draws = vec![primitive_draw; 4097];
+        let primitive_draws = vec![primitive_draw];
+        let camera = Camera3DUniform {
+            view_proj: math3d::MAT4_IDENTITY,
+            camera_pos: [300.0, 0.0, 0.0],
+            _pad: 0.0,
+        };
 
-        let plan = RenderBatchPlanner::build(9, 1, &[], &primitive_draws, &primitive_chunks);
+        let plan = RenderBatchPlanner::build(
+            9,
+            1,
+            &[],
+            &primitive_draws,
+            &primitive_chunks,
+            &primitive_chunk_info,
+            Some(&camera),
+            RenderBatchQualityProfile::default(),
+        );
 
         assert_eq!(plan.primitive_batches, 2);
         assert_eq!(plan.lod1_chunks, 2);
         assert_eq!(plan.lod0_chunks, 0);
+    }
+
+    #[test]
+    fn batch_planner_counts_frustum_and_distance_culls() {
+        let primitive_draws = vec![PrimitiveDraw::from_update(PrimitiveObjectUpdate {
+            pos: Vec3::ZERO,
+            lod_far: 5.0,
+            ..primitive_update(2, 1, 1, 9, 0)
+        })];
+        let far_model = ModelDraw {
+            model_id: 3,
+            model_uniform: ModelUniform {
+                model: math3d::model_matrix(Vec3::new(10.0, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE),
+                normal_matrix: math3d::MAT4_IDENTITY,
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                material_params: [1.0, 1.0, 1.0, 1.0],
+                emissive_color: [0.0, 0.0, 0.0, 0.0],
+                texture_flags: [0.0, 0.0, 0.0, 0.0],
+                material_response: [1.0, 0.0, 1.0, 1.0],
+                texture_flags2: [0.0, 0.0, 0.0, 0.0],
+            },
+            material: MaterialOverride::default(),
+            animation_world_id: 0,
+            animation_target_id: 0,
+        };
+        let camera = Camera3DUniform {
+            view_proj: math3d::MAT4_IDENTITY,
+            camera_pos: [100.0, 0.0, 0.0],
+            _pad: 0.0,
+        };
+
+        let plan = RenderBatchPlanner::build(
+            10,
+            2,
+            &[far_model],
+            &primitive_draws,
+            &[],
+            &[],
+            Some(&camera),
+            RenderBatchQualityProfile::default(),
+        );
+
+        assert_eq!(plan.frustum_culled_chunks, 1);
+        assert_eq!(plan.distance_culled_chunks, 1);
+        assert_eq!(plan.visible_objects, 0);
     }
 }

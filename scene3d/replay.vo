@@ -51,6 +51,7 @@ type PhysicsReplaySample struct {
 	Velocity voplay.Vec3 `json:"velocity"`
 	SurfaceID string `json:"surfaceId"`
 	ContactCount int `json:"contactCount"`
+	BackendApplyHash int `json:"backendApplyHash"`
 	PoseHash float64 `json:"poseHash"`
 	TelemetryHash float64 `json:"telemetryHash"`
 }
@@ -126,7 +127,7 @@ func (r *PhysicsReplayTraceRecorder) RecordVehicle(step int, intent VehicleInten
 	if step < 0 {
 		panic("scene3d.PhysicsReplayTraceRecorder: step must be >= 0")
 	}
-	r.trace.Samples = append(r.trace.Samples, PhysicsReplaySample{Step: step, Intent: intent.Normalized(), Position: telemetry.Position, Rotation: telemetry.Rotation, Velocity: telemetry.Velocity, SurfaceID: telemetry.SurfaceID, ContactCount: telemetry.ContactCount, PoseHash: PhysicsPoseHash(telemetry.Position, telemetry.Rotation), TelemetryHash: PhysicsTelemetryHash(telemetry)})
+	r.trace.Samples = append(r.trace.Samples, PhysicsReplaySample{Step: step, Intent: intent.Normalized(), Position: telemetry.Position, Rotation: telemetry.Rotation, Velocity: telemetry.Velocity, SurfaceID: telemetry.SurfaceID, ContactCount: telemetry.ContactCount, BackendApplyHash: telemetry.BackendApplyHash, PoseHash: PhysicsPoseHash(telemetry.Position, telemetry.Rotation), TelemetryHash: PhysicsTelemetryHash(telemetry)})
 }
 
 func (r *PhysicsReplayTraceRecorder) Trace() PhysicsReplayTrace {
@@ -161,7 +162,7 @@ func PhysicsPoseHash(position voplay.Vec3, rotation voplay.Quat) float64 {
 }
 
 func PhysicsTelemetryHash(t VehicleTelemetry) float64 {
-	return PhysicsPoseHash(t.Position, t.Rotation) + t.Velocity.X*0.43 + t.Velocity.Y*0.47 + t.Velocity.Z*0.53 + float64(t.ContactCount)*0.59 + t.Speed*0.61
+	return PhysicsPoseHash(t.Position, t.Rotation) + t.Velocity.X*0.43 + t.Velocity.Y*0.47 + t.Velocity.Z*0.53 + float64(t.ContactCount)*0.59 + t.Speed*0.61 + float64(t.BackendApplyHash)*0.67
 }
 
 func MarshalRacingReplay(replay RacingReplay) ([]byte, error) {

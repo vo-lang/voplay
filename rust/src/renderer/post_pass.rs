@@ -1,6 +1,27 @@
 use super::*;
 
 pub(super) struct PostPassExecutor;
+pub(super) struct PostPassSetup;
+
+pub(super) struct PostPassSetupContext<'a> {
+    pub(super) renderer: &'a mut Renderer,
+    pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
+    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) light_uniform: &'a LightUniform,
+    pub(super) projected_decals: &'a [PostDecalGpu],
+    pub(super) projected_decal_atlas_binding_count: u32,
+    pub(super) bloom_threshold: f32,
+    pub(super) bloom_strength: f32,
+    pub(super) sharpen_strength: f32,
+    pub(super) fxaa_strength: f32,
+    pub(super) contact_ao_strength: f32,
+    pub(super) contact_ao_radius: f32,
+    pub(super) contact_ao_depth_scale: f32,
+    pub(super) contact_ao_detail_strength: f32,
+    pub(super) contact_ao_detail_radius: f32,
+    pub(super) contact_ao_normal_bias: f32,
+    pub(super) contact_ao_quality: u32,
+}
 
 pub(super) struct PostPassContext<'a> {
     pub(super) renderer: &'a mut Renderer,
@@ -8,6 +29,82 @@ pub(super) struct PostPassContext<'a> {
     pub(super) surface_view: &'a wgpu::TextureView,
     pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
     pub(super) perf_enabled: bool,
+}
+
+impl PostPassSetup {
+    pub(super) fn upload_uniforms(ctx: &mut PostPassSetupContext<'_>) {
+        let mut post_uniform = PostUniform::from_settings(
+            ctx.renderer.surface_config.width,
+            ctx.renderer.surface_config.height,
+            ctx.bloom_threshold,
+            ctx.bloom_strength,
+            ctx.sharpen_strength,
+            ctx.fxaa_strength,
+            ctx.contact_ao_strength,
+            ctx.contact_ao_radius,
+            ctx.contact_ao_depth_scale,
+            ctx.contact_ao_detail_strength,
+            ctx.contact_ao_detail_radius,
+            ctx.contact_ao_normal_bias,
+            ctx.contact_ao_quality,
+        );
+        let mut post_decal_light_vectors = [[0.0f32; 4]; 3];
+        let mut post_decal_light_colors = [[0.0f32; 4]; 3];
+        let mut post_decal_light_count = 0usize;
+        for light in
+            ctx.light_uniform.lights.iter().take(
+                ctx.light_uniform.count[0].min(ctx.light_uniform.lights.len() as u32) as usize,
+            )
+        {
+            if light.color_intensity[3] > 0.0 {
+                post_decal_light_vectors[post_decal_light_count] = [
+                    light.position_or_dir[0],
+                    light.position_or_dir[1],
+                    light.position_or_dir[2],
+                    light.color_intensity[3],
+                ];
+                post_decal_light_colors[post_decal_light_count] = [
+                    light.color_intensity[0],
+                    light.color_intensity[1],
+                    light.color_intensity[2],
+                    light.position_or_dir[3],
+                ];
+                post_decal_light_count += 1;
+                if post_decal_light_count >= post_decal_light_vectors.len() {
+                    break;
+                }
+            }
+        }
+        if post_decal_light_count > 0 {
+            post_uniform = post_uniform.with_decal_lights(
+                &post_decal_light_vectors[..post_decal_light_count],
+                &post_decal_light_colors[..post_decal_light_count],
+            );
+        }
+        ctx.renderer.queue.write_buffer(
+            &ctx.renderer.post_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&post_uniform),
+        );
+        let post_inv_view_proj = ctx
+            .camera3d_uniform
+            .and_then(|camera| math3d::mat4_inverse(&camera.view_proj))
+            .unwrap_or(math3d::MAT4_IDENTITY);
+        let post_camera_pos = ctx
+            .camera3d_state
+            .map(|(eye, _, _, _, _, _)| eye.to_array())
+            .unwrap_or([0.0, 0.0, 0.0]);
+        ctx.renderer.queue.write_buffer(
+            &ctx.renderer.post_decal_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&PostDecalUniform::from_decals(
+                post_inv_view_proj,
+                post_camera_pos,
+                ctx.projected_decals,
+                ctx.projected_decal_atlas_binding_count,
+            )),
+        );
+    }
 }
 
 impl PostPassExecutor {

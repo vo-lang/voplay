@@ -50,6 +50,16 @@ pub struct PrimitiveChunkRef {
     pub chunk_id: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrimitiveChunkBatchInfo {
+    pub chunk: PrimitiveChunkRef,
+    pub bounds_min: Vec3,
+    pub bounds_max: Vec3,
+    pub min_lod_near: f32,
+    pub max_lod_far: f32,
+    pub all_have_far_lod: bool,
+}
+
 #[derive(Clone, Copy)]
 pub struct PrimitiveObjectUpdate {
     pub scene_id: u32,
@@ -231,6 +241,18 @@ impl PrimitiveRenderWorld {
         draws: &mut Vec<PrimitiveDraw>,
         chunks: &mut Vec<PrimitiveChunkRef>,
     ) {
+        let mut chunk_info = Vec::new();
+        self.collect_draws_with_chunk_info(scene_id, camera, draws, chunks, &mut chunk_info);
+    }
+
+    pub fn collect_draws_with_chunk_info(
+        &self,
+        scene_id: u32,
+        camera: Option<&Camera3DUniform>,
+        draws: &mut Vec<PrimitiveDraw>,
+        chunks: &mut Vec<PrimitiveChunkRef>,
+        chunk_info: &mut Vec<PrimitiveChunkBatchInfo>,
+    ) {
         let Some(scene) = self.scenes.get(&scene_id) else {
             return;
         };
@@ -251,10 +273,19 @@ impl PrimitiveRenderWorld {
                         continue;
                     }
                 }
-                chunks.push(PrimitiveChunkRef {
+                let chunk_ref = PrimitiveChunkRef {
                     scene_id,
                     layer_id: *layer_id,
                     chunk_id: chunk.chunk_id,
+                };
+                chunks.push(chunk_ref);
+                chunk_info.push(PrimitiveChunkBatchInfo {
+                    chunk: chunk_ref,
+                    bounds_min: chunk.bounds.min,
+                    bounds_max: chunk.bounds.max,
+                    min_lod_near: meta.min_lod_near,
+                    max_lod_far: meta.max_lod_far,
+                    all_have_far_lod: meta.all_have_far_lod,
                 });
             }
             for object_id in &layer.visible_order {

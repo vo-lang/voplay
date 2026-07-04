@@ -841,6 +841,10 @@ func SpawnMapPrimitiveLayersWithAssets(scene *Scene, assets *voplay.Assets, asse
 	return spawnMapPrimitiveLayersWithAssets(scene, assets, asset, baseDir, targets, nil)
 }
 
+func SpawnBakedMapPrimitiveContentWithAssets(scene *Scene, assets *voplay.Assets, prepared *MapPreparedAsset, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
+	return SpawnPreparedMapPrimitiveLayersWithAssets(scene, assets, prepared, targets)
+}
+
 func SpawnPreparedMapPrimitiveLayersWithAssets(scene *Scene, assets *voplay.Assets, prepared *MapPreparedAsset, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
 	if prepared == nil {
 		return nil, errors.New("scene3d.SpawnPreparedMapPrimitiveLayersWithAssets: prepared map is nil")

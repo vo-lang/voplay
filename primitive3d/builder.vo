@@ -3,11 +3,12 @@ package primitive3d
 import "github.com/vo-lang/voplay"
 
 type BuilderDesc struct {
-	Kind      LayerKind
-	Shapes    *ShapeRegistry
+	Kind LayerKind
+	Shapes *ShapeRegistry
 	Materials *MaterialPalette
-	Chunking  ChunkingDesc
-	Name      string
+	Chunking ChunkingDesc
+	PreloadChunks bool
+	Name string
 }
 
 type PartDesc struct {
@@ -47,6 +48,7 @@ func NewBuilder(desc BuilderDesc) *Builder {
 		Shapes: shapes,
 		Materials: materials,
 		Chunking: desc.Chunking,
+		PreloadChunks: desc.PreloadChunks,
 		Name: desc.Name,
 	})
 	return &Builder{shapes: shapes, materials: materials, layer: layer}

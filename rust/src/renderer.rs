@@ -22,19 +22,24 @@ use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
 use crate::pipeline_sprite::{PipelineSprite, SpriteInstance};
 use crate::primitive_pipeline::{PrimitiveDrawStats, PrimitivePipeline};
-use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
-use crate::render_world::{RenderBatchPlanner, RenderObjectUpdate, RenderWorld};
+use crate::primitive_scene::{
+    PrimitiveChunkBatchInfo, PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate,
+};
+use crate::render_world::{
+    RenderBatchPlanner, RenderBatchQualityProfile, RenderObjectUpdate, RenderWorld,
+};
 use crate::renderer_frame::{
-    FrameGraph, FrameGraphReport, RenderPassKind, RenderPassWorkload, RenderResourceRegistry,
-    RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY, RES_POST_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP,
-    RES_SURFACE_COLOR, RES_SURFACE_PROPS, RES_WATER_COLOR,
+    FrameGraph, FrameGraphReport, RenderFramePipeline, RenderPassKind, RenderPassWorkload,
+    RenderResourceRegistry, RES_CAPTURE, RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY, RES_POST_COLOR,
+    RES_READBACK, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
+    RES_WATER_COLOR,
 };
 use crate::renderer_perf::{
     elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
     RendererPerfStats, RENDERER_DIAG_DISABLE_BLOOM, RENDERER_DIAG_DISABLE_CONTACT_AO,
     RENDERER_DIAG_DISABLE_DECALS, RENDERER_DIAG_DISABLE_FXAA, RENDERER_DIAG_DISABLE_POST_EFFECTS,
     RENDERER_DIAG_DISABLE_PRIMITIVES, RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS,
-    RENDERER_DIAG_DISABLE_SHADOWS, RENDERER_DIAG_DISABLE_SHARPEN,
+    RENDERER_DIAG_DISABLE_SHADOWS, RENDERER_DIAG_DISABLE_SHARPEN, RENDERER_PERF_PAYLOAD_VERSION,
 };
 use crate::renderer_targets::{MAIN_SAMPLE_COUNT, RECEIVER_MASK_FORMAT, SURFACE_PROPS_FORMAT};
 use crate::stream::{DrawCommand, StreamReader};
@@ -43,11 +48,13 @@ use crate::texture::{TextureId, TextureManager, TexturePixelsData};
 
 mod backend_submit_pass;
 mod depth_pass;
+mod frame_decode;
 mod frame_orchestrator;
 mod frame_submit;
 mod main_opaque_pass;
 mod main_transparent_pass;
 mod overlay_pass;
+mod pass_dispatch;
 mod post_pass;
 mod shadow_pass;
 mod water_pass;
@@ -245,6 +252,7 @@ pub struct Renderer {
     debug_frame_count: u64,
     last_perf_packet: Vec<u8>,
     last_frame_graph_report: FrameGraphReport,
+    last_frame_pipeline: RenderFramePipeline,
     perf_stats_enabled: bool,
 }
 
@@ -460,6 +468,7 @@ impl Renderer {
             debug_frame_count: 0,
             last_perf_packet: Vec::new(),
             last_frame_graph_report: FrameGraphReport::default(),
+            last_frame_pipeline: RenderFramePipeline::default(),
             perf_stats_enabled: false,
         })
     }
@@ -1131,8 +1140,26 @@ impl Renderer {
         &self.last_perf_packet
     }
 
+    pub(crate) fn update_last_perf_packet(
+        &mut self,
+        perf_enabled: bool,
+        perf: &RendererPerfStats,
+    ) -> f64 {
+        if !perf_enabled {
+            self.last_perf_packet.clear();
+            return 0.0;
+        }
+        let perf_packet_start = Some(perf_now());
+        self.last_perf_packet = encode_renderer_perf_packet(perf);
+        elapsed_ms_opt(perf_packet_start)
+    }
+
     pub(crate) fn last_frame_graph_report(&self) -> &FrameGraphReport {
         &self.last_frame_graph_report
+    }
+
+    pub(crate) fn last_frame_pipeline(&self) -> &RenderFramePipeline {
+        &self.last_frame_pipeline
     }
 
     pub fn set_perf_stats_enabled(&mut self, enabled: bool) {

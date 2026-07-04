@@ -15,6 +15,8 @@ pub(crate) enum RenderResourceKind {
     PostColor,
     WaterColor,
     Overlay,
+    Capture,
+    Readback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +179,63 @@ pub(crate) struct RenderFramePipeline {
     pub(crate) graph_build: FrameGraphBuild,
     pub(crate) graph_execute: FrameGraphExecute,
     pub(crate) perf_packet: PerfPacketEncode,
+}
+
+impl RenderFramePipeline {
+    pub(crate) fn from_frame_metrics(
+        frame_id: u32,
+        command_count: u32,
+        scene_mutation_count: u32,
+        overlay_command_count: u32,
+        decode_ms: f64,
+        visible_object_count: u32,
+        visible_chunk_count: u32,
+        material_group_count: u32,
+        diagnostic_flags: u32,
+        graph_report: &FrameGraphReport,
+        graph_build_ms: f64,
+        graph_execute_ms: f64,
+        perf_payload_version: u32,
+        perf_packet_ms: f64,
+    ) -> Self {
+        RenderFramePipeline {
+            decode: RenderFrameDecode {
+                frame_id,
+                command_count,
+                scene_mutation_count,
+                overlay_command_count,
+                elapsed_ms: decode_ms.max(0.0),
+            },
+            snapshot: RenderSceneSnapshot {
+                frame_id,
+                view_count: 1,
+                visible_object_count,
+                visible_chunk_count,
+                material_group_count,
+                diagnostic_flags,
+                immutable: true,
+            },
+            graph_build: FrameGraphBuild {
+                frame_id,
+                planned_pass_count: graph_report.planned_pass_count,
+                resource_count: graph_report.resource_count,
+                target_count: graph_report.target_count,
+                elapsed_ms: graph_build_ms.max(0.0),
+            },
+            graph_execute: FrameGraphExecute {
+                frame_id,
+                executed_pass_count: graph_report.pass_count,
+                slowest_pass: graph_report.slowest_pass,
+                slowest_pass_ms: graph_report.slowest_pass_ms,
+                elapsed_ms: graph_execute_ms.max(0.0),
+            },
+            perf_packet: PerfPacketEncode {
+                frame_id,
+                payload_version: perf_payload_version,
+                elapsed_ms: perf_packet_ms.max(0.0),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -454,23 +513,26 @@ impl FrameGraph {
     }
 }
 
+pub(crate) trait RenderPassNodeDispatcher {
+    fn execute(&mut self, kind: RenderPassKind) -> Result<f64, String>;
+    fn workload(&self, kind: RenderPassKind) -> RenderPassWorkload;
+}
+
 impl FrameGraphExecutor<'_> {
-    pub(crate) fn execute_node<F, W>(
+    pub(crate) fn execute_node<D>(
         &mut self,
         node: &RenderPassNode,
         enabled: bool,
-        execute: F,
-        workload: W,
+        dispatcher: &mut D,
     ) -> Result<Option<RenderPassNodeDiagnostic>, String>
     where
-        F: FnOnce() -> Result<f64, String>,
-        W: FnOnce() -> RenderPassWorkload,
+        D: RenderPassNodeDispatcher + ?Sized,
     {
         if !node.enabled || !enabled || !self.graph.has_pass(node.kind) {
             return Ok(None);
         }
-        let elapsed_ms = execute()?.max(0.0);
-        let workload = workload();
+        let elapsed_ms = dispatcher.execute(node.kind)?.max(0.0);
+        let workload = dispatcher.workload(node.kind);
         self.graph.record_pass(node.kind, elapsed_ms);
         Ok(Some(RenderPassNodeDiagnostic {
             kind: node.kind,
@@ -480,18 +542,18 @@ impl FrameGraphExecutor<'_> {
         }))
     }
 
-    pub(crate) fn execute_pass<F>(
+    pub(crate) fn execute_pass<G>(
         &mut self,
         kind: RenderPassKind,
-        execute: F,
+        run_pass: G,
     ) -> Result<Option<f64>, String>
     where
-        F: FnOnce() -> Result<f64, String>,
+        G: FnOnce() -> Result<f64, String>,
     {
         if !self.graph.has_pass(kind) {
             return Ok(None);
         }
-        let elapsed_ms = execute()?.max(0.0);
+        let elapsed_ms = run_pass()?.max(0.0);
         self.graph.record_pass(kind, elapsed_ms);
         Ok(Some(elapsed_ms))
     }
@@ -587,6 +649,11 @@ impl RenderResourceRegistry {
             self.store.surface_props_view.is_some(),
             RenderResourceLifetime::Persistent,
         );
+        self.declare_target(RES_SHADOW_MAP, false, RenderResourceLifetime::Persistent);
+        self.declare_target(RES_WATER_COLOR, false, RenderResourceLifetime::Transient);
+        self.declare_target(RES_OVERLAY, true, RenderResourceLifetime::External);
+        self.declare_target(RES_CAPTURE, false, RenderResourceLifetime::Transient);
+        self.declare_target(RES_READBACK, false, RenderResourceLifetime::External);
     }
 
     pub(crate) fn main_color_ready(&self) -> bool {
@@ -740,6 +807,14 @@ pub(crate) const RES_WATER_COLOR: RenderResource = RenderResource {
 pub(crate) const RES_OVERLAY: RenderResource = RenderResource {
     name: "overlay",
     kind: RenderResourceKind::Overlay,
+};
+pub(crate) const RES_CAPTURE: RenderResource = RenderResource {
+    name: "capture",
+    kind: RenderResourceKind::Capture,
+};
+pub(crate) const RES_READBACK: RenderResource = RenderResource {
+    name: "readback",
+    kind: RenderResourceKind::Readback,
 };
 
 #[cfg(test)]
@@ -905,7 +980,37 @@ mod tests {
     }
 
     #[test]
-    fn frame_graph_executor_runs_node_closure_and_reports_workload() {
+    fn frame_graph_declares_capture_and_readback_lifetimes() {
+        let mut graph = FrameGraph::single_view(11, 0);
+        graph.declare_target(RES_SHADOW_MAP, true);
+        graph.declare_transient_target(RES_WATER_COLOR, false);
+        graph.declare_external_target(RES_OVERLAY, true);
+        graph.declare_transient_target(RES_CAPTURE, false);
+        graph.declare_external_target(RES_READBACK, false);
+        let report = graph.report();
+
+        assert_eq!(report.persistent_target_count, 1);
+        assert_eq!(report.transient_target_count, 2);
+        assert_eq!(report.external_target_count, 2);
+    }
+
+    #[test]
+    fn frame_graph_executor_dispatches_node_and_reports_workload() {
+        struct TestDispatcher {
+            elapsed_ms: f64,
+            workload: RenderPassWorkload,
+        }
+
+        impl RenderPassNodeDispatcher for TestDispatcher {
+            fn execute(&mut self, _kind: RenderPassKind) -> Result<f64, String> {
+                Ok(self.elapsed_ms)
+            }
+
+            fn workload(&self, _kind: RenderPassKind) -> RenderPassWorkload {
+                self.workload
+            }
+        }
+
         let mut graph = FrameGraph::single_view(12, 0);
         graph.declare_target(RES_MAIN_COLOR, true);
         graph.plan_pass(
@@ -919,20 +1024,19 @@ mod tests {
             .into_iter()
             .find(|node| node.kind == RenderPassKind::Overlay)
             .unwrap();
+        let mut dispatcher = TestDispatcher {
+            elapsed_ms: 0.42,
+            workload: RenderPassWorkload {
+                draw_calls: 3,
+                batches: 2,
+                instances: 8,
+                triangles: 96,
+                upload_bytes: 128,
+            },
+        };
         let diagnostic = graph
             .executor()
-            .execute_node(
-                &node,
-                true,
-                || Ok(0.42),
-                || RenderPassWorkload {
-                    draw_calls: 3,
-                    batches: 2,
-                    instances: 8,
-                    triangles: 96,
-                    upload_bytes: 128,
-                },
-            )
+            .execute_node(&node, true, &mut dispatcher)
             .unwrap()
             .unwrap();
         assert_eq!(diagnostic.name, "overlay");
@@ -941,5 +1045,45 @@ mod tests {
         let report = graph.report();
         assert_eq!(report.pass_count, 1);
         assert_eq!(report.ready_target_count, 2);
+    }
+
+    #[test]
+    fn render_frame_pipeline_captures_stage_metrics() {
+        let mut graph = FrameGraph::single_view(13, 0x20);
+        graph.declare_target(RES_MAIN_COLOR, true);
+        graph.plan_pass(
+            RenderPassKind::Overlay,
+            &[RES_MAIN_COLOR],
+            &[RES_OVERLAY],
+            true,
+        );
+        graph.record_pass(RenderPassKind::Overlay, 0.75);
+        let report = graph.report();
+
+        let pipeline = RenderFramePipeline::from_frame_metrics(
+            13,
+            44,
+            3,
+            12,
+            0.5,
+            18,
+            7,
+            4,
+            0x20,
+            &report,
+            0.2,
+            report.total_pass_ms,
+            6,
+            0.1,
+        );
+
+        assert_eq!(pipeline.decode.command_count, 44);
+        assert_eq!(pipeline.snapshot.visible_chunk_count, 7);
+        assert_eq!(
+            pipeline.graph_build.planned_pass_count,
+            report.planned_pass_count
+        );
+        assert_eq!(pipeline.graph_execute.executed_pass_count, 1);
+        assert_eq!(pipeline.perf_packet.payload_version, 6);
     }
 }

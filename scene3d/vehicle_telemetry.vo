@@ -33,6 +33,7 @@ type VehicleTelemetry struct {
 	Surface SurfaceMaterial
 	SurfaceBlend SurfaceMaterialBlend
 	WheelContacts []WheelContactSample
+	BackendApplyHash int
 	AirborneTime float64
 	LastImpulse float64
 	LastTangentImpulse float64
@@ -63,7 +64,7 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 		return VehicleTelemetry{}
 	}
 	currentSurface := vehicle.CurrentSurfaceMaterial()
-	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), SignedSpeed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: currentSurface, SurfaceBlend: SurfaceMaterialBlend{Primary: currentSurface}, Drifting: vehicle.Drifting || vehicle.LastForceCommand.Drifting, Boosting: vehicle.LastForceCommand.Boosting}
+	t := VehicleTelemetry{Speed: vehicleFiniteOr(vehicle.Speed, 0), SignedSpeed: vehicleFiniteOr(vehicle.Speed, 0), Yaw: vehicleFiniteOr(vehicle.Yaw, 0), Grounded: vehicle.Grounded, GroundNormal: vehicleCleanNormal(vehicle.GroundNormal), GroundPoint: vehicleCleanVec3(vehicle.GroundPoint), WheelCount: vehicle.WheelCount(), Surface: currentSurface, SurfaceBlend: SurfaceMaterialBlend{Primary: currentSurface}, BackendApplyHash: vehicle.LastBackendApplyCommand.DebugHash, Drifting: vehicle.Drifting || vehicle.LastForceCommand.Drifting, Boosting: vehicle.LastForceCommand.Boosting}
 	if vehicle.Body != nil {
 		t.Position = vehicleCleanVec3(vehicle.Body.Position())
 		t.Rotation = vehicleCleanQuat(vehicle.Body.Rotation())
@@ -81,8 +82,8 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 			continue
 		}
 		surface := t.Surface
-		if vehicle.Track != nil && wheel.SurfaceID != "" {
-			surface = SurfaceMaterialAtTrackPosition(vehicle.Track, wheel.ContactPoint)
+		if wheel.SurfaceID != "" || wheel.Surface.ID != "" || wheel.Surface.Kind != "" {
+			surface = vehicle.surfaceMaterialForWheel(wheel)
 		}
 		t.WheelContacts = append(t.WheelContacts, WheelContactSample{WheelIndex: i, HitPoint: wheel.ContactPoint, Normal: wheel.ContactNormal, Compression: wheel.SuspensionCompression, Surface: surface, ForwardSlip: wheel.LongitudinalSlip, SideSlip: wheel.LateralSlip, Load: wheel.NormalLoad, Grip: surface.GripScale, InContact: wheel.InContact})
 		if wheel.InContact {

@@ -868,9 +868,10 @@ export class RenderIsland {
             return true;
         if (this.displayPulseMode === "timer")
             return true;
-        // Hybrid mode keeps a late backup pulse, but rAF must own normal visible
-        // cadence. Letting timer wake early makes WebGPU surface acquisition block.
-        return this.displayPulseMode === "hybrid";
+        // Hybrid mode starts with rAF-only visible cadence. The timer path takes
+        // over only after rAF has already been observed as slow, so the backup does
+        // not race healthy rAF frames and inject cadence jitter into the game clock.
+        return this.displayPulseMode === "hybrid" && this.displayPulseTimerCadence;
     }
     displayPulseFallbackDelayMs(nowMs) {
         if (document.visibilityState !== "visible")

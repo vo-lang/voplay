@@ -221,7 +221,11 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		cmds := ctx.Draw.Bytes()
 		if ctx.overlay != nil && ctx.overlay.enabled {
 			// Record metrics and draw the engine perf HUD only when diagnostics are enabled.
-			ctx.overlay.recordFrame(frameDt, logicNs, ctx.lastFixedSteps, drawBytes, inputNs, advanceNs, drawNs, drawStats)
+			perfFrameDt := frameDt
+			if game.TargetFrameRate > 0 && advanceDt > 0 {
+				perfFrameDt = advanceDt
+			}
+			ctx.overlay.recordFrame(perfFrameDt, logicNs, ctx.lastFixedSteps, drawBytes, inputNs, advanceNs, drawNs, drawStats)
 			overlayStart := time.Now()
 			ctx.overlay.draw(ctx.Draw)
 			submitStats := ctx.Draw.Stats()

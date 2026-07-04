@@ -78,7 +78,6 @@ export declare class RenderIsland {
     private schedulePerfLivenessProbes;
     private collectPerfLivenessMetrics;
     private ensureDisplayPulseTicker;
-    private shouldScheduleDisplayPulseRaf;
     private shouldScheduleDisplayPulseTimer;
     private displayPulseFallbackDelayMs;
     private displayPulseCadenceDelayMs;

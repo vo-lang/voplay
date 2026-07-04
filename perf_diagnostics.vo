@@ -37,6 +37,7 @@ const (
 	PerfGateFailureSlowFrames = "slow_frames"
 	PerfGateFailureFrameP99 = "frame_p99"
 	PerfGateFailureFrameMax = "frame_max"
+	PerfGateFailureActiveWork = "active_work"
 	PerfGateFailureGpuQueue = "gpu_queue"
 	PerfGateFailureGpuWorkDone = "gpu_work_done"
 	PerfGateFailureHudOverhead = "hud_overhead"
@@ -407,6 +408,7 @@ type PerfGateConfig struct {
 	MaxSlowFrames int
 	MaxFrameP99Ms float64
 	MaxFrameMaxMs float64
+	MaxActiveWorkP99Ms float64
 	MaxGpuQueueBoundFrames int
 	MaxGpuWorkDoneP90Ms float64
 	MaxHudOverheadFrames int
@@ -1872,6 +1874,9 @@ func EvaluatePerfGate(snapshot PerfSnapshot, config PerfGateConfig) PerfGateResu
 	}
 	if config.MaxFrameMaxMs > 0 && summary.FrameMaxMs > config.MaxFrameMaxMs {
 		return perfGateFail(result, PerfGateFailureFrameMax, "frame max " + perfFormatMs(summary.FrameMaxMs) + " exceeds " + perfFormatMs(config.MaxFrameMaxMs))
+	}
+	if config.MaxActiveWorkP99Ms > 0 && summary.ActiveWorkP99Ms > config.MaxActiveWorkP99Ms {
+		return perfGateFail(result, PerfGateFailureActiveWork, "active work p99 " + perfFormatMs(summary.ActiveWorkP99Ms) + " exceeds " + perfFormatMs(config.MaxActiveWorkP99Ms))
 	}
 	if config.MaxGpuQueueBoundFrames >= 0 && snapshot.Attribution.GpuQueueBound > config.MaxGpuQueueBoundFrames {
 		return perfGateFail(result, PerfGateFailureGpuQueue, "gpu queue bound frames " + strconv.Itoa(snapshot.Attribution.GpuQueueBound) + " exceed " + strconv.Itoa(config.MaxGpuQueueBoundFrames))

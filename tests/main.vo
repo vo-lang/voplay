@@ -4114,6 +4114,10 @@ func testPerfDiagnosticsApiContract() {
 	gpuWorkSnapshot.ThirtySecond.GpuWorkDoneP90Ms = 100
 	gpuWorkGate := voplay.EvaluatePerfGate(gpuWorkSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxGpuWorkDoneP90Ms: 12, MaxHudOverheadFrames: 0})
 	assert(!gpuWorkGate.Passed && gpuWorkGate.PrimaryFailure == voplay.PerfGateFailureGpuWorkDone, "perf gate fails gpu work-done p90")
+	activeSnapshot := okSnapshot
+	activeSnapshot.ThirtySecond.ActiveWorkP99Ms = 18
+	activeGate := voplay.EvaluatePerfGate(activeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxActiveWorkP99Ms: 12, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
+	assert(!activeGate.Passed && activeGate.PrimaryFailure == voplay.PerfGateFailureActiveWork, "perf gate fails active work p99")
 	probeSnapshot := okSnapshot
 	probeSnapshot.Overhead.ProbeOverheadMs = 0.2
 	probeGate := voplay.EvaluatePerfGate(probeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})

@@ -90,9 +90,26 @@ pub(crate) struct RenderPassNode {
     pub(crate) name: &'static str,
     pub(crate) reads: Vec<RenderResource>,
     pub(crate) writes: Vec<RenderResource>,
+    pub(crate) transient_writes: Vec<RenderResource>,
     pub(crate) enabled: bool,
-    pub(crate) transient: bool,
     pub(crate) diagnostics: Vec<RenderPassDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RenderPassWorkload {
+    pub(crate) draw_calls: u32,
+    pub(crate) batches: u32,
+    pub(crate) instances: u32,
+    pub(crate) triangles: u32,
+    pub(crate) upload_bytes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenderPassNodeDiagnostic {
+    pub(crate) kind: RenderPassKind,
+    pub(crate) name: &'static str,
+    pub(crate) elapsed_ms: f64,
+    pub(crate) workload: RenderPassWorkload,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -297,8 +314,12 @@ impl FrameGraph {
                 name: plan.name,
                 reads: plan.reads.clone(),
                 writes: plan.writes.clone(),
+                transient_writes: if plan.transient {
+                    plan.writes.clone()
+                } else {
+                    Vec::new()
+                },
                 enabled: plan.enabled,
-                transient: plan.transient,
                 diagnostics: self
                     .passes
                     .iter()
@@ -307,6 +328,10 @@ impl FrameGraph {
                     .collect(),
             })
             .collect()
+    }
+
+    pub(crate) fn node(&self, kind: RenderPassKind) -> Option<RenderPassNode> {
+        self.nodes().into_iter().find(|node| node.kind == kind)
     }
 
     pub(crate) fn has_pass(&self, kind: RenderPassKind) -> bool {
@@ -403,6 +428,31 @@ impl FrameGraph {
 }
 
 impl FrameGraphExecutor<'_> {
+    pub(crate) fn execute_node<F, W>(
+        &mut self,
+        node: &RenderPassNode,
+        enabled: bool,
+        execute: F,
+        workload: W,
+    ) -> Result<Option<RenderPassNodeDiagnostic>, String>
+    where
+        F: FnOnce() -> Result<f64, String>,
+        W: FnOnce() -> RenderPassWorkload,
+    {
+        if !node.enabled || !enabled || !self.graph.has_pass(node.kind) {
+            return Ok(None);
+        }
+        let elapsed_ms = execute()?.max(0.0);
+        let workload = workload();
+        self.graph.record_pass(node.kind, elapsed_ms);
+        Ok(Some(RenderPassNodeDiagnostic {
+            kind: node.kind,
+            name: node.name,
+            elapsed_ms,
+            workload,
+        }))
+    }
+
     pub(crate) fn execute_pass<F>(
         &mut self,
         kind: RenderPassKind,
@@ -657,6 +707,7 @@ mod tests {
         }
         let nodes = graph.nodes();
         assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[1].transient_writes, vec![RES_WATER_COLOR]);
         assert_eq!(nodes[1].diagnostics.len(), 1);
         let report = graph.report();
         assert_eq!(report.pass_count, 1);
@@ -697,5 +748,44 @@ mod tests {
         assert!(report.resource_churn.target_creates >= 2);
         assert!(report.resource_churn.target_reuses >= 1);
         assert!(report.resource_churn.target_recreates >= 2);
+    }
+
+    #[test]
+    fn frame_graph_executor_runs_node_closure_and_reports_workload() {
+        let mut graph = FrameGraph::single_view(12, 0);
+        graph.declare_target(RES_MAIN_COLOR, true);
+        graph.plan_pass(
+            RenderPassKind::Overlay,
+            &[RES_MAIN_COLOR],
+            &[RES_OVERLAY],
+            true,
+        );
+        let node = graph
+            .nodes()
+            .into_iter()
+            .find(|node| node.kind == RenderPassKind::Overlay)
+            .unwrap();
+        let diagnostic = graph
+            .executor()
+            .execute_node(
+                &node,
+                true,
+                || Ok(0.42),
+                || RenderPassWorkload {
+                    draw_calls: 3,
+                    batches: 2,
+                    instances: 8,
+                    triangles: 96,
+                    upload_bytes: 128,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(diagnostic.name, "overlay");
+        assert_eq!(diagnostic.workload.draw_calls, 3);
+        assert_eq!(diagnostic.workload.instances, 8);
+        let report = graph.report();
+        assert_eq!(report.pass_count, 1);
+        assert_eq!(report.ready_target_count, 2);
     }
 }

@@ -92,6 +92,27 @@ type VehicleForceCommand struct {
 	Surface SurfaceMaterial
 }
 
+type PhysicsBackendWheelCommand struct {
+	WheelIndex int
+	SteeringAngle float64
+	EngineForce float64
+	BrakeForce float64
+}
+
+type PhysicsBackendApplyCommand struct {
+	ForceCommand VehicleForceCommand
+	SteeringAngle float64
+	BodyForce voplay.Vec3
+	DragForce float64
+	Downforce float64
+	WaterLift float64
+	AirControl float64
+	WallGrip float64
+	RailGrip float64
+	DebugHash int
+	Wheels []PhysicsBackendWheelCommand
+}
+
 type KartDynamicsResult struct {
 	VehicleConfig VehicleConfig
 	VehicleInput VehicleInput
@@ -263,6 +284,53 @@ func NormalizeVehicleForceCommand(command VehicleForceCommand, vehicle VehicleCo
 	command.RailGrip = math.Max(0, vehicleFiniteOr(command.RailGrip, 0))
 	command.Surface = NormalizeSurfaceMaterial(command.Surface)
 	return command
+}
+
+func BuildPhysicsBackendApplyCommand(command VehicleForceCommand, vehicle VehicleConfig, currentSteer float64, dt float64) PhysicsBackendApplyCommand {
+	vehicle = normalizeVehicleConfig(vehicle)
+	command = NormalizeVehicleForceCommand(command, vehicle)
+	if dt < 0 {
+		dt = 0
+	}
+	steer := vehicleMoveTowards(currentSteer, command.SteeringAngle, vehicle.SteerRate * dt)
+	driveWheelCount := vehicleDriveWheelCount(vehicle.Wheels)
+	wheels := make([]PhysicsBackendWheelCommand, len(vehicle.Wheels))
+	for i, wheel := range vehicle.Wheels {
+		steering := 0.0
+		force := 0.0
+		wheelBrake := 0.0
+		if wheel.Steer {
+			steering = -steer
+		}
+		if wheel.Drive {
+			force = command.EngineForce / driveWheelCount
+		}
+		if wheel.Brake {
+			wheelBrake = command.BrakeForce
+		}
+		wheels[i] = PhysicsBackendWheelCommand{WheelIndex: i, SteeringAngle: steering, EngineForce: force, BrakeForce: wheelBrake}
+	}
+	bodyForce := voplay.Vec3{Y: command.WaterLift - command.Downforce}
+	return PhysicsBackendApplyCommand{ForceCommand: command, SteeringAngle: steer, BodyForce: bodyForce, DragForce: command.DragForce, Downforce: command.Downforce, WaterLift: command.WaterLift, AirControl: command.AirControl, WallGrip: command.WallGrip, RailGrip: command.RailGrip, DebugHash: physicsBackendApplyDebugHash(command, steer, len(wheels)), Wheels: wheels}
+}
+
+func physicsBackendApplyDebugHash(command VehicleForceCommand, steer float64, wheelCount int) int {
+	hash := 17
+	hash = hash * 31 + int(math.Round(command.SteeringAngle * 1000))
+	hash = hash * 31 + int(math.Round(steer * 1000))
+	hash = hash * 31 + int(math.Round(command.EngineForce))
+	hash = hash * 31 + int(math.Round(command.BrakeForce))
+	hash = hash * 31 + int(math.Round(command.DragForce))
+	hash = hash * 31 + int(math.Round(command.Downforce))
+	hash = hash * 31 + int(math.Round(command.WaterLift))
+	hash = hash * 31 + wheelCount
+	if command.Boosting {
+		hash = hash * 31 + 1
+	}
+	if command.Drifting {
+		hash = hash * 31 + 1
+	}
+	return hash
 }
 
 func NormalizeKartVehicleModel(model KartVehicleModel, vehicle VehicleConfig) KartVehicleModel {

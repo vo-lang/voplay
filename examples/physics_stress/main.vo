@@ -149,6 +149,7 @@ func scenarioDefinitions() []ScenarioDefinition {
 		ScenarioDefinition{Name: "skidpad", VehicleCount: 1},
 		ScenarioDefinition{Name: "slalom", VehicleCount: 1},
 		ScenarioDefinition{Name: "drift-turbo", VehicleCount: 1},
+		ScenarioDefinition{Name: "boost-pad", VehicleCount: 1},
 		ScenarioDefinition{Name: "offroad-transition", VehicleCount: 1},
 		ScenarioDefinition{Name: "jump-landing", VehicleCount: 1},
 		ScenarioDefinition{Name: "wall-impact", VehicleCount: 1},
@@ -209,6 +210,10 @@ func runScenario(def ScenarioDefinition) ScenarioReport {
 }
 
 func setupScenario(name string, r *ScenarioRuntime) {
+	if name == "boost-pad" && len(r.Vehicles) > 0 {
+		r.Vehicles[0].SetPose(voplay.Vec3{X: 0, Y: 1.2, Z: 0}, 0)
+		return
+	}
 	if name == "wall-impact" {
 		r.Scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: 1, Z: -28}, Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(12, 2, 1), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 0.9}})
 		return
@@ -240,6 +245,9 @@ func scenarioIntent(name string, step int, vehicle int, r *ScenarioRuntime) scen
 			return scene3d.VehicleIntent{Throttle: 0.94, Steering: 0.86, Drift: true}
 		}
 		return scene3d.VehicleIntent{Throttle: 1, Steering: -0.3}
+	}
+	if name == "boost-pad" {
+		return scene3d.VehicleIntent{Throttle: 0.96}
 	}
 	if name == "offroad-transition" {
 		steer := 0.16
@@ -424,6 +432,9 @@ func (r *ScenarioReport) validate() {
 	}
 	if r.Name == "drift-turbo" && r.SurfaceSamples["road"] == 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.drift_turbo", Severity: 1, Detail: "expected road samples during drift turbo"})
+	}
+	if r.Name == "boost-pad" && r.SurfaceSamples["boost-strip"] == 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.boost_pad", Severity: 1, Detail: "expected boost strip surface samples"})
 	}
 	if r.Name == "water-skim" && r.SurfaceSamples["water-skim"] == 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.water_skim", Severity: 1, Detail: "expected water surface samples"})

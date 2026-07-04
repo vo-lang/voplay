@@ -2994,6 +2994,31 @@ func testScene3DVehicleTelemetryAndKartController() {
 	stepResolved := dynamics.Step(scene3d.VehicleIntent{Throttle: 1, Steering: 1, Drift: true, BoostRequest: true}, material, 18, true, 1.0 / 60.0)
 	assert(stepResolved.VehicleInput.Boost && stepResolved.Drifting, "scene3d kart dynamics resolves boost and drift controls")
 	assert(stepResolved.RecoveryInput.Throttle > 0, "scene3d kart dynamics emits recovery input")
+	backendApply := scene3d.BuildPhysicsBackendApplyCommand(stepResolved.ForceCommand, stepResolved.VehicleConfig, 0, 1.0)
+	assert(len(backendApply.Wheels) == len(stepResolved.VehicleConfig.Wheels), "scene3d physics backend apply command maps every wheel")
+	assert(backendApply.SteeringAngle > 0, "scene3d physics backend apply command advances steer angle")
+	assert(backendApply.DebugHash != 0, "scene3d physics backend apply command emits debug hash")
+	assert(backendApply.AirControl > 0, "scene3d physics backend apply command carries air response")
+	backendSteerWheels := 0
+	for _, wheelCommand := range backendApply.Wheels {
+		if wheelCommand.SteeringAngle < 0 {
+			backendSteerWheels++
+		}
+	}
+	assert(backendSteerWheels > 0, "scene3d physics backend apply command keeps backend steering sign convention")
+	driveCommand := scene3d.BuildPhysicsBackendApplyCommand(scene3d.VehicleForceCommand{EngineForce: 240, Surface: scene3d.DefaultSurfaceMaterial()}, scene3d.DefaultKartVehicleConfig(), 0, 1.0)
+	backendDriveForce := 0.0
+	for _, wheelCommand := range driveCommand.Wheels {
+		backendDriveForce += wheelCommand.EngineForce
+	}
+	assert(backendDriveForce > 0, "scene3d physics backend apply command distributes engine force")
+	brakeCommand := scene3d.BuildPhysicsBackendApplyCommand(scene3d.VehicleForceCommand{BrakeForce: 123, Downforce: 7, WaterLift: 2, Surface: scene3d.DefaultSurfaceMaterial()}, scene3d.DefaultKartVehicleConfig(), 0, 1.0)
+	backendBrakeForce := 0.0
+	for _, wheelCommand := range brakeCommand.Wheels {
+		backendBrakeForce += wheelCommand.BrakeForce
+	}
+	assert(backendBrakeForce > 0, "scene3d physics backend apply command maps brake force")
+	assertFloatNear(brakeCommand.BodyForce.Y, -5, 0.000001, "scene3d physics backend apply command maps rigid body force")
 	pb.bodyState = makePhysicsBodyState(body.ID(), body.Position(), body.Rotation(), voplay.Vec3{X: 4, Z: -12})
 	pb.vehicleState = makeRaycastVehicleStateWith(12, voplay.Vec3{Y: 0.2, Z: -20}, voplay.Vec3{Z: -20}, 0.28, 0, 18)
 	s.StepAndSyncPhysics(1.0 / 60.0)

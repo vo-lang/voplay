@@ -157,50 +157,39 @@ func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
 	if v == nil || dt <= 0 {
 		return
 	}
-	v.applyForceCommandToBackend(command, dt)
+	command = NormalizeVehicleForceCommand(command, v.Config)
+	backendCommand := v.applyForceCommandToBackend(command, dt)
 	if v.Body == nil || v.Body.Physics == nil {
 		return
 	}
 	vel := v.Body.Physics.velocity
 	speed := vel.Length()
-	if command.DragForce > 0 && speed > 0 {
-		v.Body.ApplyForce(vel.Normalize().Scale(-command.DragForce))
+	if backendCommand.DragForce > 0 && speed > 0 {
+		v.Body.ApplyForce(vel.Normalize().Scale(-backendCommand.DragForce))
 	}
-	if command.Downforce > 0 {
-		v.Body.ApplyForce(voplay.Vec3{Y: -command.Downforce})
-	}
-	if command.WaterLift > 0 {
-		v.Body.ApplyForce(voplay.Vec3{Y: command.WaterLift})
+	if backendCommand.BodyForce.LengthSq() > 0 {
+		v.Body.ApplyForce(backendCommand.BodyForce)
 	}
 }
 
-func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt float64) {
-	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
-		return
+func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt float64) PhysicsBackendApplyCommand {
+	if v == nil {
+		return PhysicsBackendApplyCommand{}
+	}
+	backendCommand := BuildPhysicsBackendApplyCommand(command, v.Config, v.SteerAngle, dt)
+	if v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		return backendCommand
 	}
 	scene := v.scene
 	if scene == nil || scene.worldID == 0 {
-		return
+		return backendCommand
 	}
-	command = NormalizeVehicleForceCommand(command, v.Config)
-	v.Drifting = command.Drifting
-	v.SteerAngle = vehicleMoveTowards(v.SteerAngle, command.SteeringAngle, v.Config.SteerRate * dt)
-	driveWheelCount := vehicleDriveWheelCount(v.Config.Wheels)
-	for i, wheel := range v.Config.Wheels {
-		steering := 0.0
-		force := 0.0
-		wheelBrake := 0.0
-		if wheel.Steer {
-			steering = -v.SteerAngle
-		}
-		if wheel.Drive {
-			force = command.EngineForce / driveWheelCount
-		}
-		if wheel.Brake {
-			wheelBrake = command.BrakeForce
-		}
-		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, i, steering, force, wheelBrake)
+	v.Drifting = backendCommand.ForceCommand.Drifting
+	v.SteerAngle = backendCommand.SteeringAngle
+	for _, wheel := range backendCommand.Wheels {
+		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, wheel.WheelIndex, wheel.SteeringAngle, wheel.EngineForce, wheel.BrakeForce)
 	}
+	return backendCommand
 }
 
 func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
@@ -255,9 +244,7 @@ func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {
 		v.Body.Physics.angularVelocity = voplay.Vec3{}
 	}
 	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
-		for i := 0; i < len(v.Config.Wheels); i++ {
-			physBackend.SetRaycastVehicleWheelControl(v.scene.worldID, v.vehicleID, i, 0, 0, v.Config.BrakeForce)
-		}
+		v.applyForceCommandToBackend(VehicleForceCommand{BrakeForce: v.Config.BrakeForce, Surface: v.CurrentSurfaceMaterial()}, 1.0 / 60.0)
 	}
 }
 

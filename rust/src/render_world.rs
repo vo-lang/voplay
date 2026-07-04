@@ -60,6 +60,12 @@ pub struct RenderWorldChunk {
 pub struct RenderBatchPlan {
     pub frame_id: u32,
     pub visible_objects: u32,
+    pub model_batch_indices: Vec<usize>,
+    pub primitive_draw_indices: Vec<usize>,
+    pub primitive_chunk_indices: Vec<usize>,
+    pub water_draw_indices: Vec<usize>,
+    pub water_chunk_indices: Vec<usize>,
+    pub decal_batch_indices: Vec<usize>,
     pub visible_chunks: Vec<RenderWorldChunk>,
     pub frustum_culled_chunks: u32,
     pub distance_culled_chunks: u32,
@@ -104,6 +110,41 @@ impl RenderBatchPlan {
         }
         self.visible_chunks.push(chunk);
     }
+
+    pub fn model_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
+        self.model_batch_indices
+            .iter()
+            .filter_map(|index| draws.get(*index).copied())
+            .collect()
+    }
+
+    pub fn primitive_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
+        self.primitive_draw_indices
+            .iter()
+            .filter_map(|index| draws.get(*index).copied())
+            .collect()
+    }
+
+    pub fn primitive_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
+        self.primitive_chunk_indices
+            .iter()
+            .filter_map(|index| chunks.get(*index).copied())
+            .collect()
+    }
+
+    pub fn water_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
+        self.water_draw_indices
+            .iter()
+            .filter_map(|index| draws.get(*index).copied())
+            .collect()
+    }
+
+    pub fn water_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
+        self.water_chunk_indices
+            .iter()
+            .filter_map(|index| chunks.get(*index).copied())
+            .collect()
+    }
 }
 
 pub struct RenderBatchPlanner;
@@ -122,6 +163,7 @@ impl RenderBatchPlanner {
             ..Default::default()
         };
         for (index, draw) in model_draws.iter().enumerate() {
+            plan.model_batch_indices.push(index);
             plan.push_chunk(RenderWorldChunk {
                 scene_id,
                 chunk_id: draw.model_id,
@@ -141,6 +183,8 @@ impl RenderBatchPlanner {
             });
         }
         for (index, chunk) in primitive_chunks.iter().enumerate() {
+            plan.primitive_chunk_indices.push(index);
+            plan.water_chunk_indices.push(index);
             plan.push_chunk(RenderWorldChunk {
                 scene_id: chunk.scene_id,
                 chunk_id: chunk.chunk_id,
@@ -160,7 +204,10 @@ impl RenderBatchPlanner {
             });
         }
         for (index, draw) in primitive_draws.iter().enumerate() {
-            if !draw.is_water_surface() {
+            if draw.is_water_surface() {
+                plan.water_draw_indices.push(index);
+            } else {
+                plan.primitive_draw_indices.push(index);
                 continue;
             }
             plan.push_chunk(RenderWorldChunk {
@@ -497,7 +544,13 @@ mod tests {
         world.collect_scene_draws(7, &mut model_draws);
         let primitive_draws = vec![
             PrimitiveDraw::from_update(primitive_update(7, 3, 100, 77, 0)),
-            PrimitiveDraw::from_update(primitive_update(7, 3, 101, 78, PRIMITIVE_FLAG_WATER_SURFACE)),
+            PrimitiveDraw::from_update(primitive_update(
+                7,
+                3,
+                101,
+                78,
+                PRIMITIVE_FLAG_WATER_SURFACE,
+            )),
         ];
         let primitive_chunks = vec![PrimitiveChunkRef {
             scene_id: 7,
@@ -505,7 +558,8 @@ mod tests {
             chunk_id: 9,
         }];
 
-        let plan = RenderBatchPlanner::build(120, 7, &model_draws, &primitive_draws, &primitive_chunks);
+        let plan =
+            RenderBatchPlanner::build(120, 7, &model_draws, &primitive_draws, &primitive_chunks);
 
         assert_eq!(plan.frame_id, 120);
         assert_eq!(plan.visible_objects, 3);

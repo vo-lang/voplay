@@ -168,14 +168,3 @@ pub(crate) fn create_msaa_surface_props_view(
         "voplay_surface_props_msaa",
     ))
 }
-
-#[derive(Default)]
-pub(crate) struct RendererTargetRegistry {
-    pub(crate) depth_view: Option<wgpu::TextureView>,
-    pub(crate) msaa_color_view: Option<wgpu::TextureView>,
-    pub(crate) post_color_view: Option<wgpu::TextureView>,
-    pub(crate) msaa_receiver_mask_view: Option<wgpu::TextureView>,
-    pub(crate) receiver_mask_view: Option<wgpu::TextureView>,
-    pub(crate) msaa_surface_props_view: Option<wgpu::TextureView>,
-    pub(crate) surface_props_view: Option<wgpu::TextureView>,
-}

@@ -1,3 +1,9 @@
+use crate::renderer_targets::{
+    create_depth_view, create_msaa_color_view, create_msaa_receiver_mask_view,
+    create_msaa_surface_props_view, create_post_color_view, create_receiver_mask_view,
+    create_surface_props_view, MAIN_SAMPLE_COUNT,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RenderResourceKind {
     SurfaceColor,
@@ -200,14 +206,35 @@ pub(crate) struct RenderResourceChurn {
     pub(crate) alias_reuses: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Default)]
+struct RenderTargetStore {
+    depth_view: Option<wgpu::TextureView>,
+    msaa_color_view: Option<wgpu::TextureView>,
+    post_color_view: Option<wgpu::TextureView>,
+    msaa_receiver_mask_view: Option<wgpu::TextureView>,
+    receiver_mask_view: Option<wgpu::TextureView>,
+    msaa_surface_props_view: Option<wgpu::TextureView>,
+    surface_props_view: Option<wgpu::TextureView>,
+}
+
 pub(crate) struct RenderResourceRegistry {
     targets: Vec<RenderTargetStatus>,
     churn: RenderResourceChurn,
     resize_generation: u32,
+    store: RenderTargetStore,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Default for RenderResourceRegistry {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            churn: RenderResourceChurn::default(),
+            resize_generation: 0,
+            store: RenderTargetStore::default(),
+        }
+    }
+}
+
 pub(crate) struct FrameGraph {
     frame: RenderFrameSnapshot,
     registry: RenderResourceRegistry,
@@ -471,6 +498,133 @@ impl FrameGraphExecutor<'_> {
 }
 
 impl RenderResourceRegistry {
+    pub(crate) fn new_render_targets(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let mut registry = Self::default();
+        registry.recreate_render_targets(device, width, height, surface_format);
+        registry
+    }
+
+    pub(crate) fn recreate_render_targets(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        self.store = RenderTargetStore {
+            depth_view: Some(create_depth_view(device, width, height, MAIN_SAMPLE_COUNT)),
+            msaa_color_view: create_msaa_color_view(
+                device,
+                width,
+                height,
+                surface_format,
+                MAIN_SAMPLE_COUNT,
+            ),
+            post_color_view: Some(create_post_color_view(
+                device,
+                width,
+                height,
+                surface_format,
+            )),
+            msaa_receiver_mask_view: create_msaa_receiver_mask_view(
+                device,
+                width,
+                height,
+                MAIN_SAMPLE_COUNT,
+            ),
+            receiver_mask_view: Some(create_receiver_mask_view(
+                device,
+                width,
+                height,
+                1,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                "voplay_receiver_mask",
+            )),
+            msaa_surface_props_view: create_msaa_surface_props_view(
+                device,
+                width,
+                height,
+                MAIN_SAMPLE_COUNT,
+            ),
+            surface_props_view: Some(create_surface_props_view(
+                device,
+                width,
+                height,
+                1,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                "voplay_surface_props",
+            )),
+        };
+        let next_generation = self.resize_generation.saturating_add(1);
+        self.mark_resize_generation(next_generation);
+        self.declare_target(
+            RES_DEPTH,
+            self.store.depth_view.is_some(),
+            RenderResourceLifetime::Persistent,
+        );
+        self.declare_target(
+            RES_MAIN_COLOR,
+            self.main_color_ready(),
+            RenderResourceLifetime::Persistent,
+        );
+        self.declare_target(
+            RES_POST_COLOR,
+            self.store.post_color_view.is_some(),
+            RenderResourceLifetime::Persistent,
+        );
+        self.declare_target(
+            RES_RECEIVER_MASK,
+            self.store.receiver_mask_view.is_some(),
+            RenderResourceLifetime::Persistent,
+        );
+        self.declare_target(
+            RES_SURFACE_PROPS,
+            self.store.surface_props_view.is_some(),
+            RenderResourceLifetime::Persistent,
+        );
+    }
+
+    pub(crate) fn main_color_ready(&self) -> bool {
+        self.store.post_color_view.is_some() || self.store.msaa_color_view.is_some()
+    }
+
+    pub(crate) fn depth_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.depth_view.as_ref()
+    }
+
+    pub(crate) fn msaa_color_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.msaa_color_view.as_ref()
+    }
+
+    pub(crate) fn post_color_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.post_color_view.as_ref()
+    }
+
+    pub(crate) fn msaa_receiver_mask_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.msaa_receiver_mask_view.as_ref()
+    }
+
+    pub(crate) fn receiver_mask_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.receiver_mask_view.as_ref()
+    }
+
+    pub(crate) fn msaa_surface_props_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.msaa_surface_props_view.as_ref()
+    }
+
+    pub(crate) fn surface_props_view(&self) -> Option<&wgpu::TextureView> {
+        self.store.surface_props_view.as_ref()
+    }
+
+    pub(crate) fn resize_generation(&self) -> u32 {
+        self.resize_generation
+    }
+
     pub(crate) fn declare_target(
         &mut self,
         resource: RenderResource,

@@ -220,9 +220,6 @@ func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
 			return NormalizeSurfaceMaterial(primary)
 		}
 	}
-	if v.Track != nil && v.Body != nil {
-		return SurfaceMaterialAtTrackPosition(v.Track, v.Body.Position())
-	}
 	return DefaultSurfaceMaterial()
 }
 

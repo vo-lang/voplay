@@ -25,9 +25,9 @@ use crate::primitive_pipeline::{PrimitiveDrawStats, PrimitivePipeline};
 use crate::primitive_scene::{PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate};
 use crate::render_world::{RenderBatchPlanner, RenderObjectUpdate, RenderWorld};
 use crate::renderer_frame::{
-    FrameGraph, FrameGraphReport, RenderPassKind, RenderPassWorkload, RES_DEPTH, RES_MAIN_COLOR,
-    RES_OVERLAY, RES_POST_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR,
-    RES_SURFACE_PROPS, RES_WATER_COLOR,
+    FrameGraph, FrameGraphReport, RenderPassKind, RenderPassWorkload, RenderResourceRegistry,
+    RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY, RES_POST_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP,
+    RES_SURFACE_COLOR, RES_SURFACE_PROPS, RES_WATER_COLOR,
 };
 use crate::renderer_perf::{
     elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
@@ -36,17 +36,21 @@ use crate::renderer_perf::{
     RENDERER_DIAG_DISABLE_PRIMITIVES, RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS,
     RENDERER_DIAG_DISABLE_SHADOWS, RENDERER_DIAG_DISABLE_SHARPEN,
 };
-use crate::renderer_targets::{
-    create_depth_view, create_msaa_color_view, create_msaa_receiver_mask_view,
-    create_msaa_surface_props_view, create_post_color_view, create_receiver_mask_view,
-    create_surface_props_view, RendererTargetRegistry, MAIN_SAMPLE_COUNT, RECEIVER_MASK_FORMAT,
-    SURFACE_PROPS_FORMAT,
-};
+use crate::renderer_targets::{MAIN_SAMPLE_COUNT, RECEIVER_MASK_FORMAT, SURFACE_PROPS_FORMAT};
 use crate::stream::{DrawCommand, StreamReader};
 use crate::terrain::TerrainData;
 use crate::texture::{TextureId, TextureManager, TexturePixelsData};
 
+mod backend_submit_pass;
+mod depth_pass;
+mod frame_orchestrator;
 mod frame_submit;
+mod main_opaque_pass;
+mod main_transparent_pass;
+mod overlay_pass;
+mod post_pass;
+mod shadow_pass;
+mod water_pass;
 
 /// Maximum number of camera states per frame before buffer regrow.
 const INITIAL_CAMERA_SLOTS: usize = 16;
@@ -202,7 +206,7 @@ pub struct Renderer {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-    targets: RendererTargetRegistry,
+    resources: RenderResourceRegistry,
     post_uniform_buffer: wgpu::Buffer,
     post_decal_uniform_buffer: wgpu::Buffer,
     post_bind_group: Option<wgpu::BindGroup>,
@@ -300,18 +304,11 @@ impl Renderer {
         surface_config: wgpu::SurfaceConfiguration,
         canvas_id: Option<String>,
     ) -> Result<Self, String> {
-        let depth_view = create_depth_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            MAIN_SAMPLE_COUNT,
-        );
-        let msaa_color_view = create_msaa_color_view(
+        let resources = RenderResourceRegistry::new_render_targets(
             &device,
             surface_config.width,
             surface_config.height,
             surface_config.format,
-            MAIN_SAMPLE_COUNT,
         );
         let screen_width = surface_config.width as f32;
         let screen_height = surface_config.height as f32;
@@ -374,40 +371,6 @@ impl Renderer {
             MAIN_SAMPLE_COUNT,
         );
         let pipeline_post = PipelinePost::new(&device, &queue, surface_config.format);
-        let post_color_view = create_post_color_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            surface_config.format,
-        );
-        let receiver_mask_view = create_receiver_mask_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            "voplay_receiver_mask",
-        );
-        let msaa_receiver_mask_view = create_msaa_receiver_mask_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            MAIN_SAMPLE_COUNT,
-        );
-        let surface_props_view = create_surface_props_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            "voplay_surface_props",
-        );
-        let msaa_surface_props_view = create_msaa_surface_props_view(
-            &device,
-            surface_config.width,
-            surface_config.height,
-            MAIN_SAMPLE_COUNT,
-        );
         let post_uniform_buffer = PipelinePost::create_uniform_buffer(&device);
         let post_decal_uniform_buffer = PipelinePost::create_decal_uniform_buffer(&device);
         queue.write_buffer(
@@ -430,11 +393,22 @@ impl Renderer {
         let post_depth_view = if MAIN_SAMPLE_COUNT > 1 {
             pipeline_depth.depth_texture_view()
         } else {
-            &depth_view
+            resources
+                .depth_view()
+                .ok_or_else(|| "voplay: missing depth target during renderer build".to_string())?
         };
+        let post_color_view = resources
+            .post_color_view()
+            .ok_or_else(|| "voplay: missing post target during renderer build".to_string())?;
+        let receiver_mask_view = resources.receiver_mask_view().ok_or_else(|| {
+            "voplay: missing receiver mask target during renderer build".to_string()
+        })?;
+        let surface_props_view = resources.surface_props_view().ok_or_else(|| {
+            "voplay: missing surface props target during renderer build".to_string()
+        })?;
         let post_bind_group = pipeline_post.create_bind_group(
             &device,
-            &post_color_view,
+            post_color_view,
             post_depth_view,
             &post_uniform_buffer,
             &post_decal_uniform_buffer,
@@ -442,8 +416,8 @@ impl Renderer {
             [fallback_decal_normal_atlas; MAX_POST_DECAL_ATLASES],
             [fallback_decal_roughness_atlas; MAX_POST_DECAL_ATLASES],
             [fallback_decal_mask_atlas; MAX_POST_DECAL_ATLASES],
-            &receiver_mask_view,
-            &surface_props_view,
+            receiver_mask_view,
+            surface_props_view,
         );
         let model_manager = ModelManager::new();
         let mut font_manager = FontManager::new()?;
@@ -454,15 +428,7 @@ impl Renderer {
             queue,
             surface,
             surface_config,
-            targets: RendererTargetRegistry {
-                depth_view: Some(depth_view),
-                msaa_color_view,
-                post_color_view: Some(post_color_view),
-                msaa_receiver_mask_view,
-                receiver_mask_view: Some(receiver_mask_view),
-                msaa_surface_props_view,
-                surface_props_view: Some(surface_props_view),
-            },
+            resources,
             post_uniform_buffer,
             post_decal_uniform_buffer,
             post_bind_group: Some(post_bind_group),
@@ -621,41 +587,12 @@ impl Renderer {
         self.surface_config.height = height;
         eprintln!("voplay: renderer resize {}x{}", width, height);
         self.surface.configure(&self.device, &self.surface_config);
-        self.targets.depth_view = Some(create_depth_view(
-            &self.device,
-            width,
-            height,
-            MAIN_SAMPLE_COUNT,
-        ));
-        self.targets.msaa_color_view = create_msaa_color_view(
+        self.resources.recreate_render_targets(
             &self.device,
             width,
             height,
             self.surface_config.format,
-            MAIN_SAMPLE_COUNT,
         );
-        let post_color_view =
-            create_post_color_view(&self.device, width, height, self.surface_config.format);
-        let receiver_mask_view = create_receiver_mask_view(
-            &self.device,
-            width,
-            height,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            "voplay_receiver_mask",
-        );
-        self.targets.msaa_receiver_mask_view =
-            create_msaa_receiver_mask_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
-        let surface_props_view = create_surface_props_view(
-            &self.device,
-            width,
-            height,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            "voplay_surface_props",
-        );
-        self.targets.msaa_surface_props_view =
-            create_msaa_surface_props_view(&self.device, width, height, MAIN_SAMPLE_COUNT);
         if MAIN_SAMPLE_COUNT > 1 {
             self.pipeline_depth.resize(&self.device, width, height);
         }
@@ -666,13 +603,25 @@ impl Renderer {
         let post_depth_view = if MAIN_SAMPLE_COUNT > 1 {
             self.pipeline_depth.depth_texture_view()
         } else {
-            self.targets.depth_view
-                .as_ref()
+            self.resources
+                .depth_view()
                 .expect("voplay: missing depth target after resize")
         };
+        let post_color_view = self
+            .resources
+            .post_color_view()
+            .expect("voplay: missing post target after resize");
+        let receiver_mask_view = self
+            .resources
+            .receiver_mask_view()
+            .expect("voplay: missing receiver mask target after resize");
+        let surface_props_view = self
+            .resources
+            .surface_props_view()
+            .expect("voplay: missing surface props target after resize");
         let post_bind_group = self.pipeline_post.create_bind_group(
             &self.device,
-            &post_color_view,
+            post_color_view,
             post_depth_view,
             &self.post_uniform_buffer,
             &self.post_decal_uniform_buffer,
@@ -680,12 +629,9 @@ impl Renderer {
             [fallback_decal_normal_atlas; MAX_POST_DECAL_ATLASES],
             [fallback_decal_roughness_atlas; MAX_POST_DECAL_ATLASES],
             [fallback_decal_mask_atlas; MAX_POST_DECAL_ATLASES],
-            &receiver_mask_view,
-            &surface_props_view,
+            receiver_mask_view,
+            surface_props_view,
         );
-        self.targets.post_color_view = Some(post_color_view);
-        self.targets.receiver_mask_view = Some(receiver_mask_view);
-        self.targets.surface_props_view = Some(surface_props_view);
         self.post_bind_group = Some(post_bind_group);
     }
 

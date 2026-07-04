@@ -46,7 +46,7 @@ type DisplayPulseWaiter = {
 const DISPLAY_PULSE_DELAY_MS = 0xFFFFFFFF;
 const DISPLAY_PULSE_VISIBLE_GUARD_MS = 34;
 const DISPLAY_PULSE_LOST_RAF_FALLBACK_MS = 34;
-const DISPLAY_PULSE_TIMER_TARGET_MS = 1000 / 60;
+const DISPLAY_PULSE_TIMER_TARGET_MS = 1000 / 120;
 const DISPLAY_PULSE_VISIBLE_BACKUP_MS = 250;
 const DISPLAY_PULSE_RAF_HEALTHY_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.05;
 const DISPLAY_PULSE_RAF_SLOW_MS = DISPLAY_PULSE_VISIBLE_BACKUP_MS;
@@ -971,7 +971,7 @@ export class RenderIsland {
     const scheduleId = ++this.displayPulseScheduleId;
     const nowMs = performance.now();
     const visible = document.visibilityState === "visible";
-    if (this.displayPulseMode !== "timer" && visible) {
+    if (this.shouldScheduleDisplayPulseRaf(visible)) {
       this.displayPulseRafId = window.requestAnimationFrame(() => this.handleDisplayPulse(scheduleId, "raf"));
     }
     if (this.shouldScheduleDisplayPulseTimer(visible)) {
@@ -980,18 +980,22 @@ export class RenderIsland {
     }
   }
 
+  private shouldScheduleDisplayPulseRaf(visible: boolean): boolean {
+    return visible && this.displayPulseMode === "raf";
+  }
+
   private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
     if (!visible) return true;
     if (this.displayPulseMode === "timer") return true;
-    // Visible hybrid cadence treats rAF as the sole display clock. Hidden pages
-    // and explicit timer mode keep timer fallback; visible timer cadence remains
-    // opt-in through pulse-mode=timer.
-    return false;
+    // Visible hybrid cadence uses one timer-driven display clock. The render
+    // pacer can divide 120Hz pulses down for 60Hz games, while explicit rAF
+    // mode remains available for browser-vsync diagnostics.
+    return this.displayPulseMode === "hybrid";
   }
 
   private displayPulseFallbackDelayMs(nowMs: number): number {
     if (document.visibilityState !== "visible") return DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
-    if (this.displayPulseMode === "timer") {
+    if (this.displayPulseMode === "timer" || this.displayPulseMode === "hybrid") {
       return this.displayPulseCadenceDelayMs(nowMs);
     }
     return DISPLAY_PULSE_VISIBLE_BACKUP_MS;
@@ -1080,7 +1084,7 @@ export class RenderIsland {
   }
 
   private recordTimerPulse(nowMs: number, previousWakeMs: number | null): void {
-    if (this.displayPulseMode !== "timer") return;
+    if (this.displayPulseMode === "raf") return;
     if (previousWakeMs === null) return;
     const deltaMs = nowMs - previousWakeMs;
     if (deltaMs < 1 || deltaMs > DISPLAY_PULSE_LOST_RAF_FALLBACK_MS * 2) return;

@@ -22,7 +22,6 @@ pub(super) struct FramePassDispatcher<'a> {
     pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
     pub(super) skybox_cubemap_id: Option<u32>,
     pub(super) light_uniform: &'a mut LightUniform,
-    pub(super) raw_model_draws: &'a [ModelDraw],
     pub(super) planned_model_draws: &'a [ModelDraw],
     pub(super) primitive_depth_draws: &'a mut Vec<PrimitiveDraw>,
     pub(super) primitive_depth_chunks: &'a [PrimitiveChunkRef],
@@ -72,7 +71,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
             RenderPassKind::DepthPrepass => {
                 let perf_enabled = self.perf_enabled;
                 let camera3d_uniform = self.camera3d_uniform;
-                let model_draws = self.raw_model_draws;
+                let model_draws = self.planned_model_draws;
                 let primitive_depth_chunks = self.primitive_depth_chunks;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
@@ -94,7 +93,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                 let perf_enabled = self.perf_enabled;
                 let camera3d_uniform = self.camera3d_uniform;
                 let camera3d_state = self.camera3d_state;
-                let model_draws = self.raw_model_draws;
+                let model_draws = self.planned_model_draws;
                 let primitive_shadow_chunks = self.primitive_shadow_chunks;
                 let retained_scene_draws = self.retained_scene_draws;
                 let shadow_resolution = self.shadow_resolution;
@@ -244,7 +243,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
             RenderPassKind::DepthPrepass => DepthPassExecutor::workload(),
             RenderPassKind::Shadow => ShadowPassExecutor::workload(),
             RenderPassKind::MainOpaque => MainOpaquePassExecutor::workload(
-                self.raw_model_draws.len(),
+                self.planned_model_draws.len(),
                 self.planned_primitive_draws.len(),
                 self.planned_primitive_chunks.len(),
             ),

@@ -264,6 +264,33 @@ impl PostDecalGpu {
         }
         self
     }
+
+    pub(crate) fn render_batch_bounds(&self) -> ([f32; 3], f32) {
+        let half_width = self.center_width[3].max(0.001);
+        let half_length = self.forward_length[3].max(0.001);
+        let depth = self.color_depth[3].max(0.001);
+        let radius = (half_width * half_width + half_length * half_length + depth * depth)
+            .sqrt()
+            .max(0.001);
+        (
+            [
+                self.center_width[0],
+                self.center_width[1],
+                self.center_width[2],
+            ],
+            radius,
+        )
+    }
+
+    pub(crate) fn render_batch_material_group(&self) -> u32 {
+        let atlas_slot = self.atlas_params[0];
+        let atlas_group = if atlas_slot >= 0.0 {
+            atlas_slot as u32 + 1
+        } else {
+            0
+        };
+        (atlas_group << 16) ^ self.material_params[3].to_bits()
+    }
 }
 
 #[repr(C)]

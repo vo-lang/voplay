@@ -202,6 +202,100 @@ func (e *Entity) AngularVelocity() voplay.Vec3 {
 	return e.Physics.angularVelocity
 }
 
+func (s *Scene) applyVehiclePoseReset(body *Entity, command VehiclePoseResetCommand) {
+	if s == nil || body == nil || body.Physics == nil {
+		return
+	}
+	rotation := voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Yaw)
+	body.position = command.Position
+	body.rotation = rotation
+	body.Physics.velocity = command.LinearVelocity
+	body.Physics.angularVelocity = command.AngularVelocity
+	if body.Physics.bodyID == 0 {
+		return
+	}
+	s.writePhysCmd(physicsCmdSetPos, body.Physics.bodyID, command.Position.X, command.Position.Y, command.Position.Z)
+	s.writePhysCmdQuat(physicsCmdSetRot, body.Physics.bodyID, rotation)
+	s.writePhysCmd(physicsCmdSetVel, body.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+	s.writePhysCmd(physicsCmdSetAngVel, body.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+	if s.worldID != 0 {
+		physBackend.ApplyPoseReset(s.worldID, body.Physics.bodyID, command)
+	}
+}
+
+func (s *Scene) applyVehicleMotionReset(body *Entity, command VehicleMotionResetCommand) {
+	if s == nil || body == nil || body.Physics == nil {
+		return
+	}
+	body.Physics.velocity = command.LinearVelocity
+	body.Physics.angularVelocity = command.AngularVelocity
+	if body.Physics.bodyID == 0 {
+		return
+	}
+	s.writePhysCmd(physicsCmdSetVel, body.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+	s.writePhysCmd(physicsCmdSetAngVel, body.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+	if s.worldID != 0 {
+		physBackend.ApplyMotionReset(s.worldID, body.Physics.bodyID, command)
+	}
+}
+
+func (s *Scene) applyVehicleSleepState(body *Entity, command VehicleSleepCommand) {
+	if s == nil || body == nil || body.Physics == nil || body.Physics.bodyID == 0 {
+		return
+	}
+	if s.worldID != 0 {
+		physBackend.ApplySleepState(s.worldID, body.Physics.bodyID, command)
+	}
+}
+
+func (s *Scene) applyVehicleRecovery(body *Entity, command VehicleRecoveryCommand) {
+	if s == nil || body == nil || body.Physics == nil {
+		return
+	}
+	s.applyVehiclePoseReset(body, command.Pose)
+	s.applyVehicleMotionReset(body, command.Motion)
+	if body.Physics.bodyID != 0 && s.worldID != 0 {
+		physBackend.ApplyRecovery(s.worldID, body.Physics.bodyID, command)
+	}
+}
+
+func ApplyEntityPhysicsConstraint(entity *Entity, command VehicleConstraintCommand) {
+	if entity == nil || entity.scene == nil {
+		return
+	}
+	entity.scene.applyEntityPhysicsConstraint(entity, command)
+}
+
+func (s *Scene) applyEntityPhysicsConstraint(entity *Entity, command VehicleConstraintCommand) {
+	if s == nil || entity == nil || entity.Physics == nil {
+		return
+	}
+	if command.ApplyPosition {
+		entity.position = command.Position
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetPos, entity.Physics.bodyID, command.Position.X, command.Position.Y, command.Position.Z)
+		}
+	}
+	if command.ApplyRotation {
+		entity.rotation = command.Rotation
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmdQuat(physicsCmdSetRot, entity.Physics.bodyID, command.Rotation)
+		}
+	}
+	if command.ApplyLinearVelocity {
+		entity.Physics.velocity = command.LinearVelocity
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetVel, entity.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+		}
+	}
+	if command.ApplyAngularVelocity {
+		entity.Physics.angularVelocity = command.AngularVelocity
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetAngVel, entity.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+		}
+	}
+}
+
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
 	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
@@ -266,6 +360,11 @@ type PhysicsBackend interface {
 	CreateRaycastVehicle(worldID, vehicleID, bodyID int)
 	DestroyRaycastVehicle(worldID, vehicleID int)
 	AddRaycastVehicleWheel(worldID, vehicleID int, data []byte)
+	ApplyVehicleForces(worldID, vehicleID int, command PhysicsBackendApplyCommand)
+	ApplyPoseReset(worldID, bodyID int, command VehiclePoseResetCommand)
+	ApplyMotionReset(worldID, bodyID int, command VehicleMotionResetCommand)
+	ApplySleepState(worldID, bodyID int, command VehicleSleepCommand)
+	ApplyRecovery(worldID, bodyID int, command VehicleRecoveryCommand)
 	SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64)
 	RaycastVehicleState(worldID, vehicleID int) []byte
 	Step(worldID int, dt float64, cmds []byte) []byte
@@ -313,6 +412,20 @@ func (defaultPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int) {
 func (defaultPhysicsBackend) AddRaycastVehicleWheel(worldID, vehicleID int, data []byte) {
 	physicsAddRaycastVehicleWheel(worldID, vehicleID, data)
 }
+
+func (defaultPhysicsBackend) ApplyVehicleForces(worldID, vehicleID int, command PhysicsBackendApplyCommand) {
+	for _, wheel := range command.Wheels {
+		physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheel.WheelIndex, wheel.SteeringAngle, wheel.EngineForce, wheel.BrakeForce)
+	}
+}
+
+func (defaultPhysicsBackend) ApplyPoseReset(worldID, bodyID int, command VehiclePoseResetCommand) {}
+
+func (defaultPhysicsBackend) ApplyMotionReset(worldID, bodyID int, command VehicleMotionResetCommand) {}
+
+func (defaultPhysicsBackend) ApplySleepState(worldID, bodyID int, command VehicleSleepCommand) {}
+
+func (defaultPhysicsBackend) ApplyRecovery(worldID, bodyID int, command VehicleRecoveryCommand) {}
 
 func (defaultPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64) {
 	physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheelID, steering, engineForce, brake)

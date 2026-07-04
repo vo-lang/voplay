@@ -2972,6 +2972,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(contactEvents[0].Fallback && contactEvents[0].Source == scene3d.ContactEventSourceBackendPairFallback, "scene3d contact events mark backend pair fallback")
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle wheel count before sync")
 	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: 1}, 1.0 / 60.0)
+	assert(len(pb.vehicleApplyCommands) > 0, "scene3d vehicle sends backend apply command")
 	assert(len(pb.vehicleControls) > 0, "scene3d vehicle sends wheel controls")
 	assert(pb.vehicleControls[0].steering < 0, "scene3d right steer uses backend sign convention")
 	state, ok := vehicle.WheelState(0)
@@ -3079,6 +3080,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	overlay.Destroy(s)
 	overlay.Destroy(s)
 	vehicle.SetPose(voplay.Vec3{Y: 1}, 0)
+	assert(len(pb.poseResetCommands) > 0, "scene3d vehicle SetPose sends backend pose reset command")
 	pb.vehicleControls = nil
 	pb.vehicleState = makeRaycastVehicleState()
 	vehicle.UpdateIntent(scene3d.VehicleIntent{Throttle: 1, Steering: -1}, 1.0 / 60.0)
@@ -3092,6 +3094,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	kstate := kart.UpdateIntent(scene3d.VehicleIntent{Throttle: 1, Steering: 0.5}, 1.0 / 60.0)
 	assert(kstate.Boosting, "scene3d kart controller boosting state")
 	kart.Respawn(track.PoseAt(0))
+	assert(len(pb.recoveryCommands) > 0, "scene3d kart respawn sends backend recovery command")
 	assertFloatNear(kart.BoostTimer, 0, 0.000001, "scene3d kart respawn clears boost")
 	vehicle.Destroy()
 	assert(len(pb.destroyVehicles) == 1, "scene3d vehicle destroy releases backend vehicle")
@@ -3171,6 +3174,7 @@ func testScene3DKartControllerAcceptance() {
 	stuckState := kart.Update(scene3d.KartInput{Throttle: 1}, 0.1)
 	assert(stuckState.Stuck && stuckState.ShouldRespawn, "scene3d kart stuck throttle requests respawn")
 	kart.RespawnNear(voplay.Vec3{X: 99, Y: 2, Z: -99})
+	assert(len(pb.recoveryCommands) > 0, "scene3d kart respawn near sends backend recovery command")
 	assertFloatNear(vehicle.Speed, 0, 0.000001, "scene3d kart respawn near clears speed")
 	assertFloatNear(vehicle.SteerAngle, 0, 0.000001, "scene3d kart respawn near clears steering")
 	assert(!vehicle.Drifting, "scene3d kart respawn near clears drifting")
@@ -3211,6 +3215,7 @@ func testScene3DVehicleRecovery() {
 	vehicle.SteerAngle = 0.4
 	vehicle.Drifting = true
 	recovery.RespawnNear(voplay.Vec3{X: 99, Y: 2, Z: -99})
+	assert(len(pb.recoveryCommands) > 0, "scene3d vehicle recovery respawn sends backend recovery command")
 	assertFloatNear(vehicle.Speed, 0, 0.000001, "scene3d vehicle recovery respawn clears speed")
 	assertFloatNear(vehicle.SteerAngle, 0, 0.000001, "scene3d vehicle recovery respawn clears steering")
 	assert(!vehicle.Drifting, "scene3d vehicle recovery respawn clears drift state")
@@ -3460,6 +3465,11 @@ type testScene3DPhysicsBackend struct {
 	bodyState []byte
 	contacts []byte
 	vehicleControls []testVehicleControl
+	vehicleApplyCommands []scene3d.PhysicsBackendApplyCommand
+	poseResetCommands []scene3d.VehiclePoseResetCommand
+	motionResetCommands []scene3d.VehicleMotionResetCommand
+	sleepCommands []scene3d.VehicleSleepCommand
+	recoveryCommands []scene3d.VehicleRecoveryCommand
 }
 
 type testVehicleControl struct {
@@ -3507,6 +3517,29 @@ func (b *testScene3DPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int
 }
 
 func (b *testScene3DPhysicsBackend) AddRaycastVehicleWheel(worldID, vehicleID int, data []byte) {}
+
+func (b *testScene3DPhysicsBackend) ApplyVehicleForces(worldID, vehicleID int, command scene3d.PhysicsBackendApplyCommand) {
+	b.vehicleApplyCommands = append(b.vehicleApplyCommands, command)
+	for _, wheel := range command.Wheels {
+		b.SetRaycastVehicleWheelControl(worldID, vehicleID, wheel.WheelIndex, wheel.SteeringAngle, wheel.EngineForce, wheel.BrakeForce)
+	}
+}
+
+func (b *testScene3DPhysicsBackend) ApplyPoseReset(worldID, bodyID int, command scene3d.VehiclePoseResetCommand) {
+	b.poseResetCommands = append(b.poseResetCommands, command)
+}
+
+func (b *testScene3DPhysicsBackend) ApplyMotionReset(worldID, bodyID int, command scene3d.VehicleMotionResetCommand) {
+	b.motionResetCommands = append(b.motionResetCommands, command)
+}
+
+func (b *testScene3DPhysicsBackend) ApplySleepState(worldID, bodyID int, command scene3d.VehicleSleepCommand) {
+	b.sleepCommands = append(b.sleepCommands, command)
+}
+
+func (b *testScene3DPhysicsBackend) ApplyRecovery(worldID, bodyID int, command scene3d.VehicleRecoveryCommand) {
+	b.recoveryCommands = append(b.recoveryCommands, command)
+}
 
 func (b *testScene3DPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64) {
 	b.vehicleControls = append(b.vehicleControls, testVehicleControl{wheelID: wheelID, steering: steering, engineForce: engineForce, brake: brake})

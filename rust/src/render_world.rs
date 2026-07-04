@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::math3d::{self, Quat, Vec3};
+use crate::model_loader::ModelManager;
 use crate::pipeline3d::{Camera3DUniform, MaterialOverride, ModelDraw, ModelUniform};
+use crate::pipeline_post::PostDecalGpu;
 use crate::primitive_scene::{
     PrimitiveChunkBatchInfo, PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate,
     PrimitiveRenderWorld,
@@ -79,11 +81,34 @@ pub struct RenderWorldChunk {
     pub last_upload_frame: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderTerrainBatchInput {
+    pub draw_index: usize,
+    pub bounds: RenderChunkBounds,
+    pub material_group: u32,
+    pub dirty_start: u32,
+    pub dirty_count: u32,
+    pub resident_state: RenderWorldChunkResidentState,
+    pub last_upload_frame: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderDecalBatchInput {
+    pub decal_index: usize,
+    pub bounds: RenderChunkBounds,
+    pub material_group: u32,
+    pub dirty_start: u32,
+    pub dirty_count: u32,
+    pub resident_state: RenderWorldChunkResidentState,
+    pub last_upload_frame: u32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RenderBatchPlan {
     pub frame_id: u32,
     pub visible_objects: u32,
     pub model_batch_indices: Vec<usize>,
+    pub terrain_batch_indices: Vec<usize>,
     pub primitive_draw_indices: Vec<usize>,
     pub primitive_chunk_indices: Vec<usize>,
     pub water_draw_indices: Vec<usize>,
@@ -141,6 +166,13 @@ impl RenderBatchPlan {
             .collect()
     }
 
+    pub fn terrain_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
+        self.terrain_batch_indices
+            .iter()
+            .filter_map(|index| draws.get(*index).copied())
+            .collect()
+    }
+
     pub fn primitive_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
         self.primitive_draw_indices
             .iter()
@@ -168,6 +200,13 @@ impl RenderBatchPlan {
             .filter_map(|index| chunks.get(*index).copied())
             .collect()
     }
+
+    pub fn decal_batches(&self, decals: &[PostDecalGpu]) -> Vec<PostDecalGpu> {
+        self.decal_batch_indices
+            .iter()
+            .filter_map(|index| decals.get(*index).copied())
+            .collect()
+    }
 }
 
 pub struct RenderBatchPlanner;
@@ -177,9 +216,11 @@ impl RenderBatchPlanner {
         frame_id: u32,
         scene_id: u32,
         model_draws: &[ModelDraw],
+        terrain_inputs: &[RenderTerrainBatchInput],
         primitive_draws: &[PrimitiveDraw],
         primitive_chunks: &[PrimitiveChunkRef],
         primitive_chunk_info: &[PrimitiveChunkBatchInfo],
+        decal_inputs: &[RenderDecalBatchInput],
         camera: Option<&Camera3DUniform>,
         quality: RenderBatchQualityProfile,
     ) -> RenderBatchPlan {
@@ -188,6 +229,34 @@ impl RenderBatchPlanner {
             ..Default::default()
         };
         for (index, draw) in model_draws.iter().enumerate() {
+            if let Some(input) = terrain_inputs
+                .iter()
+                .find(|input| input.draw_index == index)
+            {
+                let bounds = input.bounds;
+                if Self::outside_camera(camera, bounds) {
+                    plan.frustum_culled_chunks += 1;
+                    continue;
+                }
+                plan.model_batch_indices.push(index);
+                plan.terrain_batch_indices.push(index);
+                plan.visible_objects = plan.visible_objects.saturating_add(1);
+                plan.push_chunk(RenderWorldChunk {
+                    scene_id,
+                    chunk_id: draw.model_id,
+                    kind: RenderBatchKind::Terrain,
+                    bounds,
+                    lod_level: Self::select_lod(camera, bounds, RenderLodRange::default(), quality),
+                    material_group: input.material_group,
+                    instance_start: index as u32,
+                    instance_count: 1,
+                    dirty_start: input.dirty_start,
+                    dirty_count: input.dirty_count,
+                    resident_state: input.resident_state,
+                    last_upload_frame: input.last_upload_frame,
+                });
+                continue;
+            }
             let bounds = Self::model_draw_bounds(draw);
             if Self::outside_camera(camera, bounds) {
                 plan.frustum_culled_chunks += 1;
@@ -300,7 +369,82 @@ impl RenderBatchPlanner {
                 });
             }
         }
+        for input in decal_inputs {
+            let bounds = input.bounds;
+            if Self::outside_camera(camera, bounds) {
+                plan.frustum_culled_chunks += 1;
+                continue;
+            }
+            plan.decal_batch_indices.push(input.decal_index);
+            plan.visible_objects = plan.visible_objects.saturating_add(1);
+            plan.push_chunk(RenderWorldChunk {
+                scene_id,
+                chunk_id: 0xC000_0000 | input.decal_index as u32,
+                kind: RenderBatchKind::Decal,
+                bounds,
+                lod_level: Self::select_lod(camera, bounds, RenderLodRange::default(), quality),
+                material_group: input.material_group,
+                instance_start: input.decal_index as u32,
+                instance_count: 1,
+                dirty_start: input.dirty_start,
+                dirty_count: input.dirty_count,
+                resident_state: input.resident_state,
+                last_upload_frame: input.last_upload_frame,
+            });
+        }
         plan
+    }
+
+    pub fn terrain_inputs(
+        frame_id: u32,
+        model_draws: &[ModelDraw],
+        models: &ModelManager,
+    ) -> Vec<RenderTerrainBatchInput> {
+        model_draws
+            .iter()
+            .enumerate()
+            .filter_map(|(draw_index, draw)| {
+                let model = models.get(draw.model_id)?;
+                let has_terrain = model
+                    .meshes
+                    .iter()
+                    .any(|mesh| !mesh.skinned && mesh.material.control_texture_id.is_some());
+                if !has_terrain {
+                    return None;
+                }
+                Some(RenderTerrainBatchInput {
+                    draw_index,
+                    bounds: Self::model_draw_bounds(draw),
+                    material_group: draw.material.id,
+                    dirty_start: 0,
+                    dirty_count: 0,
+                    resident_state: RenderWorldChunkResidentState::Resident,
+                    last_upload_frame: frame_id,
+                })
+            })
+            .collect()
+    }
+
+    pub fn decal_inputs(frame_id: u32, decals: &[PostDecalGpu]) -> Vec<RenderDecalBatchInput> {
+        decals
+            .iter()
+            .enumerate()
+            .map(|(decal_index, decal)| {
+                let (center, radius) = decal.render_batch_bounds();
+                RenderDecalBatchInput {
+                    decal_index,
+                    bounds: RenderChunkBounds {
+                        center: Vec3::new(center[0], center[1], center[2]),
+                        radius,
+                    },
+                    material_group: decal.render_batch_material_group(),
+                    dirty_start: decal_index as u32,
+                    dirty_count: 1,
+                    resident_state: RenderWorldChunkResidentState::Dirty,
+                    last_upload_frame: frame_id,
+                }
+            })
+            .collect()
     }
 
     fn select_lod(
@@ -720,9 +864,11 @@ impl RenderWorld {
             frame_id,
             scene_id,
             &model_draws,
+            &[],
             &primitive_draws,
             &primitive_chunks,
             &primitive_chunk_info,
+            &[],
             camera,
             RenderBatchQualityProfile::default(),
         )
@@ -776,6 +922,28 @@ mod tests {
         }
     }
 
+    fn model_draw(model_id: u32, position: Vec3, material_id: u32) -> ModelDraw {
+        ModelDraw {
+            model_id,
+            model_uniform: ModelUniform {
+                model: math3d::model_matrix(position, Quat::IDENTITY, Vec3::ONE),
+                normal_matrix: math3d::MAT4_IDENTITY,
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                material_params: [1.0, 1.0, 1.0, 1.0],
+                emissive_color: [0.0, 0.0, 0.0, 0.0],
+                texture_flags: [0.0, 0.0, 0.0, 0.0],
+                material_response: [1.0, 0.0, 1.0, 1.0],
+                texture_flags2: [0.0, 0.0, 0.0, 0.0],
+            },
+            material: MaterialOverride {
+                id: material_id,
+                ..Default::default()
+            },
+            animation_world_id: 0,
+            animation_target_id: 0,
+        }
+    }
+
     #[test]
     fn render_world_builds_unified_batch_plan() {
         let mut world = RenderWorld::new();
@@ -823,9 +991,11 @@ mod tests {
             120,
             7,
             &model_draws,
+            &[],
             &primitive_draws,
             &primitive_chunks,
             &primitive_chunk_info,
+            &[],
             None,
             RenderBatchQualityProfile::default(),
         );
@@ -860,6 +1030,64 @@ mod tests {
     }
 
     #[test]
+    fn batch_planner_constructs_terrain_and_decal_entries() {
+        let terrain_draw = model_draw(42, Vec3::new(3.0, 0.0, 0.0), 9);
+        let terrain_inputs = vec![RenderTerrainBatchInput {
+            draw_index: 0,
+            bounds: RenderChunkBounds {
+                center: Vec3::new(3.0, 0.0, 0.0),
+                radius: 4.0,
+            },
+            material_group: 77,
+            dirty_start: 4,
+            dirty_count: 2,
+            resident_state: RenderWorldChunkResidentState::Dirty,
+            last_upload_frame: 41,
+        }];
+        let decals = vec![PostDecalGpu::new(
+            [2.0, 0.5, 1.0],
+            0.25,
+            3.0,
+            5.0,
+            1.0,
+            [1.0, 0.8, 0.6, 0.75],
+        )];
+        let decal_inputs = RenderBatchPlanner::decal_inputs(41, &decals);
+
+        let plan = RenderBatchPlanner::build(
+            41,
+            3,
+            &[terrain_draw],
+            &terrain_inputs,
+            &[],
+            &[],
+            &[],
+            &decal_inputs,
+            None,
+            RenderBatchQualityProfile::default(),
+        );
+
+        assert_eq!(plan.mesh_batches, 0);
+        assert_eq!(plan.terrain_batches, 1);
+        assert_eq!(plan.decal_batches, 1);
+        assert_eq!(plan.total_batches(), 2);
+        assert_eq!(plan.model_batch_indices, vec![0]);
+        assert_eq!(plan.terrain_batch_indices, vec![0]);
+        assert_eq!(plan.decal_batch_indices, vec![0]);
+        assert_eq!(plan.terrain_batches(&[terrain_draw]).len(), 1);
+        assert_eq!(plan.decal_batches(&decals).len(), 1);
+        assert_eq!(plan.dirty_uploads, 2);
+        assert!(plan
+            .visible_chunks
+            .iter()
+            .any(|chunk| chunk.kind == RenderBatchKind::Terrain && chunk.material_group == 77));
+        assert!(plan
+            .visible_chunks
+            .iter()
+            .any(|chunk| chunk.kind == RenderBatchKind::Decal && chunk.dirty_count == 1));
+    }
+
+    #[test]
     fn batch_planner_selects_lod_from_distance_and_metadata() {
         let primitive_chunks = vec![PrimitiveChunkRef {
             scene_id: 1,
@@ -885,9 +1113,11 @@ mod tests {
             9,
             1,
             &[],
+            &[],
             &primitive_draws,
             &primitive_chunks,
             &primitive_chunk_info,
+            &[],
             Some(&camera),
             RenderBatchQualityProfile::default(),
         );
@@ -930,7 +1160,9 @@ mod tests {
             10,
             2,
             &[far_model],
+            &[],
             &primitive_draws,
+            &[],
             &[],
             &[],
             Some(&camera),

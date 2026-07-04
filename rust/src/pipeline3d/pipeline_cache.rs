@@ -1,5 +1,5 @@
-use super::*;
 use super::shader_library;
+use super::*;
 
 impl Pipeline3D {
     pub fn new(

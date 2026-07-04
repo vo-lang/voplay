@@ -1,0 +1,384 @@
+package scene3d
+
+import (
+	"errors"
+	"math"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+)
+
+type ChunkAuthoring struct {
+	CellSize float64
+	PreloadChunks bool
+}
+
+type PrimitiveBatchAuthoring struct {
+	Name string
+	Kind primitive3d.LayerKind
+	Chunk ChunkAuthoring
+}
+
+type SurfaceMaterialAuthoring struct {
+	Preset primitive3d.MaterialPreset
+	Base voplay.MaterialDesc
+	Name string
+}
+
+type PrimitiveInstanceAuthoring struct {
+	Shape primitive3d.ShapeID
+	Material primitive3d.MaterialID
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Scale voplay.Vec3
+	Tint voplay.Color
+	Flags primitive3d.InstanceFlags
+	LodNear float64
+	LodFar float64
+	WindStrength float64
+	AtlasUV voplay.Rect
+}
+
+type PrimitiveWorldAuthoringDesc struct {
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	Layers []PrimitiveBatchAuthoring
+}
+
+type PrimitiveWorldAuthoring struct {
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	scene *Scene
+	layers map[string]*primitive3d.Layer
+	layerOrder []string
+}
+
+type PrimitiveAuthoringPart struct {
+	Layer *primitive3d.Layer
+	Object primitive3d.ObjectID
+	Shape primitive3d.ShapeID
+	Material primitive3d.MaterialID
+	Flags primitive3d.InstanceFlags
+	LodNear float64
+	LodFar float64
+	WindStrength float64
+	AtlasUV voplay.Rect
+	Scale voplay.Vec3
+	Tint voplay.Color
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	Visible bool
+}
+
+type ColliderAuthoring struct {
+	Layer int
+	Mask int
+	SegmentLength float64
+	MinSegments int
+	GroundTag string
+	GroundY float64
+	GroundHalfExtents voplay.Vec3
+	GroundFriction float64
+	GroundRestitution float64
+	RoadTag string
+	RoadYOffset float64
+	RoadHalfHeight float64
+	RoadOuterOffset float64
+	RoadSegmentOverlap float64
+	RoadFriction float64
+	RoadRestitution float64
+}
+
+type TrackColliderStripResult struct {
+	Entities []*Entity
+}
+
+type WaterAuthoring struct {
+	Material SurfaceMaterialAuthoring
+	Surface TrackSurface
+}
+
+type BoostAuthoring struct {
+	Material SurfaceMaterialAuthoring
+	Surface TrackSurface
+}
+
+type RailAuthoring struct {
+	Material SurfaceMaterialAuthoring
+	Collider ColliderAuthoring
+}
+
+type WallAuthoring struct {
+	Material SurfaceMaterialAuthoring
+	Collider ColliderAuthoring
+}
+
+func NewPrimitiveWorldAuthoring(scene *Scene, desc PrimitiveWorldAuthoringDesc) *PrimitiveWorldAuthoring {
+	shapes := desc.Shapes
+	if shapes == nil {
+		shapes = primitive3d.NewShapeRegistry()
+	}
+	materials := desc.Materials
+	if materials == nil {
+		materials = primitive3d.NewMaterialPalette()
+	}
+	authoring := &PrimitiveWorldAuthoring{Shapes: shapes, Materials: materials, scene: scene, layers: map[string]*primitive3d.Layer{}, layerOrder: []string{}}
+	for _, layer := range desc.Layers {
+		authoring.AddLayer(layer)
+	}
+	return authoring
+}
+
+func (a *PrimitiveWorldAuthoring) CloneForScene(scene *Scene, dynamic PrimitiveBatchAuthoring) *PrimitiveWorldAuthoring {
+	if a == nil {
+		return nil
+	}
+	clone := &PrimitiveWorldAuthoring{Shapes: a.Shapes, Materials: a.Materials, scene: scene, layers: map[string]*primitive3d.Layer{}, layerOrder: []string{}}
+	for _, name := range a.layerOrder {
+		source := a.layers[name]
+		if source == nil {
+			continue
+		}
+		if source.Kind() == primitive3d.DynamicLayer {
+			desc := dynamic
+			if desc.Name == "" {
+				desc.Name = name
+			}
+			if desc.Kind == 0 {
+				desc.Kind = primitive3d.DynamicLayer
+			}
+			clone.AddLayer(desc)
+			continue
+		}
+		clone.registerLayer(name, source.Clone())
+	}
+	return clone
+}
+
+func (a *PrimitiveWorldAuthoring) AddLayer(desc PrimitiveBatchAuthoring) *primitive3d.Layer {
+	a.ensureReady()
+	layer := a.newLayer(desc)
+	name := desc.Name
+	if name == "" {
+		name = layer.Name()
+	}
+	a.registerLayer(name, layer)
+	return layer
+}
+
+func (a *PrimitiveWorldAuthoring) Layer(name string) *primitive3d.Layer {
+	if a == nil || a.layers == nil {
+		return nil
+	}
+	return a.layers[name]
+}
+
+func (a *PrimitiveWorldAuthoring) BuildLayer(name string) {
+	layer := a.Layer(name)
+	if layer != nil {
+		layer.Build()
+	}
+}
+
+func (a *PrimitiveWorldAuthoring) Shape(desc primitive3d.ShapeDesc) primitive3d.ShapeID {
+	a.ensureReady()
+	return a.Shapes.Shape(desc)
+}
+
+func (a *PrimitiveWorldAuthoring) Material(desc SurfaceMaterialAuthoring) primitive3d.MaterialID {
+	a.ensureReady()
+	return a.Materials.Material(primitive3d.MaterialDesc{Preset: desc.Preset, Base: desc.Base, Name: desc.Name})
+}
+
+func (a *PrimitiveWorldAuthoring) AddPrimitive(layerName string, desc PrimitiveInstanceAuthoring) primitive3d.ObjectID {
+	layer := a.requireLayer(layerName)
+	return layer.Add(primitive3d.Instance{Shape: desc.Shape, Material: desc.Material, Position: desc.Position, Rotation: normalizeAuthoringQuat(desc.Rotation), Scale: normalizeAuthoringScale(desc.Scale), Tint: desc.Tint, Flags: desc.Flags, LodNear: desc.LodNear, LodFar: desc.LodFar, WindStrength: desc.WindStrength, AtlasUV: desc.AtlasUV})
+}
+
+func (a *PrimitiveWorldAuthoring) AddDynamic(layerName string, desc PrimitiveInstanceAuthoring) *PrimitiveAuthoringPart {
+	layer := a.requireLayer(layerName)
+	instance := primitive3d.Instance{Shape: desc.Shape, Material: desc.Material, Position: desc.Position, Rotation: normalizeAuthoringQuat(desc.Rotation), Scale: normalizeAuthoringScale(desc.Scale), Tint: desc.Tint, Flags: desc.Flags, LodNear: desc.LodNear, LodFar: desc.LodFar, WindStrength: desc.WindStrength, AtlasUV: desc.AtlasUV}
+	id := layer.Add(instance)
+	return &PrimitiveAuthoringPart{Layer: layer, Object: id, Shape: desc.Shape, Material: desc.Material, Flags: desc.Flags, LodNear: desc.LodNear, LodFar: desc.LodFar, WindStrength: desc.WindStrength, AtlasUV: desc.AtlasUV, Position: desc.Position, Rotation: normalizeAuthoringQuat(desc.Rotation), Scale: normalizeAuthoringScale(desc.Scale), Tint: desc.Tint, Visible: true}
+}
+
+func (p *PrimitiveAuthoringPart) SetPose(position voplay.Vec3, rotation voplay.Quat) {
+	p.setPose(position, rotation, false)
+}
+
+func (p *PrimitiveAuthoringPart) SetPoseScale(position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3) {
+	if p == nil {
+		return
+	}
+	nextScale := normalizeAuthoringScale(scale)
+	scaleChanged := p.Scale != nextScale
+	p.Scale = nextScale
+	p.setPose(position, rotation, scaleChanged)
+}
+
+func (p *PrimitiveAuthoringPart) SetVisible(visible bool) {
+	if p == nil || p.Layer == nil || p.Object == 0 {
+		return
+	}
+	if p.Visible == visible {
+		return
+	}
+	p.Visible = visible
+	p.write()
+}
+
+func (a *PrimitiveWorldAuthoring) ensureReady() {
+	if a == nil {
+		panic("scene3d.PrimitiveWorldAuthoring: authoring must not be nil")
+	}
+	if a.Shapes == nil {
+		a.Shapes = primitive3d.NewShapeRegistry()
+	}
+	if a.Materials == nil {
+		a.Materials = primitive3d.NewMaterialPalette()
+	}
+	if a.layers == nil {
+		a.layers = map[string]*primitive3d.Layer{}
+	}
+	if a.layerOrder == nil {
+		a.layerOrder = []string{}
+	}
+}
+
+func (a *PrimitiveWorldAuthoring) newLayer(desc PrimitiveBatchAuthoring) *primitive3d.Layer {
+	kind := desc.Kind
+	if kind == 0 {
+		kind = primitive3d.StaticLayer
+	}
+	return primitive3d.NewLayer(primitive3d.LayerDesc{Kind: kind, Shapes: a.Shapes, Materials: a.Materials, Chunking: primitive3d.ChunkingDesc{CellSize: desc.Chunk.CellSize}, PreloadChunks: desc.Chunk.PreloadChunks, Name: desc.Name})
+}
+
+func (a *PrimitiveWorldAuthoring) registerLayer(name string, layer *primitive3d.Layer) {
+	a.ensureReady()
+	if layer == nil {
+		panic("scene3d.PrimitiveWorldAuthoring.AddLayer: layer must not be nil")
+	}
+	if name == "" {
+		name = layer.Name()
+	}
+	if name == "" {
+		panic("scene3d.PrimitiveWorldAuthoring.AddLayer: layer name is required")
+	}
+	if _, exists := a.layers[name]; !exists {
+		a.layerOrder = append(a.layerOrder, name)
+	}
+	a.layers[name] = layer
+	if a.scene != nil {
+		a.scene.AddPrimitiveLayer(layer)
+	}
+}
+
+func (a *PrimitiveWorldAuthoring) requireLayer(name string) *primitive3d.Layer {
+	layer := a.Layer(name)
+	if layer == nil {
+		panic("scene3d.PrimitiveWorldAuthoring: unknown primitive layer " + name)
+	}
+	return layer
+}
+
+func (p *PrimitiveAuthoringPart) setPose(position voplay.Vec3, rotation voplay.Quat, force bool) {
+	if p == nil || p.Layer == nil || p.Object == 0 {
+		return
+	}
+	nextRotation := normalizeAuthoringQuat(rotation)
+	if !force && p.Position == position && p.Rotation == nextRotation {
+		return
+	}
+	p.Position = position
+	p.Rotation = nextRotation
+	p.write()
+}
+
+func (p *PrimitiveAuthoringPart) write() {
+	if p == nil || p.Layer == nil || p.Object == 0 {
+		return
+	}
+	scale := p.Scale
+	if !p.Visible {
+		scale = voplay.Vec3{X: 0.001, Y: 0.001, Z: 0.001}
+	}
+	p.Layer.Set(p.Object, primitive3d.Instance{Shape: p.Shape, Material: p.Material, Flags: p.Flags, LodNear: p.LodNear, LodFar: p.LodFar, WindStrength: p.WindStrength, AtlasUV: p.AtlasUV, Position: p.Position, Rotation: normalizeAuthoringQuat(p.Rotation), Scale: normalizeAuthoringScale(scale), Tint: p.Tint, Object: p.Object})
+}
+
+func normalizeAuthoringQuat(rotation voplay.Quat) voplay.Quat {
+	if rotation == (voplay.Quat{}) {
+		return voplay.QuatIdentity()
+	}
+	return rotation
+}
+
+func normalizeAuthoringScale(scale voplay.Vec3) voplay.Vec3 {
+	if scale == (voplay.Vec3{}) {
+		return voplay.Vec3{X: 1, Y: 1, Z: 1}
+	}
+	return scale
+}
+
+func SpawnTrackColliderStrip(scene *Scene, track *Track, desc ColliderAuthoring) (TrackColliderStripResult, error) {
+	if scene == nil {
+		return TrackColliderStripResult{}, errors.New("scene3d.SpawnTrackColliderStrip: scene is nil")
+	}
+	if track == nil {
+		return TrackColliderStripResult{}, errors.New("scene3d.SpawnTrackColliderStrip: track is nil")
+	}
+	if track.Length() <= 0 {
+		return TrackColliderStripResult{}, errors.New("scene3d.SpawnTrackColliderStrip: track length must be > 0")
+	}
+	desc = normalizeColliderAuthoring(desc)
+	result := TrackColliderStripResult{Entities: []*Entity{}}
+	if desc.GroundHalfExtents.X > 0 && desc.GroundHalfExtents.Y > 0 && desc.GroundHalfExtents.Z > 0 {
+		ground := scene.Spawn(EntityDesc{Position: voplay.Vec3{Y: desc.GroundY}, Tag: desc.GroundTag, Physics: &Physics{Type: Static, Collider: Box(desc.GroundHalfExtents.X, desc.GroundHalfExtents.Y, desc.GroundHalfExtents.Z), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.GroundFriction, Restitution: desc.GroundRestitution}, PickMode: PickDisabled})
+		ground.Visible = false
+		result.Entities = append(result.Entities, ground)
+	}
+	count := int(math.Ceil(track.Length() / desc.SegmentLength))
+	if count < desc.MinSegments {
+		count = desc.MinSegments
+	}
+	step := track.Length() / float64(count)
+	for i := 0; i < count; i++ {
+		pose := track.PoseAt(float64(i) * step + step * 0.5)
+		ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: desc.RoadYOffset}), Rotation: pose.Rotation, Tag: desc.RoadTag, Physics: &Physics{Type: Static, Collider: Box(pose.HalfWidth + desc.RoadOuterOffset, desc.RoadHalfHeight, step * desc.RoadSegmentOverlap), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.RoadFriction, Restitution: desc.RoadRestitution}, PickMode: PickDisabled})
+		ent.Visible = false
+		result.Entities = append(result.Entities, ent)
+	}
+	return result, nil
+}
+
+func normalizeColliderAuthoring(desc ColliderAuthoring) ColliderAuthoring {
+	if desc.Layer == 0 {
+		desc.Layer = voplay.CollisionLayerDefault
+	}
+	if desc.Mask == 0 {
+		desc.Mask = voplay.CollisionMaskAll
+	}
+	if desc.SegmentLength <= 0 {
+		desc.SegmentLength = 50
+	}
+	if desc.MinSegments <= 0 {
+		desc.MinSegments = 1
+	}
+	if desc.GroundTag == "" {
+		desc.GroundTag = "track_ground_physics"
+	}
+	if desc.GroundFriction == 0 {
+		desc.GroundFriction = 0.72
+	}
+	if desc.RoadTag == "" {
+		desc.RoadTag = "track_road_physics"
+	}
+	if desc.RoadHalfHeight <= 0 {
+		desc.RoadHalfHeight = 0.18
+	}
+	if desc.RoadSegmentOverlap <= 0 {
+		desc.RoadSegmentOverlap = 0.72
+	}
+	if desc.RoadFriction == 0 {
+		desc.RoadFriction = 1.0
+	}
+	return desc
+}

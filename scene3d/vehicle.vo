@@ -74,6 +74,33 @@ type VehiclePoseResetCommand struct {
 	AngularVelocity voplay.Vec3
 }
 
+type VehicleMotionResetCommand struct {
+	LinearVelocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+}
+
+type VehicleSleepCommand struct {
+	Sleeping bool
+}
+
+type VehicleRecoveryCommand struct {
+	Pose VehiclePoseResetCommand
+	Motion VehicleMotionResetCommand
+	Reason string
+}
+
+type VehicleConstraintCommand struct {
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	LinearVelocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+	ApplyPosition bool
+	ApplyRotation bool
+	ApplyLinearVelocity bool
+	ApplyAngularVelocity bool
+	Reason string
+}
+
 type VehicleWheelVisualSample struct {
 	WheelIndex int
 	Center voplay.Vec3
@@ -204,9 +231,7 @@ func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt flo
 	}
 	v.Drifting = backendCommand.ForceCommand.Drifting
 	v.SteerAngle = backendCommand.SteeringAngle
-	for _, wheel := range backendCommand.Wheels {
-		physBackend.SetRaycastVehicleWheelControl(scene.worldID, v.vehicleID, wheel.WheelIndex, wheel.SteeringAngle, wheel.EngineForce, wheel.BrakeForce)
-	}
+	physBackend.ApplyVehicleForces(scene.worldID, v.vehicleID, backendCommand)
 	return backendCommand
 }
 
@@ -254,10 +279,46 @@ func ResetVehicleMotionState(vehicle *Vehicle) {
 	if vehicle == nil {
 		return
 	}
-	vehicle.Speed = 0
-	vehicle.SteerAngle = 0
-	vehicle.WheelSpin = 0
-	vehicle.Drifting = false
+	vehicle.applyMotionResetToBackend(VehicleMotionResetCommand{})
+}
+
+func ApplyVehicleSleepState(vehicle *Vehicle, command VehicleSleepCommand) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.applySleepStateToBackend(command)
+}
+
+func ApplyVehicleRecovery(vehicle *Vehicle, command VehicleRecoveryCommand) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.applyRecoveryToBackend(command)
+}
+
+func ApplyVehicleConstraint(vehicle *Vehicle, command VehicleConstraintCommand) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.applyConstraintToBackend(command)
+}
+
+func (v *Vehicle) resetRuntimeMotionState() {
+	if v == nil {
+		return
+	}
+	v.Speed = 0
+	v.SteerAngle = 0
+	v.WheelSpin = 0
+	v.Drifting = false
+}
+
+func (v *Vehicle) resetRuntimePoseState(yaw float64) {
+	if v == nil {
+		return
+	}
+	v.Yaw = yaw
+	v.resetRuntimeMotionState()
 }
 
 func (v *Vehicle) VisualWheelSample(index int) (VehicleWheelVisualSample, bool) {
@@ -282,21 +343,82 @@ func (v *Vehicle) applyPoseResetToBackend(command VehiclePoseResetCommand) {
 	if v == nil || v.Body == nil {
 		return
 	}
-	v.Yaw = command.Yaw
-	v.Speed = 0
-	v.SteerAngle = 0
-	v.WheelSpin = 0
-	v.Drifting = false
-	v.Body.SetPosition(command.Position)
-	v.Body.SetRotation(voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Yaw))
-	if v.Body.Physics != nil {
-		v.Body.SetVelocity(command.LinearVelocity)
-		v.Body.SetAngularVelocity(command.AngularVelocity)
-		v.Body.Physics.velocity = command.LinearVelocity
-		v.Body.Physics.angularVelocity = command.AngularVelocity
+	v.resetRuntimePoseState(command.Yaw)
+	scene := v.scene
+	if scene == nil {
+		scene = v.Body.scene
+	}
+	if scene != nil {
+		scene.applyVehiclePoseReset(v.Body, command)
 	}
 	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
 		v.applyForceCommandToBackend(VehicleForceCommand{BrakeForce: v.Config.BrakeForce, Surface: v.CurrentSurfaceMaterial()}, 1.0 / 60.0)
+	}
+}
+
+func (v *Vehicle) applyMotionResetToBackend(command VehicleMotionResetCommand) {
+	if v == nil {
+		return
+	}
+	v.resetRuntimeMotionState()
+	if v.Body == nil {
+		return
+	}
+	scene := v.scene
+	if scene == nil {
+		scene = v.Body.scene
+	}
+	if scene != nil {
+		scene.applyVehicleMotionReset(v.Body, command)
+	}
+}
+
+func (v *Vehicle) applySleepStateToBackend(command VehicleSleepCommand) {
+	if v == nil || v.Body == nil {
+		return
+	}
+	scene := v.scene
+	if scene == nil {
+		scene = v.Body.scene
+	}
+	if scene != nil {
+		scene.applyVehicleSleepState(v.Body, command)
+	}
+}
+
+func (v *Vehicle) applyRecoveryToBackend(command VehicleRecoveryCommand) {
+	if v == nil || v.Body == nil {
+		return
+	}
+	v.resetRuntimePoseState(command.Pose.Yaw)
+	scene := v.scene
+	if scene == nil {
+		scene = v.Body.scene
+	}
+	if scene != nil {
+		scene.applyVehicleRecovery(v.Body, command)
+	}
+	if v.scene != nil && v.scene.worldID != 0 && v.vehicleID != 0 {
+		v.applyForceCommandToBackend(VehicleForceCommand{BrakeForce: v.Config.BrakeForce, Surface: v.CurrentSurfaceMaterial()}, 1.0 / 60.0)
+	}
+}
+
+func (v *Vehicle) applyConstraintToBackend(command VehicleConstraintCommand) {
+	if v == nil || v.Body == nil {
+		return
+	}
+	scene := v.scene
+	if scene == nil {
+		scene = v.Body.scene
+	}
+	if scene != nil {
+		scene.applyEntityPhysicsConstraint(v.Body, command)
+	}
+	if command.ApplyRotation {
+		v.Yaw = vehicleYawFromRotation(command.Rotation)
+	}
+	if command.ApplyLinearVelocity {
+		v.Speed = command.LinearVelocity.Length()
 	}
 }
 

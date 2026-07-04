@@ -27,7 +27,6 @@ mod skinned_submitter;
 mod terrain_submitter;
 mod water_submitter;
 
-
 /// Maximum number of lights per frame.
 const MAX_LIGHTS: usize = 8;
 const MAX_JOINTS: usize = animation::MAX_JOINTS;

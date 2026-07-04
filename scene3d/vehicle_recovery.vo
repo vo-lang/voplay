@@ -96,7 +96,7 @@ func (r *VehicleRecovery) Respawn(pose TrackPose) {
 	if r == nil || r.Vehicle == nil {
 		return
 	}
-	r.Vehicle.SetPose(pose.Position, pose.Yaw)
+	ApplyVehicleRecovery(r.Vehicle, VehicleRecoveryCommand{Pose: VehiclePoseResetCommand{Position: pose.Position, Yaw: pose.Yaw}, Motion: VehicleMotionResetCommand{}, Reason: "vehicle_recovery_respawn"})
 	r.Reset()
 }
 

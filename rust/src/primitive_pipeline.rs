@@ -8,8 +8,8 @@ use crate::model_loader::{MeshMaterial, MeshVertex, ModelId, ModelManager};
 use crate::pipeline3d::{Camera3DUniform, LightUniform, MaterialOverride, ModelUniform};
 use crate::primitive_scene::{
     PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate, PRIMITIVE_FLAG_ATLAS_UV,
-    PRIMITIVE_FLAG_BILLBOARD, PRIMITIVE_FLAG_NO_SHADOW, PRIMITIVE_FLAG_Y_BILLBOARD,
-    PRIMITIVE_FLAG_WATER_SURFACE,
+    PRIMITIVE_FLAG_BILLBOARD, PRIMITIVE_FLAG_NO_SHADOW, PRIMITIVE_FLAG_WATER_SURFACE,
+    PRIMITIVE_FLAG_Y_BILLBOARD,
 };
 use crate::renderer_perf::{elapsed_ms, perf_now};
 use crate::texture::TextureManager;

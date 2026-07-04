@@ -146,7 +146,7 @@ func (k *KartController) Respawn(pose TrackPose) {
 	if k == nil || k.Vehicle == nil {
 		return
 	}
-	k.Vehicle.SetPose(pose.Position, pose.Yaw)
+	ApplyVehicleRecovery(k.Vehicle, VehicleRecoveryCommand{Pose: VehiclePoseResetCommand{Position: pose.Position, Yaw: pose.Yaw}, Motion: VehicleMotionResetCommand{}, Reason: "kart_controller_respawn"})
 	k.Dynamics.Reset()
 	k.BoostTimer = 0
 	k.DriftCharge = 0

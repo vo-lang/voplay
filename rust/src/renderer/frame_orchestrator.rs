@@ -95,7 +95,7 @@ impl Renderer {
             text_count,
             sprite_count,
             model_command_count,
-            projected_decal_count,
+            projected_decal_count: _projected_decal_count,
             scene_upsert_count,
             scene_removal_count,
             scene_draw_count,
@@ -158,9 +158,6 @@ impl Renderer {
             }
         }
         let contact_ao_active = post_contact_ao_strength > 0.001 && post_contact_ao_quality > 0;
-        let projected_decals_active = !projected_decals.is_empty();
-        let post_depth_active = contact_ao_active || projected_decals_active;
-        let depth_prepass_active = MAIN_SAMPLE_COUNT > 1 && post_depth_active;
         let primitives_enabled = !perf_overrides.has(RENDERER_DIAG_DISABLE_PRIMITIVES);
         let primitive_shadows_enabled = primitives_enabled
             && shadow_enabled
@@ -181,7 +178,36 @@ impl Renderer {
                     &mut primitive_chunks,
                     &mut primitive_chunk_info,
                 );
-            if depth_prepass_active {
+        }
+        perf.scene_update_ms = elapsed_ms_opt(scene_update_start);
+        let frame_id = debug_frame_count.min(u32::MAX as u64) as u32;
+        let terrain_batch_inputs =
+            RenderBatchPlanner::terrain_inputs(frame_id, &model_draws, &self.model_manager);
+        let decal_batch_inputs = RenderBatchPlanner::decal_inputs(frame_id, &projected_decals);
+        let render_batch_plan = RenderBatchPlanner::build(
+            frame_id,
+            0,
+            &model_draws,
+            &terrain_batch_inputs,
+            &primitive_draws,
+            &primitive_chunks,
+            &primitive_chunk_info,
+            &decal_batch_inputs,
+            camera3d_uniform.as_ref(),
+            RenderBatchQualityProfile::default(),
+        );
+        let planned_model_draws = render_batch_plan.model_batches(&model_draws);
+        let _planned_terrain_draws = render_batch_plan.terrain_batches(&model_draws);
+        let planned_primitive_draws = render_batch_plan.primitive_draw_batches(&primitive_draws);
+        let planned_primitive_chunks = render_batch_plan.primitive_chunk_batches(&primitive_chunks);
+        let planned_water_draws = render_batch_plan.water_draw_batches(&primitive_draws);
+        let planned_water_chunks = render_batch_plan.water_chunk_batches(&primitive_chunks);
+        let planned_projected_decals = render_batch_plan.decal_batches(&projected_decals);
+        let projected_decals_active = !planned_projected_decals.is_empty();
+        let post_depth_active = contact_ao_active || projected_decals_active;
+        let depth_prepass_active = MAIN_SAMPLE_COUNT > 1 && post_depth_active;
+        if depth_prepass_active {
+            for scene_id in &retained_scene_draws {
                 self.render_world.collect_scene_primitive_depth_draws(
                     *scene_id,
                     camera3d_uniform.as_ref(),
@@ -189,7 +215,10 @@ impl Renderer {
                     &mut primitive_depth_chunks,
                 );
             }
-            if primitive_shadows_enabled {
+            primitive_depth_chunks.retain(|chunk| planned_primitive_chunks.contains(chunk));
+        }
+        if primitive_shadows_enabled {
+            for scene_id in &retained_scene_draws {
                 self.render_world.collect_scene_primitive_shadow_objects(
                     *scene_id,
                     camera3d_uniform.as_ref(),
@@ -199,27 +228,11 @@ impl Renderer {
                     .collect_scene_primitive_shadow_chunks_from_candidates(
                         *scene_id,
                         camera3d_uniform.as_ref(),
-                        &primitive_chunks,
+                        &planned_primitive_chunks,
                         &mut primitive_shadow_chunks,
                     );
             }
         }
-        perf.scene_update_ms = elapsed_ms_opt(scene_update_start);
-        let render_batch_plan = RenderBatchPlanner::build(
-            debug_frame_count.min(u32::MAX as u64) as u32,
-            0,
-            &model_draws,
-            &primitive_draws,
-            &primitive_chunks,
-            &primitive_chunk_info,
-            camera3d_uniform.as_ref(),
-            RenderBatchQualityProfile::default(),
-        );
-        let planned_model_draws = render_batch_plan.model_batches(&model_draws);
-        let planned_primitive_draws = render_batch_plan.primitive_draw_batches(&primitive_draws);
-        let planned_primitive_chunks = render_batch_plan.primitive_chunk_batches(&primitive_chunks);
-        let planned_water_draws = render_batch_plan.water_draw_batches(&primitive_draws);
-        let planned_water_chunks = render_batch_plan.water_chunk_batches(&primitive_chunks);
         let mut material_groups = Vec::<u32>::new();
         for chunk in &render_batch_plan.visible_chunks {
             if !material_groups.contains(&chunk.material_group) {
@@ -252,10 +265,10 @@ impl Renderer {
                 scene_upsert_count,
                 scene_draw_count,
                 planned_model_draws.len(),
-                primitive_draws.len(),
-                primitive_chunks.len(),
+                planned_primitive_draws.len(),
+                planned_primitive_chunks.len(),
                 skybox_count,
-                projected_decal_count,
+                planned_projected_decals.len(),
                 perf_overrides.flags(),
                 rect_count,
                 circle_count,
@@ -415,7 +428,6 @@ impl Renderer {
                 camera3d_state,
                 skybox_cubemap_id,
                 light_uniform: &mut light_uniform,
-                raw_model_draws: &model_draws,
                 planned_model_draws: &planned_model_draws,
                 primitive_depth_draws: &mut primitive_depth_draws,
                 primitive_depth_chunks: &primitive_depth_chunks,
@@ -476,7 +488,7 @@ impl Renderer {
                 camera3d_uniform: camera3d_uniform.as_ref(),
                 camera3d_state,
                 light_uniform: &light_uniform,
-                projected_decals: &projected_decals,
+                projected_decals: &planned_projected_decals,
                 projected_decal_atlas_binding_count: projected_decal_atlas_bindings.len() as u32,
                 bloom_threshold: post_bloom_threshold,
                 bloom_strength: post_bloom_strength,
@@ -547,7 +559,6 @@ impl Renderer {
                 camera3d_state,
                 skybox_cubemap_id,
                 light_uniform: &mut light_uniform,
-                raw_model_draws: &model_draws,
                 planned_model_draws: &planned_model_draws,
                 primitive_depth_draws: &mut primitive_depth_draws,
                 primitive_depth_chunks: &primitive_depth_chunks,
@@ -701,7 +712,7 @@ impl Renderer {
             let sprite_upload = frame.sprites.len() * std::mem::size_of::<SpriteInstance>();
             let post_upload = std::mem::size_of::<PostUniform>()
                 + std::mem::size_of::<PostDecalUniform>()
-                + projected_decals.len() * std::mem::size_of::<PostDecalGpu>();
+                + planned_projected_decals.len() * std::mem::size_of::<PostDecalGpu>();
             perf.upload_bytes =
                 saturating_u32(camera_upload + shape_upload + sprite_upload + post_upload);
             if perf.submit_frame_ms >= 16.0 {

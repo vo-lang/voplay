@@ -47,11 +47,11 @@ const DISPLAY_PULSE_DELAY_MS = 0xFFFFFFFF;
 const DISPLAY_PULSE_VISIBLE_GUARD_MS = 34;
 const DISPLAY_PULSE_LOST_RAF_FALLBACK_MS = 34;
 const DISPLAY_PULSE_TIMER_TARGET_MS = 1000 / 60;
-const DISPLAY_PULSE_VISIBLE_BACKUP_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.08;
+const DISPLAY_PULSE_VISIBLE_BACKUP_MS = 250;
 const DISPLAY_PULSE_RAF_HEALTHY_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.05;
-const DISPLAY_PULSE_RAF_SLOW_MS = DISPLAY_PULSE_TIMER_TARGET_MS * 1.1;
+const DISPLAY_PULSE_RAF_SLOW_MS = DISPLAY_PULSE_VISIBLE_BACKUP_MS;
 const DISPLAY_PULSE_HEALTHY_RAF_FRAMES = 2;
-const DISPLAY_PULSE_SLOW_RAF_FRAMES = 1;
+const DISPLAY_PULSE_SLOW_RAF_FRAMES = 2;
 const DISPLAY_PULSE_TIMER_LEAD_MAX_MS = 2.0;
 const DISPLAY_PULSE_TIMER_LEAD_GAIN = 0.125;
 const DISPLAY_PULSE_TIMER_LEAD_DEADBAND_MS = 0.15;
@@ -983,10 +983,10 @@ export class RenderIsland {
   private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
     if (!visible) return true;
     if (this.displayPulseMode === "timer") return true;
-    // Hybrid mode starts with rAF-only visible cadence. The timer path takes
-    // over only after rAF has already been observed as slow, so the backup does
-    // not race healthy rAF frames and inject cadence jitter into the game clock.
-    return this.displayPulseMode === "hybrid" && this.displayPulseTimerCadence;
+    // Hybrid visible cadence treats rAF as the display clock. The timer is a
+    // long lost-rAF guard, so it cannot race normal vsync and inject cadence
+    // jitter into the game clock.
+    return this.displayPulseMode === "hybrid";
   }
 
   private displayPulseFallbackDelayMs(nowMs: number): number {

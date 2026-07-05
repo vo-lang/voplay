@@ -1,6 +1,35 @@
 
 use super::*;
 
+struct TimedTestDispatcher {
+    elapsed_ms: f64,
+}
+
+impl RenderPassNodeDispatcher for TimedTestDispatcher {
+    fn execute(&mut self, _kind: RenderPassKind) -> Result<f64, String> {
+        Ok(self.elapsed_ms)
+    }
+
+    fn workload(&self, _kind: RenderPassKind) -> RenderPassWorkload {
+        RenderPassWorkload::default()
+    }
+}
+
+fn execute_test_pass(
+    graph: &mut FrameGraph,
+    kind: RenderPassKind,
+    elapsed_ms: f64,
+) -> Result<Option<f64>, String> {
+    let node = graph
+        .node(kind)
+        .ok_or_else(|| format!("missing test frame graph node {}", kind.name()))?;
+    let mut dispatcher = TimedTestDispatcher { elapsed_ms };
+    Ok(graph
+        .executor()
+        .execute_node(&node, true, &mut dispatcher)?
+        .map(|diagnostic| diagnostic.elapsed_ms))
+}
+
 #[test]
 fn frame_graph_reports_passes_resources_and_slowest_pass() {
     let mut graph = FrameGraph::single_view(42, 0);
@@ -27,27 +56,18 @@ fn frame_graph_reports_passes_resources_and_slowest_pass() {
         &[RES_SURFACE_COLOR],
         true,
     );
-    {
-        let mut executor = graph.executor();
-        assert_eq!(
-            executor
-                .execute_pass(RenderPassKind::Shadow, || Ok(0.8))
-                .unwrap(),
-            Some(0.8)
-        );
-        assert_eq!(
-            executor
-                .execute_pass(RenderPassKind::MainOpaque, || Ok(2.4))
-                .unwrap(),
-            Some(2.4)
-        );
-        assert_eq!(
-            executor
-                .execute_pass(RenderPassKind::Post, || Ok(1.1))
-                .unwrap(),
-            Some(1.1)
-        );
-    }
+    assert_eq!(
+        execute_test_pass(&mut graph, RenderPassKind::Shadow, 0.8).unwrap(),
+        Some(0.8)
+    );
+    assert_eq!(
+        execute_test_pass(&mut graph, RenderPassKind::MainOpaque, 2.4).unwrap(),
+        Some(2.4)
+    );
+    assert_eq!(
+        execute_test_pass(&mut graph, RenderPassKind::Post, 1.1).unwrap(),
+        Some(1.1)
+    );
     let report = graph.report();
     assert_eq!(report.frame_id, 42);
     assert_eq!(report.pass_count, 3);
@@ -101,21 +121,14 @@ fn frame_graph_executor_records_nodes_and_marks_targets_ready() {
         &[RES_WATER_COLOR],
         true,
     );
-    {
-        let mut executor = graph.executor();
-        assert_eq!(
-            executor
-                .execute_pass(RenderPassKind::MainTransparent, || Ok(0.5))
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            executor
-                .execute_pass(RenderPassKind::Water, || Ok(0.7))
-                .unwrap(),
-            Some(0.7)
-        );
-    }
+    assert_eq!(
+        execute_test_pass(&mut graph, RenderPassKind::MainTransparent, 0.5).unwrap(),
+        None
+    );
+    assert_eq!(
+        execute_test_pass(&mut graph, RenderPassKind::Water, 0.7).unwrap(),
+        Some(0.7)
+    );
     let nodes = graph.nodes();
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[1].transient_writes, vec![RES_WATER_COLOR]);
@@ -136,9 +149,14 @@ fn frame_graph_executor_fails_on_missing_required_read() {
         &[RES_WATER_COLOR],
         true,
     );
+    let node = graph.node(RenderPassKind::Water).unwrap();
     let err = graph
         .executor()
-        .execute_pass(RenderPassKind::Water, || Ok(0.7))
+        .execute_node(
+            &node,
+            true,
+            &mut TimedTestDispatcher { elapsed_ms: 0.7 },
+        )
         .unwrap_err();
     assert!(err.contains("missing required read depth"));
     assert_eq!(graph.report().missing_read_count, 1);
@@ -154,9 +172,14 @@ fn frame_graph_executor_fails_on_missing_required_write() {
         &[RES_SHADOW_MAP],
         true,
     );
+    let node = graph.node(RenderPassKind::Shadow).unwrap();
     let err = graph
         .executor()
-        .execute_pass(RenderPassKind::Shadow, || Ok(0.7))
+        .execute_node(
+            &node,
+            true,
+            &mut TimedTestDispatcher { elapsed_ms: 0.7 },
+        )
         .unwrap_err();
     assert!(err.contains("missing required write shadow-map"));
 }

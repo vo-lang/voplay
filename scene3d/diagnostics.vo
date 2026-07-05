@@ -68,3 +68,10 @@ func ProductSceneDiagnostics(scene *Scene) SceneDiagnostics {
 	}
 	return scene.Diagnostics()
 }
+
+func ProductSetRenderDebugMode(scene *Scene, mode int) {
+	if scene == nil {
+		return
+	}
+	scene.RenderDebugMode = normalizeRenderDebugMode(mode)
+}

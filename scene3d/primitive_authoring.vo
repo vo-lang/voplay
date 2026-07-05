@@ -88,6 +88,29 @@ type ColliderAuthoring struct {
 	RoadRestitution float64
 }
 
+type ProductTrackColliderSpec struct {
+	Layer int
+	Mask int
+	SegmentLength float64
+	MinSegments int
+	GroundTag string
+	GroundY float64
+	GroundHalfExtents voplay.Vec3
+	GroundFriction float64
+	GroundRestitution float64
+	RoadTag string
+	RoadYOffset float64
+	RoadHalfHeight float64
+	RoadOuterOffset float64
+	RoadSegmentOverlap float64
+	RoadFriction float64
+	RoadRestitution float64
+}
+
+func (spec ProductTrackColliderSpec) colliderAuthoring() ColliderAuthoring {
+	return ColliderAuthoring{Layer: spec.Layer, Mask: spec.Mask, SegmentLength: spec.SegmentLength, MinSegments: spec.MinSegments, GroundTag: spec.GroundTag, GroundY: spec.GroundY, GroundHalfExtents: spec.GroundHalfExtents, GroundFriction: spec.GroundFriction, GroundRestitution: spec.GroundRestitution, RoadTag: spec.RoadTag, RoadYOffset: spec.RoadYOffset, RoadHalfHeight: spec.RoadHalfHeight, RoadOuterOffset: spec.RoadOuterOffset, RoadSegmentOverlap: spec.RoadSegmentOverlap, RoadFriction: spec.RoadFriction, RoadRestitution: spec.RoadRestitution}
+}
+
 type TrackColliderStripResult struct {
 	Entities []*Entity
 }
@@ -217,6 +240,10 @@ func NewProductPrimitiveAuthoring(scene *Scene, desc ProductPrimitiveAuthoringDe
 	return &ProductPrimitiveAuthoring{world: NewPrimitiveWorldAuthoring(scene, PrimitiveWorldAuthoringDesc{Shapes: desc.Shapes, Materials: desc.Materials, Layers: desc.Layers})}
 }
 
+func NewProductPrimitiveRuntime(scene *Scene, desc ProductPrimitiveAuthoringDesc) *ProductPrimitiveAuthoring {
+	return NewProductPrimitiveAuthoring(scene, desc)
+}
+
 func (a *ProductPrimitiveAuthoring) CloneForScene(scene *Scene, dynamic PrimitiveBatchAuthoring) *ProductPrimitiveAuthoring {
 	if a == nil || a.world == nil {
 		return nil
@@ -264,6 +291,20 @@ func (a *ProductPrimitiveAuthoring) Dynamic(layerName string, desc PrimitiveInst
 		return nil
 	}
 	return a.world.AddDynamic(layerName, desc)
+}
+
+func ProductPrimitivePlace(a *ProductPrimitiveAuthoring, layerName string, desc PrimitiveInstanceAuthoring) primitive3d.ObjectID {
+	if a == nil {
+		return 0
+	}
+	return a.Place(layerName, desc)
+}
+
+func ProductPrimitiveDynamic(a *ProductPrimitiveAuthoring, layerName string, desc PrimitiveInstanceAuthoring) *PrimitiveAuthoringPart {
+	if a == nil {
+		return nil
+	}
+	return a.Dynamic(layerName, desc)
 }
 
 func ProductPrimitiveSetPose(part *PrimitiveAuthoringPart, position voplay.Vec3, rotation voplay.Quat) {
@@ -388,6 +429,10 @@ func normalizeAuthoringScale(scale voplay.Vec3) voplay.Vec3 {
 		return voplay.Vec3{X: 1, Y: 1, Z: 1}
 	}
 	return scale
+}
+
+func ProductSpawnTrackColliderStrip(scene *Scene, track *Track, spec ProductTrackColliderSpec) (TrackColliderStripResult, error) {
+	return SpawnTrackColliderStrip(scene, track, spec.colliderAuthoring())
 }
 
 func SpawnTrackColliderStrip(scene *Scene, track *Track, desc ColliderAuthoring) (TrackColliderStripResult, error) {

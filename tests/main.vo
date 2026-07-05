@@ -2820,6 +2820,17 @@ func makeRaycastVehicleState() []byte {
 	return makeRaycastVehicleStateWith(12.5, voplay.Vec3{X: 0, Y: 0.2, Z: -20}, voplay.Vec3{X: 0, Y: 0, Z: -20}, 0.28, -0.2, 1.25)
 }
 
+func writeRaycastWheelMaterial(w *codec.ByteWriter, id string, kind int) {
+	for i := 0; i < 32; i++ {
+		if i < len(id) {
+			w.WriteByte(id[i])
+		} else {
+			w.WriteByte(0)
+		}
+	}
+	w.WriteU32(kind)
+}
+
 func makeRaycastVehicleStateWith(speed float64, center voplay.Vec3, contact voplay.Vec3, suspensionLength float64, steering float64, rotation float64) []byte {
 	w := codec.NewByteWriter(128)
 	w.WriteF64(speed)
@@ -2837,6 +2848,13 @@ func makeRaycastVehicleStateWith(speed float64, center voplay.Vec3, contact vopl
 	w.WriteF64(suspensionLength)
 	w.WriteF64(steering)
 	w.WriteF64(rotation)
+	materialID := scene3d.TrackSurfaceRoad
+	materialKind := 1
+	if contact.X < -5 {
+		materialID = "grass_left"
+		materialKind = 2
+	}
+	writeRaycastWheelMaterial(&w, materialID, materialKind)
 	return w.Bytes()
 }
 
@@ -2857,6 +2875,7 @@ func makeBadRaycastVehicleState() []byte {
 	w.WriteF64(math.Inf(1))
 	w.WriteF64(math.NaN())
 	w.WriteF64(math.Inf(-1))
+	writeRaycastWheelMaterial(&w, scene3d.TrackSurfaceRoad, 1)
 	return w.Bytes()
 }
 

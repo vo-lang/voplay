@@ -261,18 +261,22 @@ func (s *Scene) applyVehicleRecovery(body *Entity, command VehicleRecoveryComman
 	}
 }
 
-func ApplyEntityPhysicsConstraint(entity *Entity, command VehicleConstraintCommand) {
+func ApplyEntityPhysicsConstraint(entity *Entity, command vehicleBackendConstraintCommand) {
 	if entity == nil || entity.scene == nil {
 		return
 	}
 	entity.scene.applyEntityPhysicsConstraint(entity, command)
 }
 
-func ApplyEntityPhysicsTarget(entity *Entity, command VehicleConstraintCommand) {
+func ProductMoveEntityPhysicsTarget(entity *Entity, position voplay.Vec3, reason string) {
+	ApplyEntityPhysicsTarget(entity, vehicleBackendConstraintCommand{Position: position, ApplyPosition: true, Reason: reason})
+}
+
+func ApplyEntityPhysicsTarget(entity *Entity, command vehicleBackendConstraintCommand) {
 	ApplyEntityPhysicsConstraint(entity, command)
 }
 
-func (s *Scene) applyEntityPhysicsConstraint(entity *Entity, command VehicleConstraintCommand) {
+func (s *Scene) applyEntityPhysicsConstraint(entity *Entity, command vehicleBackendConstraintCommand) {
 	if s == nil || entity == nil || entity.Physics == nil {
 		return
 	}

@@ -1,0 +1,85 @@
+package scene3d
+
+const defaultVehiclePhysicsSessionFixedDt = 1.0 / 60.0
+const vehiclePhysicsSessionMaxSteps = 8
+
+type VehicleIntentFrame struct {
+	FrameID int
+	Intent VehicleIntent
+	Delta float64
+}
+
+type VehiclePhysicsSessionDesc struct {
+	Scene *Scene
+	Vehicle *Vehicle
+	FixedDt float64
+	RecordReplay bool
+}
+
+type VehiclePhysicsSession struct {
+	Scene *Scene
+	Vehicle *Vehicle
+	FixedDt float64
+	Accumulator float64
+	FrameID int
+	Replay *PhysicsReplayTraceRecorder
+	LastIntentFrame VehicleIntentFrame
+	LastTelemetry VehicleTelemetry
+}
+
+func NewVehiclePhysicsSession(desc VehiclePhysicsSessionDesc) *VehiclePhysicsSession {
+	fixedDt := desc.FixedDt
+	if fixedDt <= 0 {
+		fixedDt = defaultVehiclePhysicsSessionFixedDt
+	}
+	session := &VehiclePhysicsSession{Scene: desc.Scene, Vehicle: desc.Vehicle, FixedDt: fixedDt}
+	if desc.RecordReplay {
+		session.Replay = NewPhysicsReplayTraceRecorder(fixedDt)
+	}
+	return session
+}
+
+func (s *VehiclePhysicsSession) Step(delta float64, intent VehicleIntent) VehicleTelemetry {
+	if s == nil {
+		return VehicleTelemetry{}
+	}
+	if delta < 0 {
+		delta = 0
+	}
+	if s.FixedDt <= 0 {
+		s.FixedDt = defaultVehiclePhysicsSessionFixedDt
+	}
+	s.Accumulator += delta
+	steps := 0
+	for s.Accumulator >= s.FixedDt && steps < vehiclePhysicsSessionMaxSteps {
+		s.FrameID++
+		s.LastIntentFrame = VehicleIntentFrame{FrameID: s.FrameID, Intent: intent.Normalized(), Delta: s.FixedDt}
+		FixedPhysicsStep(s.Scene, s.FixedDt)
+		s.Accumulator -= s.FixedDt
+		steps++
+	}
+	if steps == vehiclePhysicsSessionMaxSteps && s.Accumulator >= s.FixedDt {
+		s.Accumulator = 0
+	}
+	if s.Vehicle != nil {
+		s.LastTelemetry = ProductVehicleTelemetry(s.Vehicle)
+		if s.Replay != nil && steps > 0 {
+			s.Replay.RecordVehicle(s.FrameID, s.LastIntentFrame.Intent, s.LastTelemetry)
+		}
+	}
+	return s.LastTelemetry
+}
+
+func (s *VehiclePhysicsSession) Trace() PhysicsReplayTrace {
+	if s == nil || s.Replay == nil {
+		return PhysicsReplayTrace{}
+	}
+	return s.Replay.Trace()
+}
+
+func FixedPhysicsStep(scene *Scene, dt float64) {
+	if scene == nil {
+		return
+	}
+	scene.StepAndSyncPhysics(dt)
+}

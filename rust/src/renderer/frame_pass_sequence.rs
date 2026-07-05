@@ -1,0 +1,275 @@
+use super::frame_graph_plan::FrameGraphPlanNodes;
+use super::pass_dispatch::FramePassDispatcher;
+use super::post_pass::{PostPassSetup, PostPassSetupContext};
+use super::*;
+use crate::draw_list::Frame2D;
+
+pub(super) struct FramePassSequenceContext<'a> {
+    pub(super) frame_graph: &'a mut FrameGraph,
+    pub(super) nodes: &'a FrameGraphPlanNodes,
+    pub(super) encoder: Option<wgpu::CommandEncoder>,
+    pub(super) output: Option<wgpu::SurfaceTexture>,
+    pub(super) surface_view: &'a wgpu::TextureView,
+    pub(super) frame: &'a Frame2D,
+    pub(super) camera_alignment: u32,
+    pub(super) clear_color: wgpu::Color,
+    pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
+    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) skybox_cubemap_id: Option<u32>,
+    pub(super) light_uniform: &'a mut LightUniform,
+    pub(super) planned_model_draws: &'a [ModelDraw],
+    pub(super) primitive_depth_draws: &'a mut Vec<PrimitiveDraw>,
+    pub(super) primitive_depth_chunks: &'a [PrimitiveChunkRef],
+    pub(super) primitive_shadow_draws: &'a mut Vec<PrimitiveDraw>,
+    pub(super) primitive_shadow_chunks: &'a [PrimitiveChunkRef],
+    pub(super) retained_scene_draws: &'a [u32],
+    pub(super) planned_primitive_draws: &'a [PrimitiveDraw],
+    pub(super) planned_primitive_chunks: &'a [PrimitiveChunkRef],
+    pub(super) planned_water_draws: &'a [PrimitiveDraw],
+    pub(super) planned_water_chunks: &'a [PrimitiveChunkRef],
+    pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
+    pub(super) projected_decals: &'a [PostDecalGpu],
+    pub(super) projected_decal_atlas_binding_count: u32,
+    pub(super) shadow_resolution: u32,
+    pub(super) shadow_quality: u32,
+    pub(super) shadow_distance: f32,
+    pub(super) shadow_fade: f32,
+    pub(super) shadow_softness: f32,
+    pub(super) shadow_strength: f32,
+    pub(super) post_depth_active: bool,
+    pub(super) aspect: f32,
+    pub(super) perf_enabled: bool,
+    pub(super) perf: &'a mut RendererPerfStats,
+    pub(super) primitive_depth_draw_calls: &'a mut u32,
+    pub(super) primitive_shadow_draw_calls: &'a mut u32,
+    pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
+    pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
+    pub(super) primitive_main_submitted: &'a mut bool,
+    pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
+    pub(super) bloom_threshold: f32,
+    pub(super) bloom_strength: f32,
+    pub(super) sharpen_strength: f32,
+    pub(super) fxaa_strength: f32,
+    pub(super) contact_ao_strength: f32,
+    pub(super) contact_ao_radius: f32,
+    pub(super) contact_ao_depth_scale: f32,
+    pub(super) contact_ao_detail_strength: f32,
+    pub(super) contact_ao_detail_radius: f32,
+    pub(super) contact_ao_normal_bias: f32,
+    pub(super) contact_ao_quality: u32,
+}
+
+pub(super) struct FramePassSequenceTimings {
+    pub(super) depth_pass_ms: f64,
+    pub(super) shadow_pass_ms: f64,
+    pub(super) main_pass_ms: f64,
+    pub(super) water_pass_ms: f64,
+    pub(super) post_pass_ms: f64,
+    pub(super) overlay_pass_ms: f64,
+    pub(super) shadow_active: bool,
+}
+
+impl Renderer {
+    pub(super) fn execute_frame_pass_sequence(
+        &mut self,
+        mut context: FramePassSequenceContext<'_>,
+    ) -> Result<FramePassSequenceTimings, String> {
+        let mut shadow_active = false;
+        let (encoder, output, depth_pass_ms, shadow_pass_ms) = self.execute_depth_shadow_passes(
+            &mut context,
+            &mut shadow_active,
+        )?;
+        if !shadow_active {
+            context.light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
+            context.light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
+            context.light_uniform.shadow_cascade_splits = [0.0; 4];
+            context.light_uniform.shadow_params = [0.0, 0.002, context.shadow_softness, context.shadow_strength];
+            context.light_uniform.shadow_params2 = [
+                context.shadow_distance,
+                context.shadow_fade,
+                context.shadow_quality as f32,
+                0.0,
+            ];
+        }
+        self.upload_post_pass_uniforms(&mut context);
+        let (main_pass_ms, water_pass_ms, post_pass_ms, overlay_pass_ms) =
+            self.execute_main_and_submit_passes(context, encoder, output, &mut shadow_active)?;
+        Ok(FramePassSequenceTimings {
+            depth_pass_ms,
+            shadow_pass_ms,
+            main_pass_ms,
+            water_pass_ms,
+            post_pass_ms,
+            overlay_pass_ms,
+            shadow_active,
+        })
+    }
+
+    fn execute_depth_shadow_passes(
+        &mut self,
+        context: &mut FramePassSequenceContext<'_>,
+        shadow_active: &mut bool,
+    ) -> Result<(wgpu::CommandEncoder, wgpu::SurfaceTexture, f64, f64), String> {
+        let mut dispatcher = FramePassDispatcher {
+            renderer: self,
+            encoder: context.encoder.take(),
+            output: context.output.take(),
+            surface_view: context.surface_view,
+            frame: context.frame,
+            camera_alignment: context.camera_alignment,
+            clear_color: context.clear_color,
+            camera3d_uniform: context.camera3d_uniform,
+            camera3d_state: context.camera3d_state,
+            skybox_cubemap_id: context.skybox_cubemap_id,
+            light_uniform: context.light_uniform,
+            planned_model_draws: context.planned_model_draws,
+            primitive_depth_draws: context.primitive_depth_draws,
+            primitive_depth_chunks: context.primitive_depth_chunks,
+            primitive_shadow_draws: context.primitive_shadow_draws,
+            primitive_shadow_chunks: context.primitive_shadow_chunks,
+            retained_scene_draws: context.retained_scene_draws,
+            planned_primitive_draws: context.planned_primitive_draws,
+            planned_primitive_chunks: context.planned_primitive_chunks,
+            planned_water_draws: context.planned_water_draws,
+            planned_water_chunks: context.planned_water_chunks,
+            projected_decal_atlas_bindings: context.projected_decal_atlas_bindings,
+            shadow_resolution: context.shadow_resolution,
+            shadow_quality: context.shadow_quality,
+            shadow_distance: context.shadow_distance,
+            shadow_fade: context.shadow_fade,
+            shadow_softness: context.shadow_softness,
+            shadow_strength: context.shadow_strength,
+            main_aux_targets_enabled: context.post_depth_active,
+            aspect: context.aspect,
+            perf_enabled: context.perf_enabled,
+            perf: context.perf,
+            primitive_depth_draw_calls: context.primitive_depth_draw_calls,
+            primitive_shadow_draw_calls: context.primitive_shadow_draw_calls,
+            primitive_main_stats: context.primitive_main_stats,
+            primitive_transparent_stats: context.primitive_transparent_stats,
+            primitive_main_submitted: context.primitive_main_submitted,
+            primitive_water_stats: context.primitive_water_stats,
+            shadow_active,
+        };
+        let depth_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.depth, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        let shadow_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.shadow, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        let frame_parts = dispatcher.into_frame_parts()?;
+        Ok((frame_parts.0, frame_parts.1, depth_pass_ms, shadow_pass_ms))
+    }
+
+    fn upload_post_pass_uniforms(&mut self, context: &mut FramePassSequenceContext<'_>) {
+        let mut post_setup = PostPassSetupContext {
+            renderer: self,
+            camera3d_uniform: context.camera3d_uniform,
+            camera3d_state: context.camera3d_state,
+            light_uniform: context.light_uniform,
+            projected_decals: context.projected_decals,
+            projected_decal_atlas_binding_count: context.projected_decal_atlas_binding_count,
+            bloom_threshold: context.bloom_threshold,
+            bloom_strength: context.bloom_strength,
+            sharpen_strength: context.sharpen_strength,
+            fxaa_strength: context.fxaa_strength,
+            contact_ao_strength: context.contact_ao_strength,
+            contact_ao_radius: context.contact_ao_radius,
+            contact_ao_depth_scale: context.contact_ao_depth_scale,
+            contact_ao_detail_strength: context.contact_ao_detail_strength,
+            contact_ao_detail_radius: context.contact_ao_detail_radius,
+            contact_ao_normal_bias: context.contact_ao_normal_bias,
+            contact_ao_quality: context.contact_ao_quality,
+        };
+        PostPassSetup::upload_uniforms(&mut post_setup);
+    }
+
+    fn execute_main_and_submit_passes(
+        &mut self,
+        context: FramePassSequenceContext<'_>,
+        encoder: wgpu::CommandEncoder,
+        output: wgpu::SurfaceTexture,
+        shadow_active: &mut bool,
+    ) -> Result<(f64, f64, f64, f64), String> {
+        let mut dispatcher = FramePassDispatcher {
+            renderer: self,
+            encoder: Some(encoder),
+            output: Some(output),
+            surface_view: context.surface_view,
+            frame: context.frame,
+            camera_alignment: context.camera_alignment,
+            clear_color: context.clear_color,
+            camera3d_uniform: context.camera3d_uniform,
+            camera3d_state: context.camera3d_state,
+            skybox_cubemap_id: context.skybox_cubemap_id,
+            light_uniform: context.light_uniform,
+            planned_model_draws: context.planned_model_draws,
+            primitive_depth_draws: context.primitive_depth_draws,
+            primitive_depth_chunks: context.primitive_depth_chunks,
+            primitive_shadow_draws: context.primitive_shadow_draws,
+            primitive_shadow_chunks: context.primitive_shadow_chunks,
+            retained_scene_draws: context.retained_scene_draws,
+            planned_primitive_draws: context.planned_primitive_draws,
+            planned_primitive_chunks: context.planned_primitive_chunks,
+            planned_water_draws: context.planned_water_draws,
+            planned_water_chunks: context.planned_water_chunks,
+            projected_decal_atlas_bindings: context.projected_decal_atlas_bindings,
+            shadow_resolution: context.shadow_resolution,
+            shadow_quality: context.shadow_quality,
+            shadow_distance: context.shadow_distance,
+            shadow_fade: context.shadow_fade,
+            shadow_softness: context.shadow_softness,
+            shadow_strength: context.shadow_strength,
+            main_aux_targets_enabled: context.post_depth_active,
+            aspect: context.aspect,
+            perf_enabled: context.perf_enabled,
+            perf: context.perf,
+            primitive_depth_draw_calls: context.primitive_depth_draw_calls,
+            primitive_shadow_draw_calls: context.primitive_shadow_draw_calls,
+            primitive_main_stats: context.primitive_main_stats,
+            primitive_transparent_stats: context.primitive_transparent_stats,
+            primitive_main_submitted: context.primitive_main_submitted,
+            primitive_water_stats: context.primitive_water_stats,
+            shadow_active,
+        };
+        let main_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.main_opaque, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.main_transparent, true, &mut dispatcher)?;
+        let water_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.water, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        let post_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.post, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        let overlay_pass_ms = context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.overlay, true, &mut dispatcher)?
+            .map(|diagnostic| diagnostic.elapsed_ms)
+            .unwrap_or(0.0);
+        context
+            .frame_graph
+            .executor()
+            .execute_node(&context.nodes.backend_submit, true, &mut dispatcher)?;
+        Ok((main_pass_ms, water_pass_ms, post_pass_ms, overlay_pass_ms))
+    }
+}

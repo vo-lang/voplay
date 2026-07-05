@@ -1,8 +1,10 @@
 use super::*;
+use super::frame_transaction::FrameTransaction;
 use crate::renderer_frame::RenderFrameDecode;
 
 pub(super) struct FrameDecodeOutput {
     pub(super) stage: RenderFrameDecode,
+    pub(super) transaction: FrameTransaction,
     pub(super) clear_color: wgpu::Color,
     pub(super) camera3d_uniform: Option<Camera3DUniform>,
     pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
@@ -41,5 +43,4 @@ pub(super) struct FrameDecodeOutput {
     pub(super) scene_removal_count: u32,
     pub(super) scene_draw_count: u32,
     pub(super) skybox_count: u32,
-    pub(super) resident_chunk_rebuild_count: u32,
 }

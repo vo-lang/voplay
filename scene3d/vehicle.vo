@@ -8,7 +8,11 @@ import (
 
 const (
 	raycastVehicleWheelDescBytes = 18 * 8
-	raycastVehicleWheelStateBytes = 1 + 12 * 8
+	raycastVehicleWheelMaterialIDBytes = 32
+	raycastVehicleWheelStateBytes = 1 + 12 * 8 + raycastVehicleWheelMaterialIDBytes + 4
+	raycastVehicleWheelMaterialKindRoad = 1
+	raycastVehicleWheelMaterialKindOffroad = 2
+	raycastVehicleWheelMaterialKindBoost = 3
 )
 
 type VehicleWheelConfig struct {
@@ -89,7 +93,7 @@ type VehicleRecoveryCommand struct {
 	Reason string
 }
 
-type VehicleConstraintCommand struct {
+type vehicleBackendConstraintCommand struct {
 	Position voplay.Vec3
 	Rotation voplay.Quat
 	LinearVelocity voplay.Vec3
@@ -289,7 +293,7 @@ func ApplyVehicleRecovery(vehicle *Vehicle, command VehicleRecoveryCommand) {
 	vehicle.applyRecoveryToBackend(command)
 }
 
-func ApplyVehicleConstraint(vehicle *Vehicle, command VehicleConstraintCommand) {
+func applyVehicleConstraint(vehicle *Vehicle, command vehicleBackendConstraintCommand) {
 	if vehicle == nil {
 		return
 	}
@@ -396,7 +400,7 @@ func (v *Vehicle) applyRecoveryToBackend(command VehicleRecoveryCommand) {
 	}
 }
 
-func (v *Vehicle) applyConstraintToBackend(command VehicleConstraintCommand) {
+func (v *Vehicle) applyConstraintToBackend(command vehicleBackendConstraintCommand) {
 	if v == nil || v.Body == nil {
 		return
 	}
@@ -462,6 +466,30 @@ func (v *Vehicle) WheelCount() int {
 	return len(v.Config.Wheels)
 }
 
+func vehicleWheelMaterialIDFromBytes(bytes []byte) string {
+	end := 0
+	for end < len(bytes) && bytes[end] != 0 {
+		end++
+	}
+	if end == 0 {
+		return ""
+	}
+	return string(bytes[:end])
+}
+
+func vehicleWheelMaterialFromPacket(id string, kind int) SurfaceMaterial {
+	if id == "" {
+		return DefaultSurfaceMaterial()
+	}
+	if kind == raycastVehicleWheelMaterialKindOffroad {
+		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialOffroad, Friction: 0.72, GripScale: 0.72, SpeedScale: 0.72, EngineScale: 0.72})
+	}
+	if kind == raycastVehicleWheelMaterialKindBoost {
+		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialBoost, Friction: 1, GripScale: 1.05, SpeedScale: 1, EngineScale: 1, Boost: 1, OnRoad: true})
+	}
+	return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialRoad, Friction: 1, GripScale: 1, SpeedScale: 1, EngineScale: 1, OnRoad: true})
+}
+
 func (v *Vehicle) surfaceMaterialForWheel(wheel VehicleWheelState) SurfaceMaterial {
 	if wheel.Surface.ID != "" || wheel.Surface.Kind != "" {
 		return NormalizeSurfaceMaterial(wheel.Surface)
@@ -511,6 +539,12 @@ func (v *Vehicle) syncState() {
 		state.SuspensionLength = vehicleFiniteOr(r.ReadF64(), 0)
 		state.Steering = vehicleFiniteOr(-r.ReadF64(), 0)
 		state.Rotation = vehicleFiniteOr(r.ReadF64(), 0)
+		materialID := vehicleWheelMaterialIDFromBytes(r.ReadBytes(raycastVehicleWheelMaterialIDBytes))
+		materialKind := r.ReadU32()
+		if materialID != "" {
+			state.SurfaceID = materialID
+			state.Surface = vehicleWheelMaterialFromPacket(materialID, materialKind)
+		}
 		if i < len(v.Config.Wheels) {
 			cfg := v.Config.Wheels[i]
 			if cfg.SuspensionRestLength > 0 {
@@ -531,8 +565,8 @@ func (v *Vehicle) syncState() {
 		state.NormalLoad = vehicleFiniteOr(state.NormalLoad, 0)
 		state.LongitudinalSlip = vehicleFiniteOr(state.LongitudinalSlip, 0)
 		state.LateralSlip = vehicleFiniteOr(state.LateralSlip, 0)
-		if state.InContact && v.Track != nil {
-			surface := SurfaceMaterialFromTrackHit(v.Track.SurfaceAt(state.ContactPoint))
+		if state.InContact {
+			surface := v.surfaceMaterialForWheel(state)
 			state.SurfaceID = surface.ID
 			state.Surface = surface
 		}

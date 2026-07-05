@@ -590,8 +590,9 @@ impl PhysicsWorld3D {
 
         // speed(f64), wheel_count(u32), then per wheel:
         // contact(u8), center xyz, contact xyz, normal xyz,
-        // suspension_length, steering, rotation (all f64)
-        let mut buf = Vec::with_capacity(12 + wheels.len() * (1 + 12 * 8));
+        // suspension_length, steering, rotation (all f64),
+        // material id (32 bytes, nul padded), material kind (u32).
+        let mut buf = Vec::with_capacity(12 + wheels.len() * (1 + 12 * 8 + 32 + 4));
         buf.extend_from_slice(&(speed as f64).to_le_bytes());
         buf.extend_from_slice(&(wheels.len() as u32).to_le_bytes());
         for wheel in wheels {
@@ -612,6 +613,8 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&(info.suspension_length as f64).to_le_bytes());
             buf.extend_from_slice(&(wheel.steering as f64).to_le_bytes());
             buf.extend_from_slice(&(wheel.rotation as f64).to_le_bytes());
+            buf.extend_from_slice(&[0u8; 32]);
+            buf.extend_from_slice(&1u32.to_le_bytes());
         }
         buf
     }

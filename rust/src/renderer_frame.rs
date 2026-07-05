@@ -569,27 +569,6 @@ impl FrameGraphExecutor<'_> {
         }))
     }
 
-    pub(crate) fn execute_pass<G>(
-        &mut self,
-        kind: RenderPassKind,
-        run_pass: G,
-    ) -> Result<Option<f64>, String>
-    where
-        G: FnOnce() -> Result<f64, String>,
-    {
-        if !self.graph.has_pass(kind) {
-            return Ok(None);
-        }
-        let node = self
-            .graph
-            .node(kind)
-            .ok_or_else(|| format!("voplay: missing frame graph node {}", kind.name()))?;
-        self.graph.validate_required_writes(&node)?;
-        self.graph.validate_ready_reads(&node)?;
-        let elapsed_ms = run_pass()?.max(0.0);
-        self.graph.record_pass(kind, elapsed_ms);
-        Ok(Some(elapsed_ms))
-    }
 }
 
 impl RenderResourceRegistry {

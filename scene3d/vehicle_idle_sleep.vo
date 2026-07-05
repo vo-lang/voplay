@@ -66,3 +66,15 @@ func VehicleShouldSleepIdlePhysics(sample VehicleIdleSleepSample, config Vehicle
 	}
 	return true
 }
+
+func ProductPrimeVehicleIdleSleep(vehicle *Vehicle) {
+	if vehicle == nil {
+		return
+	}
+	vehicle.Grounded = true
+}
+
+func ProductVehicleIdleSleepSample(vehicle *Vehicle, intent VehicleIntent, kartSpeed float64, idleFrames int, boosting, drifting, assistActive bool) VehicleIdleSleepSample {
+	telemetry := ProductVehicleTelemetry(vehicle)
+	return VehicleIdleSleepSample{Intent: intent, Velocity: telemetry.Velocity, AngularVelocity: telemetry.AngularVelocity, KartSpeed: kartSpeed, Grounded: telemetry.Grounded, IdleFrames: idleFrames, Boosting: boosting, Drifting: drifting, AssistActive: assistActive}
+}

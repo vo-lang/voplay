@@ -825,6 +825,13 @@ func (s *Scene) UpdateAudio() {
 	voplay.UpdateSpatialAudio()
 }
 
+func ProductStepAndSyncPhysics(scene *Scene, dt float64) {
+	if scene == nil {
+		return
+	}
+	scene.StepAndSyncPhysics(dt)
+}
+
 func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return

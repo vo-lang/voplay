@@ -1,7 +1,69 @@
 use super::*;
 use crate::pipeline3d::PrimitiveSubmitter;
+use std::cmp::Ordering;
 
 pub(super) struct MainTransparentPassExecutor;
+
+#[derive(Clone, Copy)]
+pub(super) struct RenderDrawItem {
+    pass: RenderPassKind,
+    depth: f32,
+    stable_index: usize,
+    primitive: PrimitiveDraw,
+}
+
+impl RenderDrawItem {
+    fn translucent_primitive(
+        camera_pos: Vec3,
+        stable_index: usize,
+        primitive: PrimitiveDraw,
+    ) -> Self {
+        let position = Vec3::new(
+            primitive.model_uniform.model[3][0],
+            primitive.model_uniform.model[3][1],
+            primitive.model_uniform.model[3][2],
+        );
+        let delta = position - camera_pos;
+        Self {
+            pass: RenderPassKind::MainTransparent,
+            depth: delta.dot(delta),
+            stable_index,
+            primitive,
+        }
+    }
+}
+
+fn sorted_transparent_draw_items(
+    camera: &Camera3DUniform,
+    draws: &[PrimitiveDraw],
+) -> Vec<RenderDrawItem> {
+    let camera_pos = Vec3::new(
+        camera.camera_pos[0],
+        camera.camera_pos[1],
+        camera.camera_pos[2],
+    );
+    let mut items = draws
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, primitive)| {
+            RenderDrawItem::translucent_primitive(camera_pos, index, primitive)
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| {
+        b.depth
+            .partial_cmp(&a.depth)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.stable_index.cmp(&b.stable_index))
+    });
+    items
+}
+
+fn accumulate_stats(total: &mut PrimitiveDrawStats, next: PrimitiveDrawStats) {
+    total.batch_count = total.batch_count.saturating_add(next.batch_count);
+    total.instance_count = total.instance_count.saturating_add(next.instance_count);
+    total.triangle_count = total.triangle_count.saturating_add(next.triangle_count);
+}
 
 pub(super) struct MainTransparentPassContext<'a> {
     pub(super) renderer: &'a mut Renderer,
@@ -89,18 +151,30 @@ impl MainTransparentPassExecutor {
             ctx.light_uniform,
         );
         let shadow_view = ctx.renderer.pipeline_shadow.shadow_texture_view();
-        let primitive_stats = ctx.renderer.primitive_pipeline.draw(
-            &ctx.renderer.device,
-            &ctx.renderer.queue,
-            &mut render_pass,
-            ctx.primitive_draws,
-            ctx.primitive_chunks,
-            &ctx.renderer.model_manager,
-            &ctx.renderer.texture_manager,
-            shadow_view,
-            false,
-            PrimitiveSubmitter::draw(crate::primitive_pipeline::PrimitiveRenderFilter::Translucent),
-        );
+        let sorted_items = sorted_transparent_draw_items(cam3d, ctx.primitive_draws);
+        let sorted_primitive_draws = sorted_items
+            .iter()
+            .filter(|item| item.pass == RenderPassKind::MainTransparent)
+            .map(|item| item.primitive)
+            .collect::<Vec<_>>();
+        let mut primitive_stats = PrimitiveDrawStats::default();
+        if !sorted_primitive_draws.is_empty() || !ctx.primitive_chunks.is_empty() {
+            let stats = ctx.renderer.primitive_pipeline.draw(
+                &ctx.renderer.device,
+                &ctx.renderer.queue,
+                &mut render_pass,
+                &sorted_primitive_draws,
+                ctx.primitive_chunks,
+                &ctx.renderer.model_manager,
+                &ctx.renderer.texture_manager,
+                shadow_view,
+                false,
+                PrimitiveSubmitter::draw(
+                    crate::primitive_pipeline::PrimitiveRenderFilter::Translucent,
+                ),
+            );
+            accumulate_stats(&mut primitive_stats, stats);
+        }
         drop(render_pass);
         Ok(MainTransparentPassResult {
             elapsed_ms: elapsed_ms_opt(transparent_start),

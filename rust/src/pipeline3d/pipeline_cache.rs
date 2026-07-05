@@ -1,744 +1,15 @@
-use super::shader_library;
 use super::*;
 
 impl Pipeline3D {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        receiver_mask_format: wgpu::TextureFormat,
-        surface_props_format: wgpu::TextureFormat,
-        sample_count: u32,
-    ) -> Self {
-        let static_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("voplay_mesh"),
-            source: wgpu::ShaderSource::Wgsl(shader_library::STATIC_MESH_SHADER.into()),
-        });
-        let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("voplay_mesh_terrain"),
-            source: wgpu::ShaderSource::Wgsl(shader_library::TERRAIN_MESH_SHADER.into()),
-        });
-        let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("voplay_mesh_skinned"),
-            source: wgpu::ShaderSource::Wgsl(shader_library::SKINNED_MESH_SHADER.into()),
-        });
-
-        // Group 0: Camera
-        let camera_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("voplay_mesh_camera_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        // Group 1: Model transform (dynamic offset for per-draw uniforms)
-        let model_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("voplay_mesh_model_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let model_buffer_alignment = device.limits().min_uniform_buffer_offset_alignment;
-
-        // Group 2: Lights
-        let light_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("voplay_mesh_light_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let main_texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("voplay_mesh_main_texture_bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Depth,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 7,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        let mut terrain_texture_entries = vec![
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ];
-        for binding in 4..16 {
-            terrain_texture_entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-        }
-        terrain_texture_entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 16,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        });
-        let terrain_texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("voplay_mesh_terrain_texture_bgl"),
-                entries: &terrain_texture_entries,
-            });
-
-        // Group 3: Main texture + shadow map
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("voplay_mesh_layout"),
-            bind_group_layouts: &[
-                &camera_bgl,
-                &model_bgl,
-                &light_bgl,
-                &main_texture_bind_group_layout,
-            ],
-            push_constant_ranges: &[],
-        });
-        let terrain_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("voplay_mesh_terrain_layout"),
-                bind_group_layouts: &[
-                    &camera_bgl,
-                    &model_bgl,
-                    &light_bgl,
-                    &terrain_texture_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            });
-
-        let depth_stencil = Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        });
-        let multisample = wgpu::MultisampleState {
-            count: sample_count,
-            ..wgpu::MultisampleState::default()
-        };
-
-        let vertex_state = wgpu::VertexState {
-            module: &static_shader,
-            entry_point: Some("vs_main"),
-            buffers: &[MeshVertex::layout()],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
-        let instanced_vertex_state = wgpu::VertexState {
-            module: &static_shader,
-            entry_point: Some("vs_instanced"),
-            buffers: &[MeshVertex::layout(), InstanceData::layout()],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
-
-        let primitive = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            polygon_mode: wgpu::PolygonMode::Fill,
-            unclipped_depth: false,
-            conservative: false,
-        };
-
-        // Textured pipeline
-        let textured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_textured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_mesh_textured"),
-            layout: Some(&pipeline_layout),
-            vertex: vertex_state.clone(),
-            fragment: Some(wgpu::FragmentState {
-                module: &static_shader,
-                entry_point: Some("fs_main"),
-                targets: &textured_targets,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample,
-            multiview: None,
-            cache: None,
-        });
-        let instanced_textured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_instanced_textured =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_instanced_textured"),
-                layout: Some(&pipeline_layout),
-                vertex: instanced_vertex_state.clone(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &static_shader,
-                    entry_point: Some("fs_instanced"),
-                    targets: &instanced_textured_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-        let instanced_textured_color_targets =
-            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
-        let pipeline_instanced_textured_color =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_instanced_textured_color"),
-                layout: Some(&pipeline_layout),
-                vertex: instanced_vertex_state.clone(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &static_shader,
-                    entry_point: Some("fs_instanced_color"),
-                    targets: &instanced_textured_color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-
-        let terrain_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_terrain_splat =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_terrain_splat"),
-                layout: Some(&terrain_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &terrain_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[MeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &terrain_shader,
-                    entry_point: Some("fs_main_terrain"),
-                    targets: &terrain_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-        let terrain_color_targets =
-            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
-        let pipeline_terrain_splat_color =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_terrain_splat_color"),
-                layout: Some(&terrain_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &terrain_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[MeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &terrain_shader,
-                    entry_point: Some("fs_main_terrain_color"),
-                    targets: &terrain_color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-
-        let skinned_textured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_skinned_textured =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_skinned_textured"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &skinned_shader,
-                    entry_point: Some("vs_skinned"),
-                    buffers: &[SkinnedMeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &skinned_shader,
-                    entry_point: Some("fs_skinned"),
-                    targets: &skinned_textured_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-        let skinned_textured_color_targets =
-            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
-        let pipeline_skinned_textured_color =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_skinned_textured_color"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &skinned_shader,
-                    entry_point: Some("vs_skinned"),
-                    buffers: &[SkinnedMeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &skinned_shader,
-                    entry_point: Some("fs_skinned_color"),
-                    targets: &skinned_textured_color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-
-        let skinned_untextured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_skinned_untextured =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_skinned_untextured"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &skinned_shader,
-                    entry_point: Some("vs_skinned"),
-                    buffers: &[SkinnedMeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &skinned_shader,
-                    entry_point: Some("fs_skinned_no_tex"),
-                    targets: &skinned_untextured_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-        let skinned_untextured_color_targets =
-            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
-        let pipeline_skinned_untextured_color =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_skinned_untextured_color"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &skinned_shader,
-                    entry_point: Some("vs_skinned"),
-                    buffers: &[SkinnedMeshVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &skinned_shader,
-                    entry_point: Some("fs_skinned_no_tex_color"),
-                    targets: &skinned_untextured_color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-
-        // Untextured pipeline (uses fs_main_no_tex)
-        let untextured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_untextured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_mesh_untextured"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &static_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[MeshVertex::layout()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &static_shader,
-                entry_point: Some("fs_main_no_tex"),
-                targets: &untextured_targets,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample,
-            multiview: None,
-            cache: None,
-        });
-        let instanced_untextured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_instanced_untextured =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_instanced_untextured"),
-                layout: Some(&pipeline_layout),
-                vertex: instanced_vertex_state.clone(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &static_shader,
-                    entry_point: Some("fs_instanced_no_tex"),
-                    targets: &instanced_untextured_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-        let instanced_untextured_color_targets =
-            color_only_targets(surface_format, Some(wgpu::BlendState::ALPHA_BLENDING));
-        let pipeline_instanced_untextured_color =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("voplay_mesh_instanced_untextured_color"),
-                layout: Some(&pipeline_layout),
-                vertex: instanced_vertex_state,
-                fragment: Some(wgpu::FragmentState {
-                    module: &static_shader,
-                    entry_point: Some("fs_instanced_no_tex_color"),
-                    targets: &instanced_untextured_color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive,
-                depth_stencil: depth_stencil.clone(),
-                multisample,
-                multiview: None,
-                cache: None,
-            });
-
-        // Create uniform buffers
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_mesh_camera_ub"),
-            size: std::mem::size_of::<Camera3DUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_mesh_camera_bg"),
-            layout: &camera_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-
-        let model_buffer_slot_count: u32 = 256;
-        let aligned_model_size = Self::align_up(
-            std::mem::size_of::<ModelUniform>() as u32,
-            model_buffer_alignment,
-        );
-        let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_mesh_model_ub"),
-            size: aligned_model_size as u64 * model_buffer_slot_count as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let model_bind_group = Self::create_model_bind_group(
-            device,
-            &model_bgl,
-            &model_buffer,
-            std::mem::size_of::<ModelUniform>() as u64,
-            "voplay_mesh_model_bg",
-        );
-
-        let skinned_model_buffer_slot_count: u32 = 32;
-        let aligned_skinned_size = Self::align_up(
-            std::mem::size_of::<SkinnedModelUniform>() as u32,
-            model_buffer_alignment,
-        );
-        let skinned_model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_mesh_skinned_model_ub"),
-            size: aligned_skinned_size as u64 * skinned_model_buffer_slot_count as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let skinned_model_bind_group = Self::create_model_bind_group(
-            device,
-            &model_bgl,
-            &skinned_model_buffer,
-            std::mem::size_of::<SkinnedModelUniform>() as u64,
-            "voplay_mesh_skinned_model_bg",
-        );
-
-        let instance_buffer_capacity: u32 = 1024;
-        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_mesh_instance_vb"),
-            size: std::mem::size_of::<InstanceData>() as u64 * instance_buffer_capacity as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voplay_mesh_light_ub"),
-            size: std::mem::size_of::<LightUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voplay_mesh_light_bg"),
-            layout: &light_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: light_buffer.as_entire_binding(),
-            }],
-        });
-
-        let material_samplers = MATERIAL_SAMPLER_KEYS
-            .iter()
-            .map(|key| Self::create_material_sampler(device, *key))
-            .collect();
-        let material_clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("voplay_material_sampler_clamp"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: 8,
-            ..Default::default()
-        });
-
-        // 1x1 white texture for untextured meshes
-        let white_data = [255u8; 4]; // RGBA white
-        let white_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voplay_white_1x1"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &white_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &white_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        Self {
-            pipeline_textured,
-            pipeline_untextured,
-            pipeline_instanced_textured,
-            pipeline_instanced_textured_color,
-            pipeline_instanced_untextured,
-            pipeline_instanced_untextured_color,
-            pipeline_terrain_splat,
-            pipeline_terrain_splat_color,
-            pipeline_skinned_textured,
-            pipeline_skinned_textured_color,
-            pipeline_skinned_untextured,
-            pipeline_skinned_untextured_color,
-            camera_buffer,
-            camera_bind_group,
-            model_bgl,
-            model_buffer,
-            model_bind_group,
-            model_buffer_alignment,
-            model_buffer_slot_count,
-            skinned_model_buffer,
-            skinned_model_bind_group,
-            skinned_model_buffer_slot_count,
-            instance_buffer,
-            instance_buffer_capacity,
-            light_buffer,
-            light_bind_group,
-            main_texture_bind_group_layout,
-            terrain_texture_bind_group_layout,
-            material_samplers,
-            material_clamp_sampler,
-            white_texture_view: white_view,
-            main_texture_bind_groups: HashMap::new(),
-            terrain_texture_bind_groups: HashMap::new(),
-        }
-    }
-
     pub fn clear_texture_bind_group_cache(&mut self) {
         self.main_texture_bind_groups.clear();
         self.terrain_texture_bind_groups.clear();
     }
 
-    fn create_material_sampler(device: &wgpu::Device, key: MaterialSamplerKey) -> wgpu::Sampler {
+    pub(super) fn create_material_sampler(
+        device: &wgpu::Device,
+        key: MaterialSamplerKey,
+    ) -> wgpu::Sampler {
         let address_mode = match key.wrap_mode {
             crate::material::MATERIAL_WRAP_CLAMP => wgpu::AddressMode::ClampToEdge,
             crate::material::MATERIAL_WRAP_MIRROR => wgpu::AddressMode::MirrorRepeat,
@@ -766,11 +37,11 @@ impl Pipeline3D {
         })
     }
 
-    fn align_up(value: u32, alignment: u32) -> u32 {
+    pub(super) fn align_up(value: u32, alignment: u32) -> u32 {
         (value + alignment - 1) & !(alignment - 1)
     }
 
-    fn create_model_bind_group(
+    pub(super) fn create_model_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         buffer: &wgpu::Buffer,
@@ -791,7 +62,7 @@ impl Pipeline3D {
         })
     }
 
-    fn ensure_model_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+    pub(super) fn ensure_model_capacity(&mut self, device: &wgpu::Device, needed: u32) {
         if needed <= self.model_buffer_slot_count {
             return;
         }
@@ -816,7 +87,7 @@ impl Pipeline3D {
         self.model_buffer_slot_count = new_count;
     }
 
-    fn ensure_skinned_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+    pub(super) fn ensure_skinned_capacity(&mut self, device: &wgpu::Device, needed: u32) {
         if needed <= self.skinned_model_buffer_slot_count {
             return;
         }
@@ -841,7 +112,7 @@ impl Pipeline3D {
         self.skinned_model_buffer_slot_count = new_count;
     }
 
-    fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+    pub(super) fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: u32) {
         if needed <= self.instance_buffer_capacity {
             return;
         }
@@ -855,13 +126,13 @@ impl Pipeline3D {
         self.instance_buffer_capacity = new_count;
     }
 
-    fn valid_texture_id(textures: &TextureManager, texture_id: Option<u32>) -> u32 {
+    pub(super) fn valid_texture_id(textures: &TextureManager, texture_id: Option<u32>) -> u32 {
         texture_id
             .filter(|id| *id != 0 && textures.get(*id).is_some())
             .unwrap_or(0)
     }
 
-    fn resolve_main_texture_key(
+    pub(super) fn resolve_main_texture_key(
         material: &MaterialOverride,
         mesh_material: &MeshMaterial,
         textures: &TextureManager,
@@ -920,7 +191,7 @@ impl Pipeline3D {
         }
     }
 
-    fn texture_view_for_key<'a>(
+    pub(super) fn texture_view_for_key<'a>(
         &'a self,
         textures: &'a TextureManager,
         texture_id: u32,
@@ -931,14 +202,17 @@ impl Pipeline3D {
             .unwrap_or(&self.white_texture_view)
     }
 
-    fn valid_layer_texture_ids(
+    pub(super) fn valid_layer_texture_ids(
         textures: &TextureManager,
         texture_ids: &[Option<u32>; 4],
     ) -> [u32; 4] {
         std::array::from_fn(|index| Self::valid_texture_id(textures, texture_ids[index]))
     }
 
-    fn terrain_layer_normal_flags(textures: &TextureManager, material: &MeshMaterial) -> [f32; 4] {
+    pub(super) fn terrain_layer_normal_flags(
+        textures: &TextureManager,
+        material: &MeshMaterial,
+    ) -> [f32; 4] {
         let normal_ids =
             Self::valid_layer_texture_ids(textures, &material.layer_normal_texture_ids);
         std::array::from_fn(|index| {
@@ -950,13 +224,16 @@ impl Pipeline3D {
         })
     }
 
-    fn terrain_layer_mr_flags(textures: &TextureManager, material: &MeshMaterial) -> [f32; 4] {
+    pub(super) fn terrain_layer_mr_flags(
+        textures: &TextureManager,
+        material: &MeshMaterial,
+    ) -> [f32; 4] {
         let mr_ids =
             Self::valid_layer_texture_ids(textures, &material.layer_metallic_roughness_texture_ids);
         std::array::from_fn(|index| if mr_ids[index] == 0 { 0.0 } else { 1.0 })
     }
 
-    fn terrain_material_key(tuning: TerrainMaterialTuning) -> [u32; 16] {
+    pub(super) fn terrain_material_key(tuning: TerrainMaterialTuning) -> [u32; 16] {
         let uniform = TerrainMaterialUniform::from_tuning(tuning);
         [
             uniform.params0[0].to_bits(),
@@ -978,11 +255,11 @@ impl Pipeline3D {
         ]
     }
 
-    fn sampler_for_key(&self, key: MaterialSamplerKey) -> &wgpu::Sampler {
+    pub(super) fn sampler_for_key(&self, key: MaterialSamplerKey) -> &wgpu::Sampler {
         &self.material_samplers[key.sampler_index()]
     }
 
-    fn mesh_material_uniform_values(
+    pub(super) fn mesh_material_uniform_values(
         material: &MaterialOverride,
         mesh_material: &MeshMaterial,
         key: MainTextureKey,
@@ -1005,7 +282,7 @@ impl Pipeline3D {
         )
     }
 
-    fn create_main_texture_bind_group(
+    pub(super) fn create_main_texture_bind_group(
         &self,
         device: &wgpu::Device,
         textures: &TextureManager,
@@ -1058,7 +335,7 @@ impl Pipeline3D {
         })
     }
 
-    fn create_terrain_texture_bind_group(
+    pub(super) fn create_terrain_texture_bind_group(
         &self,
         device: &wgpu::Device,
         control_view: &wgpu::TextureView,
@@ -1116,7 +393,7 @@ impl Pipeline3D {
         })
     }
 
-    fn ensure_main_texture_bind_group(
+    pub(super) fn ensure_main_texture_bind_group(
         &mut self,
         device: &wgpu::Device,
         textures: &TextureManager,
@@ -1130,7 +407,7 @@ impl Pipeline3D {
         self.main_texture_bind_groups.insert(key, bind_group);
     }
 
-    fn ensure_terrain_texture_bind_group(
+    pub(super) fn ensure_terrain_texture_bind_group(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1193,377 +470,5 @@ impl Pipeline3D {
     ) {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
         queue.write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(lights));
-    }
-
-    /// Draw a list of models within an active render pass.
-    pub fn draw_models<'a>(
-        &'a mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        pass: &mut wgpu::RenderPass<'a>,
-        draws: &[ModelDraw],
-        models: &'a ModelManager,
-        textures: &'a TextureManager,
-        shadow_view: &'a wgpu::TextureView,
-        aux_targets_enabled: bool,
-    ) {
-        if draws.is_empty() {
-            return;
-        }
-
-        let mesh_submit_profile = super::mesh_submitter::MeshSubmitter::prepare(draws, models);
-        let skinned_slot_hint = super::skinned_submitter::SkinnedSubmitter::prepare(draws, models);
-        let terrain_slot_hint = super::terrain_submitter::TerrainSubmitter::prepare(draws, models);
-
-        let aligned_model_stride = Self::align_up(
-            std::mem::size_of::<ModelUniform>() as u32,
-            self.model_buffer_alignment,
-        );
-        let aligned_skinned_stride = Self::align_up(
-            std::mem::size_of::<SkinnedModelUniform>() as u32,
-            self.model_buffer_alignment,
-        );
-
-        let mut instance_batches: Vec<InstanceBatch> =
-            Vec::with_capacity(mesh_submit_profile.batch_hint);
-        let mut instance_batch_index: HashMap<InstanceBatchKey, usize> = HashMap::new();
-        let mut static_slot: u32 = 0;
-        let mut skinned_slot: u32 = 0;
-        for draw in draws {
-            let gpu_model = match models.get(draw.model_id) {
-                Some(m) => m,
-                None => continue,
-            };
-            for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
-                let material_color = draw.material.base_color_multiplier();
-                let base_color = [
-                    mesh.material.base_color[0] * material_color[0],
-                    mesh.material.base_color[1] * material_color[1],
-                    mesh.material.base_color[2] * material_color[2],
-                    mesh.material.base_color[3] * material_color[3],
-                ];
-                if mesh.skinned {
-                    skinned_slot += 1;
-                    continue;
-                }
-                if mesh.material.control_texture_id.is_some() {
-                    static_slot += 1;
-                    continue;
-                }
-
-                let texture_key =
-                    Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                let key = InstanceBatchKey {
-                    model_id: draw.model_id,
-                    mesh_index,
-                    textures: texture_key,
-                };
-                let batch_index = if let Some(index) = instance_batch_index.get(&key) {
-                    *index
-                } else {
-                    let index = instance_batches.len();
-                    instance_batches.push(InstanceBatch {
-                        key,
-                        instances: Vec::new(),
-                    });
-                    instance_batch_index.insert(key, index);
-                    index
-                };
-                let mut model_uniform = draw.model_uniform;
-                model_uniform.base_color = base_color;
-                let (
-                    material_params,
-                    emissive_color,
-                    texture_flags,
-                    material_response,
-                    texture_flags2,
-                ) = Self::mesh_material_uniform_values(&draw.material, &mesh.material, texture_key);
-                model_uniform.material_params = material_params;
-                model_uniform.emissive_color = emissive_color;
-                model_uniform.texture_flags = texture_flags;
-                model_uniform.material_response = material_response;
-                model_uniform.texture_flags2 = texture_flags2;
-                instance_batches[batch_index]
-                    .instances
-                    .push(InstanceData::from_uniform(&model_uniform));
-            }
-        }
-
-        self.ensure_model_capacity(device, static_slot.max(terrain_slot_hint));
-        self.ensure_skinned_capacity(device, skinned_slot.max(skinned_slot_hint));
-
-        let mut instance_data = Vec::with_capacity(mesh_submit_profile.instance_count as usize);
-        let mut instance_batch_draws = Vec::with_capacity(instance_batches.len());
-        for batch in &instance_batches {
-            let start = instance_data.len() as u32;
-            instance_data.extend_from_slice(&batch.instances);
-            instance_batch_draws.push(InstanceBatchDraw {
-                key: batch.key,
-                start,
-                count: batch.instances.len() as u32,
-            });
-        }
-        if !instance_data.is_empty() {
-            self.ensure_instance_capacity(device, instance_data.len() as u32);
-            queue.write_buffer(
-                &self.instance_buffer,
-                0,
-                bytemuck::cast_slice(&instance_data),
-            );
-        }
-
-        static_slot = 0;
-        skinned_slot = 0;
-        for draw in draws {
-            let gpu_model = match models.get(draw.model_id) {
-                Some(m) => m,
-                None => continue,
-            };
-            for mesh in &gpu_model.meshes {
-                let material_color = draw.material.base_color_multiplier();
-                let base_color = [
-                    mesh.material.base_color[0] * material_color[0],
-                    mesh.material.base_color[1] * material_color[1],
-                    mesh.material.base_color[2] * material_color[2],
-                    mesh.material.base_color[3] * material_color[3],
-                ];
-                if mesh.skinned {
-                    let texture_key =
-                        Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                    let (
-                        material_params,
-                        emissive_color,
-                        texture_flags,
-                        material_response,
-                        texture_flags2,
-                    ) = Self::mesh_material_uniform_values(
-                        &draw.material,
-                        &mesh.material,
-                        texture_key,
-                    );
-                    let mut skinned_uniform = SkinnedModelUniform {
-                        model: draw.model_uniform.model,
-                        normal_matrix: draw.model_uniform.normal_matrix,
-                        base_color,
-                        material_params,
-                        emissive_color,
-                        texture_flags,
-                        material_response,
-                        texture_flags2,
-                        joint_count: [0, 0, 0, 0],
-                        joints: [[[0.0; 4]; 4]; MAX_JOINTS],
-                    };
-                    let palette = if draw.animation_world_id != 0 && draw.animation_target_id != 0 {
-                        animation::get_palette(draw.animation_world_id, draw.animation_target_id)
-                    } else {
-                        None
-                    };
-                    let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
-                    assert!(
-                        joint_palette.len() <= MAX_JOINTS,
-                        "voplay: joint palette exceeds MAX_JOINTS"
-                    );
-                    skinned_uniform.joint_count[0] = joint_palette.len() as u32;
-                    for (index, matrix) in joint_palette.iter().enumerate() {
-                        skinned_uniform.joints[index] = *matrix;
-                    }
-                    let offset = skinned_slot as u64 * aligned_skinned_stride as u64;
-                    queue.write_buffer(
-                        &self.skinned_model_buffer,
-                        offset,
-                        bytemuck::bytes_of(&skinned_uniform),
-                    );
-                    skinned_slot += 1;
-                } else {
-                    if mesh.material.control_texture_id.is_none() {
-                        continue;
-                    }
-                    let mut model_uniform = draw.model_uniform;
-                    model_uniform.base_color = base_color;
-                    model_uniform.material_params = [
-                        draw.material.uv_scale_or(mesh.material.uv_scales[0]),
-                        mesh.material.uv_scales[1],
-                        mesh.material.uv_scales[2],
-                        mesh.material.uv_scales[3],
-                    ];
-                    model_uniform.emissive_color =
-                        Self::terrain_layer_mr_flags(textures, &mesh.material);
-                    model_uniform.texture_flags =
-                        Self::terrain_layer_normal_flags(textures, &mesh.material);
-                    model_uniform.material_response = [1.0, 0.0, 1.0, 1.0];
-                    model_uniform.texture_flags2 = [0.0, 0.0, 0.0, 0.0];
-                    let offset = static_slot as u64 * aligned_model_stride as u64;
-                    queue.write_buffer(
-                        &self.model_buffer,
-                        offset,
-                        bytemuck::bytes_of(&model_uniform),
-                    );
-                    static_slot += 1;
-                }
-            }
-        }
-
-        for draw in draws {
-            let gpu_model = match models.get(draw.model_id) {
-                Some(m) => m,
-                None => continue,
-            };
-            for mesh in &gpu_model.meshes {
-                if mesh.skinned {
-                    let texture_key =
-                        Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                    self.ensure_main_texture_bind_group(device, textures, texture_key, shadow_view);
-                    continue;
-                }
-                if let Some(control_id) = mesh.material.control_texture_id {
-                    let control = Self::valid_texture_id(textures, Some(control_id));
-                    let terrain_key = TerrainTextureKey {
-                        control,
-                        albedo_layers: Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_texture_ids,
-                        ),
-                        normal_layers: Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_normal_texture_ids,
-                        ),
-                        metallic_roughness_layers: Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_metallic_roughness_texture_ids,
-                        ),
-                        material: Self::terrain_material_key(mesh.material.terrain_tuning),
-                    };
-                    self.ensure_terrain_texture_bind_group(
-                        device,
-                        queue,
-                        textures,
-                        terrain_key,
-                        mesh.material.terrain_tuning,
-                        shadow_view,
-                    );
-                }
-            }
-        }
-        for batch in &instance_batch_draws {
-            self.ensure_main_texture_bind_group(device, textures, batch.key.textures, shadow_view);
-        }
-
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(2, &self.light_bind_group, &[]);
-
-        static_slot = 0;
-        skinned_slot = 0;
-
-        for draw in draws {
-            let gpu_model = match models.get(draw.model_id) {
-                Some(m) => m,
-                None => continue,
-            };
-
-            for mesh in &gpu_model.meshes {
-                if mesh.skinned {
-                    let dyn_offset = skinned_slot * aligned_skinned_stride;
-                    pass.set_bind_group(1, &self.skinned_model_bind_group, &[dyn_offset]);
-                    skinned_slot += 1;
-
-                    let texture_key =
-                        Self::resolve_main_texture_key(&draw.material, &mesh.material, textures);
-                    let main_texture_bind_group = self
-                        .main_texture_bind_groups
-                        .get(&texture_key)
-                        .expect("main texture bind group cache missing");
-                    let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
-                        (true, true) => &self.pipeline_skinned_textured,
-                        (true, false) => &self.pipeline_skinned_textured_color,
-                        (false, true) => &self.pipeline_skinned_untextured,
-                        (false, false) => &self.pipeline_skinned_untextured_color,
-                    };
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(3, &*main_texture_bind_group, &[]);
-                } else {
-                    if mesh.material.control_texture_id.is_none() {
-                        continue;
-                    }
-                    let dyn_offset = static_slot * aligned_model_stride;
-                    pass.set_bind_group(1, &self.model_bind_group, &[dyn_offset]);
-                    static_slot += 1;
-
-                    if let Some(control_id) = mesh.material.control_texture_id {
-                        pass.set_pipeline(if aux_targets_enabled {
-                            &self.pipeline_terrain_splat
-                        } else {
-                            &self.pipeline_terrain_splat_color
-                        });
-                        let texture_key = Self::valid_texture_id(textures, Some(control_id));
-                        let layer_texture_ids = Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_texture_ids,
-                        );
-                        let layer_normal_texture_ids = Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_normal_texture_ids,
-                        );
-                        let layer_metallic_roughness_texture_ids = Self::valid_layer_texture_ids(
-                            textures,
-                            &mesh.material.layer_metallic_roughness_texture_ids,
-                        );
-                        let terrain_key = TerrainTextureKey {
-                            control: texture_key,
-                            albedo_layers: layer_texture_ids,
-                            normal_layers: layer_normal_texture_ids,
-                            metallic_roughness_layers: layer_metallic_roughness_texture_ids,
-                            material: Self::terrain_material_key(mesh.material.terrain_tuning),
-                        };
-                        let terrain_texture_bind_group = &self
-                            .terrain_texture_bind_groups
-                            .get(&terrain_key)
-                            .expect("terrain texture bind group cache missing")
-                            .bind_group;
-                        pass.set_bind_group(3, terrain_texture_bind_group, &[]);
-                    }
-                }
-
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            }
-        }
-
-        if instance_batch_draws.is_empty() {
-            return;
-        }
-
-        pass.set_bind_group(1, &self.model_bind_group, &[0]);
-        let instance_stride = std::mem::size_of::<InstanceData>() as u64;
-
-        for batch in &instance_batch_draws {
-            let gpu_model = match models.get(batch.key.model_id) {
-                Some(m) => m,
-                None => continue,
-            };
-            let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
-                continue;
-            };
-            let texture_key = batch.key.textures;
-            let main_texture_bind_group = self
-                .main_texture_bind_groups
-                .get(&texture_key)
-                .expect("instanced texture bind group cache missing");
-            let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
-                (true, true) => &self.pipeline_instanced_textured,
-                (true, false) => &self.pipeline_instanced_textured_color,
-                (false, true) => &self.pipeline_instanced_untextured,
-                (false, false) => &self.pipeline_instanced_untextured_color,
-            };
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(3, &*main_texture_bind_group, &[]);
-
-            let start = batch.start as u64 * instance_stride;
-            let end = start + batch.count as u64 * instance_stride;
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
-        }
     }
 }

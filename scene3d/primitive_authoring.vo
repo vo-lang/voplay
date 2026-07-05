@@ -201,6 +201,78 @@ func (a *PrimitiveWorldAuthoring) AddDynamic(layerName string, desc PrimitiveIns
 	return &PrimitiveAuthoringPart{Layer: layer, Object: id, Shape: desc.Shape, Material: desc.Material, Flags: desc.Flags, LodNear: desc.LodNear, LodFar: desc.LodFar, WindStrength: desc.WindStrength, AtlasUV: desc.AtlasUV, Position: desc.Position, Rotation: normalizeAuthoringQuat(desc.Rotation), Scale: normalizeAuthoringScale(desc.Scale), Tint: desc.Tint, Visible: true}
 }
 
+
+
+type ProductPrimitiveAuthoringDesc struct {
+	Shapes *primitive3d.ShapeRegistry
+	Materials *primitive3d.MaterialPalette
+	Layers []PrimitiveBatchAuthoring
+}
+
+type ProductPrimitiveAuthoring struct {
+	world *PrimitiveWorldAuthoring
+}
+
+func NewProductPrimitiveAuthoring(scene *Scene, desc ProductPrimitiveAuthoringDesc) *ProductPrimitiveAuthoring {
+	return &ProductPrimitiveAuthoring{world: NewPrimitiveWorldAuthoring(scene, PrimitiveWorldAuthoringDesc{Shapes: desc.Shapes, Materials: desc.Materials, Layers: desc.Layers})}
+}
+
+func (a *ProductPrimitiveAuthoring) CloneForScene(scene *Scene, dynamic PrimitiveBatchAuthoring) *ProductPrimitiveAuthoring {
+	if a == nil || a.world == nil {
+		return nil
+	}
+	return &ProductPrimitiveAuthoring{world: a.world.CloneForScene(scene, dynamic)}
+}
+
+func (a *ProductPrimitiveAuthoring) Layer(name string) *primitive3d.Layer {
+	if a == nil || a.world == nil {
+		return nil
+	}
+	return a.world.Layer(name)
+}
+
+func (a *ProductPrimitiveAuthoring) BuildLayer(name string) {
+	if a == nil || a.world == nil {
+		return
+	}
+	a.world.BuildLayer(name)
+}
+
+func (a *ProductPrimitiveAuthoring) Shape(desc primitive3d.ShapeDesc) primitive3d.ShapeID {
+	if a == nil || a.world == nil {
+		return 0
+	}
+	return a.world.Shape(desc)
+}
+
+func (a *ProductPrimitiveAuthoring) Material(desc SurfaceMaterialAuthoring) primitive3d.MaterialID {
+	if a == nil || a.world == nil {
+		return 0
+	}
+	return a.world.Material(desc)
+}
+
+func (a *ProductPrimitiveAuthoring) Place(layerName string, desc PrimitiveInstanceAuthoring) primitive3d.ObjectID {
+	if a == nil || a.world == nil {
+		return 0
+	}
+	return a.world.AddPrimitive(layerName, desc)
+}
+
+func (a *ProductPrimitiveAuthoring) Dynamic(layerName string, desc PrimitiveInstanceAuthoring) *PrimitiveAuthoringPart {
+	if a == nil || a.world == nil {
+		return nil
+	}
+	return a.world.AddDynamic(layerName, desc)
+}
+
+func ProductPrimitiveSetPose(part *PrimitiveAuthoringPart, position voplay.Vec3, rotation voplay.Quat) {
+	if part == nil {
+		return
+	}
+	part.SetPose(position, rotation)
+}
+
 func (p *PrimitiveAuthoringPart) SetPose(position voplay.Vec3, rotation voplay.Quat) {
 	p.setPose(position, rotation, false)
 }

@@ -21,6 +21,7 @@ mod decal_submitter;
 mod material_binder;
 mod mesh_submitter;
 mod pipeline_cache;
+mod pipeline_factory;
 mod primitive_submitter;
 mod shader_library;
 mod skinned_submitter;

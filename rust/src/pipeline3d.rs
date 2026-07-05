@@ -27,6 +27,10 @@ mod skinned_submitter;
 mod terrain_submitter;
 mod water_submitter;
 
+pub(crate) use decal_submitter::DecalSubmitter;
+pub(crate) use primitive_submitter::PrimitiveSubmitter;
+pub(crate) use water_submitter::WaterSubmitter;
+
 /// Maximum number of lights per frame.
 const MAX_LIGHTS: usize = 8;
 const MAX_JOINTS: usize = animation::MAX_JOINTS;
@@ -333,7 +337,11 @@ fn color_only_targets(
 
 /// The 3D mesh rendering pipeline.
 pub struct Pipeline3D {
+    #[allow(dead_code)]
+    // owner: voplay/render; expiry: 2026-07-12; legacy direct pipelines retained during cache split.
     pipeline_textured: wgpu::RenderPipeline,
+    #[allow(dead_code)]
+    // owner: voplay/render; expiry: 2026-07-12; legacy direct pipelines retained during cache split.
     pipeline_untextured: wgpu::RenderPipeline,
     pipeline_instanced_textured: wgpu::RenderPipeline,
     pipeline_instanced_textured_color: wgpu::RenderPipeline,

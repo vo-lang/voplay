@@ -1154,10 +1154,12 @@ impl Renderer {
         elapsed_ms_opt(perf_packet_start)
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor used outside scoped unit filters.
     pub(crate) fn last_frame_graph_report(&self) -> &FrameGraphReport {
         &self.last_frame_graph_report
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor used outside scoped unit filters.
     pub(crate) fn last_frame_pipeline(&self) -> &RenderFramePipeline {
         &self.last_frame_pipeline
     }

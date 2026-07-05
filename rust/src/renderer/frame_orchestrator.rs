@@ -40,22 +40,6 @@ impl Renderer {
             self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         }
 
-        let acquire_start = if perf_enabled { Some(perf_now()) } else { None };
-        let mut output = self
-            .surface
-            .get_current_texture()
-            .map_err(|e| format!("voplay: get_current_texture: {}", e))?;
-        perf.surface_acquire_ms = elapsed_ms_opt(acquire_start);
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("voplay_frame"),
-            });
-
         let screen_w = self.screen_width;
         let screen_h = self.screen_height;
 
@@ -124,6 +108,7 @@ impl Renderer {
         let mut primitive_shadow_draw_calls = 0u32;
         let mut primitive_main_submitted = false;
         let mut primitive_main_stats = PrimitiveDrawStats::default();
+        let mut primitive_transparent_stats = PrimitiveDrawStats::default();
         let mut primitive_water_stats = PrimitiveDrawStats::default();
         if perf_overrides.has(RENDERER_DIAG_DISABLE_SHADOWS) {
             shadow_enabled = false;
@@ -245,6 +230,14 @@ impl Renderer {
             && self
                 .primitive_pipeline
                 .has_water_surface(&planned_water_draws, &planned_water_chunks);
+        let transparent_pass_active = primitives_enabled
+            && camera3d_uniform.is_some()
+            && self.primitive_pipeline.has_translucent_surface(
+                &planned_primitive_draws,
+                &planned_primitive_chunks,
+                &self.model_manager,
+                &self.texture_manager,
+            );
 
         // Flush font atlas (re-upload if new glyphs were rasterized)
         self.font_manager
@@ -362,7 +355,7 @@ impl Renderer {
             RenderPassKind::MainTransparent,
             &[RES_MAIN_COLOR, RES_DEPTH],
             &[RES_MAIN_COLOR],
-            false,
+            transparent_pass_active,
         );
         frame_graph.plan_transient_pass(
             RenderPassKind::Water,
@@ -408,6 +401,13 @@ impl Renderer {
                 RenderPassKind::Shadow.name()
             )
         })?;
+        let (mut output, view, surface_acquire_ms) = self.acquire_surface_texture(perf_enabled)?;
+        perf.surface_acquire_ms = surface_acquire_ms;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("voplay_frame"),
+            });
         let mut shadow_active = false;
         let depth_pass_ms;
         let shadow_pass_ms;
@@ -452,6 +452,7 @@ impl Renderer {
                 primitive_depth_draw_calls: &mut primitive_depth_draw_calls,
                 primitive_shadow_draw_calls: &mut primitive_shadow_draw_calls,
                 primitive_main_stats: &mut primitive_main_stats,
+                primitive_transparent_stats: &mut primitive_transparent_stats,
                 primitive_main_submitted: &mut primitive_main_submitted,
                 primitive_water_stats: &mut primitive_water_stats,
                 shadow_active: &mut shadow_active,
@@ -583,6 +584,7 @@ impl Renderer {
                 primitive_depth_draw_calls: &mut primitive_depth_draw_calls,
                 primitive_shadow_draw_calls: &mut primitive_shadow_draw_calls,
                 primitive_main_stats: &mut primitive_main_stats,
+                primitive_transparent_stats: &mut primitive_transparent_stats,
                 primitive_main_submitted: &mut primitive_main_submitted,
                 primitive_water_stats: &mut primitive_water_stats,
                 shadow_active: &mut shadow_active,
@@ -641,7 +643,8 @@ impl Renderer {
             perf.graph_alias_reuses = self.last_frame_graph_report.resource_churn.alias_reuses;
             perf.text_draws = text_count;
             perf.sprite_draws = sprite_count;
-            perf.primitive_draws = primitive_main_draw_calls;
+            perf.primitive_draws =
+                primitive_main_draw_calls.saturating_add(primitive_transparent_stats.batch_count);
             perf.water_draws = primitive_water_stats.batch_count;
             perf.water_instances = primitive_water_stats.instance_count;
             perf.water_triangles = primitive_water_stats.triangle_count;
@@ -686,6 +689,10 @@ impl Renderer {
             }
             instance_count = instance_count.saturating_add(primitive_main_stats.instance_count);
             triangle_count = triangle_count.saturating_add(primitive_main_stats.triangle_count);
+            instance_count =
+                instance_count.saturating_add(primitive_transparent_stats.instance_count);
+            triangle_count =
+                triangle_count.saturating_add(primitive_transparent_stats.triangle_count);
             instance_count = instance_count.saturating_add(primitive_water_stats.instance_count);
             triangle_count = triangle_count.saturating_add(primitive_water_stats.triangle_count);
             perf.model_draws = model_mesh_draws;
@@ -782,5 +789,39 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    fn acquire_surface_texture(
+        &mut self,
+        perf_enabled: bool,
+    ) -> Result<(wgpu::SurfaceTexture, wgpu::TextureView, f64), String> {
+        let acquire_start = if perf_enabled { Some(perf_now()) } else { None };
+        let output = match self.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.surface_config);
+                self.surface.get_current_texture().map_err(|error| {
+                    format!(
+                        "voplay: get_current_texture recovery after lost/outdated failed: {error}"
+                    )
+                })?
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                return Err(
+                    "voplay: get_current_texture timeout; frame skipped before submit".to_string(),
+                );
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                return Err(
+                    "voplay: get_current_texture out of memory; renderer cannot recover"
+                        .to_string(),
+                );
+            }
+            Err(error) => return Err(format!("voplay: get_current_texture failed: {error}")),
+        };
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        Ok((output, view, elapsed_ms_opt(acquire_start)))
     }
 }

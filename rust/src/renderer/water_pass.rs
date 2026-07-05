@@ -1,5 +1,5 @@
 use super::*;
-use crate::primitive_pipeline::PrimitiveRenderFilter;
+use crate::pipeline3d::WaterSubmitter;
 
 pub(super) struct WaterPassExecutor;
 
@@ -172,7 +172,7 @@ impl WaterPassExecutor {
             &ctx.renderer.texture_manager,
             shadow_view,
             ctx.main_aux_targets_enabled,
-            PrimitiveRenderFilter::Water,
+            WaterSubmitter::draw(),
         );
         drop(render_pass);
         Ok(WaterPassResult {

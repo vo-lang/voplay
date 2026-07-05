@@ -149,14 +149,42 @@ func VehicleAudioInputFromVehicle(vehicle *Vehicle) VehicleAudioInput {
 	if vehicle == nil {
 		return VehicleAudioInput{}
 	}
-	slip := 0.0
-	for _, wheel := range vehicle.Wheels {
-		s := vehicleAudioAbs(wheel.LateralSlip)
-		if s > slip {
-			slip = s
+	return VehicleAudioInputFromTelemetry(vehicle.Telemetry())
+}
+
+func VehicleAudioInputFromTelemetry(telemetry VehicleTelemetry) VehicleAudioInput {
+	input := VehicleAudioInput{Speed: vehicleAudioAbs(telemetry.Speed), LongitudinalSlip: vehicleAudioAbs(telemetry.MaxLongitudinalSlip), LateralSlip: vehicleAudioAbs(telemetry.MaxLateralSlip), Boost: telemetry.Boosting}
+	if telemetry.Surface.ID != "" && !telemetry.Surface.OnRoad {
+		input.SurfaceAmount = 1
+	}
+	for _, wheel := range telemetry.WheelTelemetry {
+		contact := wheel.Contact
+		longitudinal := vehicleAudioAbs(contact.ForwardSlip)
+		lateral := vehicleAudioAbs(contact.SideSlip)
+		if longitudinal > input.LongitudinalSlip {
+			input.LongitudinalSlip = longitudinal
+		}
+		if lateral > input.LateralSlip {
+			input.LateralSlip = lateral
+		}
+		if contact.InContact && contact.Surface.ID != "" && !contact.Surface.OnRoad {
+			input.SurfaceAmount = 1
 		}
 	}
-	return VehicleAudioInput{Speed: vehicleAudioAbs(vehicle.Speed), LongitudinalSlip: 0, LateralSlip: slip, Boost: false}
+	for _, contact := range telemetry.WheelContacts {
+		longitudinal := vehicleAudioAbs(contact.ForwardSlip)
+		lateral := vehicleAudioAbs(contact.SideSlip)
+		if longitudinal > input.LongitudinalSlip {
+			input.LongitudinalSlip = longitudinal
+		}
+		if lateral > input.LateralSlip {
+			input.LateralSlip = lateral
+		}
+		if contact.InContact && contact.Surface.ID != "" && !contact.Surface.OnRoad {
+			input.SurfaceAmount = 1
+		}
+	}
+	return input
 }
 
 func computeVehicleAudioState(input VehicleAudioInput, cfg VehicleAudioConfig) VehicleAudioState {

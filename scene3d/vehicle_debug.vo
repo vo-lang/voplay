@@ -72,9 +72,7 @@ func BuildVehicleDebugSnapshot(vehicle *Vehicle, track *Track) VehicleDebugSnaps
 		track = vehicle.Track
 	}
 	snapshot := VehicleDebugSnapshot{Speed: vehicle.Speed, Grounded: vehicle.Grounded, Wheels: []VehicleWheelDebugSnapshot{}}
-	if track != nil && vehicle.Body != nil {
-		snapshot.Surface = track.SurfaceAt(vehicle.Body.Position())
-	}
+	snapshot.Surface = vehicle.CurrentSurfaceHit()
 	for i := 0; i < vehicle.WheelCount(); i++ {
 		state, ok := vehicle.WheelState(i)
 		if !ok {

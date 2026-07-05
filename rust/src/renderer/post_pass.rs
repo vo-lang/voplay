@@ -1,4 +1,5 @@
 use super::*;
+use crate::pipeline3d::DecalSubmitter;
 
 pub(super) struct PostPassExecutor;
 pub(super) struct PostPassSetup;
@@ -94,6 +95,10 @@ impl PostPassSetup {
             .camera3d_state
             .map(|(eye, _, _, _, _, _)| eye.to_array())
             .unwrap_or([0.0, 0.0, 0.0]);
+        let projected_decal_count = DecalSubmitter::prepare(ctx.projected_decals);
+        let projected_decal_atlas_binding_count = ctx
+            .projected_decal_atlas_binding_count
+            .min(projected_decal_count as u32);
         ctx.renderer.queue.write_buffer(
             &ctx.renderer.post_decal_uniform_buffer,
             0,
@@ -101,7 +106,7 @@ impl PostPassSetup {
                 post_inv_view_proj,
                 post_camera_pos,
                 ctx.projected_decals,
-                ctx.projected_decal_atlas_binding_count,
+                projected_decal_atlas_binding_count,
             )),
         );
     }

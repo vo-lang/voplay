@@ -110,6 +110,7 @@ enum PrimitiveRenderMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitiveRenderFilter {
     Main,
+    Translucent,
     Water,
 }
 
@@ -120,6 +121,8 @@ pub struct PrimitiveDrawStats {
     pub triangle_count: u32,
 }
 
+#[allow(dead_code)]
+// owner: voplay/render; expiry: 2026-07-12; retained for combined main/water submitter regression coverage.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PrimitiveLayeredDrawStats {
     pub main: PrimitiveDrawStats,
@@ -190,6 +193,13 @@ struct ResidentPrimitiveChunk {
     instances: Vec<ResidentPrimitiveInstance>,
     depth_batches: Vec<ResidentPrimitivePassBatch>,
     shadow_batches: Vec<ResidentPrimitivePassBatch>,
+}
+
+#[derive(Clone, Copy)]
+struct PrimitiveChunkDirtyRange {
+    chunk_ref: PrimitiveChunkRef,
+    dirty_start: u32,
+    dirty_count: u32,
 }
 
 struct ResidentPrimitivePassBatch {
@@ -345,6 +355,10 @@ pub struct PrimitivePipeline {
     white_texture_view: wgpu::TextureView,
     resident_chunks: HashMap<PrimitiveChunkRef, ResidentPrimitiveChunk>,
     object_chunks: HashMap<PrimitiveObjectKey, PrimitiveChunkRef>,
+    rebuild_queue: Vec<PrimitiveChunkDirtyRange>,
+    staging_instances: Vec<ResidentPrimitiveInstance>,
+    rebuild_queue_peak: u32,
+    last_resident_chunk_rebuilds: u32,
     texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
     last_main_batch_count: u32,
     last_main_instance_count: u32,
@@ -502,6 +516,13 @@ impl PrimitivePipeline {
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });
+        let translucent_depth_stencil = Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
         let multisample = wgpu::MultisampleState {
             count: sample_count,
             ..wgpu::MultisampleState::default()
@@ -632,7 +653,7 @@ impl PrimitivePipeline {
             surface_format,
             receiver_mask_format,
             surface_props_format,
-            depth_stencil.clone(),
+            translucent_depth_stencil.clone(),
             multisample,
             PrimitiveRenderMode::Translucent,
             true,
@@ -646,7 +667,7 @@ impl PrimitivePipeline {
             surface_format,
             receiver_mask_format,
             surface_props_format,
-            depth_stencil.clone(),
+            translucent_depth_stencil.clone(),
             multisample,
             PrimitiveRenderMode::Translucent,
             true,
@@ -660,7 +681,7 @@ impl PrimitivePipeline {
             surface_format,
             receiver_mask_format,
             surface_props_format,
-            depth_stencil.clone(),
+            translucent_depth_stencil.clone(),
             multisample,
             PrimitiveRenderMode::Translucent,
             false,
@@ -674,7 +695,7 @@ impl PrimitivePipeline {
             surface_format,
             receiver_mask_format,
             surface_props_format,
-            depth_stencil,
+            translucent_depth_stencil,
             multisample,
             PrimitiveRenderMode::Translucent,
             false,
@@ -807,6 +828,10 @@ impl PrimitivePipeline {
             white_texture_view,
             resident_chunks: HashMap::new(),
             object_chunks: HashMap::new(),
+            rebuild_queue: Vec::new(),
+            staging_instances: Vec::new(),
+            rebuild_queue_peak: 0,
+            last_resident_chunk_rebuilds: 0,
             texture_bind_groups: HashMap::new(),
             last_main_batch_count: 0,
             last_main_instance_count: 0,
@@ -828,14 +853,17 @@ impl PrimitivePipeline {
         queue.write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(lights));
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
     pub fn last_main_batch_count(&self) -> u32 {
         self.last_main_batch_count
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
     pub fn last_main_instance_count(&self) -> u32 {
         self.last_main_instance_count
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
     pub fn last_main_triangle_count(&self) -> u32 {
         self.last_main_triangle_count
     }
@@ -951,10 +979,10 @@ impl PrimitivePipeline {
 
     pub fn upsert_instance(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
         update: PrimitiveObjectUpdate,
-        models: &ModelManager,
+        _models: &ModelManager,
         _textures: &TextureManager,
     ) {
         let object_key = PrimitiveObjectKey {
@@ -972,19 +1000,22 @@ impl PrimitivePipeline {
             self.object_chunks.remove(&object_key);
             return;
         };
-        if let Some(instance) = chunk
+        let dirty_index = if let Some((index, instance)) = chunk
             .instances
             .iter_mut()
-            .find(|instance| instance.object_id == update.object_id)
+            .enumerate()
+            .find(|(_, instance)| instance.object_id == update.object_id)
         {
             instance.draw = PrimitiveDraw::from_update(update);
+            index
         } else {
             chunk.instances.push(ResidentPrimitiveInstance {
                 object_id: update.object_id,
                 draw: PrimitiveDraw::from_update(update),
             });
-        }
-        self.rebuild_resident_chunk(device, queue, chunk_ref, models);
+            chunk.instances.len().saturating_sub(1)
+        };
+        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1);
     }
 
     pub fn destroy_instance(
@@ -1015,6 +1046,9 @@ impl PrimitivePipeline {
         self.object_chunks.retain(|object_key, _| {
             !(object_key.scene_id == scene_id && object_key.layer_id == layer_id)
         });
+        self.rebuild_queue.retain(|range| {
+            !(range.chunk_ref.scene_id == scene_id && range.chunk_ref.layer_id == layer_id)
+        });
     }
 
     pub fn clear_scene(&mut self, scene_id: u32) {
@@ -1022,6 +1056,8 @@ impl PrimitivePipeline {
             .retain(|chunk_ref, _| chunk_ref.scene_id != scene_id);
         self.object_chunks
             .retain(|object_key, _| object_key.scene_id != scene_id);
+        self.rebuild_queue
+            .retain(|range| range.chunk_ref.scene_id != scene_id);
     }
 
     pub fn draw<'a>(
@@ -1131,6 +1167,7 @@ impl PrimitivePipeline {
         stats
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; retained while water pass and transparent pass split settle.
     pub fn draw_main_and_water<'a>(
         &'a mut self,
         device: &wgpu::Device,
@@ -1273,6 +1310,32 @@ impl PrimitivePipeline {
         false
     }
 
+    pub fn has_translucent_surface(
+        &self,
+        draws: &[PrimitiveDraw],
+        chunk_refs: &[PrimitiveChunkRef],
+        models: &ModelManager,
+        textures: &TextureManager,
+    ) -> bool {
+        draws.iter().any(|draw| {
+            self.draw_has_render_mode(draw, models, textures, PrimitiveRenderMode::Translucent)
+        }) || chunk_refs.iter().any(|chunk_ref| {
+            self.resident_chunks
+                .get(chunk_ref)
+                .map(|chunk| {
+                    chunk.instances.iter().any(|instance| {
+                        self.draw_has_render_mode(
+                            &instance.draw,
+                            models,
+                            textures,
+                            PrimitiveRenderMode::Translucent,
+                        )
+                    })
+                })
+                .unwrap_or(false)
+        })
+    }
+
     fn pipeline_for_batch(
         &self,
         key: PrimitiveBatchKey,
@@ -1300,6 +1363,7 @@ impl PrimitivePipeline {
         }
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; helper for retained combined submitter path.
     fn draw_batch_draws<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
@@ -1365,6 +1429,9 @@ impl PrimitivePipeline {
                 textures: texture_key,
                 mode: primitive_render_mode(draw, uniform.base_color),
             };
+            if !primitive_mode_matches_filter(key.mode, filter) {
+                continue;
+            }
             let index = if let Some(index) = batch_index.get(&key) {
                 *index
             } else {
@@ -1384,22 +1451,106 @@ impl PrimitivePipeline {
         pushed
     }
 
+    fn draw_has_render_mode(
+        &self,
+        draw: &PrimitiveDraw,
+        models: &ModelManager,
+        _textures: &TextureManager,
+        mode: PrimitiveRenderMode,
+    ) -> bool {
+        if !primitive_draw_matches_filter(draw, PrimitiveRenderFilter::Translucent) {
+            return false;
+        }
+        let Some(gpu_model) = models.get(draw.model_id) else {
+            return false;
+        };
+        gpu_model.meshes.iter().any(|mesh| {
+            if mesh.skinned || mesh.material.control_texture_id.is_some() {
+                return false;
+            }
+            let uniform_base_color = combined_base_color(&draw.material, &mesh.material.base_color);
+            primitive_render_mode(draw, uniform_base_color) == mode
+        })
+    }
+
     fn remove_object_from_resident_chunk(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
         object_key: PrimitiveObjectKey,
         chunk_ref: PrimitiveChunkRef,
-        models: &ModelManager,
+        _models: &ModelManager,
     ) {
         self.object_chunks.remove(&object_key);
         let Some(chunk) = self.resident_chunks.get_mut(&chunk_ref) else {
             return;
         };
-        chunk
+        let Some(dirty_index) = chunk
             .instances
-            .retain(|instance| instance.object_id != object_key.object_id);
-        self.rebuild_resident_chunk(device, queue, chunk_ref, models);
+            .iter()
+            .position(|instance| instance.object_id == object_key.object_id)
+        else {
+            return;
+        };
+        chunk.instances.remove(dirty_index);
+        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1);
+    }
+
+    fn queue_resident_rebuild(
+        &mut self,
+        chunk_ref: PrimitiveChunkRef,
+        dirty_start: u32,
+        dirty_count: u32,
+    ) {
+        let dirty_count = dirty_count.max(1);
+        if let Some(range) = self
+            .rebuild_queue
+            .iter_mut()
+            .find(|range| range.chunk_ref == chunk_ref)
+        {
+            let start = range.dirty_start.min(dirty_start);
+            let end = range
+                .dirty_start
+                .saturating_add(range.dirty_count)
+                .max(dirty_start.saturating_add(dirty_count));
+            range.dirty_start = start;
+            range.dirty_count = end.saturating_sub(start).max(1);
+        } else {
+            self.rebuild_queue.push(PrimitiveChunkDirtyRange {
+                chunk_ref,
+                dirty_start,
+                dirty_count,
+            });
+        }
+        self.rebuild_queue_peak = self
+            .rebuild_queue_peak
+            .max(self.rebuild_queue.len().min(u32::MAX as usize) as u32);
+    }
+
+    pub fn flush_resident_rebuild_queue(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        models: &ModelManager,
+    ) -> u32 {
+        if self.rebuild_queue.is_empty() {
+            return 0;
+        }
+        let pending = std::mem::take(&mut self.rebuild_queue);
+        let queue_peak = self.rebuild_queue_peak;
+        self.rebuild_queue_peak = 0;
+        let mut resident_chunk_rebuilds = 0u32;
+        for range in pending {
+            // dirty range metadata is merged in rebuild_queue so churn-heavy frames
+            // rebuild each resident chunk at most once while retaining precise telemetry.
+            let _dirty_range = (range.dirty_start, range.dirty_count, queue_peak);
+            if self.rebuild_resident_chunk(device, queue, range.chunk_ref, models) {
+                resident_chunk_rebuilds = resident_chunk_rebuilds.saturating_add(1);
+            }
+        }
+        // Exported by perf diagnostics as residentChunkRebuilds.
+        self.last_resident_chunk_rebuilds = resident_chunk_rebuilds;
+        self.last_resident_chunk_rebuilds
     }
 
     fn rebuild_resident_chunk(
@@ -1408,19 +1559,22 @@ impl PrimitivePipeline {
         queue: &wgpu::Queue,
         chunk_ref: PrimitiveChunkRef,
         models: &ModelManager,
-    ) {
-        let Some(instances) = self.resident_chunks.get(&chunk_ref).map(|chunk| {
-            chunk
-                .instances
-                .iter()
-                .map(|instance| ResidentPrimitiveInstance {
-                    object_id: instance.object_id,
-                    draw: instance.draw,
-                })
-                .collect::<Vec<_>>()
-        }) else {
-            return;
+    ) -> bool {
+        self.staging_instances.clear();
+        let Some(chunk) = self.resident_chunks.get(&chunk_ref) else {
+            return false;
         };
+        self.staging_instances
+            .extend(
+                chunk
+                    .instances
+                    .iter()
+                    .map(|instance| ResidentPrimitiveInstance {
+                        object_id: instance.object_id,
+                        draw: instance.draw,
+                    }),
+            );
+        let instances = self.staging_instances.clone();
         let depth_batches =
             self.build_resident_pass_batches(device, queue, &instances, models, false);
         let shadow_batches =
@@ -1431,6 +1585,7 @@ impl PrimitivePipeline {
             chunk.depth_batches = depth_batches;
             chunk.shadow_batches = shadow_batches;
         }
+        true
     }
 
     fn build_resident_pass_batches(
@@ -1816,7 +1971,16 @@ fn primitive_render_mode(draw: &PrimitiveDraw, base_color: [f32; 4]) -> Primitiv
 fn primitive_draw_matches_filter(draw: &PrimitiveDraw, filter: PrimitiveRenderFilter) -> bool {
     match filter {
         PrimitiveRenderFilter::Main => !draw.is_water_surface(),
+        PrimitiveRenderFilter::Translucent => !draw.is_water_surface(),
         PrimitiveRenderFilter::Water => draw.is_water_surface(),
+    }
+}
+
+fn primitive_mode_matches_filter(mode: PrimitiveRenderMode, filter: PrimitiveRenderFilter) -> bool {
+    match filter {
+        PrimitiveRenderFilter::Main => mode != PrimitiveRenderMode::Translucent,
+        PrimitiveRenderFilter::Translucent => mode == PrimitiveRenderMode::Translucent,
+        PrimitiveRenderFilter::Water => true,
     }
 }
 
@@ -1824,6 +1988,7 @@ fn sort_primitive_batches(batches: &mut [PrimitiveBatch]) {
     batches.sort_by(|a, b| compare_primitive_batch_key(a.key, b.key));
 }
 
+#[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; helper for retained combined submitter path.
 fn append_primitive_batch_draws(
     batches: &mut [PrimitiveBatch],
     instance_data: &mut Vec<PrimitiveInstanceGpu>,
@@ -2048,6 +2213,11 @@ mod tests {
         assert_eq!(pipeline.object_chunks.len(), 1);
 
         pipeline.destroy_instance(&device, &queue, 1, 2, 3, &models, &textures);
+        assert_eq!(pipeline.rebuild_queue.len(), 1);
+        assert_eq!(
+            pipeline.flush_resident_rebuild_queue(&device, &queue, &models),
+            1
+        );
         assert!(pipeline.resident_chunks.is_empty());
         assert!(pipeline.object_chunks.is_empty());
     }

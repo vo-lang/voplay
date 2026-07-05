@@ -1,0 +1,188 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type VehicleRoadEdgeAssistCommand struct {
+	RoadPosition voplay.Vec3
+	Right voplay.Vec3
+	Inward voplay.Vec3
+	EdgeHalfWidth float64
+	AssistStart float64
+	LateralAbs float64
+	Side float64
+	SoftZone float64
+	MaxPushSpeed float64
+	VelocityBlend float64
+	OutwardDamping float64
+	ImpactSpeed float64
+	PositionBlend float64
+	MaxCorrection float64
+	PostMaxCorrection float64
+	SnapOverflow float64
+	RideHeight float64
+	Lift float64
+	Entering bool
+}
+
+type VehicleRoadEdgeAssistResult struct {
+	Active bool
+	VelocityAdjusted bool
+	PositionAdjusted bool
+	Lifted bool
+	Position voplay.Vec3
+	LinearVelocity voplay.Vec3
+}
+
+func (v *Vehicle) Position() voplay.Vec3 {
+	if v != nil && v.Body != nil {
+		return v.Body.Position()
+	}
+	return voplay.Vec3{}
+}
+
+func (v *Vehicle) LinearVelocity() voplay.Vec3 {
+	if v != nil && v.Body != nil && v.Body.Physics != nil {
+		return v.Body.Physics.velocity
+	}
+	return voplay.Vec3{}
+}
+
+func (v *Vehicle) AngularVelocity() voplay.Vec3 {
+	if v != nil && v.Body != nil && v.Body.Physics != nil {
+		return v.Body.Physics.angularVelocity
+	}
+	return voplay.Vec3{}
+}
+
+func ApplyVehicleRoadEdgeAssist(vehicle *Vehicle, command VehicleRoadEdgeAssistCommand, dt float64) VehicleRoadEdgeAssistResult {
+	result := VehicleRoadEdgeAssistResult{}
+	if vehicle == nil || dt <= 0 {
+		return result
+	}
+	command = normalizeVehicleRoadEdgeAssistCommand(command)
+	if command.LateralAbs <= command.AssistStart {
+		return result
+	}
+	result.Active = true
+	pos := vehicle.Position()
+	vel := vehicle.LinearVelocity()
+	t := vehicleClamp((command.LateralAbs - command.AssistStart) / command.SoftZone, 0, 1)
+	strength := t * t * (3 - 2 * t)
+	outwardSpeed := vel.Dot(command.Right) * command.Side
+	if outwardSpeed > 0 {
+		vel = vel.Sub(command.Right.Scale(command.Side * outwardSpeed * command.OutwardDamping * strength))
+		result.VelocityAdjusted = true
+	}
+	inwardSpeed := vel.Dot(command.Inward)
+	targetInwardSpeed := command.MaxPushSpeed * strength
+	if command.Entering && targetInwardSpeed < command.ImpactSpeed {
+		targetInwardSpeed = command.ImpactSpeed
+	}
+	if inwardSpeed < targetInwardSpeed {
+		blend := vehicleClamp(command.VelocityBlend * dt, 0, 1)
+		vel = vel.Add(command.Inward.Scale((targetInwardSpeed - inwardSpeed) * blend))
+		result.VelocityAdjusted = true
+	}
+	if result.VelocityAdjusted {
+		ApplyVehicleConstraint(vehicle, VehicleConstraintCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_assist_velocity"})
+	}
+	corrected := pos
+	penetration := command.LateralAbs - command.EdgeHalfWidth
+	if penetration > 0 {
+		correction := vehicleClamp(penetration * command.PositionBlend * dt, 0, command.MaxCorrection)
+		if correction > 0 {
+			corrected = corrected.Add(command.Inward.Scale(correction))
+			result.PositionAdjusted = true
+		}
+	}
+	if command.LateralAbs > command.EdgeHalfWidth + command.SnapOverflow {
+		corrected = command.RoadPosition.Add(command.Right.Scale(command.Side * (command.EdgeHalfWidth - command.SoftZone * 0.45)))
+		corrected.Y = pos.Y
+		result.PositionAdjusted = true
+	}
+	corrected, result.Lifted, vel = vehicleRoadEdgeLift(vehicle, corrected, vel, command)
+	if result.PositionAdjusted || result.Lifted {
+		ApplyVehicleConstraint(vehicle, VehicleConstraintCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_assist_position"})
+	}
+	result.Position = corrected
+	result.LinearVelocity = vel
+	return result
+}
+
+func ResolveVehicleRoadEdgeAssistPose(vehicle *Vehicle, command VehicleRoadEdgeAssistCommand) VehicleRoadEdgeAssistResult {
+	result := VehicleRoadEdgeAssistResult{}
+	if vehicle == nil {
+		return result
+	}
+	command = normalizeVehicleRoadEdgeAssistCommand(command)
+	if command.LateralAbs <= command.AssistStart {
+		return result
+	}
+	result.Active = true
+	pos := vehicle.Position()
+	corrected := pos
+	if command.LateralAbs > command.EdgeHalfWidth {
+		correction := vehicleClamp(command.LateralAbs - command.EdgeHalfWidth, 0, command.PostMaxCorrection)
+		if correction > 0 {
+			corrected = corrected.Add(command.Inward.Scale(correction))
+			result.PositionAdjusted = true
+		}
+	}
+	vel := vehicle.LinearVelocity()
+	corrected, result.Lifted, vel = vehicleRoadEdgeLift(vehicle, corrected, vel, command)
+	if result.PositionAdjusted || result.Lifted {
+		ApplyVehicleConstraint(vehicle, VehicleConstraintCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_post_position"})
+	}
+	result.Position = corrected
+	result.LinearVelocity = vel
+	return result
+}
+
+func vehicleRoadEdgeLift(vehicle *Vehicle, pos, vel voplay.Vec3, command VehicleRoadEdgeAssistCommand) (voplay.Vec3, bool, voplay.Vec3) {
+	minY := command.RoadPosition.Y + command.RideHeight + command.Lift
+	if pos.Y >= minY {
+		return pos, false, vel
+	}
+	pos.Y = minY
+	if vel.Y < 0 {
+		vel.Y = 0
+		ApplyVehicleConstraint(vehicle, VehicleConstraintCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_clear_downward_velocity"})
+	}
+	return pos, true, vel
+}
+
+func normalizeVehicleRoadEdgeAssistCommand(command VehicleRoadEdgeAssistCommand) VehicleRoadEdgeAssistCommand {
+	if command.SoftZone <= 0 {
+		command.SoftZone = 1
+	}
+	if command.MaxPushSpeed < 0 {
+		command.MaxPushSpeed = 0
+	}
+	if command.VelocityBlend <= 0 {
+		command.VelocityBlend = 1
+	}
+	if command.PositionBlend <= 0 {
+		command.PositionBlend = 1
+	}
+	if command.MaxCorrection <= 0 {
+		command.MaxCorrection = command.SoftZone
+	}
+	if command.PostMaxCorrection <= 0 {
+		command.PostMaxCorrection = command.MaxCorrection
+	}
+	if command.SnapOverflow < 0 {
+		command.SnapOverflow = 0
+	}
+	if command.OutwardDamping < 0 {
+		command.OutwardDamping = 0
+	}
+	if command.ImpactSpeed < 0 {
+		command.ImpactSpeed = 0
+	}
+	if command.Side == 0 {
+		command.Side = 1
+	}
+	return command
+}

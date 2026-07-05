@@ -640,7 +640,6 @@ impl Renderer {
                     atlas_uv,
                 } => {
                     scene_upsert_count += 1;
-                    resident_chunk_rebuild_count += 1;
                     let update = PrimitiveObjectUpdate {
                         scene_id,
                         layer_id,
@@ -672,7 +671,6 @@ impl Renderer {
                     object_id,
                 } => {
                     scene_removal_count += 1;
-                    resident_chunk_rebuild_count += 1;
                     self.primitive_pipeline.destroy_instance(
                         &self.device,
                         &self.queue,
@@ -948,6 +946,13 @@ impl Renderer {
                 }
             }
         }
+        resident_chunk_rebuild_count = resident_chunk_rebuild_count.saturating_add(
+            self.primitive_pipeline.flush_resident_rebuild_queue(
+                &self.device,
+                &self.queue,
+                &self.model_manager,
+            ),
+        );
         let elapsed_ms = elapsed_ms_opt(decode_start);
 
         FrameDecodeOutput {

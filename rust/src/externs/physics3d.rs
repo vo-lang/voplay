@@ -393,6 +393,86 @@ pub fn physics3d_set_raycast_vehicle_wheel_control(call: &mut ExternCallContext)
     ExternResult::Ok
 }
 
+#[vo_fn("voplay/scene3d", "physicsApplyRaycastVehicleForces")]
+pub fn physics3d_apply_raycast_vehicle_forces(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let vehicle_id = call.arg_u64(1) as u32;
+    let body_force = Vec3::new(
+        call.arg_f64(2) as f32,
+        call.arg_f64(3) as f32,
+        call.arg_f64(4) as f32,
+    );
+    let drag_force = call.arg_f64(5) as f32;
+    let downforce = call.arg_f64(6) as f32;
+    let water_lift = call.arg_f64(7) as f32;
+    let air_control = call.arg_f64(8) as f32;
+    let wall_grip = call.arg_f64(9) as f32;
+    let rail_grip = call.arg_f64(10) as f32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.apply_raycast_vehicle_forces(
+            vehicle_id,
+            body_force,
+            drag_force,
+            downforce,
+            water_lift,
+            air_control,
+            wall_grip,
+            rail_grip,
+        )
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsSetBodyPose")]
+pub fn physics3d_set_body_pose(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let body_id = call.arg_u64(1) as u32;
+    let pos = Vec3::new(
+        call.arg_f64(2) as f32,
+        call.arg_f64(3) as f32,
+        call.arg_f64(4) as f32,
+    );
+    let rot = Quat::new(
+        call.arg_f64(5) as f32,
+        call.arg_f64(6) as f32,
+        call.arg_f64(7) as f32,
+        call.arg_f64(8) as f32,
+    );
+    crate::physics3d::with_world(world_id, |world| world.set_body_pose(body_id, pos, rot));
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsSetBodyMotion")]
+pub fn physics3d_set_body_motion(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let body_id = call.arg_u64(1) as u32;
+    let linear = Vec3::new(
+        call.arg_f64(2) as f32,
+        call.arg_f64(3) as f32,
+        call.arg_f64(4) as f32,
+    );
+    let angular = Vec3::new(
+        call.arg_f64(5) as f32,
+        call.arg_f64(6) as f32,
+        call.arg_f64(7) as f32,
+    );
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_body_motion(body_id, linear, angular)
+    });
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsSetBodySleepState")]
+pub fn physics3d_set_body_sleep_state(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let body_id = call.arg_u64(1) as u32;
+    let sleeping = call.arg_u64(2) != 0;
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_body_sleep_state(body_id, sleeping)
+    });
+    ExternResult::Ok
+}
+
 #[vo_fn("voplay/scene3d", "physicsRaycastVehicleState")]
 pub fn physics3d_raycast_vehicle_state(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;

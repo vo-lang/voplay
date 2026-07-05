@@ -24,6 +24,8 @@ impl Transform {
 
 #[derive(Clone, Debug)]
 pub struct Joint {
+    #[allow(dead_code)]
+    // owner: voplay/animation; expiry: 2026-07-12; retained for imported skeleton labels.
     pub name: String,
     pub parent: Option<usize>,
     pub local_transform: Transform,

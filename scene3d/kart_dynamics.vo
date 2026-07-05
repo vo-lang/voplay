@@ -8,8 +8,15 @@ import (
 type KartDynamics struct {
 	Config KartDynamicsConfig
 	BoostTimer float64
+	BoostState BoostState
 	DriftCharge float64
 	wasDrifting bool
+}
+
+type BoostState struct {
+	Active bool
+	Timer float64
+	Source string
 }
 
 type KartDynamicsConfig struct {
@@ -123,6 +130,7 @@ type KartDynamicsResult struct {
 	WheelContacts []WheelContactSample
 	Boosting bool
 	BoostTimer float64
+	BoostState BoostState
 	Drifting bool
 	DriftCharge float64
 	MiniTurboReleased bool
@@ -188,13 +196,16 @@ func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed
 		d.DriftCharge = vehicleMoveTowards(d.DriftCharge, 0, dt * 1.5)
 	}
 	boosting := d.BoostTimer > 0
+	d.BoostState = BoostState{Active: boosting, Timer: d.BoostTimer, Source: "kart_dynamics"}
 	controlIntent := intent
 	controlIntent.BoostRequest = boosting
 	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
 	force := BuildVehicleForceCommand(controlIntent, vehicleConfig, cfg.Model, surface, speed, grounded, boosting, drifting)
-	result := KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
+	result := KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, BoostState: d.BoostState, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
 	d.BoostTimer = vehicleMoveTowards(d.BoostTimer, 0, dt)
+	d.BoostState = BoostState{Active: d.BoostTimer > 0, Timer: d.BoostTimer, Source: "kart_dynamics"}
 	result.BoostTimer = d.BoostTimer
+	result.BoostState = d.BoostState
 	return result
 }
 
@@ -377,6 +388,7 @@ func (d *KartDynamics) ActivateBoost(duration float64) {
 	}
 	if duration > d.BoostTimer {
 		d.BoostTimer = duration
+		d.BoostState = BoostState{Active: d.BoostTimer > 0, Timer: d.BoostTimer, Source: "kart_dynamics"}
 	}
 }
 
@@ -385,6 +397,7 @@ func (d *KartDynamics) Reset() {
 		return
 	}
 	d.BoostTimer = 0
+	d.BoostState = BoostState{Active: false, Timer: 0, Source: "kart_dynamics"}
 	d.DriftCharge = 0
 	d.wasDrifting = false
 }

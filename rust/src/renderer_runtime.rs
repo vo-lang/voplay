@@ -6,6 +6,8 @@ use std::sync::{Mutex, OnceLock};
 use crate::renderer::Renderer;
 
 struct HostedRendererState {
+    #[allow(dead_code)]
+    // owner: voplay/runtime; expiry: 2026-07-12; host reset generation is observed by embedding layers.
     generation: u64,
     renderer: HostedRenderer,
 }
@@ -70,6 +72,7 @@ fn with_hosted_renderer_ref<R>(f: impl FnOnce(&HostedRendererState) -> R) -> R {
     f(&state)
 }
 
+#[allow(dead_code)] // owner: voplay/runtime; expiry: 2026-07-12; used by wasm/island entrypoints outside scoped unit filters.
 pub fn reset_renderer() -> u64 {
     with_hosted_renderer_mut(|state| {
         state.generation = state.generation.wrapping_add(1);

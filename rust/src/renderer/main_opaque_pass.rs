@@ -1,5 +1,5 @@
 use super::*;
-use crate::primitive_pipeline::PrimitiveRenderFilter;
+use crate::pipeline3d::PrimitiveSubmitter;
 
 pub(super) struct MainOpaquePassExecutor;
 
@@ -114,11 +114,7 @@ impl MainOpaquePassExecutor {
         } else {
             None
         };
-        let color_store = if MAIN_SAMPLE_COUNT > 1 {
-            wgpu::StoreOp::Discard
-        } else {
-            wgpu::StoreOp::Store
-        };
+        let color_store = wgpu::StoreOp::Store;
         let aux_store = if MAIN_SAMPLE_COUNT > 1 {
             wgpu::StoreOp::Discard
         } else {
@@ -244,7 +240,7 @@ impl MainOpaquePassExecutor {
                     &ctx.renderer.texture_manager,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
-                    PrimitiveRenderFilter::Main,
+                    PrimitiveSubmitter::draw(crate::primitive_pipeline::PrimitiveRenderFilter::Main),
                 );
                 ctx.perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
             }

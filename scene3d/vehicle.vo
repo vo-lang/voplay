@@ -204,17 +204,6 @@ func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
 	command = NormalizeVehicleForceCommand(command, v.Config)
 	backendCommand := v.applyForceCommandToBackend(command, dt)
 	v.LastBackendApplyCommand = backendCommand
-	if v.Body == nil || v.Body.Physics == nil {
-		return
-	}
-	vel := v.Body.Physics.velocity
-	speed := vel.Length()
-	if backendCommand.DragForce > 0 && speed > 0 {
-		v.Body.ApplyForce(vel.Normalize().Scale(-backendCommand.DragForce))
-	}
-	if backendCommand.BodyForce.LengthSq() > 0 {
-		v.Body.ApplyForce(backendCommand.BodyForce)
-	}
 }
 
 func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt float64) PhysicsBackendApplyCommand {
@@ -259,6 +248,10 @@ func (v *Vehicle) CurrentSurfaceMaterial() SurfaceMaterial {
 		}
 	}
 	return DefaultSurfaceMaterial()
+}
+
+func (v *Vehicle) CurrentSurfaceHit() TrackSurfaceHit {
+	return TrackSurfaceHitFromSurfaceMaterial(v.CurrentSurfaceMaterial())
 }
 
 func (v *Vehicle) SetPose(position voplay.Vec3, yaw float64) {

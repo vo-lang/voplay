@@ -23,7 +23,6 @@ mod impostor_baker;
 mod input;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod material;
-#[allow(dead_code)]
 mod math3d;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod model_loader;

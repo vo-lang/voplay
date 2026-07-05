@@ -104,6 +104,11 @@ func SurfaceMaterialFromTrackHit(hit TrackSurfaceHit) SurfaceMaterial {
 	return NormalizeSurfaceMaterial(m)
 }
 
+func TrackSurfaceHitFromSurfaceMaterial(material SurfaceMaterial) TrackSurfaceHit {
+	material = NormalizeSurfaceMaterial(material)
+	return TrackSurfaceHit{Name: material.ID, Kind: material.Kind, Friction: material.Friction, Boost: material.Boost, OnSurface: true, OnRoad: material.OnRoad}
+}
+
 func SurfaceMaterialAtTrackPosition(track *Track, pos voplay.Vec3) SurfaceMaterial {
 	if track == nil {
 		return DefaultSurfaceMaterial()

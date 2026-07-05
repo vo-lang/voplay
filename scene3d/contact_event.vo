@@ -11,6 +11,8 @@ const (
 	ContactEventSourceBackendPairFallback = "physics.backend_pair_fallback"
 )
 
+type MaterialID string
+
 type ContactEvent struct {
 	A *Entity
 	B *Entity
@@ -26,6 +28,7 @@ type ContactEvent struct {
 	TangentImpulse float64
 	HasImpulse bool
 	Surface SurfaceMaterial
+	MaterialID MaterialID
 	Source string
 	Fallback bool
 }
@@ -80,9 +83,13 @@ func ContactEventFromPair(contact Contact) ContactEvent {
 			if vehicle != nil && (vehicle.Body == contact.A || vehicle.Body == contact.B) && vehicle.Track != nil {
 				event.Kind = ContactEventKindSurface
 				event.Surface = vehicle.CurrentSurfaceMaterial()
+				event.MaterialID = MaterialID(event.Surface.ID)
 				break
 			}
 		}
+	}
+	if event.MaterialID == "" {
+		event.MaterialID = MaterialID(event.Surface.ID)
 	}
 	return event
 }
@@ -101,6 +108,9 @@ func (event ContactEvent) IndustrialReady() bool {
 		return false
 	}
 	if event.Surface.ID == "" || event.Surface.Kind == "" {
+		return false
+	}
+	if event.MaterialID == "" {
 		return false
 	}
 	return true

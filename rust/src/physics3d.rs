@@ -474,6 +474,91 @@ impl PhysicsWorld3D {
         }
     }
 
+    pub fn apply_raycast_vehicle_forces(
+        &mut self,
+        vehicle_id: u32,
+        body_force: Vec3,
+        drag_force: f32,
+        downforce: f32,
+        water_lift: f32,
+        air_control: f32,
+        wall_grip: f32,
+        rail_grip: f32,
+    ) {
+        let Some(vehicle) = self.raycast_vehicles.get(&vehicle_id) else {
+            return;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(vehicle.controller.chassis) else {
+            return;
+        };
+
+        let vertical_force = water_lift - downforce;
+        let mut force = vector![body_force.x, body_force.y, body_force.z];
+        if force.y == 0.0 && vertical_force != 0.0 {
+            force.y = vertical_force;
+        }
+
+        let vel = *rb.linvel();
+        let speed = vel.norm();
+        if drag_force > 0.0 && speed > 0.0 {
+            force -= vel / speed * drag_force;
+        }
+
+        let grip = (wall_grip + rail_grip).clamp(0.0, 4.0);
+        if grip > 0.0 && speed > 0.0 {
+            force.x -= vel.x * grip * 0.25;
+            force.z -= vel.z * grip * 0.25;
+        }
+
+        if force.norm_squared() > 0.0 {
+            rb.add_force(force, true);
+        }
+
+        if air_control > 0.0 {
+            let damping = (air_control * 0.02).clamp(0.0, 0.35);
+            if damping > 0.0 {
+                rb.set_angvel(*rb.angvel() * (1.0 - damping), true);
+            }
+        }
+    }
+
+    pub fn set_body_pose(&mut self, body_id: u32, pos: Vec3, rot: Quat) {
+        let Some(handle) = self.handle_map.get(&body_id).copied() else {
+            return;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(handle) else {
+            return;
+        };
+        let rotation = UnitQuaternion::from_quaternion(Quaternion::new(rot.w, rot.x, rot.y, rot.z));
+        rb.set_translation(vector![pos.x, pos.y, pos.z], true);
+        rb.set_rotation(rotation, true);
+    }
+
+    pub fn set_body_motion(&mut self, body_id: u32, linear: Vec3, angular: Vec3) {
+        let Some(handle) = self.handle_map.get(&body_id).copied() else {
+            return;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(handle) else {
+            return;
+        };
+        rb.set_linvel(vector![linear.x, linear.y, linear.z], true);
+        rb.set_angvel(vector![angular.x, angular.y, angular.z], true);
+    }
+
+    pub fn set_body_sleep_state(&mut self, body_id: u32, sleeping: bool) {
+        let Some(handle) = self.handle_map.get(&body_id).copied() else {
+            return;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(handle) else {
+            return;
+        };
+        if sleeping {
+            rb.sleep();
+        } else {
+            rb.wake_up(true);
+        }
+    }
+
     fn update_raycast_vehicles(&mut self, dt: f32) {
         if self.raycast_vehicles.is_empty() {
             return;

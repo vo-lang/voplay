@@ -144,6 +144,7 @@ impl TextureManager {
         &self.bind_group_layout
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; retained for sprite/material cache split callers.
     pub fn sampler(&self) -> &wgpu::Sampler {
         &self.sampler
     }

@@ -228,11 +228,12 @@ impl RenderBatchPlanner {
             frame_id,
             ..Default::default()
         };
+        let terrain_by_draw: HashMap<usize, RenderTerrainBatchInput> = terrain_inputs
+            .iter()
+            .map(|input| (input.draw_index, *input))
+            .collect();
         for (index, draw) in model_draws.iter().enumerate() {
-            if let Some(input) = terrain_inputs
-                .iter()
-                .find(|input| input.draw_index == index)
-            {
+            if let Some(input) = terrain_by_draw.get(&index) {
                 let bounds = input.bounds;
                 if Self::outside_camera(camera, bounds) {
                     plan.frustum_culled_chunks += 1;
@@ -414,7 +415,7 @@ impl RenderBatchPlanner {
                 }
                 Some(RenderTerrainBatchInput {
                     draw_index,
-                    bounds: Self::model_draw_bounds(draw),
+                    bounds: Self::model_bounds(draw, models),
                     material_group: draw.material.id,
                     dirty_start: 0,
                     dirty_count: 0,
@@ -473,6 +474,19 @@ impl RenderBatchPlanner {
         Self::bounds_from_model_matrix(&draw.model_uniform.model)
     }
 
+    fn model_bounds(draw: &ModelDraw, models: &ModelManager) -> RenderChunkBounds {
+        models
+            .get(draw.model_id)
+            .map(|model| {
+                Self::bounds_from_model_aabb(
+                    &draw.model_uniform.model,
+                    model.aabb_min,
+                    model.aabb_max,
+                )
+            })
+            .unwrap_or_else(|| Self::model_draw_bounds(draw))
+    }
+
     fn primitive_draw_bounds(draw: &PrimitiveDraw) -> RenderChunkBounds {
         Self::bounds_from_model_matrix(&draw.model_uniform.model)
     }
@@ -493,6 +507,37 @@ impl RenderBatchPlanner {
         let axis_y = Vec3::new(model[1][0], model[1][1], model[1][2]);
         let axis_z = Vec3::new(model[2][0], model[2][1], model[2][2]);
         let radius = ((axis_x.length() + axis_y.length() + axis_z.length()) * 0.5).max(0.001);
+        RenderChunkBounds { center, radius }
+    }
+
+    fn bounds_from_model_aabb(
+        model: &math3d::Mat4,
+        aabb_min: [f32; 3],
+        aabb_max: [f32; 3],
+    ) -> RenderChunkBounds {
+        let corners = [
+            [aabb_min[0], aabb_min[1], aabb_min[2], 1.0],
+            [aabb_max[0], aabb_min[1], aabb_min[2], 1.0],
+            [aabb_min[0], aabb_max[1], aabb_min[2], 1.0],
+            [aabb_max[0], aabb_max[1], aabb_min[2], 1.0],
+            [aabb_min[0], aabb_min[1], aabb_max[2], 1.0],
+            [aabb_max[0], aabb_min[1], aabb_max[2], 1.0],
+            [aabb_min[0], aabb_max[1], aabb_max[2], 1.0],
+            [aabb_max[0], aabb_max[1], aabb_max[2], 1.0],
+        ];
+        let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for corner in corners {
+            let world = math3d::mat4_mul_vec4(model, corner);
+            min.x = min.x.min(world[0]);
+            min.y = min.y.min(world[1]);
+            min.z = min.z.min(world[2]);
+            max.x = max.x.max(world[0]);
+            max.y = max.y.max(world[1]);
+            max.z = max.z.max(world[2]);
+        }
+        let center = (min + max) * 0.5;
+        let radius = (max - center).length().max(0.001);
         RenderChunkBounds { center, radius }
     }
 
@@ -751,6 +796,7 @@ impl RenderWorld {
         }
     }
 
+    #[allow(dead_code)] // owner: voplay/render-world; expiry: 2026-07-12; public scene owner API kept for non-renderer callers.
     pub fn collect_scene_primitive_draws(
         &self,
         scene_id: u32,

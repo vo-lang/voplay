@@ -451,6 +451,31 @@ impl FrameGraph {
         }
     }
 
+    fn validate_ready_reads(&mut self, node: &RenderPassNode) -> Result<(), String> {
+        for resource in &node.reads {
+            if !self.registry.is_ready(*resource) {
+                self.missing_reads = self.missing_reads.saturating_add(1);
+                return Err(format!(
+                    "voplay: frame graph missing required read {} for pass {}",
+                    resource.name, node.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_required_writes(&self, node: &RenderPassNode) -> Result<(), String> {
+        for resource in &node.writes {
+            if !self.registry.is_declared(*resource) {
+                return Err(format!(
+                    "voplay: frame graph missing required write {} for pass {}",
+                    resource.name, node.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn report(&self) -> FrameGraphReport {
         let mut resources = Vec::<RenderResource>::new();
         let mut active_targets = Vec::<RenderResource>::new();
@@ -531,6 +556,8 @@ impl FrameGraphExecutor<'_> {
         if !node.enabled || !enabled || !self.graph.has_pass(node.kind) {
             return Ok(None);
         }
+        self.graph.validate_required_writes(node)?;
+        self.graph.validate_ready_reads(node)?;
         let elapsed_ms = dispatcher.execute(node.kind)?.max(0.0);
         let workload = dispatcher.workload(node.kind);
         self.graph.record_pass(node.kind, elapsed_ms);
@@ -553,6 +580,12 @@ impl FrameGraphExecutor<'_> {
         if !self.graph.has_pass(kind) {
             return Ok(None);
         }
+        let node = self
+            .graph
+            .node(kind)
+            .ok_or_else(|| format!("voplay: missing frame graph node {}", kind.name()))?;
+        self.graph.validate_required_writes(&node)?;
+        self.graph.validate_ready_reads(&node)?;
         let elapsed_ms = run_pass()?.max(0.0);
         self.graph.record_pass(kind, elapsed_ms);
         Ok(Some(elapsed_ms))
@@ -688,6 +721,7 @@ impl RenderResourceRegistry {
         self.store.surface_props_view.as_ref()
     }
 
+    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; exposed for resize/recreate stress probes.
     pub(crate) fn resize_generation(&self) -> u32 {
         self.resize_generation
     }
@@ -742,6 +776,12 @@ impl RenderResourceRegistry {
         self.targets
             .iter()
             .any(|target| target.resource == resource && target.ready)
+    }
+
+    pub(crate) fn is_declared(&self, resource: RenderResource) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.resource == resource)
     }
 
     pub(crate) fn targets(&self) -> &[RenderTargetStatus] {
@@ -828,6 +868,7 @@ mod tests {
         graph.declare_target(RES_SHADOW_MAP, true);
         graph.declare_target(RES_MAIN_COLOR, true);
         graph.declare_target(RES_SURFACE_COLOR, true);
+        graph.declare_target(RES_RECEIVER_MASK, true);
         graph.plan_pass(
             RenderPassKind::Shadow,
             &[RES_DEPTH],
@@ -907,6 +948,7 @@ mod tests {
     fn frame_graph_executor_records_nodes_and_marks_targets_ready() {
         let mut graph = FrameGraph::single_view(8, 0);
         graph.declare_target(RES_MAIN_COLOR, false);
+        graph.declare_target(RES_DEPTH, true);
         graph.plan_pass(
             RenderPassKind::MainTransparent,
             &[RES_MAIN_COLOR],
@@ -940,9 +982,43 @@ mod tests {
         assert_eq!(nodes[1].diagnostics.len(), 1);
         let report = graph.report();
         assert_eq!(report.pass_count, 1);
-        assert_eq!(report.ready_target_count, 1);
+        assert_eq!(report.ready_target_count, 2);
         assert_eq!(report.transient_target_count, 1);
-        assert_eq!(report.missing_read_count, 1);
+        assert_eq!(report.missing_read_count, 0);
+    }
+
+    #[test]
+    fn frame_graph_executor_fails_on_missing_required_read() {
+        let mut graph = FrameGraph::single_view(14, 0);
+        graph.plan_transient_pass(
+            RenderPassKind::Water,
+            &[RES_DEPTH],
+            &[RES_WATER_COLOR],
+            true,
+        );
+        let err = graph
+            .executor()
+            .execute_pass(RenderPassKind::Water, || Ok(0.7))
+            .unwrap_err();
+        assert!(err.contains("missing required read depth"));
+        assert_eq!(graph.report().missing_read_count, 1);
+    }
+
+    #[test]
+    fn frame_graph_executor_fails_on_missing_required_write() {
+        let mut graph = FrameGraph::single_view(15, 0);
+        graph.declare_target(RES_DEPTH, true);
+        graph.plan_pass(
+            RenderPassKind::Shadow,
+            &[RES_DEPTH],
+            &[RES_SHADOW_MAP],
+            true,
+        );
+        let err = graph
+            .executor()
+            .execute_pass(RenderPassKind::Shadow, || Ok(0.7))
+            .unwrap_err();
+        assert!(err.contains("missing required write shadow-map"));
     }
 
     #[test]
@@ -1013,6 +1089,7 @@ mod tests {
 
         let mut graph = FrameGraph::single_view(12, 0);
         graph.declare_target(RES_MAIN_COLOR, true);
+        graph.declare_external_target(RES_OVERLAY, false);
         graph.plan_pass(
             RenderPassKind::Overlay,
             &[RES_MAIN_COLOR],

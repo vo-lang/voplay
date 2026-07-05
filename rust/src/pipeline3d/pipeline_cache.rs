@@ -1211,6 +1211,10 @@ impl Pipeline3D {
             return;
         }
 
+        let mesh_submit_profile = super::mesh_submitter::MeshSubmitter::prepare(draws, models);
+        let skinned_slot_hint = super::skinned_submitter::SkinnedSubmitter::prepare(draws, models);
+        let terrain_slot_hint = super::terrain_submitter::TerrainSubmitter::prepare(draws, models);
+
         let aligned_model_stride = Self::align_up(
             std::mem::size_of::<ModelUniform>() as u32,
             self.model_buffer_alignment,
@@ -1220,9 +1224,8 @@ impl Pipeline3D {
             self.model_buffer_alignment,
         );
 
-        let mut instance_batches: Vec<InstanceBatch> = Vec::new();
+        let mut instance_batches: Vec<InstanceBatch> = Vec::with_capacity(mesh_submit_profile.batch_hint);
         let mut instance_batch_index: HashMap<InstanceBatchKey, usize> = HashMap::new();
-        let mut instance_count: u32 = 0;
         let mut static_slot: u32 = 0;
         let mut skinned_slot: u32 = 0;
         for draw in draws {
@@ -1282,14 +1285,13 @@ impl Pipeline3D {
                 instance_batches[batch_index]
                     .instances
                     .push(InstanceData::from_uniform(&model_uniform));
-                instance_count += 1;
             }
         }
 
-        self.ensure_model_capacity(device, static_slot);
-        self.ensure_skinned_capacity(device, skinned_slot);
+        self.ensure_model_capacity(device, static_slot.max(terrain_slot_hint));
+        self.ensure_skinned_capacity(device, skinned_slot.max(skinned_slot_hint));
 
-        let mut instance_data = Vec::with_capacity(instance_count as usize);
+        let mut instance_data = Vec::with_capacity(mesh_submit_profile.instance_count as usize);
         let mut instance_batch_draws = Vec::with_capacity(instance_batches.len());
         for batch in &instance_batches {
             let start = instance_data.len() as u32;

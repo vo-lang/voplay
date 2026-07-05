@@ -17,6 +17,7 @@ use super::with_renderer;
 
 static HEADLESS_FONT_MANAGER: OnceLock<Result<Mutex<FontManager>, String>> = OnceLock::new();
 
+#[allow(dead_code)] // owner: voplay/wasm-ffi; expiry: 2026-07-12; used by island bindings outside scoped Rust suites.
 pub(crate) fn with_headless_font_manager_pub<R>(
     f: impl FnOnce(&mut FontManager) -> R,
 ) -> Result<R, String> {
@@ -334,6 +335,7 @@ fn terrain_heights_to_bytes(heights: &[f32]) -> Vec<u8> {
     bytes
 }
 
+#[allow(dead_code)] // owner: voplay/wasm-ffi; expiry: 2026-07-12; used by island bindings outside scoped Rust suites.
 pub(crate) fn encode_terrain_result_bytes(
     result: Result<crate::terrain::TerrainData, String>,
 ) -> Vec<u8> {

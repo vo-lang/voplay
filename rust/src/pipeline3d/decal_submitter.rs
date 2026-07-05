@@ -1,3 +1,8 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct DecalSubmitter;
+
+impl DecalSubmitter {
+    pub(crate) fn prepare(decals: &[crate::pipeline_post::PostDecalGpu]) -> usize {
+        decals.len()
+    }
+}

@@ -61,3 +61,10 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 	}
 	return diag
 }
+
+func ProductSceneDiagnostics(scene *Scene) SceneDiagnostics {
+	if scene == nil {
+		return SceneDiagnostics{}
+	}
+	return scene.Diagnostics()
+}

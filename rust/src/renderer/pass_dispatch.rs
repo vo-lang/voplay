@@ -1,7 +1,7 @@
 use super::backend_submit_pass::{BackendSubmitPassContext, BackendSubmitPassExecutor};
 use super::depth_pass::{DepthPassContext, DepthPassExecutor};
 use super::main_opaque_pass::{MainOpaquePassContext, MainOpaquePassExecutor};
-use super::main_transparent_pass::MainTransparentPassExecutor;
+use super::main_transparent_pass::{MainTransparentPassContext, MainTransparentPassExecutor};
 use super::overlay_pass::{OverlayPassContext, OverlayPassExecutor};
 use super::post_pass::{PostPassContext, PostPassExecutor};
 use super::shadow_pass::{ShadowPassContext, ShadowPassExecutor};
@@ -46,6 +46,7 @@ pub(super) struct FramePassDispatcher<'a> {
     pub(super) primitive_depth_draw_calls: &'a mut u32,
     pub(super) primitive_shadow_draw_calls: &'a mut u32,
     pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
+    pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
     pub(super) primitive_main_submitted: &'a mut bool,
     pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
     pub(super) shadow_active: &'a mut bool,
@@ -166,7 +167,28 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                 *self.primitive_main_submitted = self.primitive_main_stats.batch_count > 0;
                 Ok(result.elapsed_ms)
             }
-            RenderPassKind::MainTransparent => MainTransparentPassExecutor::execute(),
+            RenderPassKind::MainTransparent => {
+                let camera3d_uniform = self.camera3d_uniform;
+                let light_uniform = &*self.light_uniform;
+                let planned_primitive_draws = self.planned_primitive_draws;
+                let planned_primitive_chunks = self.planned_primitive_chunks;
+                let perf_enabled = self.perf_enabled;
+                let encoder = self.encoder.as_mut().ok_or_else(|| {
+                    "voplay: frame pass dispatcher missing command encoder".to_string()
+                })?;
+                let mut context = MainTransparentPassContext {
+                    renderer: &mut *self.renderer,
+                    encoder,
+                    camera3d_uniform,
+                    light_uniform,
+                    primitive_draws: planned_primitive_draws,
+                    primitive_chunks: planned_primitive_chunks,
+                    perf_enabled,
+                };
+                let result = MainTransparentPassExecutor::execute(&mut context)?;
+                *self.primitive_transparent_stats = result.primitive_stats;
+                Ok(result.elapsed_ms)
+            }
             RenderPassKind::Water => {
                 let perf_enabled = self.perf_enabled;
                 let camera3d_uniform = self.camera3d_uniform;
@@ -247,7 +269,9 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                 self.planned_primitive_draws.len(),
                 self.planned_primitive_chunks.len(),
             ),
-            RenderPassKind::MainTransparent => MainTransparentPassExecutor::workload(),
+            RenderPassKind::MainTransparent => {
+                MainTransparentPassExecutor::workload(*self.primitive_transparent_stats)
+            }
             RenderPassKind::Water => WaterPassExecutor::workload(*self.primitive_water_stats),
             RenderPassKind::Post => PostPassExecutor::workload(),
             RenderPassKind::Overlay => OverlayPassExecutor::workload(self.frame),

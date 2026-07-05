@@ -407,30 +407,6 @@ pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far
     ]
 }
 
-pub fn orthographic_rh_zo(
-    left: f32,
-    right: f32,
-    bottom: f32,
-    top: f32,
-    near: f32,
-    far: f32,
-) -> Mat4 {
-    let w = right - left;
-    let h = top - bottom;
-    let d = near - far;
-    [
-        [2.0 / w, 0.0, 0.0, 0.0],
-        [0.0, 2.0 / h, 0.0, 0.0],
-        [0.0, 0.0, 1.0 / d, 0.0],
-        [
-            (left + right) / (left - right),
-            (top + bottom) / (bottom - top),
-            near / d,
-            1.0,
-        ],
-    ]
-}
-
 pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
     compute_shadow_vp_with_snap(camera_inv_vp, light_dir, 0)
 }

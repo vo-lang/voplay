@@ -164,10 +164,10 @@ func (k *KartController) RespawnNear(pos voplay.Vec3) {
 }
 
 func (k *KartController) currentSurface() TrackSurfaceHit {
-	if k == nil || k.Track == nil || k.Vehicle == nil || k.Vehicle.Body == nil {
+	if k == nil || k.Vehicle == nil {
 		return TrackSurfaceHit{Name: TrackSurfaceRoad, Kind: TrackSurfaceRoad, Friction: 1, OnSurface: true, OnRoad: true}
 	}
-	return k.Track.SurfaceAt(k.Vehicle.Body.Position())
+	return k.Vehicle.CurrentSurfaceHit()
 }
 
 func (k *KartController) updateRecovery(input VehicleRecoveryInput, dt float64) VehicleRecoveryState {

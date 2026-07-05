@@ -660,9 +660,8 @@ impl<'a> FrameTransactionBuilder<'a> {
                     instances,
                 } => {
                     scene_upsert_count += instances.len() as u32;
-                    transaction.replace_primitive_chunk_refs(
-                        scene_id, layer_id, chunk_id, instances,
-                    );
+                    transaction
+                        .replace_primitive_chunk_refs(scene_id, layer_id, chunk_id, instances);
                 }
                 DrawCommand::Primitive3DReplaceChunkKeys {
                     scene_id,
@@ -671,9 +670,8 @@ impl<'a> FrameTransactionBuilder<'a> {
                     instances,
                 } => {
                     scene_upsert_count += instances.len() as u32;
-                    transaction.replace_primitive_chunk_keys(
-                        scene_id, layer_id, chunk_id, instances,
-                    );
+                    transaction
+                        .replace_primitive_chunk_keys(scene_id, layer_id, chunk_id, instances);
                 }
                 DrawCommand::Primitive3DUpsertMaterials {
                     scene_id,
@@ -804,5 +802,4 @@ impl<'a> FrameTransactionBuilder<'a> {
             skybox_count,
         }
     }
-
 }

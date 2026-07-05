@@ -3,7 +3,6 @@ use crate::draw_list::Frame2D;
 use crate::render_world::RenderBatchPlan;
 use crate::renderer_perf::PerfInstant;
 
-
 pub(super) fn begin_frame_perf(
     perf_enabled: bool,
     debug_frame_count: u64,
@@ -101,8 +100,8 @@ impl Renderer {
         context: &mut FramePerfFinalizeContext<'_>,
         primitive_main_draw_calls: u32,
     ) {
-        let primitive_draws =
-            primitive_main_draw_calls.saturating_add(context.primitive_transparent_stats.batch_count);
+        let primitive_draws = primitive_main_draw_calls
+            .saturating_add(context.primitive_transparent_stats.batch_count);
         let water_draws = context.primitive_water_stats.batch_count;
         let primitive_chunks = saturating_u32(context.render_batch_plan.visible_chunks.len());
         let resident_chunk_rebuilds = context
@@ -272,7 +271,8 @@ struct FrameMeshPerfStats {
 
 fn frame_upload_bytes(context: &FramePerfFinalizeContext<'_>) -> u32 {
     let camera_upload = context.frame.cameras.len() * std::mem::size_of::<CameraUniform>();
-    let shape_upload = context.frame.shapes.len() * std::mem::size_of::<crate::pipeline2d::ShapeInstance>();
+    let shape_upload =
+        context.frame.shapes.len() * std::mem::size_of::<crate::pipeline2d::ShapeInstance>();
     let sprite_upload = context.frame.sprites.len() * std::mem::size_of::<SpriteInstance>();
     let post_upload = std::mem::size_of::<PostUniform>()
         + std::mem::size_of::<PostDecalUniform>()

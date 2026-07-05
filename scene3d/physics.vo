@@ -25,6 +25,8 @@ type Physics struct {
 	Restitution float64
 	LinearDamping float64
 	AngularDamping float64
+	SurfaceID string
+	SurfaceKind string
 	FixedRotation bool
 	LockRotationX bool
 	LockRotationY bool
@@ -136,7 +138,45 @@ const (
 	physicsCmdSetRot byte = 5
 	physicsCmdSetAngVel byte = 6
 	physicsContactDetailBytes = 8 + 12 * 8 + 1
+	physicsSurfaceMaterialIDBytes = 32
 )
+
+func physicsSurfaceMaterialKind(kind string) int {
+	if kind == SurfaceMaterialOffroad || kind == TrackSurfaceOffroad {
+		return raycastVehicleWheelMaterialKindOffroad
+	}
+	if kind == SurfaceMaterialBoost || kind == TrackSurfaceBoost {
+		return raycastVehicleWheelMaterialKindBoost
+	}
+	if kind == SurfaceMaterialWater {
+		return raycastVehicleWheelMaterialKindWater
+	}
+	if kind == SurfaceMaterialRail {
+		return raycastVehicleWheelMaterialKindRail
+	}
+	if kind == SurfaceMaterialWall {
+		return raycastVehicleWheelMaterialKindWall
+	}
+	return raycastVehicleWheelMaterialKindRoad
+}
+
+func writePhysicsSurfaceMaterial(w *codec.ByteWriter, id, kind string) {
+	if id == "" {
+		id = TrackSurfaceRoad
+	}
+	if kind == "" {
+		kind = id
+	}
+	bytes := []byte(id)
+	for i := 0; i < physicsSurfaceMaterialIDBytes; i++ {
+		if i < len(bytes) {
+			w.WriteByte(bytes[i])
+		} else {
+			w.WriteByte(0)
+		}
+	}
+	w.WriteU32(physicsSurfaceMaterialKind(kind))
+}
 
 func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2, v3 float64) {
 	s.physCmds.WriteByte(cmd)
@@ -309,7 +349,7 @@ func (s *Scene) applyEntityPhysicsConstraint(entity *Entity, command vehicleBack
 func serializeBodyDesc(e *Entity) []byte {
 	p := e.Physics
 	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
-	w := codec.NewByteWriter(154)
+	w := codec.NewByteWriter(154 + physicsSurfaceMaterialIDBytes + 4)
 	w.WriteByte(byte(p.Type))
 	w.WriteByte(byte(p.Collider.kind))
 	w.WriteBool(p.FixedRotation)
@@ -336,6 +376,7 @@ func serializeBodyDesc(e *Entity) []byte {
 	w.WriteF64(p.Restitution)
 	w.WriteF64(p.LinearDamping)
 	w.WriteF64(p.AngularDamping)
+	writePhysicsSurfaceMaterial(&w, p.SurfaceID, p.SurfaceKind)
 	return w.Bytes()
 }
 

@@ -1,8 +1,8 @@
 use super::frame_2d_upload::Frame2DUploadContext;
 use super::frame_decode::FrameDecodeOutput;
 use super::frame_graph_plan::{FrameGraphPlanDesc, FrameGraphPlanOutput};
-use super::frame_perf_finalize::{begin_frame_perf, FramePerfFinalizeContext};
 use super::frame_pass_sequence::FramePassSequenceContext;
+use super::frame_perf_finalize::{begin_frame_perf, FramePerfFinalizeContext};
 use super::frame_workload_plan::{FrameWorkloadPlan, FrameWorkloadPlanContext};
 use super::*;
 
@@ -290,9 +290,10 @@ impl Renderer {
         }
         Ok(())
     }
-
 }
 pub(super) struct FrameSubmitOrchestrator;
 impl FrameSubmitOrchestrator {
-    pub(super) fn run(renderer: &mut Renderer, data: &[u8]) -> Result<(), String> { renderer.run_frame_orchestrator(data) }
+    pub(super) fn run(renderer: &mut Renderer, data: &[u8]) -> Result<(), String> {
+        renderer.run_frame_orchestrator(data)
+    }
 }

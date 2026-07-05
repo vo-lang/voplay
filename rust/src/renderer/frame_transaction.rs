@@ -28,7 +28,6 @@ pub(super) struct FrameTransactionApplyReport {
     pub(super) resident_chunk_rebuild_count: u32,
 }
 
-
 impl Renderer {
     pub(super) fn apply_frame_transaction(
         &mut self,
@@ -219,7 +218,10 @@ impl FrameTransaction {
 
     pub(super) fn destroy_object(&mut self, scene_id: u32, object_id: u32) {
         self.owner_mutations
-            .push(FrameOwnerMutation::DestroyObject { scene_id, object_id });
+            .push(FrameOwnerMutation::DestroyObject {
+                scene_id,
+                object_id,
+            });
     }
 
     pub(super) fn clear_scene(&mut self, scene_id: u32) {
@@ -382,12 +384,13 @@ impl FrameTransaction {
             resident_chunk_rebuild_count = resident_chunk_rebuild_count
                 .saturating_add(apply_owner_mutation(&mut ctx, mutation));
         }
-        resident_chunk_rebuild_count =
-            resident_chunk_rebuild_count.saturating_add(ctx.primitive_pipeline.flush_resident_rebuild_queue(
+        resident_chunk_rebuild_count = resident_chunk_rebuild_count.saturating_add(
+            ctx.primitive_pipeline.flush_resident_rebuild_queue(
                 ctx.device,
                 ctx.queue,
                 ctx.model_manager,
-            ));
+            ),
+        );
         FrameTransactionApplyReport {
             resident_chunk_rebuild_count,
         }
@@ -517,12 +520,8 @@ fn apply_owner_mutation(
             chunk_id,
             instances,
         } => {
-            let updates = primitive_updates_from_refs(
-                scene_id,
-                layer_id,
-                instances,
-                ctx.primitive_materials,
-            );
+            let updates =
+                primitive_updates_from_refs(scene_id, layer_id, instances, ctx.primitive_materials);
             replace_primitive_chunk(ctx, scene_id, layer_id, chunk_id, updates);
             1
         }
@@ -548,8 +547,10 @@ fn apply_owner_mutation(
             materials,
         } => {
             for material in materials {
-                ctx.primitive_materials
-                    .insert((scene_id, layer_id, material.material_id), material.material);
+                ctx.primitive_materials.insert(
+                    (scene_id, layer_id, material.material_id),
+                    material.material,
+                );
             }
             0
         }

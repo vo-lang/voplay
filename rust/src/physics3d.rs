@@ -14,6 +14,28 @@ use crate::math3d::{Quat, Vec3};
 use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 const BODY_STATE_BYTES_3D: usize = 4 + 13 * 8;
+const SURFACE_MATERIAL_KIND_ROAD: u32 = 1;
+
+#[derive(Debug, Clone, Copy)]
+pub struct SurfaceMaterial3D {
+    pub id: [u8; 32],
+    pub kind: u32,
+}
+
+impl Default for SurfaceMaterial3D {
+    fn default() -> Self {
+        Self {
+            id: [0u8; 32],
+            kind: SURFACE_MATERIAL_KIND_ROAD,
+        }
+    }
+}
+
+impl SurfaceMaterial3D {
+    pub fn is_default(self) -> bool {
+        self.id.iter().all(|b| *b == 0) && self.kind == SURFACE_MATERIAL_KIND_ROAD
+    }
+}
 
 /// Global registry of 3D physics worlds, keyed by world handle.
 static REGISTRY_3D: Mutex<Option<WorldRegistry<PhysicsWorld3D>>> = Mutex::new(None);
@@ -62,6 +84,7 @@ pub struct BodyDesc3D {
     pub restitution: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
+    pub surface_material: SurfaceMaterial3D,
     pub fixed_rotation: bool,
     pub lock_rotation_x: bool,
     pub lock_rotation_y: bool,
@@ -151,6 +174,8 @@ pub struct PhysicsWorld3D {
     handle_map: HashMap<u32, RigidBodyHandle>,
     /// Reverse map from Rapier RigidBodyHandle → Vo body ID (for contact queries).
     reverse_map: HashMap<RigidBodyHandle, u32>,
+    /// Surface metadata keyed by Rapier collider hit by raycast vehicle wheels.
+    collider_surfaces: HashMap<ColliderHandle, SurfaceMaterial3D>,
     raycast_vehicles: HashMap<u32, RaycastVehicle3D>,
 }
 
@@ -171,6 +196,7 @@ impl PhysicsWorld3D {
             query_pipeline: QueryPipeline::new(),
             handle_map: HashMap::new(),
             reverse_map: HashMap::new(),
+            collider_surfaces: HashMap::new(),
             raycast_vehicles: HashMap::new(),
         }
     }
@@ -225,10 +251,20 @@ impl PhysicsWorld3D {
         }
     }
 
-    fn register_body(&mut self, body_id: u32, rb: RigidBody, collider: Collider) {
+    fn register_body(
+        &mut self,
+        body_id: u32,
+        rb: RigidBody,
+        collider: Collider,
+        surface: SurfaceMaterial3D,
+    ) {
         let handle = self.rigid_body_set.insert(rb);
-        self.collider_set
-            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        let collider_handle =
+            self.collider_set
+                .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        if !surface.is_default() {
+            self.collider_surfaces.insert(collider_handle, surface);
+        }
         self.handle_map.insert(body_id, handle);
         self.reverse_map.insert(handle, body_id);
     }
@@ -281,7 +317,7 @@ impl PhysicsWorld3D {
             .active_events(ActiveEvents::COLLISION_EVENTS)
             .build();
 
-        self.register_body(desc.body_id, rb, collider);
+        self.register_body(desc.body_id, rb, collider, desc.surface_material);
     }
 
     /// Spawn a static rigid body with a triangle mesh collider.
@@ -337,7 +373,7 @@ impl PhysicsWorld3D {
             .active_events(ActiveEvents::COLLISION_EVENTS)
             .build();
 
-        self.register_body(desc.body_id, rb, collider);
+        self.register_body(desc.body_id, rb, collider, SurfaceMaterial3D::default());
     }
 
     pub fn spawn_heightfield_body(&mut self, desc: &HeightfieldDesc3D, heights: &[f32]) {
@@ -389,7 +425,7 @@ impl PhysicsWorld3D {
                 .active_events(ActiveEvents::COLLISION_EVENTS)
                 .build();
 
-        self.register_body(desc.body_id, rb, collider);
+        self.register_body(desc.body_id, rb, collider, SurfaceMaterial3D::default());
     }
 
     /// Destroy a body by Vo ID.
@@ -398,6 +434,12 @@ impl PhysicsWorld3D {
             self.reverse_map.remove(&handle);
             self.raycast_vehicles
                 .retain(|_, vehicle| vehicle.controller.chassis != handle);
+            if let Some(body) = self.rigid_body_set.get(handle) {
+                let colliders: Vec<ColliderHandle> = body.colliders().to_vec();
+                for collider in colliders {
+                    self.collider_surfaces.remove(&collider);
+                }
+            }
             self.rigid_body_set.remove(
                 handle,
                 &mut self.island_manager,
@@ -613,8 +655,12 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&(info.suspension_length as f64).to_le_bytes());
             buf.extend_from_slice(&(wheel.steering as f64).to_le_bytes());
             buf.extend_from_slice(&(wheel.rotation as f64).to_le_bytes());
-            buf.extend_from_slice(&[0u8; 32]);
-            buf.extend_from_slice(&1u32.to_le_bytes());
+            let material = info
+                .ground_object
+                .and_then(|handle| self.collider_surfaces.get(&handle).copied())
+                .unwrap_or_default();
+            buf.extend_from_slice(&material.id);
+            buf.extend_from_slice(&material.kind.to_le_bytes());
         }
         buf
     }

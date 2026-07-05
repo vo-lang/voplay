@@ -48,11 +48,9 @@ impl Renderer {
         mut context: FrameWorkloadPlanContext<'_>,
     ) -> FrameWorkloadPlan {
         apply_frame_perf_overrides(&mut context);
-        let contact_ao_active = *context.post_contact_ao_strength > 0.001
-            && *context.post_contact_ao_quality > 0;
-        let primitives_enabled = !context
-            .perf_overrides
-            .has(RENDERER_DIAG_DISABLE_PRIMITIVES);
+        let contact_ao_active =
+            *context.post_contact_ao_strength > 0.001 && *context.post_contact_ao_quality > 0;
+        let primitives_enabled = !context.perf_overrides.has(RENDERER_DIAG_DISABLE_PRIMITIVES);
         let primitive_shadows_enabled = primitives_enabled
             && *context.shadow_enabled
             && !context
@@ -93,12 +91,13 @@ impl Renderer {
             context.camera3d_uniform,
             &planned_primitive_chunks,
         );
-        let (primitive_shadow_draws, primitive_shadow_chunks) = self.collect_frame_shadow_workloads(
-            primitive_shadows_enabled,
-            context.retained_scene_draws,
-            context.camera3d_uniform,
-            &planned_primitive_chunks,
-        );
+        let (primitive_shadow_draws, primitive_shadow_chunks) = self
+            .collect_frame_shadow_workloads(
+                primitive_shadows_enabled,
+                context.retained_scene_draws,
+                context.camera3d_uniform,
+                &planned_primitive_chunks,
+            );
         let material_group_count = material_group_count(&render_batch_plan);
         let water_pass_active = primitives_enabled
             && context.camera3d_uniform.is_some()
@@ -143,17 +142,23 @@ impl Renderer {
         primitive_chunks: &mut Vec<PrimitiveChunkRef>,
         primitive_chunk_info: &mut Vec<PrimitiveChunkBatchInfo>,
     ) {
-        let scene_update_start = if context.perf_enabled { Some(perf_now()) } else { None };
+        let scene_update_start = if context.perf_enabled {
+            Some(perf_now())
+        } else {
+            None
+        };
         for scene_id in context.retained_scene_draws {
-            self.render_world.collect_scene_draws(*scene_id, context.model_draws);
+            self.render_world
+                .collect_scene_draws(*scene_id, context.model_draws);
             if primitives_enabled {
-                self.render_world.collect_scene_primitive_draws_with_chunk_info(
-                    *scene_id,
-                    None,
-                    primitive_draws,
-                    primitive_chunks,
-                    primitive_chunk_info,
-                );
+                self.render_world
+                    .collect_scene_primitive_draws_with_chunk_info(
+                        *scene_id,
+                        None,
+                        primitive_draws,
+                        primitive_chunks,
+                        primitive_chunk_info,
+                    );
             }
         }
         context.perf.scene_update_ms = elapsed_ms_opt(scene_update_start);
@@ -214,7 +219,10 @@ fn apply_frame_perf_overrides(context: &mut FrameWorkloadPlanContext<'_>) {
         *context.shadow_strength = 0.0;
         *context.shadow_quality = 0;
     }
-    if context.perf_overrides.has(RENDERER_DIAG_DISABLE_POST_EFFECTS) {
+    if context
+        .perf_overrides
+        .has(RENDERER_DIAG_DISABLE_POST_EFFECTS)
+    {
         *context.post_bloom_strength = 0.0;
         *context.post_sharpen_strength = 0.0;
         *context.post_fxaa_strength = 0.0;
@@ -253,7 +261,8 @@ fn build_frame_batch_plan(
     camera: Option<&Camera3DUniform>,
     model_manager: &ModelManager,
 ) -> RenderBatchPlan {
-    let terrain_batch_inputs = RenderBatchPlanner::terrain_inputs(frame_id, model_draws, model_manager);
+    let terrain_batch_inputs =
+        RenderBatchPlanner::terrain_inputs(frame_id, model_draws, model_manager);
     let decal_batch_inputs = RenderBatchPlanner::decal_inputs(frame_id, projected_decals);
     RenderBatchPlanner::build(
         frame_id,

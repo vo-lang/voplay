@@ -38,7 +38,11 @@ impl Renderer {
         &self,
         desc: FrameGraphPlanDesc,
     ) -> Result<FrameGraphPlanOutput, String> {
-        let graph_build_start = if desc.perf_enabled { Some(perf_now()) } else { None };
+        let graph_build_start = if desc.perf_enabled {
+            Some(perf_now())
+        } else {
+            None
+        };
         let mut frame_graph = FrameGraph::single_view(desc.frame_id, desc.diagnostic_flags);
         frame_graph.declare_external_target(RES_SURFACE_COLOR, true);
         frame_graph.declare_target(RES_MAIN_COLOR, self.resources.main_color_ready());

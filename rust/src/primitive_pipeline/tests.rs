@@ -1,4 +1,3 @@
-
 use super::{
     primitive_render_mode, sort_primitive_batches, PrimitiveBatch, PrimitiveBatchKey,
     PrimitivePipeline, PrimitiveRenderMode, PrimitiveTextureKey,

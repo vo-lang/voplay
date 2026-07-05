@@ -568,7 +568,6 @@ impl FrameGraphExecutor<'_> {
             workload,
         }))
     }
-
 }
 
 impl RenderResourceRegistry {

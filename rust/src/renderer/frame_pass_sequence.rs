@@ -75,15 +75,14 @@ impl Renderer {
         mut context: FramePassSequenceContext<'_>,
     ) -> Result<FramePassSequenceTimings, String> {
         let mut shadow_active = false;
-        let (encoder, output, depth_pass_ms, shadow_pass_ms) = self.execute_depth_shadow_passes(
-            &mut context,
-            &mut shadow_active,
-        )?;
+        let (encoder, output, depth_pass_ms, shadow_pass_ms) =
+            self.execute_depth_shadow_passes(&mut context, &mut shadow_active)?;
         if !shadow_active {
             context.light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
             context.light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
             context.light_uniform.shadow_cascade_splits = [0.0; 4];
-            context.light_uniform.shadow_params = [0.0, 0.002, context.shadow_softness, context.shadow_strength];
+            context.light_uniform.shadow_params =
+                [0.0, 0.002, context.shadow_softness, context.shadow_strength];
             context.light_uniform.shadow_params2 = [
                 context.shadow_distance,
                 context.shadow_fade,
@@ -244,10 +243,11 @@ impl Renderer {
             .execute_node(&context.nodes.main_opaque, true, &mut dispatcher)?
             .map(|diagnostic| diagnostic.elapsed_ms)
             .unwrap_or(0.0);
-        context
-            .frame_graph
-            .executor()
-            .execute_node(&context.nodes.main_transparent, true, &mut dispatcher)?;
+        context.frame_graph.executor().execute_node(
+            &context.nodes.main_transparent,
+            true,
+            &mut dispatcher,
+        )?;
         let water_pass_ms = context
             .frame_graph
             .executor()
@@ -266,10 +266,11 @@ impl Renderer {
             .execute_node(&context.nodes.overlay, true, &mut dispatcher)?
             .map(|diagnostic| diagnostic.elapsed_ms)
             .unwrap_or(0.0);
-        context
-            .frame_graph
-            .executor()
-            .execute_node(&context.nodes.backend_submit, true, &mut dispatcher)?;
+        context.frame_graph.executor().execute_node(
+            &context.nodes.backend_submit,
+            true,
+            &mut dispatcher,
+        )?;
         Ok((main_pass_ms, water_pass_ms, post_pass_ms, overlay_pass_ms))
     }
 }

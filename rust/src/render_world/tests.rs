@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::primitive_scene::PRIMITIVE_FLAG_WATER_SURFACE;
 

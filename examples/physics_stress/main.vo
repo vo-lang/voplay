@@ -319,7 +319,10 @@ func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
 	if err != nil {
 		panic(err)
 	}
-	scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: -0.35}, Physics: &scene3d.Physics{Type: scene3d.Static, Collider: scene3d.Box(90, 0.7, 180), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 1.0}})
+	_, colliderErr := scene3d.ProductSpawnTrackColliderStrip(scene, track, scene3d.ProductTrackColliderSpec{Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, SegmentLength: 6, MinSegments: 12, RoadTag: "stress-road-physics", RoadYOffset: -0.12, RoadHalfHeight: 0.22, RoadOuterOffset: 0.4, RoadSegmentOverlap: 0.62, RoadFriction: 1.0})
+	if colliderErr != nil {
+		panic(colliderErr)
+	}
 	r := &ScenarioRuntime{Scene: scene, Track: track, Definition: def}
 	config := scene3d.DefaultKartControllerConfig()
 	config.Recovery.StuckSeconds = 2.0

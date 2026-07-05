@@ -448,7 +448,7 @@ func SpawnTrackColliderStrip(scene *Scene, track *Track, desc ColliderAuthoring)
 	desc = normalizeColliderAuthoring(desc)
 	result := TrackColliderStripResult{Entities: []*Entity{}}
 	if desc.GroundHalfExtents.X > 0 && desc.GroundHalfExtents.Y > 0 && desc.GroundHalfExtents.Z > 0 {
-		ground := scene.Spawn(EntityDesc{Position: voplay.Vec3{Y: desc.GroundY}, Tag: desc.GroundTag, Physics: &Physics{Type: Static, Collider: Box(desc.GroundHalfExtents.X, desc.GroundHalfExtents.Y, desc.GroundHalfExtents.Z), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.GroundFriction, Restitution: desc.GroundRestitution}, PickMode: PickDisabled})
+		ground := scene.Spawn(EntityDesc{Position: voplay.Vec3{Y: desc.GroundY}, Tag: desc.GroundTag, Physics: &Physics{Type: Static, Collider: Box(desc.GroundHalfExtents.X, desc.GroundHalfExtents.Y, desc.GroundHalfExtents.Z), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.GroundFriction, Restitution: desc.GroundRestitution, SurfaceID: TrackSurfaceRoad, SurfaceKind: TrackSurfaceRoad}, PickMode: PickDisabled})
 		ground.Visible = false
 		result.Entities = append(result.Entities, ground)
 	}
@@ -459,11 +459,57 @@ func SpawnTrackColliderStrip(scene *Scene, track *Track, desc ColliderAuthoring)
 	step := track.Length() / float64(count)
 	for i := 0; i < count; i++ {
 		pose := track.PoseAt(float64(i) * step + step * 0.5)
-		ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: desc.RoadYOffset}), Rotation: pose.Rotation, Tag: desc.RoadTag, Physics: &Physics{Type: Static, Collider: Box(pose.HalfWidth + desc.RoadOuterOffset, desc.RoadHalfHeight, step * desc.RoadSegmentOverlap), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.RoadFriction, Restitution: desc.RoadRestitution}, PickMode: PickDisabled})
+		ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: desc.RoadYOffset}), Rotation: pose.Rotation, Tag: desc.RoadTag, Physics: &Physics{Type: Static, Collider: Box(pose.HalfWidth + desc.RoadOuterOffset, desc.RoadHalfHeight, step * desc.RoadSegmentOverlap), Layer: desc.Layer, Mask: desc.Mask, Friction: desc.RoadFriction, Restitution: desc.RoadRestitution, SurfaceID: TrackSurfaceRoad, SurfaceKind: TrackSurfaceRoad}, PickMode: PickDisabled})
 		ent.Visible = false
 		result.Entities = append(result.Entities, ent)
 	}
+	spawnTrackSurfaceMaterialColliders(scene, track, desc, &result)
 	return result, nil
+}
+
+func spawnTrackSurfaceMaterialColliders(scene *Scene, track *Track, desc ColliderAuthoring, result *TrackColliderStripResult) {
+	if track == nil || track.asset == nil || result == nil {
+		return
+	}
+	for _, surface := range track.asset.Surfaces {
+		if surface.Name == "" || surface.Kind == "" || surface.Kind == TrackSurfaceRoad {
+			continue
+		}
+		for _, r := range trackSurfaceAuthoringRanges(track, surface) {
+			span := r.End - r.Start
+			if span <= 0 {
+				continue
+			}
+			count := int(math.Ceil(span / desc.SegmentLength))
+			if count < 1 {
+				count = 1
+			}
+			step := span / float64(count)
+			for i := 0; i < count; i++ {
+				distance := r.Start + float64(i) * step + step * 0.5
+				pose := track.PoseAt(distance)
+				left, right := trackSurfaceLateralBounds(surface, pose.HalfWidth)
+				if right < left {
+					tmp := left
+					left = right
+					right = tmp
+				}
+				halfWidth := (right - left) * 0.5
+				if halfWidth <= 0 {
+					continue
+				}
+				lateral := (left + right) * 0.5
+				friction := surface.Friction
+				if friction == 0 {
+					friction = desc.RoadFriction
+				}
+				position := pose.Position.Add(pose.Right.Scale(lateral)).Add(voplay.Vec3{Y: desc.RoadYOffset + desc.RoadHalfHeight + 0.04})
+				ent := scene.Spawn(EntityDesc{Position: position, Rotation: pose.Rotation, Tag: surface.Name, Physics: &Physics{Type: Static, Collider: Box(halfWidth, 0.035, step * desc.RoadSegmentOverlap), Layer: desc.Layer, Mask: desc.Mask, Friction: friction, Restitution: desc.RoadRestitution, SurfaceID: surface.Name, SurfaceKind: surface.Kind}, PickMode: PickDisabled})
+				ent.Visible = false
+				result.Entities = append(result.Entities, ent)
+			}
+		}
+	}
 }
 
 func normalizeColliderAuthoring(desc ColliderAuthoring) ColliderAuthoring {

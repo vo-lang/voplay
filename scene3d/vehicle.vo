@@ -13,6 +13,9 @@ const (
 	raycastVehicleWheelMaterialKindRoad = 1
 	raycastVehicleWheelMaterialKindOffroad = 2
 	raycastVehicleWheelMaterialKindBoost = 3
+	raycastVehicleWheelMaterialKindWater = 4
+	raycastVehicleWheelMaterialKindRail = 5
+	raycastVehicleWheelMaterialKindWall = 6
 )
 
 type VehicleWheelConfig struct {
@@ -486,6 +489,15 @@ func vehicleWheelMaterialFromPacket(id string, kind int) SurfaceMaterial {
 	}
 	if kind == raycastVehicleWheelMaterialKindBoost {
 		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialBoost, Friction: 1, GripScale: 1.05, SpeedScale: 1, EngineScale: 1, Boost: 1, OnRoad: true})
+	}
+	if kind == raycastVehicleWheelMaterialKindWater {
+		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialWater, Friction: 0.82, GripScale: 0.78, SpeedScale: 0.82, EngineScale: 0.78, Drag: 0.32})
+	}
+	if kind == raycastVehicleWheelMaterialKindRail {
+		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialRail, Friction: 1, GripScale: 1.15, SpeedScale: 1, EngineScale: 1, OnRoad: true})
+	}
+	if kind == raycastVehicleWheelMaterialKindWall {
+		return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialWall, Friction: 0.9, GripScale: 0.82, SpeedScale: 0.92, EngineScale: 0.9})
 	}
 	return NormalizeSurfaceMaterial(SurfaceMaterial{ID: id, Kind: SurfaceMaterialRoad, Friction: 1, GripScale: 1, SpeedScale: 1, EngineScale: 1, OnRoad: true})
 }

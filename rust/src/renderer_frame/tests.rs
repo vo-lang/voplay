@@ -1,4 +1,3 @@
-
 use super::*;
 
 struct TimedTestDispatcher {
@@ -152,11 +151,7 @@ fn frame_graph_executor_fails_on_missing_required_read() {
     let node = graph.node(RenderPassKind::Water).unwrap();
     let err = graph
         .executor()
-        .execute_node(
-            &node,
-            true,
-            &mut TimedTestDispatcher { elapsed_ms: 0.7 },
-        )
+        .execute_node(&node, true, &mut TimedTestDispatcher { elapsed_ms: 0.7 })
         .unwrap_err();
     assert!(err.contains("missing required read depth"));
     assert_eq!(graph.report().missing_read_count, 1);
@@ -175,11 +170,7 @@ fn frame_graph_executor_fails_on_missing_required_write() {
     let node = graph.node(RenderPassKind::Shadow).unwrap();
     let err = graph
         .executor()
-        .execute_node(
-            &node,
-            true,
-            &mut TimedTestDispatcher { elapsed_ms: 0.7 },
-        )
+        .execute_node(&node, true, &mut TimedTestDispatcher { elapsed_ms: 0.7 })
         .unwrap_err();
     assert!(err.contains("missing required write shadow-map"));
 }

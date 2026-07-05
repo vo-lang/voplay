@@ -3,7 +3,8 @@
 use super::util::{read_f64_le, read_u16_le, read_u32_le, ret_bytes, with_renderer_or_panic};
 use crate::math3d::{Quat, Vec3};
 use crate::physics3d::{
-    BodyDesc3D, ColliderKind3D, HeightfieldDesc3D, RaycastVehicleWheelDesc3D, TrimeshDesc3D,
+    BodyDesc3D, ColliderKind3D, HeightfieldDesc3D, RaycastVehicleWheelDesc3D, SurfaceMaterial3D,
+    TrimeshDesc3D,
 };
 use crate::physics_registry::PhysBodyType;
 use vo_ext::prelude::*;
@@ -34,7 +35,8 @@ pub fn physics3d_destroy(call: &mut ExternCallContext) -> ExternResult {
 ///         layer(u16), mask(u16),
 ///         x(f64), y(f64), z(f64), qx(f64), qy(f64), qz(f64), qw(f64),
 ///         collider_args(3x f64), collider_offset(3x f64), density(f64), friction(f64), restitution(f64),
-///         linear_damping(f64), angular_damping(f64)
+///         linear_damping(f64), angular_damping(f64),
+///         optional surface_id(32 bytes), surface_kind(u32)
 pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     // 6 flag bytes + 2 u16 fields + 18 f64 fields = 154 bytes minimum
     assert!(
@@ -81,6 +83,15 @@ pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
     let restitution = read_f64_le(data, &mut pos) as f32;
     let linear_damping = read_f64_le(data, &mut pos) as f32;
     let angular_damping = read_f64_le(data, &mut pos) as f32;
+    let mut surface_material = SurfaceMaterial3D::default();
+    if data.len() >= pos + 36 {
+        surface_material.id.copy_from_slice(&data[pos..pos + 32]);
+        pos += 32;
+        surface_material.kind = read_u32_le(data, &mut pos);
+        if surface_material.kind == 0 {
+            surface_material.kind = 1;
+        }
+    }
 
     BodyDesc3D {
         body_id,
@@ -97,6 +108,7 @@ pub(crate) fn decode_body3d_desc(body_id: u32, data: &[u8]) -> BodyDesc3D {
         restitution,
         linear_damping,
         angular_damping,
+        surface_material,
         fixed_rotation,
         lock_rotation_x,
         lock_rotation_y,

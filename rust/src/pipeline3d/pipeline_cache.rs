@@ -1224,7 +1224,8 @@ impl Pipeline3D {
             self.model_buffer_alignment,
         );
 
-        let mut instance_batches: Vec<InstanceBatch> = Vec::with_capacity(mesh_submit_profile.batch_hint);
+        let mut instance_batches: Vec<InstanceBatch> =
+            Vec::with_capacity(mesh_submit_profile.batch_hint);
         let mut instance_batch_index: HashMap<InstanceBatchKey, usize> = HashMap::new();
         let mut static_slot: u32 = 0;
         let mut skinned_slot: u32 = 0;

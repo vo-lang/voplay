@@ -2,7 +2,10 @@
 pub(crate) struct TerrainSubmitter;
 
 impl TerrainSubmitter {
-    pub(crate) fn prepare(draws: &[super::ModelDraw], models: &crate::model_loader::ModelManager) -> u32 {
+    pub(crate) fn prepare(
+        draws: &[super::ModelDraw],
+        models: &crate::model_loader::ModelManager,
+    ) -> u32 {
         let mut count = 0u32;
         for draw in draws {
             let Some(model) = models.get(draw.model_id) else {

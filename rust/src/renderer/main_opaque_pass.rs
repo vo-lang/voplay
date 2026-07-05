@@ -240,7 +240,9 @@ impl MainOpaquePassExecutor {
                     &ctx.renderer.texture_manager,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
-                    PrimitiveSubmitter::draw(crate::primitive_pipeline::PrimitiveRenderFilter::Main),
+                    PrimitiveSubmitter::draw(
+                        crate::primitive_pipeline::PrimitiveRenderFilter::Main,
+                    ),
                 );
                 ctx.perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
             }

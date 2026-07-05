@@ -8,7 +8,10 @@ pub(crate) struct MeshSubmitProfile {
 }
 
 impl MeshSubmitter {
-    pub(crate) fn prepare(draws: &[super::ModelDraw], models: &crate::model_loader::ModelManager) -> MeshSubmitProfile {
+    pub(crate) fn prepare(
+        draws: &[super::ModelDraw],
+        models: &crate::model_loader::ModelManager,
+    ) -> MeshSubmitProfile {
         let mut instance_count = 0u32;
         let mut batch_hint = 0usize;
         for draw in draws {
@@ -23,6 +26,9 @@ impl MeshSubmitter {
                 batch_hint = batch_hint.saturating_add(1);
             }
         }
-        MeshSubmitProfile { instance_count, batch_hint }
+        MeshSubmitProfile {
+            instance_count,
+            batch_hint,
+        }
     }
 }

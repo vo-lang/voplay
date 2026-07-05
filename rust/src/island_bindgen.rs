@@ -1429,6 +1429,97 @@ pub fn scene3d_physics_set_raycast_vehicle_wheel_control(input: &[u8]) -> Vec<u8
     Vec::new()
 }
 
+/// scene3d_physicsApplyRaycastVehicleForces(worldId, vehicleId, fx, fy, fz, dragForce, downforce, waterLift, airControl, wallGrip, railGrip)
+#[wasm_bindgen(js_name = "scene3d_physicsApplyRaycastVehicleForces")]
+pub fn scene3d_physics_apply_raycast_vehicle_forces(input: &[u8]) -> Vec<u8> {
+    use crate::math3d::Vec3;
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let vehicle_id = in_value(input, &mut pos) as u32;
+    let body_force = Vec3::new(
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+    );
+    let drag_force = in_f64(input, &mut pos) as f32;
+    let downforce = in_f64(input, &mut pos) as f32;
+    let water_lift = in_f64(input, &mut pos) as f32;
+    let air_control = in_f64(input, &mut pos) as f32;
+    let wall_grip = in_f64(input, &mut pos) as f32;
+    let rail_grip = in_f64(input, &mut pos) as f32;
+    crate::physics3d::with_world(world_id, |world| {
+        world.apply_raycast_vehicle_forces(
+            vehicle_id,
+            body_force,
+            drag_force,
+            downforce,
+            water_lift,
+            air_control,
+            wall_grip,
+            rail_grip,
+        )
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsSetBodyPose(worldId, bodyId, px, py, pz, qx, qy, qz, qw)
+#[wasm_bindgen(js_name = "scene3d_physicsSetBodyPose")]
+pub fn scene3d_physics_set_body_pose(input: &[u8]) -> Vec<u8> {
+    use crate::math3d::{Quat, Vec3};
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
+    let pos3 = Vec3::new(
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+    );
+    let rot = Quat::new(
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+    );
+    crate::physics3d::with_world(world_id, |world| world.set_body_pose(body_id, pos3, rot));
+    Vec::new()
+}
+
+/// scene3d_physicsSetBodyMotion(worldId, bodyId, lvx, lvy, lvz, avx, avy, avz)
+#[wasm_bindgen(js_name = "scene3d_physicsSetBodyMotion")]
+pub fn scene3d_physics_set_body_motion(input: &[u8]) -> Vec<u8> {
+    use crate::math3d::Vec3;
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
+    let linear = Vec3::new(
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+    );
+    let angular = Vec3::new(
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+        in_f64(input, &mut pos) as f32,
+    );
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_body_motion(body_id, linear, angular)
+    });
+    Vec::new()
+}
+
+/// scene3d_physicsSetBodySleepState(worldId, bodyId, sleeping)
+#[wasm_bindgen(js_name = "scene3d_physicsSetBodySleepState")]
+pub fn scene3d_physics_set_body_sleep_state(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let body_id = in_value(input, &mut pos) as u32;
+    let sleeping = in_bool(input, &mut pos);
+    crate::physics3d::with_world(world_id, |world| {
+        world.set_body_sleep_state(body_id, sleeping)
+    });
+    Vec::new()
+}
+
 /// scene3d_physicsRaycastVehicleState(worldId, vehicleId) → []byte
 #[wasm_bindgen(js_name = "scene3d_physicsRaycastVehicleState")]
 pub fn scene3d_physics_raycast_vehicle_state(input: &[u8]) -> Vec<u8> {

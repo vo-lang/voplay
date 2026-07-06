@@ -335,12 +335,12 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 		delete(attachment.chunkHideDeadline, chunkID)
 	}
 	if layer.PreloadChunks() {
-		preloadStaticPrimitiveChunks(d, stats, s.renderSceneID, attachment, layer)
+		s.preloadStaticPrimitiveChunks(d, stats, s.renderSceneID, attachment, layer)
 	}
 	return frame
 }
 
-func preloadStaticPrimitiveChunks(d *voplay.DrawCtx, stats *SceneRenderStats, sceneID int, attachment *primitiveLayerAttachment, layer *primitive3d.Layer) {
+func (s *Scene) preloadStaticPrimitiveChunks(d *voplay.DrawCtx, stats *SceneRenderStats, sceneID int, attachment *primitiveLayerAttachment, layer *primitive3d.Layer) {
 	chunkCount := len(attachment.cachedChunks)
 	if chunkCount == 0 {
 		attachment.staticPreloadCursor = 0
@@ -361,6 +361,9 @@ func preloadStaticPrimitiveChunks(d *voplay.DrawCtx, stats *SceneRenderStats, sc
 			continue
 		}
 		if attachment.visibleChunkScratch[chunk.id] {
+			continue
+		}
+		if !s.primitiveChunkLodVisible(chunk) {
 			continue
 		}
 		if uploadedChunks >= primitiveStaticPreloadMaxChunksPerFrame {

@@ -3944,6 +3944,19 @@ func testPrimitive3DModuleContract() {
 	assert(s.PrimitiveStats().VisibleChunks == 1 && s.PrimitiveStats().VisibleInstances == 1, "scene3d primitive visible static chunk returns without rebuild")
 	assert(s.PrimitiveStats().VisibleWaterInstances == 1, "scene3d primitive visible static chunk restores visible water stats")
 	s.Close()
+	preloadLodLayer := primitive3d.NewLayer(primitive3d.LayerDesc{Kind: primitive3d.StaticLayer, Shapes: shapes, Materials: materials, Chunking: primitive3d.ChunkingDesc{CellSize: 10}, PreloadChunks: true})
+	preloadLodLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{Z: -5}})
+	preloadLodLayer.Add(primitive3d.Instance{Shape: rounded, Material: red, Position: voplay.Vec3{Z: -40}, LodFar: 5})
+	preloadLodLayer.Build()
+	s = scene3d.New()
+	s.Camera.Position = voplay.Vec3{X: 0, Y: 2, Z: 10}
+	s.Camera.Target = voplay.Vec3{X: 0, Y: 2, Z: 0}
+	s.Camera.Far = 100
+	s.AddPrimitiveLayer(preloadLodLayer)
+	d = voplay.NewDrawCtx()
+	s.Draw(d)
+	assert(s.RenderStats().UpsertedObjects == 1, "scene3d primitive preload skips lod-culled static chunks")
+	s.Close()
 	stress := primitive3d.NewStressFixture(primitive3d.StressConfig{Count: 256, ShapeVariants: 4, MaterialVariants: 8, ChunkCellSize: 16})
 	s = scene3d.New()
 	s.Camera.Position = stress.Bounds.Center().Add(voplay.Vec3{Y: 80, Z: 90})

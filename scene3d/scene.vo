@@ -840,14 +840,15 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	state := physBackend.Step(s.worldID, dt, cmdBytes)
 	s.physCmds.Reset()
 	r := codec.NewByteReader(state)
-	if r.Remaining() < 4 {
+	_, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendBodyPacketKind)
+	if !ok || r.Remaining() < 4 {
 		return
 	}
 	count := r.ReadU32()
+	if r.Remaining() != count * physics3DBodyStateBytes {
+		return
+	}
 	for i := 0; i < count; i++ {
-		if r.Remaining() < physics3DBodyStateBytes {
-			break
-		}
 		bodyID := r.ReadU32()
 		x := r.ReadF64()
 		y := r.ReadF64()
@@ -925,34 +926,28 @@ func (s *Scene) Contacts() []Contact {
 	}
 	data := physBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
-	if r.Remaining() < 4 {
+	_, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendContactPacketKind)
+	if !ok || r.Remaining() < 4 {
 		return nil
 	}
 	count := r.ReadU32()
-	detailed := r.Remaining() >= count * physicsContactDetailBytes
+	if r.Remaining() != count * physicsContactDetailBytes {
+		return nil
+	}
 	var contacts []Contact
 	for i := 0; i < count; i++ {
-		if r.Remaining() < 8 {
-			break
-		}
 		idA := r.ReadU32()
 		idB := r.ReadU32()
 		a, okA := s.bodyMap[idA]
 		b, okB := s.bodyMap[idB]
-		contact := Contact{A: a, B: b, Fallback: true}
-		if detailed {
-			if r.Remaining() < physicsContactDetailBytes - 8 {
-				break
-			}
-			contact.Position = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
-			contact.Normal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
-			contact.RelativeVelocity = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
-			contact.RelativeSpeed = r.ReadF64()
-			contact.NormalImpulse = r.ReadF64()
-			contact.TangentImpulse = r.ReadF64()
-			contact.HasImpulse = r.ReadBool()
-			contact.Fallback = false
-		}
+		contact := Contact{A: a, B: b, Fallback: false}
+		contact.Position = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		contact.Normal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		contact.RelativeVelocity = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
+		contact.RelativeSpeed = r.ReadF64()
+		contact.NormalImpulse = r.ReadF64()
+		contact.TangentImpulse = r.ReadF64()
+		contact.HasImpulse = r.ReadBool()
 		if okA && okB && a.Active && b.Active {
 			contacts = append(contacts, contact)
 		}

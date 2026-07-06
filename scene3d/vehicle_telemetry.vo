@@ -79,7 +79,7 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 	rawRotation := voplay.QuatIdentity()
 	rawVelocity := voplay.Vec3{}
 	rawAngularVelocity := voplay.Vec3{}
-	invalidSamples := 0
+	invalidSamples := vehicle.RawInvalidSampleCount
 	if !vehicleFinite(rawSpeed) || !vehicleFinite(rawYaw) || !vehicleVec3Finite(rawGroundNormal) || !vehicleVec3Finite(rawGroundPoint) {
 		invalidSamples++
 	}

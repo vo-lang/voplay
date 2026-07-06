@@ -129,6 +129,9 @@ pub struct RenderBatchPlan {
     pub terrain_batches: u32,
     pub water_batches: u32,
     pub decal_batches: u32,
+    pub invalid_batch_indices: u32,
+    pub missing_chunk_info: u32,
+    pub skip_reasons: Vec<&'static str>,
 }
 
 impl RenderBatchPlan {
@@ -162,43 +165,68 @@ impl RenderBatchPlan {
         self.visible_chunks.push(chunk);
     }
 
-    pub fn model_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
-        collect_indexed_batches(&self.model_batch_indices, draws)
+    pub fn model_batches(&mut self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
+        let (batches, invalid) = collect_indexed_batches(&self.model_batch_indices, draws);
+        self.record_invalid_batch_indices(invalid, "invalid-model-batch-index");
+        batches
     }
 
-    pub fn terrain_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
-        collect_indexed_batches(&self.terrain_batch_indices, draws)
+    pub fn terrain_batches(&mut self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
+        let (batches, invalid) = collect_indexed_batches(&self.terrain_batch_indices, draws);
+        self.record_invalid_batch_indices(invalid, "invalid-terrain-batch-index");
+        batches
     }
 
-    pub fn primitive_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
-        collect_indexed_batches(&self.primitive_draw_indices, draws)
+    pub fn primitive_draw_batches(&mut self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
+        let (batches, invalid) = collect_indexed_batches(&self.primitive_draw_indices, draws);
+        self.record_invalid_batch_indices(invalid, "invalid-primitive-draw-index");
+        batches
     }
 
-    pub fn primitive_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
-        collect_indexed_batches(&self.primitive_chunk_indices, chunks)
+    pub fn primitive_chunk_batches(&mut self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
+        let (batches, invalid) = collect_indexed_batches(&self.primitive_chunk_indices, chunks);
+        self.record_invalid_batch_indices(invalid, "invalid-primitive-chunk-index");
+        batches
     }
 
-    pub fn water_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
-        collect_indexed_batches(&self.water_draw_indices, draws)
+    pub fn water_draw_batches(&mut self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
+        let (batches, invalid) = collect_indexed_batches(&self.water_draw_indices, draws);
+        self.record_invalid_batch_indices(invalid, "invalid-water-draw-index");
+        batches
     }
 
-    pub fn water_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
-        collect_indexed_batches(&self.water_chunk_indices, chunks)
+    pub fn water_chunk_batches(&mut self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
+        let (batches, invalid) = collect_indexed_batches(&self.water_chunk_indices, chunks);
+        self.record_invalid_batch_indices(invalid, "invalid-water-chunk-index");
+        batches
     }
 
-    pub fn decal_batches(&self, decals: &[PostDecalGpu]) -> Vec<PostDecalGpu> {
-        collect_indexed_batches(&self.decal_batch_indices, decals)
+    pub fn decal_batches(&mut self, decals: &[PostDecalGpu]) -> Vec<PostDecalGpu> {
+        let (batches, invalid) = collect_indexed_batches(&self.decal_batch_indices, decals);
+        self.record_invalid_batch_indices(invalid, "invalid-decal-batch-index");
+        batches
+    }
+
+    fn record_invalid_batch_indices(&mut self, invalid: u32, reason: &'static str) {
+        if invalid == 0 {
+            return;
+        }
+        self.invalid_batch_indices = self.invalid_batch_indices.saturating_add(invalid);
+        self.skip_reasons.push(reason);
     }
 }
 
-fn collect_indexed_batches<T: Copy>(indices: &[usize], values: &[T]) -> Vec<T> {
+fn collect_indexed_batches<T: Copy>(indices: &[usize], values: &[T]) -> (Vec<T>, u32) {
     let mut batches = Vec::with_capacity(indices.len());
+    let mut invalid = 0u32;
     for index in indices {
         if let Some(value) = values.get(*index).copied() {
             batches.push(value);
+        } else {
+            invalid = invalid.saturating_add(1);
         }
     }
-    batches
+    (batches, invalid)
 }
 
 pub struct RenderBatchPlanner;
@@ -280,8 +308,10 @@ impl RenderBatchPlanner {
                     primitive_chunk_info
                         .iter()
                         .find(|info| info.chunk == *chunk)
-                })
+            })
             else {
+                plan.missing_chunk_info = plan.missing_chunk_info.saturating_add(1);
+                plan.skip_reasons.push("missing-primitive-chunk-info");
                 continue;
             };
             let bounds = Self::primitive_chunk_bounds(*info);

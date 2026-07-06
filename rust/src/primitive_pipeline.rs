@@ -204,6 +204,13 @@ struct PrimitiveChunkDirtyRange {
     dirty_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResidentRebuildPolicy {
+    pub(crate) dirty_upload_bytes: u64,
+    pub(crate) full_rebuild_count: u32,
+    pub(crate) rebuild_reason: &'static str,
+}
+
 struct ResidentPrimitivePassBatch {
     key: PrimitivePassBatchKey,
     buffer: wgpu::Buffer,
@@ -361,6 +368,7 @@ pub struct PrimitivePipeline {
     staging_instances: Vec<ResidentPrimitiveInstance>,
     rebuild_queue_peak: u32,
     last_resident_chunk_rebuilds: u32,
+    last_resident_rebuild_policy: ResidentRebuildPolicy,
     texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
     last_main_batch_count: u32,
     last_main_instance_count: u32,

@@ -63,6 +63,8 @@ mod renderer;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer_frame;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod renderer_frame_resources;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer_perf;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod renderer_runtime;

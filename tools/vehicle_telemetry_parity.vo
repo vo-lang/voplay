@@ -33,9 +33,9 @@ func main() {
 	body := scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{Y: 1.1}, Physics: &scene3d.Physics{Type: scene3d.Dynamic, Collider: scene3d.Box(1.1, 0.45, 1.4), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Density: 1.0, Friction: 0.9}})
 	config := scene3d.DefaultKartVehicleConfig()
 	vehicle := scene3d.NewVehicle(body, config)
+	session := scene3d.NewVehiclePhysicsSession(scene3d.VehiclePhysicsSessionDesc{Scene: scene, Vehicle: vehicle, FixedDt: 1.0 / 60.0})
 	for i := 0; i < 90; i++ {
-		vehicle.Update(scene3d.VehicleInput{}, 1.0 / 60.0)
-		scene.StepAndSyncPhysics(1.0 / 60.0)
+		session.Step(1.0 / 60.0, scene3d.VehicleIntent{})
 	}
 	if vehicle.WheelCount() != 4 {
 		parityFail("wheel_count=" + fmt.Sprint(vehicle.WheelCount()))

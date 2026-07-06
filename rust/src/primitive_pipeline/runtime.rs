@@ -467,6 +467,7 @@ impl PrimitivePipeline {
             staging_instances: Vec::new(),
             rebuild_queue_peak: 0,
             last_resident_chunk_rebuilds: 0,
+            last_resident_rebuild_policy: ResidentRebuildPolicy::default(),
             texture_bind_groups: HashMap::new(),
             last_main_batch_count: 0,
             last_main_instance_count: 0,
@@ -1168,6 +1169,7 @@ impl PrimitivePipeline {
         models: &ModelManager,
     ) -> u32 {
         if self.rebuild_queue.is_empty() {
+            self.last_resident_rebuild_policy = ResidentRebuildPolicy::default();
             return 0;
         }
         let pending = std::mem::take(&mut self.rebuild_queue);
@@ -1190,10 +1192,12 @@ impl PrimitivePipeline {
                 resident_chunk_rebuilds = resident_chunk_rebuilds.saturating_add(1);
             }
         }
-        // Exported by perf diagnostics as residentChunkRebuilds; dirty_upload_bytes keeps
-        // the merged dirty range visible to churn reports even when a chunk rebuild is chosen.
-        let _dirty_upload_bytes = dirty_upload_bytes;
         self.last_resident_chunk_rebuilds = resident_chunk_rebuilds;
+        self.last_resident_rebuild_policy = ResidentRebuildPolicy {
+            dirty_upload_bytes,
+            full_rebuild_count: resident_chunk_rebuilds,
+            rebuild_reason: "dirty-range-resident-chunk-rebuild",
+        };
         self.last_resident_chunk_rebuilds
     }
 

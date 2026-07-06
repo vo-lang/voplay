@@ -233,6 +233,13 @@ impl MainOpaquePassExecutor {
                     ctx.light_uniform,
                 );
                 let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+                let primitive_submit_plan = PrimitiveSubmitter::draw(
+                    crate::primitive_pipeline::PrimitiveRenderFilter::Main,
+                );
+                let _primitive_submit_report = (
+                    primitive_submit_plan.owner,
+                    primitive_submit_plan.report,
+                );
                 primitive_stats = ctx.resources.primitive_pipeline.draw(
                     &ctx.resources.device,
                     &ctx.resources.queue,
@@ -243,9 +250,7 @@ impl MainOpaquePassExecutor {
                     &ctx.resources.texture_manager,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
-                    PrimitiveSubmitter::draw(
-                        crate::primitive_pipeline::PrimitiveRenderFilter::Main,
-                    ),
+                    primitive_submit_plan.filter,
                 );
                 ctx.perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
             }

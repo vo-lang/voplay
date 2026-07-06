@@ -3,8 +3,10 @@ use crate::renderer_targets::{
     create_msaa_surface_props_view, create_post_color_view, create_receiver_mask_view,
     create_surface_props_view, MAIN_SAMPLE_COUNT,
 };
+pub(crate) use crate::renderer_frame_resources::*;
+use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RenderResourceKind {
     SurfaceColor,
     MainColor,
@@ -26,7 +28,7 @@ pub(crate) enum RenderResourceLifetime {
     Transient,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RenderResource {
     pub(crate) name: &'static str,
     pub(crate) kind: RenderResourceKind,
@@ -71,6 +73,8 @@ pub(crate) struct RenderTargetStatus {
     pub(crate) ready: bool,
     pub(crate) lifetime: RenderResourceLifetime,
     pub(crate) revision: u32,
+    pub(crate) backing_owner: &'static str,
+    pub(crate) ready_cause: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -400,11 +404,7 @@ impl FrameGraph {
                 name: plan.name,
                 reads: plan.reads.clone(),
                 writes: plan.writes.clone(),
-                transient_writes: if plan.transient {
-                    plan.writes.clone()
-                } else {
-                    Vec::new()
-                },
+                transient_writes: if plan.transient { plan.writes.clone() } else { Vec::new() },
                 enabled: plan.enabled,
                 diagnostics: self
                     .passes
@@ -414,6 +414,47 @@ impl FrameGraph {
                     .collect(),
             })
             .collect()
+    }
+
+    pub(crate) fn dependency_ordered_nodes(&self) -> Result<Vec<RenderPassNode>, String> {
+        let nodes = self.nodes();
+        let mut producer_by_resource = HashMap::new();
+        for (index, node) in nodes.iter().enumerate() {
+            if !node.enabled {
+                continue;
+            }
+            for resource in &node.writes {
+                producer_by_resource.insert(*resource, index);
+            }
+        }
+        let mut state = vec![0u8; nodes.len()];
+        let mut ordered = Vec::with_capacity(nodes.len());
+        for index in 0..nodes.len() {
+            self.visit_node(index, &nodes, &producer_by_resource, &mut state, &mut ordered)?;
+        }
+        Ok(ordered)
+    }
+
+    fn visit_node(&self, index: usize, nodes: &[RenderPassNode], producer_by_resource: &HashMap<RenderResource, usize>, state: &mut [u8], ordered: &mut Vec<RenderPassNode>) -> Result<(), String> {
+        if state[index] == 2 {
+            return Ok(());
+        }
+        if state[index] == 1 {
+            return Err(format!("voplay: frame graph dependency cycle at {}", nodes[index].name));
+        }
+        state[index] = 1;
+        if nodes[index].enabled {
+            for resource in &nodes[index].reads {
+                if let Some(producer) = producer_by_resource.get(resource) {
+                    if *producer != index {
+                        self.visit_node(*producer, nodes, producer_by_resource, state, ordered)?;
+                    }
+                }
+            }
+        }
+        state[index] = 2;
+        ordered.push(nodes[index].clone());
+        Ok(())
     }
 
     pub(crate) fn node(&self, kind: RenderPassKind) -> Option<RenderPassNode> {
@@ -446,7 +487,7 @@ impl FrameGraph {
             }
             let writes = plan.writes.clone();
             for resource in writes {
-                self.registry.mark_ready(resource);
+                self.registry.mark_ready_with_cause(resource, "frame-pass-write");
             }
         }
     }
@@ -562,7 +603,7 @@ impl FrameGraphExecutor<'_> {
     where
         D: RenderPassNodeDispatcher + ?Sized,
     {
-        let nodes = self.graph.nodes();
+        let nodes = self.graph.dependency_ordered_nodes()?;
         let mut diagnostics = Vec::new();
         for node in nodes {
             if let Some(diagnostic) = self.execute_node(&node, true, dispatcher)? {
@@ -740,12 +781,33 @@ impl RenderResourceRegistry {
         ready: bool,
         lifetime: RenderResourceLifetime,
     ) {
+        self.declare_target_with_owner(
+            resource,
+            ready,
+            lifetime,
+            resource.name,
+            if ready { "declared-ready" } else { "declared-not-ready" },
+        );
+    }
+
+    pub(crate) fn declare_target_with_owner(
+        &mut self,
+        resource: RenderResource,
+        ready: bool,
+        lifetime: RenderResourceLifetime,
+        backing_owner: &'static str,
+        ready_cause: &'static str,
+    ) {
         if let Some(existing) = self
             .targets
             .iter_mut()
             .find(|target| target.resource == resource)
         {
             existing.ready = existing.ready || ready;
+            existing.backing_owner = backing_owner;
+            if ready {
+                existing.ready_cause = ready_cause;
+            }
             if existing.lifetime == RenderResourceLifetime::Transient
                 && lifetime == RenderResourceLifetime::Transient
             {
@@ -764,20 +826,33 @@ impl RenderResourceRegistry {
             ready,
             lifetime,
             revision: self.resize_generation,
+            backing_owner,
+            ready_cause,
         });
         self.churn.target_creates = self.churn.target_creates.saturating_add(1);
     }
 
-    pub(crate) fn mark_ready(&mut self, resource: RenderResource) {
+    pub(crate) fn mark_ready_with_cause(
+        &mut self,
+        resource: RenderResource,
+        ready_cause: &'static str,
+    ) {
         if let Some(target) = self
             .targets
             .iter_mut()
             .find(|target| target.resource == resource)
         {
             target.ready = true;
+            target.ready_cause = ready_cause;
             return;
         }
-        self.declare_target(resource, true, RenderResourceLifetime::Persistent);
+        self.declare_target_with_owner(
+            resource,
+            true,
+            RenderResourceLifetime::Persistent,
+            resource.name,
+            ready_cause,
+        );
     }
 
     pub(crate) fn is_ready(&self, resource: RenderResource) -> bool {
@@ -819,51 +894,6 @@ impl RenderResourceRegistry {
             .saturating_add(self.targets.len().min(u32::MAX as usize) as u32);
     }
 }
-
-pub(crate) const RES_SURFACE_COLOR: RenderResource = RenderResource {
-    name: "surface-color",
-    kind: RenderResourceKind::SurfaceColor,
-};
-pub(crate) const RES_MAIN_COLOR: RenderResource = RenderResource {
-    name: "main-color",
-    kind: RenderResourceKind::MainColor,
-};
-pub(crate) const RES_DEPTH: RenderResource = RenderResource {
-    name: "depth",
-    kind: RenderResourceKind::Depth,
-};
-pub(crate) const RES_RECEIVER_MASK: RenderResource = RenderResource {
-    name: "receiver-mask",
-    kind: RenderResourceKind::ReceiverMask,
-};
-pub(crate) const RES_SURFACE_PROPS: RenderResource = RenderResource {
-    name: "surface-props",
-    kind: RenderResourceKind::SurfaceProps,
-};
-pub(crate) const RES_SHADOW_MAP: RenderResource = RenderResource {
-    name: "shadow-map",
-    kind: RenderResourceKind::ShadowMap,
-};
-pub(crate) const RES_POST_COLOR: RenderResource = RenderResource {
-    name: "post-color",
-    kind: RenderResourceKind::PostColor,
-};
-pub(crate) const RES_WATER_COLOR: RenderResource = RenderResource {
-    name: "water-color",
-    kind: RenderResourceKind::WaterColor,
-};
-pub(crate) const RES_OVERLAY: RenderResource = RenderResource {
-    name: "overlay",
-    kind: RenderResourceKind::Overlay,
-};
-pub(crate) const RES_CAPTURE: RenderResource = RenderResource {
-    name: "capture",
-    kind: RenderResourceKind::Capture,
-};
-pub(crate) const RES_READBACK: RenderResource = RenderResource {
-    name: "readback",
-    kind: RenderResourceKind::Readback,
-};
 
 #[cfg(test)]
 mod tests;

@@ -96,7 +96,12 @@ impl PostPassSetup {
             .camera3d_state
             .map(|(eye, _, _, _, _, _)| eye.to_array())
             .unwrap_or([0.0, 0.0, 0.0]);
-        let projected_decal_count = DecalSubmitter::prepare(ctx.projected_decals);
+        let projected_decal_plan = DecalSubmitter::prepare(ctx.projected_decals);
+        let _decal_submit_report = (
+            projected_decal_plan.owner,
+            projected_decal_plan.report,
+        );
+        let projected_decal_count = projected_decal_plan.prepared_count;
         let projected_decal_atlas_binding_count = ctx
             .projected_decal_atlas_binding_count
             .min(projected_decal_count as u32);

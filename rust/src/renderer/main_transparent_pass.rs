@@ -160,6 +160,13 @@ impl MainTransparentPassExecutor {
             .collect::<Vec<_>>();
         let mut primitive_stats = PrimitiveDrawStats::default();
         if !sorted_primitive_draws.is_empty() || !ctx.primitive_chunks.is_empty() {
+            let primitive_submit_plan = PrimitiveSubmitter::draw(
+                crate::primitive_pipeline::PrimitiveRenderFilter::Translucent,
+            );
+            let _primitive_submit_report = (
+                primitive_submit_plan.owner,
+                primitive_submit_plan.report,
+            );
             let stats = ctx.resources.primitive_pipeline.draw(
                 &ctx.resources.device,
                 &ctx.resources.queue,
@@ -170,9 +177,7 @@ impl MainTransparentPassExecutor {
                 &ctx.resources.texture_manager,
                 shadow_view,
                 false,
-                PrimitiveSubmitter::draw(
-                    crate::primitive_pipeline::PrimitiveRenderFilter::Translucent,
-                ),
+                primitive_submit_plan.filter,
             );
             accumulate_stats(&mut primitive_stats, stats);
         }

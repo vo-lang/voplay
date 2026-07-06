@@ -139,11 +139,26 @@ const (
 	physicsCmdSetAngVel byte = 6
 	physicsContactDetailBytes = 8 + 12 * 8 + 1
 	PhysicsBackendPacketSchemaVersion = 1
-	PhysicsBackendPacketKind = 1
+	PhysicsBackendPacketHeaderBytes = 13
+	PhysicsBackendBodyPacketKind = 1
+	PhysicsBackendContactPacketKind = 2
+	PhysicsBackendWheelPacketKind = 3
+	PhysicsBackendPacketKind = PhysicsBackendContactPacketKind
 	PhysicsBackendPacketLength = physicsContactDetailBytes
 	PhysicsBackendCapability = "physics-backend-contact-packet-v1"
 	physicsSurfaceMaterialIDBytes = 32
 )
+
+type PhysicsBackendPacketHeader struct {
+	Kind int
+	SchemaVersion int
+	PayloadLength int
+	SchemaHash int
+}
+
+func PhysicsBackendPacketSchemaHash(kind int, payloadLength int) int {
+	return PhysicsBackendPacketSchemaVersion * 16777619 + kind * 65537 + payloadLength
+}
 
 func PhysicsBackendPacketHash(bytes []byte) int {
 	hash := PhysicsBackendPacketSchemaVersion * 16777619
@@ -154,6 +169,42 @@ func PhysicsBackendPacketHash(bytes []byte) int {
 		hash = -hash
 	}
 	return hash
+}
+
+func WritePhysicsBackendPacketHeader(w *codec.ByteWriter, kind int, payloadLength int) {
+	if w == nil {
+		return
+	}
+	w.WriteByte(byte(kind))
+	w.WriteU32(PhysicsBackendPacketSchemaVersion)
+	w.WriteU32(payloadLength)
+	w.WriteU32(PhysicsBackendPacketSchemaHash(kind, payloadLength))
+}
+
+func ReadPhysicsBackendPacketHeader(r *codec.ByteReader, expectedKind int) (PhysicsBackendPacketHeader, bool) {
+	if r == nil || r.Remaining() < PhysicsBackendPacketHeaderBytes {
+		return PhysicsBackendPacketHeader{}, false
+	}
+	header := PhysicsBackendPacketHeader{
+		Kind: int(r.ReadByte()),
+		SchemaVersion: r.ReadU32(),
+		PayloadLength: r.ReadU32(),
+		SchemaHash: r.ReadU32(),
+	}
+	return header, ValidatePhysicsBackendPacketHeader(header, expectedKind, r.Remaining())
+}
+
+func ValidatePhysicsBackendPacketHeader(header PhysicsBackendPacketHeader, expectedKind int, available int) bool {
+	if header.Kind != expectedKind {
+		return false
+	}
+	if header.SchemaVersion != PhysicsBackendPacketSchemaVersion {
+		return false
+	}
+	if header.PayloadLength < 0 || header.PayloadLength != available {
+		return false
+	}
+	return header.SchemaHash == PhysicsBackendPacketSchemaHash(header.Kind, header.PayloadLength)
 }
 
 func physicsSurfaceMaterialKind(kind string) int {

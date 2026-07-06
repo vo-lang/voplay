@@ -2820,6 +2820,13 @@ func makeRaycastVehicleState() []byte {
 	return makeRaycastVehicleStateWith(12.5, voplay.Vec3{X: 0, Y: 0.2, Z: -20}, voplay.Vec3{X: 0, Y: 0, Z: -20}, 0.28, -0.2, 1.25)
 }
 
+func wrapPhysicsBackendPacket(kind int, payload []byte) []byte {
+	w := codec.NewByteWriter(len(payload) + scene3d.PhysicsBackendPacketHeaderBytes)
+	scene3d.WritePhysicsBackendPacketHeader(&w, kind, len(payload))
+	w.WriteRawBytes(payload)
+	return w.Bytes()
+}
+
 func writeRaycastWheelMaterial(w *codec.ByteWriter, id string, kind int) {
 	for i := 0; i < 32; i++ {
 		if i < len(id) {
@@ -2855,7 +2862,7 @@ func makeRaycastVehicleStateWith(speed float64, center voplay.Vec3, contact vopl
 		materialKind = 2
 	}
 	writeRaycastWheelMaterial(&w, materialID, materialKind)
-	return w.Bytes()
+	return wrapPhysicsBackendPacket(scene3d.PhysicsBackendWheelPacketKind, w.Bytes())
 }
 
 func makeBadRaycastVehicleState() []byte {
@@ -2876,15 +2883,28 @@ func makeBadRaycastVehicleState() []byte {
 	w.WriteF64(math.NaN())
 	w.WriteF64(math.Inf(-1))
 	writeRaycastWheelMaterial(&w, scene3d.TrackSurfaceRoad, 1)
-	return w.Bytes()
+	return wrapPhysicsBackendPacket(scene3d.PhysicsBackendWheelPacketKind, w.Bytes())
 }
 
 func makePhysicsContacts(a, b int) []byte {
-	w := codec.NewByteWriter(12)
+	w := codec.NewByteWriter(128)
 	w.WriteU32(1)
 	w.WriteU32(a)
 	w.WriteU32(b)
-	return w.Bytes()
+	w.WriteF64(0)
+	w.WriteF64(1)
+	w.WriteF64(0)
+	w.WriteF64(0)
+	w.WriteF64(1)
+	w.WriteF64(0)
+	w.WriteF64(0)
+	w.WriteF64(0)
+	w.WriteF64(0)
+	w.WriteF64(0)
+	w.WriteF64(12)
+	w.WriteF64(1)
+	w.WriteBool(true)
+	return wrapPhysicsBackendPacket(scene3d.PhysicsBackendContactPacketKind, w.Bytes())
 }
 
 func makePhysicsBodyState(bodyID int, position voplay.Vec3, rotation voplay.Quat, velocity voplay.Vec3) []byte {
@@ -2908,7 +2928,7 @@ func makePhysicsBodyStateWithAngular(bodyID int, position voplay.Vec3, rotation 
 	w.WriteF64(angularVelocity.X)
 	w.WriteF64(angularVelocity.Y)
 	w.WriteF64(angularVelocity.Z)
-	return w.Bytes()
+	return wrapPhysicsBackendPacket(scene3d.PhysicsBackendBodyPacketKind, w.Bytes())
 }
 
 func sumEngineForce(controls []testVehicleControl) float64 {
@@ -2988,7 +3008,7 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(len(contactEvents) == 1, "scene3d contact events decode backend pair")
 	assert(contactEvents[0].A == body && contactEvents[0].B == wall, "scene3d contact events resolve entities")
 	assert(contactEvents[0].RelativeSpeed >= 0, "scene3d contact events report relative speed")
-	assert(contactEvents[0].Fallback && contactEvents[0].Source == scene3d.ContactEventSourceBackendPairFallback, "scene3d contact events mark backend pair fallback")
+	assert(!contactEvents[0].Fallback && contactEvents[0].Source == scene3d.ContactEventSourceBackendManifold, "scene3d contact events require schema-backed backend manifold")
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle wheel count before sync")
 	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: 1}, 1.0 / 60.0)
 	assert(len(pb.vehicleApplyCommands) > 0, "scene3d vehicle sends backend apply command")

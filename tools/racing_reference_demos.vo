@@ -186,6 +186,7 @@ type kartReferenceScene struct {
 	Body *scene3d.Entity
 	Vehicle *scene3d.Vehicle
 	Kart *scene3d.KartController
+	Session *scene3d.VehiclePhysicsSession
 }
 
 func newKartReferenceScene(name string) *kartReferenceScene {
@@ -207,7 +208,8 @@ func newKartReferenceScene(name string) *kartReferenceScene {
 	config := scene3d.DefaultKartControllerConfig()
 	vehicle := scene3d.NewVehicle(body, config.Vehicle)
 	kart := scene3d.NewKartController(vehicle, track, config)
-	return &kartReferenceScene{Scene: scene, Track: track, Body: body, Vehicle: vehicle, Kart: kart}
+	session := scene3d.NewVehiclePhysicsSession(scene3d.VehiclePhysicsSessionDesc{Scene: scene, Vehicle: vehicle, Controller: kart, FixedDt: 1.0 / 60.0})
+	return &kartReferenceScene{Scene: scene, Track: track, Body: body, Vehicle: vehicle, Kart: kart, Session: session}
 }
 
 func countWheelContacts(name string, vehicle *scene3d.Vehicle) int {
@@ -235,17 +237,16 @@ func runKartVehicleReference() {
 	ref := newKartReferenceScene(name)
 	defer ref.Scene.Close()
 	for i := 0; i < 90; i++ {
-		ref.Vehicle.Update(scene3d.VehicleInput{}, 1.0 / 60.0)
-		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
+		ref.Session.Step(1.0 / 60.0, scene3d.VehicleIntent{})
 	}
 	settledContacts := countWheelContacts(name, ref.Vehicle)
 	require(name, settledContacts > 0, "no raycast wheel contacts after settling")
 	require(name, ref.Vehicle.Grounded, "vehicle is not grounded after settling")
 	for i := 0; i < 1; i++ {
-		state := ref.Kart.Update(scene3d.KartInput{Throttle: 0.25, Steer: 0.05}, 1.0 / 60.0)
+		ref.Session.Step(1.0 / 60.0, scene3d.VehicleIntentFromKartInput(scene3d.KartInput{Throttle: 0.25, Steer: 0.05}))
+		state := ref.Session.LastState
 		requireFinite(name, state.Speed, "kart.speed")
 		requireFinite(name, state.SurfaceFriction, "kart.surface_friction")
-		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
 	}
 	contacts := countWheelContacts(name, ref.Vehicle)
 	require(name, contacts > 0, "no raycast wheel contacts after controller update")
@@ -259,8 +260,7 @@ func runRacingDebugOverlay() {
 	ref := newKartReferenceScene(name)
 	defer ref.Scene.Close()
 	for i := 0; i < 10; i++ {
-		_ = ref.Kart.Update(scene3d.KartInput{Throttle: 0.5, Steer: -0.2}, 1.0 / 60.0)
-		ref.Scene.StepAndSyncPhysics(1.0 / 60.0)
+		ref.Session.Step(1.0 / 60.0, scene3d.VehicleIntentFromKartInput(scene3d.KartInput{Throttle: 0.5, Steer: -0.2}))
 	}
 	overlay, err := scene3d.SpawnRacingDebugOverlay(ref.Scene, ref.Track, ref.Vehicle, scene3d.RacingDebugOptions{
 		Model: voplay.ModelID(405),

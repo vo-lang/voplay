@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"os"
+	"os/exec"
 	"strconv"
 	"github.com/vo-lang/voplay"
 	"github.com/vo-lang/voplay/scene3d"
@@ -62,6 +64,7 @@ type ReplayReport struct {
 	BackendPacketHash int `json:"backendPacketHash"`
 	Samples int `json:"samples"`
 	Mismatches int `json:"mismatches"`
+	FreshProcess bool `json:"freshProcess"`
 	Status string `json:"status"`
 	Issues []StressIssue `json:"issues"`
 }
@@ -110,6 +113,14 @@ type ScenarioRuntime struct {
 }
 
 func main() {
+	if os.Getenv("VOPLAY_PHYSICS_REPLAY_VERIFY") == "1" {
+		runReplayVerifierProcessFromEnv()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--verify-replay-trace" {
+		runReplayVerifierProcess()
+		return
+	}
 	report := StressReport{SchemaVersion: 1, Kind: "voplay.physicsStressReport", FixedDt: stressDt}
 	defs := scenarioDefinitions()
 	for _, def := range defs {
@@ -496,11 +507,24 @@ func makeSample(step, vehicleIndex int, telemetry scene3d.VehicleTelemetry, stat
 
 func replayContract(def ScenarioDefinition) ReplayReport {
 	reference, trace := runScenarioWithReplay(def, true)
-	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), Samples: len(trace.Samples), Status: "pass"}
+	report := verifyReplayTrace(def, trace)
 	if reference.Status != "pass" {
 		report.Status = "fail"
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "reference scenario failed"})
 	}
+	if report.Status == "pass" {
+		if RunPhysicsReplayVerifierProcess(def, trace) {
+			report.FreshProcess = true
+		} else {
+			report.Status = "fail"
+			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "fresh-process replay verifier failed"})
+		}
+	}
+	return report
+}
+
+func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) ReplayReport {
+	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), Samples: len(trace.Samples), Status: "pass"}
 	if len(trace.Samples) == 0 {
 		report.Status = "fail"
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay final sample"})
@@ -552,6 +576,86 @@ func replayContract(def ScenarioDefinition) ReplayReport {
 		report.Status = "fail"
 	}
 	return report
+}
+
+func RunPhysicsReplayVerifierProcess(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) bool {
+	data, err := json.Marshal(trace)
+	if err != nil {
+		return false
+	}
+	path := os.TempDir() + "/voplay-physics-replay-" + strconv.Itoa(os.Getpid()) + "-" + def.Name + ".json"
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return false
+	}
+	defer os.Remove(path)
+	root := os.Getenv("VOPLAY_PHYSICS_STRESS_ROOT")
+	entry := os.Getenv("VOPLAY_PHYSICS_STRESS_ENTRY")
+	if root == "" || entry == "" {
+		return false
+	}
+	cmd := exec.Command("./d.py", []string{"run", entry})
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "VOPLAY_PHYSICS_REPLAY_VERIFY=1", "VOPLAY_PHYSICS_REPLAY_SCENARIO=" + def.Name, "VOPLAY_PHYSICS_REPLAY_TRACE=" + path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		println("physics replay fresh-process verifier failed: " + string(out))
+		return false
+	}
+	return true
+}
+
+func runReplayVerifierProcessFromEnv() {
+	def, ok := scenarioDefinitionByName(os.Getenv("VOPLAY_PHYSICS_REPLAY_SCENARIO"))
+	if !ok {
+		println("physics replay verifier: unknown scenario " + os.Getenv("VOPLAY_PHYSICS_REPLAY_SCENARIO"))
+		os.Exit(2)
+	}
+	verifyReplayTraceFile(def, os.Getenv("VOPLAY_PHYSICS_REPLAY_TRACE"))
+}
+
+func runReplayVerifierProcess() {
+	if len(os.Args) < 4 {
+		println("physics replay verifier: missing scenario or trace path")
+		os.Exit(2)
+	}
+	def, ok := scenarioDefinitionByName(os.Args[2])
+	if !ok {
+		println("physics replay verifier: unknown scenario " + os.Args[2])
+		os.Exit(2)
+	}
+	verifyReplayTraceFile(def, os.Args[3])
+}
+
+func verifyReplayTraceFile(def ScenarioDefinition, path string) {
+	if path == "" {
+		println("physics replay verifier: missing trace path")
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		println("physics replay verifier: read failed " + err.Error())
+		os.Exit(2)
+	}
+	trace := scene3d.PhysicsReplayTrace{}
+	if err := json.Unmarshal(data, &trace); err != nil {
+		println("physics replay verifier: json failed " + err.Error())
+		os.Exit(2)
+	}
+	report := verifyReplayTrace(def, trace)
+	if report.Status != "pass" || report.Mismatches != 0 {
+		println("physics replay verifier: mismatch")
+		os.Exit(1)
+	}
+	println("physics replay verifier: pass")
+}
+
+func scenarioDefinitionByName(name string) (ScenarioDefinition, bool) {
+	for _, def := range scenarioDefinitions() {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return ScenarioDefinition{}, false
 }
 
 func physicsReplayStepHash(trace scene3d.PhysicsReplayTrace) int {

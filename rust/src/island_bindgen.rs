@@ -1569,25 +1569,7 @@ pub fn scene3d_physics_contacts(input: &[u8]) -> Vec<u8> {
     let mut pos = 0usize;
     let world_id = in_value(input, &mut pos) as u32;
     let contacts = crate::physics3d::with_world(world_id, |world| world.get_contacts());
-    let mut buf = Vec::with_capacity(4 + contacts.len() * (8 + 12 * 8 + 1));
-    buf.extend_from_slice(&(contacts.len() as u32).to_le_bytes());
-    for contact in &contacts {
-        buf.extend_from_slice(&contact.body1.to_le_bytes());
-        buf.extend_from_slice(&contact.body2.to_le_bytes());
-        buf.extend_from_slice(&(contact.point.x as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.point.y as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.point.z as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.normal.x as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.normal.y as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.normal.z as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.relative_velocity.x as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.relative_velocity.y as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.relative_velocity.z as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.relative_speed as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.normal_impulse as f64).to_le_bytes());
-        buf.extend_from_slice(&(contact.tangent_impulse as f64).to_le_bytes());
-        buf.push(contact.has_impulse as u8);
-    }
+    let buf = crate::physics3d::serialize_contacts_packet(&contacts);
     let mut out = Vec::new();
     out_bytes(&mut out, &buf);
     out

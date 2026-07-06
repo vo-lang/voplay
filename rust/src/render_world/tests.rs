@@ -175,7 +175,7 @@ fn batch_planner_constructs_terrain_and_decal_entries() {
     )];
     let decal_inputs = RenderBatchPlanner::decal_inputs(41, &decals);
 
-    let plan = RenderBatchPlanner::build(
+    let mut plan = RenderBatchPlanner::build(
         41,
         3,
         &[terrain_draw],

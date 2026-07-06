@@ -66,7 +66,7 @@ impl Renderer {
             &mut primitive_chunks,
             &mut primitive_chunk_info,
         );
-        let render_batch_plan = build_frame_batch_plan(
+        let mut render_batch_plan = build_frame_batch_plan(
             context.frame_id,
             context.model_draws,
             context.projected_decals,

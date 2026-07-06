@@ -156,6 +156,10 @@ func NewBlockKartPrimitiveContent(scene *Scene, assets *voplay.Assets) (*BlockKa
 	return content, nil
 }
 
+func ProductBlockKartPrimitiveContent(scene *Scene, assets *voplay.Assets) (*BlockKartPrimitiveContent, error) {
+	return NewBlockKartPrimitiveContent(scene, assets)
+}
+
 func (c *BlockKartPrimitiveContent) CloneForScene(scene *Scene) *BlockKartPrimitiveContent {
 	if c == nil || c.runtime == nil {
 		return nil
@@ -190,8 +194,22 @@ func (c *BlockKartPrimitiveContent) PlaceStatic(shape BlockKartPrimitiveShape, m
 	return c.PlaceStaticWithFlags(shape, material, position, rotation, scale, tint, BlockKartPrimitiveFlags(0))
 }
 
+func ProductBlockKartStatic(content *BlockKartPrimitiveContent, shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color) BlockKartPrimitiveObject {
+	if content == nil {
+		return 0
+	}
+	return content.PlaceStatic(shape, material, position, rotation, scale, tint)
+}
+
 func (c *BlockKartPrimitiveContent) PlaceStaticWithFlags(shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, flags BlockKartPrimitiveFlags) BlockKartPrimitiveObject {
 	return c.place(blockKartPrimitiveStaticLayer, BlockKartPrimitivePlacement{Shape: shape, Material: material, Position: position, Rotation: rotation, Scale: scale, Tint: tint, Flags: flags})
+}
+
+func ProductBlockKartStaticWithFlags(content *BlockKartPrimitiveContent, shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, flags BlockKartPrimitiveFlags) BlockKartPrimitiveObject {
+	if content == nil {
+		return 0
+	}
+	return content.PlaceStaticWithFlags(shape, material, position, rotation, scale, tint, flags)
 }
 
 func (c *BlockKartPrimitiveContent) PlaceDetail(shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, lodFar float64) BlockKartPrimitiveObject {
@@ -202,8 +220,22 @@ func (c *BlockKartPrimitiveContent) PlaceDetail(shape BlockKartPrimitiveShape, m
 	return c.place(c.detailLayerNameForLod(lodFar), BlockKartPrimitivePlacement{Shape: shape, Material: material, Position: position, Rotation: rotation, Scale: scale, Tint: tint, Flags: flags, LodFar: lodFar})
 }
 
+func ProductBlockKartDetail(content *BlockKartPrimitiveContent, shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, lodFar float64) BlockKartPrimitiveObject {
+	if content == nil {
+		return 0
+	}
+	return content.PlaceDetail(shape, material, position, rotation, scale, tint, lodFar)
+}
+
 func (c *BlockKartPrimitiveContent) AddDynamic(shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color) *BlockKartPrimitivePart {
 	return c.AddDynamicWithFlags(shape, material, position, rotation, scale, tint, BlockKartPrimitiveFlags(0))
+}
+
+func ProductBlockKartDynamic(content *BlockKartPrimitiveContent, shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color) *BlockKartPrimitivePart {
+	if content == nil {
+		return nil
+	}
+	return content.AddDynamic(shape, material, position, rotation, scale, tint)
 }
 
 func (c *BlockKartPrimitiveContent) AddDynamicWithFlags(shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, flags BlockKartPrimitiveFlags) *BlockKartPrimitivePart {
@@ -211,6 +243,13 @@ func (c *BlockKartPrimitiveContent) AddDynamicWithFlags(shape BlockKartPrimitive
 		return nil
 	}
 	return c.runtime.Dynamic(blockKartPrimitiveDynamicLayer, BlockKartPrimitivePlacement{Shape: shape, Material: material, Position: position, Rotation: rotation, Scale: scale, Tint: tint, Flags: flags}.instance())
+}
+
+func ProductBlockKartDynamicWithFlags(content *BlockKartPrimitiveContent, shape BlockKartPrimitiveShape, material BlockKartPrimitiveMaterial, position voplay.Vec3, rotation voplay.Quat, scale voplay.Vec3, tint voplay.Color, flags BlockKartPrimitiveFlags) *BlockKartPrimitivePart {
+	if content == nil {
+		return nil
+	}
+	return content.AddDynamicWithFlags(shape, material, position, rotation, scale, tint, flags)
 }
 
 func (c *BlockKartPrimitiveContent) RoadsideMeadowBakedTarget(name string) MapPrimitiveLayerTarget {
@@ -224,11 +263,19 @@ func SpawnBlockKartRoadsideBakedContent(scene *Scene, assets *voplay.Assets, pre
 	return SpawnBakedMapPrimitiveContentWithAssets(scene, assets, prepared, []MapPrimitiveLayerTarget{content.RoadsideMeadowBakedTarget(name)})
 }
 
+func ProductBlockKartRoadsideContent(scene *Scene, assets *voplay.Assets, prepared *MapPreparedAsset, content *BlockKartPrimitiveContent, name string) (*MapPrimitiveLayerSpawnResult, error) {
+	return SpawnBlockKartRoadsideBakedContent(scene, assets, prepared, content, name)
+}
+
 func SetBlockKartPrimitivePose(part *BlockKartPrimitivePart, position voplay.Vec3, rotation voplay.Quat) {
 	if part == nil {
 		return
 	}
 	part.SetPose(position, rotation)
+}
+
+func ProductBlockKartPose(part *BlockKartPrimitivePart, position voplay.Vec3, rotation voplay.Quat) {
+	SetBlockKartPrimitivePose(part, position, rotation)
 }
 
 func (b *BlockKartPrimitiveBatch) Add(desc BlockKartPrimitivePlacement) BlockKartPrimitiveObject {

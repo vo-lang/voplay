@@ -1,12 +1,22 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PrimitiveSubmitter;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrimitiveSubmitPlan {
+    pub(crate) filter: crate::primitive_pipeline::PrimitiveRenderFilter,
+    pub(crate) owner: &'static str,
+    pub(crate) report: &'static str,
+}
+
 impl PrimitiveSubmitter {
     pub(crate) fn draw(
         filter: crate::primitive_pipeline::PrimitiveRenderFilter,
-    ) -> crate::primitive_pipeline::PrimitiveRenderFilter {
-        Self::report_draw_filter(filter);
-        filter
+    ) -> PrimitiveSubmitPlan {
+        PrimitiveSubmitPlan {
+            filter,
+            owner: "PrimitiveSubmitter",
+            report: Self::report_draw_filter(filter),
+        }
     }
 
     pub(crate) fn report_draw_filter(

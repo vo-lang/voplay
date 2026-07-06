@@ -165,6 +165,8 @@ impl WaterPassExecutor {
             ctx.light_uniform,
         );
         let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+        let water_submit_plan = WaterSubmitter::draw();
+        let _water_submit_report = (water_submit_plan.owner, water_submit_plan.report);
         let stats = ctx.resources.primitive_pipeline.draw(
             &ctx.resources.device,
             &ctx.resources.queue,
@@ -175,7 +177,7 @@ impl WaterPassExecutor {
             &ctx.resources.texture_manager,
             shadow_view,
             ctx.main_aux_targets_enabled,
-            WaterSubmitter::draw(),
+            water_submit_plan.filter,
         );
         drop(render_pass);
         Ok(WaterPassResult {

@@ -15,6 +15,28 @@ use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 const BODY_STATE_BYTES_3D: usize = 4 + 13 * 8;
 const SURFACE_MATERIAL_KIND_ROAD: u32 = 1;
+const PHYSICS_BACKEND_PACKET_SCHEMA_VERSION: u32 = 1;
+const PHYSICS_BACKEND_BODY_PACKET_KIND: u8 = 1;
+const PHYSICS_BACKEND_CONTACT_PACKET_KIND: u8 = 2;
+const PHYSICS_BACKEND_WHEEL_PACKET_KIND: u8 = 3;
+const PHYSICS_BACKEND_PACKET_HEADER_BYTES: usize = 13;
+
+fn physics_backend_packet_schema_hash(kind: u8, payload_len: usize) -> u32 {
+    PHYSICS_BACKEND_PACKET_SCHEMA_VERSION
+        .wrapping_mul(16_777_619)
+        .wrapping_add((kind as u32).wrapping_mul(65_537))
+        .wrapping_add(payload_len as u32)
+}
+
+fn serialize_backend_packet(kind: u8, payload: Vec<u8>) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(PHYSICS_BACKEND_PACKET_HEADER_BYTES + payload.len());
+    packet.push(kind);
+    packet.extend_from_slice(&PHYSICS_BACKEND_PACKET_SCHEMA_VERSION.to_le_bytes());
+    packet.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    packet.extend_from_slice(&physics_backend_packet_schema_hash(kind, payload.len()).to_le_bytes());
+    packet.extend_from_slice(&payload);
+    packet
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SurfaceMaterial3D {
@@ -662,7 +684,7 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&material.id);
             buf.extend_from_slice(&material.kind.to_le_bytes());
         }
-        buf
+        serialize_backend_packet(PHYSICS_BACKEND_WHEEL_PACKET_KIND, buf)
     }
 
     /// Apply batch commands from Vo.
@@ -830,7 +852,7 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&(angvel.z as f64).to_le_bytes());
         }
 
-        buf
+        serialize_backend_packet(PHYSICS_BACKEND_BODY_PACKET_KIND, buf)
     }
 
     /// Ray cast into the 3D physics world.
@@ -978,12 +1000,46 @@ impl PhysicsWorld3D {
     }
 }
 
+pub fn serialize_contacts_packet(contacts: &[ContactInfo3D]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(4 + contacts.len() * (8 + 12 * 8 + 1));
+    payload.extend_from_slice(&(contacts.len() as u32).to_le_bytes());
+    for contact in contacts {
+        payload.extend_from_slice(&contact.body1.to_le_bytes());
+        payload.extend_from_slice(&contact.body2.to_le_bytes());
+        payload.extend_from_slice(&(contact.point.x as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.point.y as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.point.z as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.normal.x as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.normal.y as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.normal.z as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.relative_velocity.x as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.relative_velocity.y as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.relative_velocity.z as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.relative_speed as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.normal_impulse as f64).to_le_bytes());
+        payload.extend_from_slice(&(contact.tangent_impulse as f64).to_le_bytes());
+        payload.push(contact.has_impulse as u8);
+    }
+    serialize_backend_packet(PHYSICS_BACKEND_CONTACT_PACKET_KIND, payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn assert_near(got: f32, want: f32, tol: f32) {
         assert!((got - want).abs() <= tol, "got {}, want {}", got, want);
+    }
+
+    fn packet_payload(packet: &[u8], kind: u8) -> &[u8] {
+        assert_eq!(packet[0], kind);
+        let version = u32::from_le_bytes(packet[1..5].try_into().unwrap());
+        assert_eq!(version, PHYSICS_BACKEND_PACKET_SCHEMA_VERSION);
+        let payload_len = u32::from_le_bytes(packet[5..9].try_into().unwrap()) as usize;
+        let schema_hash = u32::from_le_bytes(packet[9..13].try_into().unwrap());
+        assert_eq!(schema_hash, physics_backend_packet_schema_hash(kind, payload_len));
+        assert_eq!(packet.len(), PHYSICS_BACKEND_PACKET_HEADER_BYTES + payload_len);
+        &packet[PHYSICS_BACKEND_PACKET_HEADER_BYTES..]
     }
 
     #[test]
@@ -1167,7 +1223,8 @@ mod tests {
         world.step(1.0 / 60.0);
 
         // After commands, position should be (10, 0, 0) — the last SetPosition wins.
-        let state = world.serialize_state();
+        let state_packet = world.serialize_state();
+        let state = packet_payload(&state_packet, PHYSICS_BACKEND_BODY_PACKET_KIND);
         assert!(state.len() >= 4);
         let count = u32::from_le_bytes([state[0], state[1], state[2], state[3]]);
         assert_eq!(count, 1);
@@ -1205,7 +1262,8 @@ mod tests {
         world.spawn_body(&desc);
         world.step(1.0 / 60.0);
 
-        let state = world.serialize_state();
+        let state_packet = world.serialize_state();
+        let state = packet_payload(&state_packet, PHYSICS_BACKEND_BODY_PACKET_KIND);
         assert_eq!(state.len(), 4 + BODY_STATE_BYTES_3D);
 
         let count = u32::from_le_bytes(state[0..4].try_into().unwrap());

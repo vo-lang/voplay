@@ -734,8 +734,8 @@ impl RenderResourceRegistry {
         self.declare_target(RES_SHADOW_MAP, false, RenderResourceLifetime::Persistent);
         self.declare_target(RES_WATER_COLOR, false, RenderResourceLifetime::Transient);
         self.declare_target(RES_OVERLAY, true, RenderResourceLifetime::External);
-        self.declare_target(RES_CAPTURE, false, RenderResourceLifetime::Transient);
-        self.declare_target(RES_READBACK, false, RenderResourceLifetime::External);
+        self.declare_target_with_owner(RES_CAPTURE, false, RenderResourceLifetime::Transient, "capture", "declared-not-ready");
+        self.declare_target_with_owner(RES_READBACK, false, RenderResourceLifetime::External, "readback", "declared-not-ready");
     }
 
     pub(crate) fn main_color_ready(&self) -> bool {

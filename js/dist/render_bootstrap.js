@@ -168,21 +168,7 @@ class WebGpuPerfProbe {
             ? classifyQueueDepth(workDone, workDoneInFlight)
             : "normal";
         const sampleRate = 1 / WEBGPU_WORK_DONE_SAMPLE_STRIDE;
-        const message = `webgpu window submits=${submitCpu.count}` +
-            ` queue=${queueDepthClass}` +
-            ` getTex p50/p90/p99/max=${formatMsValue(acquire.p50)}/${formatMsValue(acquire.p90)}/${formatMsValue(acquire.p99)}/${formatMsValue(acquire.max)}` +
-            ` submitCpu p50/p90/p99/max=${formatMsValue(submitCpu.p50)}/${formatMsValue(submitCpu.p90)}/${formatMsValue(submitCpu.p99)}/${formatMsValue(submitCpu.max)}` +
-            ` workDone stride=${WEBGPU_WORK_DONE_SAMPLE_STRIDE} samples=${workDone.count}` +
-            ` perSubmit p50/p90/p99/max=${formatMsValue(workDone.p50)}/${formatMsValue(workDone.p90)}/${formatMsValue(workDone.p99)}/${formatMsValue(workDone.max)}` +
-            ` raw p90/max=${formatMsValue(workDoneRaw.p90)}/${formatMsValue(workDoneRaw.max)}` +
-            ` slow120=${slow120}/${workDone.count}` +
-            ` slow60=${slow60}/${workDone.count}` +
-            ` inFlight=${workDoneInFlight}` +
-            ` hostSuspend=${workDoneHostSuspendedSamples}` +
-            ` probeCpu p99=${formatMsValue(probeCpu.p99)}` +
-            ` errors=${workDoneErrors}`;
-        const reportOverheadMs = performance.now() - reportStartMs;
-        globalThis.__voplayWebGpuPerfPacket = encodeWebGpuPerfPacket({
+        const packetMetrics = {
             acquire,
             submitCpu,
             workDone,
@@ -192,9 +178,26 @@ class WebGpuPerfProbe {
             sampleRate,
             workDoneInFlight,
             workDoneErrors,
-            reportOverheadMs,
-        });
+            reportOverheadMs: 0,
+        };
+        packetMetrics.reportOverheadMs = performance.now() - reportStartMs;
+        globalThis.__voplayWebGpuPerfPacket = encodeWebGpuPerfPacket(packetMetrics);
         const shouldLog = shouldLogPerfReports();
+        const message = shouldLog
+            ? `webgpu window submits=${submitCpu.count}` +
+                ` queue=${queueDepthClass}` +
+                ` getTex p50/p90/p99/max=${formatMsValue(acquire.p50)}/${formatMsValue(acquire.p90)}/${formatMsValue(acquire.p99)}/${formatMsValue(acquire.max)}` +
+                ` submitCpu p50/p90/p99/max=${formatMsValue(submitCpu.p50)}/${formatMsValue(submitCpu.p90)}/${formatMsValue(submitCpu.p99)}/${formatMsValue(submitCpu.max)}` +
+                ` workDone stride=${WEBGPU_WORK_DONE_SAMPLE_STRIDE} samples=${workDone.count}` +
+                ` perSubmit p50/p90/p99/max=${formatMsValue(workDone.p50)}/${formatMsValue(workDone.p90)}/${formatMsValue(workDone.p99)}/${formatMsValue(workDone.max)}` +
+                ` raw p90/max=${formatMsValue(workDoneRaw.p90)}/${formatMsValue(workDoneRaw.max)}` +
+                ` slow120=${slow120}/${workDone.count}` +
+                ` slow60=${slow60}/${workDone.count}` +
+                ` inFlight=${workDoneInFlight}` +
+                ` hostSuspend=${workDoneHostSuspendedSamples}` +
+                ` probeCpu p99=${formatMsValue(probeCpu.p99)}` +
+                ` errors=${workDoneErrors}`
+            : `webgpu window submits=${submitCpu.count} queue=${queueDepthClass}`;
         if (shouldLog) {
             console.info(`[voplay] ${message}`);
             globalThis.__voplayWebGpuPerfReport?.(message);
@@ -214,7 +217,7 @@ class WebGpuPerfProbe {
             workDoneErrors,
             workDoneHostSuspendedSamples,
             probeCpu,
-            reportOverheadMs,
+            reportOverheadMs: packetMetrics.reportOverheadMs,
         });
     }
 }

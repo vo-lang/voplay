@@ -296,8 +296,23 @@ class WebGpuPerfProbe {
       ? classifyQueueDepth(workDone, workDoneInFlight)
       : "normal";
     const sampleRate = 1 / WEBGPU_WORK_DONE_SAMPLE_STRIDE;
-    const message =
-      `webgpu window submits=${submitCpu.count}` +
+    const packetMetrics = {
+      acquire,
+      submitCpu,
+      workDone,
+      workDoneRaw,
+      probeCpu,
+      queueDepthClass,
+      sampleRate,
+      workDoneInFlight,
+      workDoneErrors,
+      reportOverheadMs: 0,
+    };
+    packetMetrics.reportOverheadMs = performance.now() - reportStartMs;
+    (globalThis as VoplayDebugGlobal).__voplayWebGpuPerfPacket = encodeWebGpuPerfPacket(packetMetrics);
+    const shouldLog = shouldLogPerfReports();
+    const message = shouldLog
+      ? `webgpu window submits=${submitCpu.count}` +
         ` queue=${queueDepthClass}` +
         ` getTex p50/p90/p99/max=${formatMsValue(acquire.p50)}/${formatMsValue(acquire.p90)}/${formatMsValue(acquire.p99)}/${formatMsValue(acquire.max)}` +
         ` submitCpu p50/p90/p99/max=${formatMsValue(submitCpu.p50)}/${formatMsValue(submitCpu.p90)}/${formatMsValue(submitCpu.p99)}/${formatMsValue(submitCpu.max)}` +
@@ -309,21 +324,8 @@ class WebGpuPerfProbe {
         ` inFlight=${workDoneInFlight}` +
         ` hostSuspend=${workDoneHostSuspendedSamples}` +
         ` probeCpu p99=${formatMsValue(probeCpu.p99)}` +
-        ` errors=${workDoneErrors}`;
-    const reportOverheadMs = performance.now() - reportStartMs;
-    (globalThis as VoplayDebugGlobal).__voplayWebGpuPerfPacket = encodeWebGpuPerfPacket({
-      acquire,
-      submitCpu,
-      workDone,
-      workDoneRaw,
-      probeCpu,
-      queueDepthClass,
-      sampleRate,
-      workDoneInFlight,
-      workDoneErrors,
-      reportOverheadMs,
-    });
-    const shouldLog = shouldLogPerfReports();
+        ` errors=${workDoneErrors}`
+      : `webgpu window submits=${submitCpu.count} queue=${queueDepthClass}`;
     if (shouldLog) {
       console.info(`[voplay] ${message}`);
       (globalThis as VoplayDebugGlobal).__voplayWebGpuPerfReport?.(message);
@@ -343,7 +345,7 @@ class WebGpuPerfProbe {
       workDoneErrors,
       workDoneHostSuspendedSamples,
       probeCpu,
-      reportOverheadMs,
+      reportOverheadMs: packetMetrics.reportOverheadMs,
     });
   }
 }

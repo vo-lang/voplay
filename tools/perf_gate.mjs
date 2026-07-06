@@ -124,6 +124,7 @@ function summarizeReports(reports) {
     gpuWorkP99Ms: 0,
     gpuWorkMaxMs: 0,
     probeOverheadMs: 0,
+    reportOverheadMs: 0,
   };
   for (const report of reports) {
     if (report?.kind === "pulse") summarizePulse(summary, report.metrics ?? {});
@@ -155,11 +156,8 @@ function summarizeWebGpu(summary, metrics) {
   }
   summary.gpuWorkP99Ms = Math.max(summary.gpuWorkP99Ms, number(workDone.p99));
   summary.gpuWorkMaxMs = Math.max(summary.gpuWorkMaxMs, number(workDone.max));
-  summary.probeOverheadMs = Math.max(
-    summary.probeOverheadMs,
-    number(probeCpu.p99),
-    number(metrics.reportOverheadMs),
-  );
+  summary.probeOverheadMs = Math.max(summary.probeOverheadMs, number(probeCpu.p99));
+  summary.reportOverheadMs = Math.max(summary.reportOverheadMs, number(metrics.reportOverheadMs));
 }
 
 function evaluateGate(summary, limits) {

@@ -292,10 +292,11 @@ class WebGpuPerfProbe {
     const probeCpu = measureSamples(probeCpuSamples);
     const slow120 = countAboveSamples(workDonePerSubmitWindow, DISPLAY_PULSE_SLOW_120_MS);
     const slow60 = countAboveSamples(workDonePerSubmitWindow, DISPLAY_PULSE_SLOW_60_MS);
-    const queueDepthClass = shouldSampleWebGpuWorkDone()
+    const workDoneSampleEnabled = shouldSampleWebGpuWorkDone();
+    const queueDepthClass = workDoneSampleEnabled
       ? classifyQueueDepth(workDone, workDoneInFlight)
       : "normal";
-    const sampleRate = 1 / WEBGPU_WORK_DONE_SAMPLE_STRIDE;
+    const sampleRate = workDoneSampleEnabled ? 1 / WEBGPU_WORK_DONE_SAMPLE_STRIDE : 0;
     const packetMetrics = {
       acquire,
       submitCpu,

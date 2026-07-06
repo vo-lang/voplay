@@ -168,6 +168,7 @@ type PerfGpuQueueStats struct {
 	QueueDepthClass string
 	SampleRate float64
 	ProbeOverheadMs float64
+	ReportOverheadMs float64
 	AsyncWindow bool
 }
 
@@ -309,6 +310,7 @@ type PerfDiagnosticsOverhead struct {
 	HudDrawCalls int
 	HudUploadBytes int
 	ProbeOverheadMs float64
+	ReportOverheadMs float64
 }
 
 type PerfCustomScope struct {
@@ -511,6 +513,7 @@ type perfGpuPacketStats struct {
 	QueueDepthClass string
 	SampleRate float64
 	ProbeOverheadMs float64
+	ReportOverheadMs float64
 	AsyncWindow bool
 }
 
@@ -1513,7 +1516,8 @@ func decodeWebGpuPerfPayload(payload []byte) perfGpuPacketStats {
 	stats.SampleRate = r.ReadF64()
 	probeCpuP99 := r.ReadF64()
 	reportOverheadMs := r.ReadF64()
-	stats.ProbeOverheadMs = perfMax(probeCpuP99, reportOverheadMs)
+	stats.ProbeOverheadMs = probeCpuP99
+	stats.ReportOverheadMs = reportOverheadMs
 	return stats
 }
 
@@ -1700,7 +1704,7 @@ func (o *DebugOverlay) recordPerfFrame() {
 			UploadBytes: uploadBytes,
 			AsyncWindow: true,
 		},
-		GpuQueue: PerfGpuQueueStats{SubmitCpuMs: perfFirstPositive(gpu.SubmitCpuMs, renderer.QueueSubmitCpuMs), SubmittedWorkDoneMs: gpu.SubmittedWorkDoneMs, InFlightSubmits: gpu.InFlightSubmits, SubmitCount: gpu.SubmitCount, SurfaceAcquireMs: perfFirstPositive(gpu.SurfaceAcquireMs, renderer.SurfaceAcquireMs), PresentCpuMs: perfFirstPositive(gpu.PresentCpuMs, renderer.PresentCpuMs), QueueDepthClass: queueDepthClass, SampleRate: gpu.SampleRate, ProbeOverheadMs: gpu.ProbeOverheadMs, AsyncWindow: true},
+		GpuQueue: PerfGpuQueueStats{SubmitCpuMs: perfFirstPositive(gpu.SubmitCpuMs, renderer.QueueSubmitCpuMs), SubmittedWorkDoneMs: gpu.SubmittedWorkDoneMs, InFlightSubmits: gpu.InFlightSubmits, SubmitCount: gpu.SubmitCount, SurfaceAcquireMs: perfFirstPositive(gpu.SurfaceAcquireMs, renderer.SurfaceAcquireMs), PresentCpuMs: perfFirstPositive(gpu.PresentCpuMs, renderer.PresentCpuMs), QueueDepthClass: queueDepthClass, SampleRate: gpu.SampleRate, ProbeOverheadMs: gpu.ProbeOverheadMs, ReportOverheadMs: gpu.ReportOverheadMs, AsyncWindow: true},
 		Present: PerfPresentStats{SurfaceAcquireMs: perfFirstPositive(gpu.SurfaceAcquireMs, renderer.SurfaceAcquireMs), PresentCpuMs: perfFirstPositive(gpu.PresentCpuMs, renderer.PresentCpuMs), AsyncWindow: true},
 		Hud: PerfHudStats{
 			Visible: o.hudVisible,
@@ -1794,6 +1798,7 @@ func (o *DebugOverlay) perfSnapshot() PerfSnapshot {
 		HudDrawCalls: snapshot.Current.Hud.DrawCalls,
 		HudUploadBytes: snapshot.Current.Hud.UploadBytes,
 		ProbeOverheadMs: snapshot.Current.GpuQueue.ProbeOverheadMs,
+		ReportOverheadMs: snapshot.Current.GpuQueue.ReportOverheadMs,
 	}
 	return snapshot
 }

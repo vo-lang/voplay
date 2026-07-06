@@ -4190,6 +4190,10 @@ func testPerfDiagnosticsApiContract() {
 	activeSnapshot.ThirtySecond.ActiveWorkP99Ms = 18
 	activeGate := voplay.EvaluatePerfGate(activeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxActiveWorkP99Ms: 12, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0})
 	assert(!activeGate.Passed && activeGate.PrimaryFailure == voplay.PerfGateFailureActiveWork, "perf gate fails active work p99")
+	reportSnapshot := okSnapshot
+	reportSnapshot.Overhead.ReportOverheadMs = 3.0
+	reportGate := voplay.EvaluatePerfGate(reportSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})
+	assert(reportGate.Passed, "perf gate ignores report overhead for probe limit")
 	probeSnapshot := okSnapshot
 	probeSnapshot.Overhead.ProbeOverheadMs = 0.2
 	probeGate := voplay.EvaluatePerfGate(probeSnapshot, voplay.PerfGateConfig{MinFrames: 60, MaxSlowFrames: 0, MaxGpuQueueBoundFrames: 0, MaxHudOverheadFrames: 0, MaxProbeOverheadMs: 0.05})

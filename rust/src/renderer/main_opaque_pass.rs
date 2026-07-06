@@ -1,10 +1,11 @@
 use super::*;
+use super::pass_dispatch::RenderPassResources;
 use crate::pipeline3d::PrimitiveSubmitter;
 
 pub(super) struct MainOpaquePassExecutor;
 
-pub(super) struct MainOpaquePassContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct MainOpaquePassContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) clear_color: wgpu::Color,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
@@ -28,7 +29,7 @@ pub(super) struct MainOpaquePassResult {
 
 impl MainOpaquePassExecutor {
     pub(super) fn execute(
-        ctx: &mut MainOpaquePassContext<'_>,
+        ctx: &mut MainOpaquePassContext<'_, '_>,
     ) -> Result<MainOpaquePassResult, String> {
         let main_start = if ctx.perf_enabled {
             Some(perf_now())
@@ -41,13 +42,13 @@ impl MainOpaquePassExecutor {
             None
         };
         let post_color_view = ctx
-            .renderer
             .resources
+            .targets
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
-            ctx.renderer
-                .resources
+            ctx.resources
+                .targets
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -55,8 +56,8 @@ impl MainOpaquePassExecutor {
         };
         let receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .receiver_mask_view()
                     .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
             )
@@ -65,8 +66,8 @@ impl MainOpaquePassExecutor {
         };
         let surface_props_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .surface_props_view()
                     .ok_or_else(|| "voplay: missing surface props target".to_string())?,
             )
@@ -75,24 +76,26 @@ impl MainOpaquePassExecutor {
         };
         let main_receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .msaa_receiver_mask_view()
                     .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
             } else {
-                receiver_mask_view.expect("receiver mask view present")
+                receiver_mask_view
+                    .ok_or_else(|| "voplay: missing receiver mask target".to_string())?
             })
         } else {
             None
         };
         let main_surface_props_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .msaa_surface_props_view()
                     .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
             } else {
-                surface_props_view.expect("surface props view present")
+                surface_props_view
+                    .ok_or_else(|| "voplay: missing surface props target".to_string())?
             })
         } else {
             None
@@ -149,7 +152,7 @@ impl MainOpaquePassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_main"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.renderer.resources.depth_view().map(|dv| {
+            depth_stencil_attachment: ctx.resources.targets.depth_view().map(|dv| {
                 wgpu::RenderPassDepthStencilAttachment {
                     view: dv,
                     depth_ops: Some(wgpu::Operations {
@@ -167,7 +170,7 @@ impl MainOpaquePassExecutor {
         if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
             (ctx.skybox_cubemap_id, ctx.camera3d_state)
         {
-            if let Some(cubemap) = ctx.renderer.texture_manager.get_cubemap(cubemap_id) {
+            if let Some(cubemap) = ctx.resources.texture_manager.get_cubemap(cubemap_id) {
                 let skybox_start = if ctx.perf_enabled {
                     Some(perf_now())
                 } else {
@@ -177,10 +180,10 @@ impl MainOpaquePassExecutor {
                 let proj = math3d::perspective_rh_zo(fov.to_radians(), ctx.aspect, near, far);
                 let vp = math3d::mat4_mul(&proj, &view_rot);
                 let inv_vp = math3d::mat4_inverse(&vp).unwrap_or(math3d::MAT4_IDENTITY);
-                ctx.renderer
+                ctx.resources
                     .pipeline_skybox
-                    .set_camera(&ctx.renderer.queue, &inv_vp);
-                ctx.renderer.pipeline_skybox.draw(
+                    .set_camera(&ctx.resources.queue, &inv_vp);
+                ctx.resources.pipeline_skybox.draw(
                     &mut render_pass,
                     cubemap,
                     ctx.main_aux_targets_enabled,
@@ -196,19 +199,19 @@ impl MainOpaquePassExecutor {
                 } else {
                     None
                 };
-                ctx.renderer.pipeline3d.set_camera_and_lights(
-                    &ctx.renderer.queue,
+                ctx.resources.pipeline3d.set_camera_and_lights(
+                    &ctx.resources.queue,
                     cam3d,
                     ctx.light_uniform,
                 );
-                let shadow_view = ctx.renderer.pipeline_shadow.shadow_texture_view();
-                ctx.renderer.pipeline3d.draw_models(
-                    &ctx.renderer.device,
-                    &ctx.renderer.queue,
+                let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+                ctx.resources.pipeline3d.draw_models(
+                    &ctx.resources.device,
+                    &ctx.resources.queue,
                     &mut render_pass,
                     ctx.model_draws,
-                    &ctx.renderer.model_manager,
-                    &ctx.renderer.texture_manager,
+                    &ctx.resources.model_manager,
+                    &ctx.resources.texture_manager,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
                 );
@@ -224,20 +227,20 @@ impl MainOpaquePassExecutor {
                 } else {
                     None
                 };
-                ctx.renderer.primitive_pipeline.set_camera_and_lights(
-                    &ctx.renderer.queue,
+                ctx.resources.primitive_pipeline.set_camera_and_lights(
+                    &ctx.resources.queue,
                     cam3d,
                     ctx.light_uniform,
                 );
-                let shadow_view = ctx.renderer.pipeline_shadow.shadow_texture_view();
-                primitive_stats = ctx.renderer.primitive_pipeline.draw(
-                    &ctx.renderer.device,
-                    &ctx.renderer.queue,
+                let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+                primitive_stats = ctx.resources.primitive_pipeline.draw(
+                    &ctx.resources.device,
+                    &ctx.resources.queue,
                     &mut render_pass,
                     ctx.primitive_draws,
                     ctx.primitive_chunks,
-                    &ctx.renderer.model_manager,
-                    &ctx.renderer.texture_manager,
+                    &ctx.resources.model_manager,
+                    &ctx.resources.texture_manager,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
                     PrimitiveSubmitter::draw(

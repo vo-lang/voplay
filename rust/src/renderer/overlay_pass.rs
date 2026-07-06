@@ -1,10 +1,11 @@
 use super::*;
+use super::pass_dispatch::RenderPassResources;
 use crate::draw_list::Frame2D;
 
 pub(super) struct OverlayPassExecutor;
 
-pub(super) struct OverlayPassContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct OverlayPassContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) surface_view: &'a wgpu::TextureView,
     pub(super) frame: &'a Frame2D,
@@ -13,7 +14,7 @@ pub(super) struct OverlayPassContext<'a> {
 }
 
 impl OverlayPassExecutor {
-    pub(super) fn execute(ctx: &mut OverlayPassContext<'_>) -> Result<f64, String> {
+    pub(super) fn execute(ctx: &mut OverlayPassContext<'_, '_>) -> Result<f64, String> {
         let overlay_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
@@ -37,9 +38,9 @@ impl OverlayPassExecutor {
             let cam_offset = dc.camera_idx as u32 * ctx.camera_alignment;
             match &dc.kind {
                 DrawCallKind::Shapes { start, count } => {
-                    ctx.renderer.pipeline2d.draw_range(
+                    ctx.resources.pipeline2d.draw_range(
                         &mut overlay_pass,
-                        &ctx.renderer.camera_bind_group,
+                        &ctx.resources.camera_bind_group,
                         &[cam_offset],
                         *start,
                         *count,
@@ -50,10 +51,10 @@ impl OverlayPassExecutor {
                     start,
                     count,
                 } => {
-                    if let Some(tex) = ctx.renderer.texture_manager.get(*texture_id) {
-                        ctx.renderer.pipeline_sprite.draw_range(
+                    if let Some(tex) = ctx.resources.texture_manager.get(*texture_id) {
+                        ctx.resources.pipeline_sprite.draw_range(
                             &mut overlay_pass,
-                            &ctx.renderer.camera_bind_group,
+                            &ctx.resources.camera_bind_group,
                             &[cam_offset],
                             &tex.bind_group,
                             *start,

@@ -1,9 +1,10 @@
 use super::*;
+use super::pass_dispatch::RenderPassResources;
 
 pub(super) struct DepthPassExecutor;
 
-pub(super) struct DepthPassContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct DepthPassContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
     pub(super) model_draws: &'a [ModelDraw],
@@ -19,7 +20,7 @@ pub(super) struct DepthPassResult {
 }
 
 impl DepthPassExecutor {
-    pub(super) fn execute(ctx: &mut DepthPassContext<'_>) -> Result<DepthPassResult, String> {
+    pub(super) fn execute(ctx: &mut DepthPassContext<'_, '_>) -> Result<DepthPassResult, String> {
         let depth_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
@@ -29,7 +30,7 @@ impl DepthPassExecutor {
         let empty_primitive_draws: &[PrimitiveDraw] = &[];
         let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
         if !ctx.primitive_depth_chunks.is_empty() {
-            ctx.renderer
+            ctx.resources
                 .primitive_pipeline
                 .append_resident_depth_draws(ctx.primitive_depth_chunks, ctx.primitive_depth_draws);
         }
@@ -47,20 +48,20 @@ impl DepthPassExecutor {
                     math3d::MAT4_IDENTITY,
                 )
             };
-        ctx.renderer.pipeline_depth.render_depth_pass(
-            &ctx.renderer.device,
+        ctx.resources.pipeline_depth.render_depth_pass(
+            &ctx.resources.device,
             ctx.encoder,
-            &ctx.renderer.queue,
+            &ctx.resources.queue,
             &depth_view_proj,
             depth_model_draws,
             depth_primitive_draws,
             empty_primitive_chunks,
-            &ctx.renderer.primitive_pipeline,
-            &ctx.renderer.model_manager,
+            &ctx.resources.primitive_pipeline,
+            &ctx.resources.model_manager,
         );
         Ok(DepthPassResult {
             elapsed_ms: elapsed_ms_opt(depth_start),
-            primitive_draw_calls: ctx.renderer.pipeline_depth.last_primitive_batch_count(),
+            primitive_draw_calls: ctx.resources.pipeline_depth.last_primitive_batch_count(),
         })
     }
 

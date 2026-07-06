@@ -1,10 +1,11 @@
 use super::*;
+use super::pass_dispatch::RenderPassResources;
 use crate::pipeline3d::WaterSubmitter;
 
 pub(super) struct WaterPassExecutor;
 
-pub(super) struct WaterPassContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct WaterPassContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
     pub(super) light_uniform: &'a LightUniform,
@@ -21,7 +22,7 @@ pub(super) struct WaterPassResult {
 }
 
 impl WaterPassExecutor {
-    pub(super) fn execute(ctx: &mut WaterPassContext<'_>) -> Result<WaterPassResult, String> {
+    pub(super) fn execute(ctx: &mut WaterPassContext<'_, '_>) -> Result<WaterPassResult, String> {
         let water_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
@@ -31,13 +32,13 @@ impl WaterPassExecutor {
             return Ok(WaterPassResult::default());
         };
         let post_color_view = ctx
-            .renderer
             .resources
+            .targets
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
-            ctx.renderer
-                .resources
+            ctx.resources
+                .targets
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -45,8 +46,8 @@ impl WaterPassExecutor {
         };
         let receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .receiver_mask_view()
                     .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
             )
@@ -55,8 +56,8 @@ impl WaterPassExecutor {
         };
         let surface_props_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .surface_props_view()
                     .ok_or_else(|| "voplay: missing surface props target".to_string())?,
             )
@@ -65,24 +66,26 @@ impl WaterPassExecutor {
         };
         let main_receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .msaa_receiver_mask_view()
                     .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
             } else {
-                receiver_mask_view.expect("receiver mask view present")
+                receiver_mask_view
+                    .ok_or_else(|| "voplay: missing receiver mask target".to_string())?
             })
         } else {
             None
         };
         let main_surface_props_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .msaa_surface_props_view()
                     .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
             } else {
-                surface_props_view.expect("surface props view present")
+                surface_props_view
+                    .ok_or_else(|| "voplay: missing surface props target".to_string())?
             })
         } else {
             None
@@ -143,7 +146,7 @@ impl WaterPassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_water"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.renderer.resources.depth_view().map(|dv| {
+            depth_stencil_attachment: ctx.resources.targets.depth_view().map(|dv| {
                 wgpu::RenderPassDepthStencilAttachment {
                     view: dv,
                     depth_ops: Some(wgpu::Operations {
@@ -156,20 +159,20 @@ impl WaterPassExecutor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        ctx.renderer.primitive_pipeline.set_camera_and_lights(
-            &ctx.renderer.queue,
+        ctx.resources.primitive_pipeline.set_camera_and_lights(
+            &ctx.resources.queue,
             cam3d,
             ctx.light_uniform,
         );
-        let shadow_view = ctx.renderer.pipeline_shadow.shadow_texture_view();
-        let stats = ctx.renderer.primitive_pipeline.draw(
-            &ctx.renderer.device,
-            &ctx.renderer.queue,
+        let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+        let stats = ctx.resources.primitive_pipeline.draw(
+            &ctx.resources.device,
+            &ctx.resources.queue,
             &mut render_pass,
             ctx.primitive_draws,
             ctx.primitive_chunks,
-            &ctx.renderer.model_manager,
-            &ctx.renderer.texture_manager,
+            &ctx.resources.model_manager,
+            &ctx.resources.texture_manager,
             shadow_view,
             ctx.main_aux_targets_enabled,
             WaterSubmitter::draw(),

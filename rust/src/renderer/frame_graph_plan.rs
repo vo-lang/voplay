@@ -1,5 +1,4 @@
 use super::*;
-use crate::renderer_frame::RenderPassNode;
 
 pub(super) struct FrameGraphPlanDesc {
     pub(super) frame_id: u32,
@@ -16,20 +15,8 @@ pub(super) struct FrameGraphPlanDesc {
     pub(super) water_pass_active: bool,
 }
 
-pub(super) struct FrameGraphPlanNodes {
-    pub(super) depth: RenderPassNode,
-    pub(super) shadow: RenderPassNode,
-    pub(super) main_opaque: RenderPassNode,
-    pub(super) main_transparent: RenderPassNode,
-    pub(super) water: RenderPassNode,
-    pub(super) post: RenderPassNode,
-    pub(super) overlay: RenderPassNode,
-    pub(super) backend_submit: RenderPassNode,
-}
-
 pub(super) struct FrameGraphPlanOutput {
     pub(super) frame_graph: FrameGraph,
-    pub(super) nodes: FrameGraphPlanNodes,
     pub(super) build_ms: f64,
 }
 
@@ -124,24 +111,8 @@ impl Renderer {
         );
         let build_ms = elapsed_ms_opt(graph_build_start);
         Ok(FrameGraphPlanOutput {
-            nodes: FrameGraphPlanNodes {
-                depth: required_node(&frame_graph, RenderPassKind::DepthPrepass)?,
-                shadow: required_node(&frame_graph, RenderPassKind::Shadow)?,
-                main_opaque: required_node(&frame_graph, RenderPassKind::MainOpaque)?,
-                main_transparent: required_node(&frame_graph, RenderPassKind::MainTransparent)?,
-                water: required_node(&frame_graph, RenderPassKind::Water)?,
-                post: required_node(&frame_graph, RenderPassKind::Post)?,
-                overlay: required_node(&frame_graph, RenderPassKind::Overlay)?,
-                backend_submit: required_node(&frame_graph, RenderPassKind::BackendSubmit)?,
-            },
             frame_graph,
             build_ms,
         })
     }
-}
-
-fn required_node(frame_graph: &FrameGraph, kind: RenderPassKind) -> Result<RenderPassNode, String> {
-    frame_graph
-        .node(kind)
-        .ok_or_else(|| format!("voplay: missing frame graph node {}", kind.name()))
 }

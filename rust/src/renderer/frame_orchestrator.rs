@@ -157,7 +157,6 @@ impl Renderer {
 
         let FrameGraphPlanOutput {
             mut frame_graph,
-            nodes: frame_graph_nodes,
             build_ms: frame_graph_build_ms,
         } = self.build_frame_graph_plan(FrameGraphPlanDesc {
             frame_id,
@@ -182,7 +181,6 @@ impl Renderer {
             });
         let pass_timings = self.execute_frame_pass_sequence(FramePassSequenceContext {
             frame_graph: &mut frame_graph,
-            nodes: &frame_graph_nodes,
             encoder: Some(encoder),
             output: Some(output),
             surface_view: &view,

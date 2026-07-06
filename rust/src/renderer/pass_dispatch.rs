@@ -3,15 +3,44 @@ use super::depth_pass::{DepthPassContext, DepthPassExecutor};
 use super::main_opaque_pass::{MainOpaquePassContext, MainOpaquePassExecutor};
 use super::main_transparent_pass::{MainTransparentPassContext, MainTransparentPassExecutor};
 use super::overlay_pass::{OverlayPassContext, OverlayPassExecutor};
-use super::post_pass::{PostPassContext, PostPassExecutor};
+use super::post_pass::{PostPassContext, PostPassExecutor, PostPassSetup, PostPassSetupContext};
 use super::shadow_pass::{ShadowPassContext, ShadowPassExecutor};
 use super::water_pass::{WaterPassContext, WaterPassExecutor};
 use super::*;
 use crate::draw_list::Frame2D;
 use crate::renderer_frame::RenderPassNodeDispatcher;
 
+pub(super) struct RenderPassResources<'a> {
+    pub(super) device: &'a wgpu::Device,
+    pub(super) queue: &'a wgpu::Queue,
+    pub(super) surface_config: &'a wgpu::SurfaceConfiguration,
+    pub(super) targets: &'a RenderResourceRegistry,
+    pub(super) post_uniform_buffer: &'a wgpu::Buffer,
+    pub(super) post_decal_uniform_buffer: &'a wgpu::Buffer,
+    pub(super) post_bind_group: &'a Option<wgpu::BindGroup>,
+    pub(super) camera_bind_group: &'a wgpu::BindGroup,
+    pub(super) pipeline2d: &'a mut Pipeline2D,
+    pub(super) pipeline_sprite: &'a mut PipelineSprite,
+    pub(super) pipeline3d: &'a mut Pipeline3D,
+    pub(super) primitive_pipeline: &'a mut PrimitivePipeline,
+    pub(super) pipeline_depth: &'a mut PipelineDepth,
+    pub(super) pipeline_shadow: &'a mut PipelineShadow,
+    pub(super) pipeline_skybox: &'a mut PipelineSkybox,
+    pub(super) pipeline_post: &'a PipelinePost,
+    pub(super) model_manager: &'a ModelManager,
+    pub(super) texture_manager: &'a TextureManager,
+    pub(super) render_world: &'a RenderWorld,
+}
+
+impl RenderPassResources<'_> {
+    pub(super) fn clear_texture_bind_group_caches(&mut self) {
+        self.pipeline3d.clear_texture_bind_group_cache();
+        self.primitive_pipeline.clear_texture_bind_group_cache();
+    }
+}
+
 pub(super) struct FramePassDispatcher<'a> {
-    pub(super) renderer: &'a mut Renderer,
+    pub(super) resources: RenderPassResources<'a>,
     pub(super) encoder: Option<wgpu::CommandEncoder>,
     pub(super) output: Option<wgpu::SurfaceTexture>,
     pub(super) surface_view: &'a wgpu::TextureView,
@@ -33,6 +62,8 @@ pub(super) struct FramePassDispatcher<'a> {
     pub(super) planned_water_draws: &'a [PrimitiveDraw],
     pub(super) planned_water_chunks: &'a [PrimitiveChunkRef],
     pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
+    pub(super) projected_decals: &'a [PostDecalGpu],
+    pub(super) projected_decal_atlas_binding_count: u32,
     pub(super) shadow_resolution: u32,
     pub(super) shadow_quality: u32,
     pub(super) shadow_distance: f32,
@@ -50,23 +81,70 @@ pub(super) struct FramePassDispatcher<'a> {
     pub(super) primitive_main_submitted: &'a mut bool,
     pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
     pub(super) shadow_active: &'a mut bool,
+    pub(super) post_uniforms_uploaded: bool,
+    pub(super) bloom_threshold: f32,
+    pub(super) bloom_strength: f32,
+    pub(super) sharpen_strength: f32,
+    pub(super) fxaa_strength: f32,
+    pub(super) contact_ao_strength: f32,
+    pub(super) contact_ao_radius: f32,
+    pub(super) contact_ao_depth_scale: f32,
+    pub(super) contact_ao_detail_strength: f32,
+    pub(super) contact_ao_detail_radius: f32,
+    pub(super) contact_ao_normal_bias: f32,
+    pub(super) contact_ao_quality: u32,
 }
 
 impl FramePassDispatcher<'_> {
-    pub(super) fn into_frame_parts(
-        self,
-    ) -> Result<(wgpu::CommandEncoder, wgpu::SurfaceTexture), String> {
-        let encoder = self
-            .encoder
-            .ok_or_else(|| "voplay: frame pass dispatcher missing command encoder".to_string())?;
-        let output = self
-            .output
-            .ok_or_else(|| "voplay: frame pass dispatcher missing surface texture".to_string())?;
-        Ok((encoder, output))
+    fn ensure_post_uniforms_uploaded(&mut self) {
+        if self.post_uniforms_uploaded {
+            return;
+        }
+        if !*self.shadow_active {
+            self.light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
+            self.light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
+            self.light_uniform.shadow_cascade_splits = [0.0; 4];
+            self.light_uniform.shadow_params =
+                [0.0, 0.002, self.shadow_softness, self.shadow_strength];
+            self.light_uniform.shadow_params2 = [
+                self.shadow_distance,
+                self.shadow_fade,
+                self.shadow_quality as f32,
+                0.0,
+            ];
+        }
+        let mut post_setup = PostPassSetupContext {
+            resources: &mut self.resources,
+            camera3d_uniform: self.camera3d_uniform,
+            camera3d_state: self.camera3d_state,
+            light_uniform: &mut *self.light_uniform,
+            projected_decals: self.projected_decals,
+            projected_decal_atlas_binding_count: self.projected_decal_atlas_binding_count,
+            bloom_threshold: self.bloom_threshold,
+            bloom_strength: self.bloom_strength,
+            sharpen_strength: self.sharpen_strength,
+            fxaa_strength: self.fxaa_strength,
+            contact_ao_strength: self.contact_ao_strength,
+            contact_ao_radius: self.contact_ao_radius,
+            contact_ao_depth_scale: self.contact_ao_depth_scale,
+            contact_ao_detail_strength: self.contact_ao_detail_strength,
+            contact_ao_detail_radius: self.contact_ao_detail_radius,
+            contact_ao_normal_bias: self.contact_ao_normal_bias,
+            contact_ao_quality: self.contact_ao_quality,
+        };
+        PostPassSetup::upload_uniforms(&mut post_setup);
+        self.post_uniforms_uploaded = true;
     }
 }
 
 impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
+    fn before_execute(&mut self, kind: RenderPassKind) -> Result<(), String> {
+        if matches!(kind, RenderPassKind::MainOpaque) {
+            self.ensure_post_uniforms_uploaded();
+        }
+        Ok(())
+    }
+
     fn execute(&mut self, kind: RenderPassKind) -> Result<f64, String> {
         match kind {
             RenderPassKind::DepthPrepass => {
@@ -78,7 +156,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = DepthPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     camera3d_uniform,
                     model_draws,
@@ -108,7 +186,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = ShadowPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     camera3d_uniform,
                     camera3d_state,
@@ -147,7 +225,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = MainOpaquePassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     clear_color,
                     camera3d_uniform,
@@ -177,7 +255,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = MainTransparentPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     camera3d_uniform,
                     light_uniform,
@@ -200,7 +278,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = WaterPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     camera3d_uniform,
                     light_uniform,
@@ -221,7 +299,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = PostPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     surface_view,
                     projected_decal_atlas_bindings,
@@ -238,7 +316,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = OverlayPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder,
                     surface_view,
                     frame,
@@ -249,7 +327,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
             }
             RenderPassKind::BackendSubmit => {
                 let mut context = BackendSubmitPassContext {
-                    renderer: &mut *self.renderer,
+                    resources: &mut self.resources,
                     encoder: self.encoder.take(),
                     output: self.output.take(),
                     perf_enabled: self.perf_enabled,

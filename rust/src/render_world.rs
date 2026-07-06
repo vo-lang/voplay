@@ -163,53 +163,42 @@ impl RenderBatchPlan {
     }
 
     pub fn model_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
-        self.model_batch_indices
-            .iter()
-            .filter_map(|index| draws.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.model_batch_indices, draws)
     }
 
     pub fn terrain_batches(&self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
-        self.terrain_batch_indices
-            .iter()
-            .filter_map(|index| draws.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.terrain_batch_indices, draws)
     }
 
     pub fn primitive_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
-        self.primitive_draw_indices
-            .iter()
-            .filter_map(|index| draws.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.primitive_draw_indices, draws)
     }
 
     pub fn primitive_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
-        self.primitive_chunk_indices
-            .iter()
-            .filter_map(|index| chunks.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.primitive_chunk_indices, chunks)
     }
 
     pub fn water_draw_batches(&self, draws: &[PrimitiveDraw]) -> Vec<PrimitiveDraw> {
-        self.water_draw_indices
-            .iter()
-            .filter_map(|index| draws.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.water_draw_indices, draws)
     }
 
     pub fn water_chunk_batches(&self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
-        self.water_chunk_indices
-            .iter()
-            .filter_map(|index| chunks.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.water_chunk_indices, chunks)
     }
 
     pub fn decal_batches(&self, decals: &[PostDecalGpu]) -> Vec<PostDecalGpu> {
-        self.decal_batch_indices
-            .iter()
-            .filter_map(|index| decals.get(*index).copied())
-            .collect()
+        collect_indexed_batches(&self.decal_batch_indices, decals)
     }
+}
+
+fn collect_indexed_batches<T: Copy>(indices: &[usize], values: &[T]) -> Vec<T> {
+    let mut batches = Vec::with_capacity(indices.len());
+    for index in indices {
+        if let Some(value) = values.get(*index).copied() {
+            batches.push(value);
+        }
+    }
+    batches
 }
 
 pub struct RenderBatchPlanner;
@@ -404,19 +393,17 @@ impl RenderBatchPlanner {
         model_draws: &[ModelDraw],
         models: &ModelManager,
     ) -> Vec<RenderTerrainBatchInput> {
-        model_draws
-            .iter()
-            .enumerate()
-            .filter_map(|(draw_index, draw)| {
-                let model = models.get(draw.model_id)?;
-                let has_terrain = model
-                    .meshes
-                    .iter()
-                    .any(|mesh| !mesh.skinned && mesh.material.control_texture_id.is_some());
-                if !has_terrain {
-                    return None;
-                }
-                Some(RenderTerrainBatchInput {
+        let mut terrain = Vec::new();
+        for (draw_index, draw) in model_draws.iter().enumerate() {
+            let Some(model) = models.get(draw.model_id) else {
+                continue;
+            };
+            let has_terrain = model
+                .meshes
+                .iter()
+                .any(|mesh| !mesh.skinned && mesh.material.control_texture_id.is_some());
+            if has_terrain {
+                terrain.push(RenderTerrainBatchInput {
                     draw_index,
                     bounds: Self::model_bounds(draw, models),
                     material_group: draw.material.id,
@@ -424,9 +411,10 @@ impl RenderBatchPlanner {
                     dirty_count: 0,
                     resident_state: RenderWorldChunkResidentState::Resident,
                     last_upload_frame: frame_id,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        terrain
     }
 
     pub fn decal_inputs(frame_id: u32, decals: &[PostDecalGpu]) -> Vec<RenderDecalBatchInput> {

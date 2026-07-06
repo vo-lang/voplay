@@ -12,6 +12,7 @@ type VehicleIntentFrame struct {
 type VehiclePhysicsSessionDesc struct {
 	Scene *Scene
 	Vehicle *Vehicle
+	Controller *KartController
 	FixedDt float64
 	RecordReplay bool
 }
@@ -19,12 +20,18 @@ type VehiclePhysicsSessionDesc struct {
 type VehiclePhysicsSession struct {
 	Scene *Scene
 	Vehicle *Vehicle
+	Controller *KartController
 	FixedDt float64
 	Accumulator float64
 	FrameID int
+	StepIndex int
 	Replay *PhysicsReplayTraceRecorder
 	LastIntentFrame VehicleIntentFrame
+	LastState KartControllerState
 	LastTelemetry VehicleTelemetry
+	InvalidSampleCount int
+	ValidationIssues []VehicleTelemetryIssue
+	LastPacketHash int
 }
 
 func NewVehiclePhysicsSession(desc VehiclePhysicsSessionDesc) *VehiclePhysicsSession {
@@ -32,7 +39,7 @@ func NewVehiclePhysicsSession(desc VehiclePhysicsSessionDesc) *VehiclePhysicsSes
 	if fixedDt <= 0 {
 		fixedDt = defaultVehiclePhysicsSessionFixedDt
 	}
-	session := &VehiclePhysicsSession{Scene: desc.Scene, Vehicle: desc.Vehicle, FixedDt: fixedDt}
+	session := &VehiclePhysicsSession{Scene: desc.Scene, Vehicle: desc.Vehicle, Controller: desc.Controller, FixedDt: fixedDt}
 	if desc.RecordReplay {
 		session.Replay = NewPhysicsReplayTraceRecorder(fixedDt)
 	}
@@ -52,9 +59,10 @@ func (s *VehiclePhysicsSession) Step(delta float64, intent VehicleIntent) Vehicl
 	s.Accumulator += delta
 	steps := 0
 	for s.Accumulator >= s.FixedDt && steps < vehiclePhysicsSessionMaxSteps {
-		s.FrameID++
-		s.LastIntentFrame = VehicleIntentFrame{FrameID: s.FrameID, Intent: intent.Normalized(), Delta: s.FixedDt}
-		FixedPhysicsStep(s.Scene, s.FixedDt)
+		s.StepIndex++
+		s.FrameID = s.StepIndex
+		s.applyIntentForFixedStep(intent)
+		s.runSceneFixedStep()
 		s.Accumulator -= s.FixedDt
 		steps++
 	}
@@ -62,12 +70,85 @@ func (s *VehiclePhysicsSession) Step(delta float64, intent VehicleIntent) Vehicl
 		s.Accumulator = 0
 	}
 	if s.Vehicle != nil {
-		s.LastTelemetry = ProductVehicleTelemetry(s.Vehicle)
-		if s.Replay != nil && steps > 0 {
-			s.Replay.RecordVehicle(s.FrameID, s.LastIntentFrame.Intent, s.LastTelemetry)
-		}
+		s.captureTelemetry()
 	}
 	return s.LastTelemetry
+}
+
+func (s *VehiclePhysicsSession) StepFleet(delta float64, sessions []*VehiclePhysicsSession, intents []VehicleIntent) []VehicleTelemetry {
+	if s == nil {
+		return []VehicleTelemetry{}
+	}
+	if delta < 0 {
+		delta = 0
+	}
+	if s.FixedDt <= 0 {
+		s.FixedDt = defaultVehiclePhysicsSessionFixedDt
+	}
+	s.Accumulator += delta
+	for s.Accumulator >= s.FixedDt {
+		s.StepIndex++
+		s.FrameID = s.StepIndex
+		for i, session := range sessions {
+			if session == nil {
+				continue
+			}
+			session.FixedDt = s.FixedDt
+			session.FrameID = s.FrameID
+			session.StepIndex = s.StepIndex
+			intent := VehicleIntent{}
+			if i < len(intents) {
+				intent = intents[i]
+			}
+			session.applyIntentForFixedStep(intent)
+		}
+		s.runSceneFixedStep()
+		s.Accumulator -= s.FixedDt
+	}
+	telemetry := []VehicleTelemetry{}
+	for _, session := range sessions {
+		if session == nil || session.Vehicle == nil {
+			telemetry = append(telemetry, VehicleTelemetry{})
+			continue
+		}
+		session.captureTelemetry()
+		telemetry = append(telemetry, session.LastTelemetry)
+	}
+	return telemetry
+}
+
+func (s *VehiclePhysicsSession) applyIntentForFixedStep(intent VehicleIntent) KartControllerState {
+	if s == nil {
+		return KartControllerState{}
+	}
+	normalized := intent.Normalized()
+	s.LastIntentFrame = VehicleIntentFrame{FrameID: s.FrameID, Intent: normalized, Delta: s.FixedDt}
+	if s.Controller != nil {
+		s.LastState = s.Controller.UpdateIntent(normalized, s.FixedDt)
+	} else if s.Vehicle != nil {
+		s.Vehicle.UpdateIntent(normalized, s.FixedDt)
+	}
+	return s.LastState
+}
+
+func (s *VehiclePhysicsSession) runSceneFixedStep() {
+	if s == nil || s.Scene == nil {
+		return
+	}
+	s.Scene.RunPhysicsFixedStep(s.FixedDt)
+}
+
+func (s *VehiclePhysicsSession) captureTelemetry() {
+	if s == nil || s.Vehicle == nil {
+		return
+	}
+	s.LastTelemetry = ProductVehicleTelemetry(s.Vehicle)
+	s.InvalidSampleCount = s.LastTelemetry.InvalidSampleCount
+	s.ValidationIssues = s.LastTelemetry.ValidationIssues(s.LastIntentFrame.Intent, VehicleTelemetryBudget{})
+	s.LastPacketHash = s.LastTelemetry.BackendApplyHash
+	if s.Replay != nil {
+		s.Replay.RecordVehicle(s.FrameID, s.LastIntentFrame.Intent, s.LastTelemetry)
+	}
 }
 
 func (s *VehiclePhysicsSession) Trace() PhysicsReplayTrace {
@@ -82,4 +163,11 @@ func FixedPhysicsStep(scene *Scene, dt float64) {
 		return
 	}
 	scene.StepAndSyncPhysics(dt)
+}
+
+func (s *Scene) RunPhysicsFixedStep(dt float64) {
+	if s == nil {
+		return
+	}
+	s.StepAndSyncPhysics(dt)
 }

@@ -539,11 +539,40 @@ impl FrameGraph {
 }
 
 pub(crate) trait RenderPassNodeDispatcher {
+    fn before_execute(&mut self, _kind: RenderPassKind) -> Result<(), String> {
+        Ok(())
+    }
+
     fn execute(&mut self, kind: RenderPassKind) -> Result<f64, String>;
     fn workload(&self, kind: RenderPassKind) -> RenderPassWorkload;
+    fn after_execute(
+        &mut self,
+        _kind: RenderPassKind,
+        _diagnostic: &RenderPassNodeDiagnostic,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl FrameGraphExecutor<'_> {
+    pub(crate) fn execute_all<D>(
+        &mut self,
+        dispatcher: &mut D,
+    ) -> Result<Vec<RenderPassNodeDiagnostic>, String>
+    where
+        D: RenderPassNodeDispatcher + ?Sized,
+    {
+        let nodes = self.graph.nodes();
+        let mut diagnostics = Vec::new();
+        for node in nodes {
+            if let Some(diagnostic) = self.execute_node(&node, true, dispatcher)? {
+                dispatcher.after_execute(node.kind, &diagnostic)?;
+                diagnostics.push(diagnostic);
+            }
+        }
+        Ok(diagnostics)
+    }
+
     pub(crate) fn execute_node<D>(
         &mut self,
         node: &RenderPassNode,
@@ -556,6 +585,7 @@ impl FrameGraphExecutor<'_> {
         if !node.enabled || !enabled || !self.graph.has_pass(node.kind) {
             return Ok(None);
         }
+        dispatcher.before_execute(node.kind)?;
         self.graph.validate_required_writes(node)?;
         self.graph.validate_ready_reads(node)?;
         let elapsed_ms = dispatcher.execute(node.kind)?.max(0.0);

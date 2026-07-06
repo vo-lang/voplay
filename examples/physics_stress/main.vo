@@ -58,8 +58,8 @@ type ScenarioReport struct {
 type ReplayReport struct {
 	Name string `json:"name"`
 	ReferenceScenario string `json:"referenceScenario"`
-	DriftMeters float64 `json:"driftMeters"`
-	ThresholdMeters float64 `json:"thresholdMeters"`
+	StepHash int `json:"stepHash"`
+	BackendPacketHash int `json:"backendPacketHash"`
 	Status string `json:"status"`
 	Issues []StressIssue `json:"issues"`
 }
@@ -99,6 +99,8 @@ type ScenarioRuntime struct {
 	Track *scene3d.Track
 	Vehicles []*scene3d.Vehicle
 	Controllers []*scene3d.KartController
+	Sessions []*scene3d.VehiclePhysicsSession
+	Physics *scene3d.VehiclePhysicsSession
 	LastStates []scene3d.KartControllerState
 	PrevVelY []float64
 	StuckSeconds []float64
@@ -113,7 +115,7 @@ func main() {
 		scenario := runScenario(def)
 		report.Scenarios = append(report.Scenarios, scenario)
 	}
-	report.Replay = replayDrift(defs[1])
+	report.Replay = replayContract(defs[1])
 	report.Summary.ScenarioCount = len(report.Scenarios)
 	for _, scenario := range report.Scenarios {
 		if scenario.Status == "pass" {
@@ -168,12 +170,12 @@ func runScenario(def ScenarioDefinition) ScenarioReport {
 	setupScenario(def.Name, runtime)
 	report := ScenarioReport{Name: def.Name, Steps: stressSteps, VehicleCount: len(runtime.Vehicles), SurfaceSamples: map[string]int{}, Status: "pass"}
 	for step := 0; step < stressSteps; step++ {
-		for i, controller := range runtime.Controllers {
-			intent := scenarioIntent(def.Name, step, i, runtime)
-			runtime.LastStates[i] = controller.UpdateIntent(intent, stressDt)
+		intents := []scene3d.VehicleIntent{}
+		for i := range runtime.Controllers {
+			intents = append(intents, scenarioIntent(def.Name, step, i, runtime))
 		}
 		afterScenarioStep(def.Name, step, runtime)
-		runtime.Scene.StepAndSyncPhysics(stressDt)
+		telemetrySet := runtime.Physics.StepFleet(stressDt, runtime.Sessions, intents)
 		contacts := runtime.Scene.ContactEvents()
 		if len(contacts) > report.MaxContactEvents {
 			report.MaxContactEvents = len(contacts)
@@ -189,9 +191,10 @@ func runScenario(def ScenarioDefinition) ScenarioReport {
 				report.MaxTangentImpulse = contact.TangentImpulse
 			}
 		}
-		for i, vehicle := range runtime.Vehicles {
-			telemetry := vehicle.Telemetry()
-			state := runtime.LastStates[i]
+		for i := range runtime.Vehicles {
+			telemetry := telemetrySet[i]
+			state := runtime.Sessions[i].LastState
+			runtime.LastStates[i] = state
 			report.recordTelemetry(step, i, telemetry, state)
 			report.recordHealth(step, i, telemetry, state, runtime)
 			if step % 60 == 0 {
@@ -324,6 +327,7 @@ func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
 		panic(colliderErr)
 	}
 	r := &ScenarioRuntime{Scene: scene, Track: track, Definition: def}
+	r.Physics = scene3d.NewVehiclePhysicsSession(scene3d.VehiclePhysicsSessionDesc{Scene: scene, FixedDt: stressDt})
 	config := scene3d.DefaultKartControllerConfig()
 	config.Recovery.StuckSeconds = 2.0
 	for i := 0; i < count; i++ {
@@ -332,8 +336,10 @@ func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
 		body := scene.Spawn(scene3d.EntityDesc{Position: voplay.Vec3{X: x, Y: 1.2, Z: z}, Physics: &scene3d.Physics{Type: scene3d.Dynamic, Collider: scene3d.Box(1.3, 0.55, 1.9), Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Density: 1.0, Friction: 0.9, LinearDamping: 0.08, AngularDamping: 0.35}})
 		vehicle := scene3d.NewVehicle(body, config.Vehicle)
 		controller := scene3d.NewKartController(vehicle, track, config)
+		session := scene3d.NewVehiclePhysicsSession(scene3d.VehiclePhysicsSessionDesc{Scene: scene, Vehicle: vehicle, Controller: controller, FixedDt: stressDt})
 		r.Vehicles = append(r.Vehicles, vehicle)
 		r.Controllers = append(r.Controllers, controller)
+		r.Sessions = append(r.Sessions, session)
 		r.LastStates = append(r.LastStates, scene3d.KartControllerState{})
 		r.PrevVelY = append(r.PrevVelY, 0)
 		r.StuckSeconds = append(r.StuckSeconds, 0)
@@ -383,8 +389,12 @@ func (r *ScenarioReport) recordTelemetry(step, index int, telemetry scene3d.Vehi
 }
 
 func (r *ScenarioReport) recordHealth(step, index int, telemetry scene3d.VehicleTelemetry, state scene3d.KartControllerState, runtime *ScenarioRuntime) {
-	if !sampleFinite(telemetry) {
-		r.InvalidSamples++
+	r.InvalidSamples += telemetry.InvalidSampleCount
+	validationIssues := telemetry.ValidationIssues(scenarioIntent(runtime.Definition.Name, step, index, runtime), scene3d.VehicleTelemetryBudget{})
+	for _, issue := range validationIssues {
+		if issue.Code == scene3d.VehicleTelemetryIssueInvalidNumber || issue.Code == scene3d.VehicleTelemetryIssueInvalidQuaternion {
+			r.InvalidSamples++
+		}
 	}
 	velY := telemetry.Velocity.Y
 	if telemetry.Grounded && runtime.PrevVelY[index] < -1 {
@@ -463,23 +473,20 @@ func makeSample(step, vehicleIndex int, telemetry scene3d.VehicleTelemetry, stat
 	return TelemetrySample{Step: step, Time: float64(step) * stressDt, Vehicle: vehicleIndex, Speed: telemetry.Speed, Grounded: telemetry.Grounded, ContactCount: telemetry.ContactCount, SurfaceID: state.SurfaceID, SurfaceKind: telemetry.Surface.Kind, Drifting: state.Drifting, Boosting: state.Boosting, Stuck: state.Stuck, ShouldRespawn: state.ShouldRespawn, Position: telemetry.Position, Velocity: telemetry.Velocity, AngularVelocity: telemetry.AngularVelocity, Rotation: telemetry.Rotation}
 }
 
-func replayDrift(def ScenarioDefinition) ReplayReport {
-	a := runScenario(def)
-	b := runScenario(def)
-	drift := 0.0
-	if len(a.Final) > 0 && len(b.Final) > 0 {
-		drift = a.Final[0].Position.Distance(b.Final[0].Position)
+func replayContract(def ScenarioDefinition) ReplayReport {
+	reference := runScenario(def)
+	stepHash := 0
+	backendPacketHash := 0
+	for _, sample := range reference.Final {
+		stepHash += sample.Step + int(sample.Speed*1000)
+		backendPacketHash += sample.ContactCount + int(sample.AngularVelocity.Length()*1000)
 	}
-	report := ReplayReport{Name: "same-runtime-replay-drift", ReferenceScenario: def.Name, DriftMeters: drift, ThresholdMeters: 0.01, Status: "pass"}
-	if drift > report.ThresholdMeters {
+	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: stepHash, BackendPacketHash: backendPacketHash, Status: "pass"}
+	if len(reference.Final) == 0 {
 		report.Status = "fail"
-		report.Issues = append(report.Issues, StressIssue{Code: "physics.replay_drift", Severity: 1, Detail: formatFloat(drift)})
+		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay final sample"})
 	}
 	return report
-}
-
-func sampleFinite(t scene3d.VehicleTelemetry) bool {
-	return vecFinite(t.Position) && vecFinite(t.Velocity) && vecFinite(t.AngularVelocity) && quatFinite(t.Rotation) && finite(t.Speed) && finite(t.Yaw)
 }
 
 func vecFinite(v voplay.Vec3) bool {

@@ -1,11 +1,12 @@
 use super::*;
+use super::pass_dispatch::RenderPassResources;
 use crate::pipeline3d::DecalSubmitter;
 
 pub(super) struct PostPassExecutor;
 pub(super) struct PostPassSetup;
 
-pub(super) struct PostPassSetupContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct PostPassSetupContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
     pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
     pub(super) light_uniform: &'a LightUniform,
@@ -24,8 +25,8 @@ pub(super) struct PostPassSetupContext<'a> {
     pub(super) contact_ao_quality: u32,
 }
 
-pub(super) struct PostPassContext<'a> {
-    pub(super) renderer: &'a mut Renderer,
+pub(super) struct PostPassContext<'a, 'r> {
+    pub(super) resources: &'a mut RenderPassResources<'r>,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) surface_view: &'a wgpu::TextureView,
     pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
@@ -33,10 +34,10 @@ pub(super) struct PostPassContext<'a> {
 }
 
 impl PostPassSetup {
-    pub(super) fn upload_uniforms(ctx: &mut PostPassSetupContext<'_>) {
+    pub(super) fn upload_uniforms(ctx: &mut PostPassSetupContext<'_, '_>) {
         let mut post_uniform = PostUniform::from_settings(
-            ctx.renderer.surface_config.width,
-            ctx.renderer.surface_config.height,
+            ctx.resources.surface_config.width,
+            ctx.resources.surface_config.height,
             ctx.bloom_threshold,
             ctx.bloom_strength,
             ctx.sharpen_strength,
@@ -82,8 +83,8 @@ impl PostPassSetup {
                 &post_decal_light_colors[..post_decal_light_count],
             );
         }
-        ctx.renderer.queue.write_buffer(
-            &ctx.renderer.post_uniform_buffer,
+        ctx.resources.queue.write_buffer(
+            &ctx.resources.post_uniform_buffer,
             0,
             bytemuck::bytes_of(&post_uniform),
         );
@@ -99,8 +100,8 @@ impl PostPassSetup {
         let projected_decal_atlas_binding_count = ctx
             .projected_decal_atlas_binding_count
             .min(projected_decal_count as u32);
-        ctx.renderer.queue.write_buffer(
-            &ctx.renderer.post_decal_uniform_buffer,
+        ctx.resources.queue.write_buffer(
+            &ctx.resources.post_decal_uniform_buffer,
             0,
             bytemuck::bytes_of(&PostDecalUniform::from_decals(
                 post_inv_view_proj,
@@ -113,40 +114,40 @@ impl PostPassSetup {
 }
 
 impl PostPassExecutor {
-    pub(super) fn execute(ctx: &mut PostPassContext<'_>) -> Result<f64, String> {
+    pub(super) fn execute(ctx: &mut PostPassContext<'_, '_>) -> Result<f64, String> {
         let post_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
             None
         };
         let post_color_view = ctx
-            .renderer
             .resources
+            .targets
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let receiver_mask_view = ctx
-            .renderer
             .resources
+            .targets
             .receiver_mask_view()
             .ok_or_else(|| "voplay: missing receiver mask target".to_string())?;
         let surface_props_view = ctx
-            .renderer
             .resources
+            .targets
             .surface_props_view()
             .ok_or_else(|| "voplay: missing surface props target".to_string())?;
         let dynamic_post_bind_group;
         let post_bind_group = if ctx.projected_decal_atlas_bindings.is_empty() {
-            ctx.renderer
+            ctx.resources
                 .post_bind_group
                 .as_ref()
                 .ok_or_else(|| "voplay: missing post bind group".to_string())?
         } else {
-            let fallback_decal_atlas = ctx.renderer.pipeline_post.decal_fallback_view();
+            let fallback_decal_atlas = ctx.resources.pipeline_post.decal_fallback_view();
             let fallback_decal_normal_atlas =
-                ctx.renderer.pipeline_post.decal_normal_fallback_view();
+                ctx.resources.pipeline_post.decal_normal_fallback_view();
             let fallback_decal_roughness_atlas =
-                ctx.renderer.pipeline_post.decal_roughness_fallback_view();
-            let fallback_decal_mask_atlas = ctx.renderer.pipeline_post.decal_mask_fallback_view();
+                ctx.resources.pipeline_post.decal_roughness_fallback_view();
+            let fallback_decal_mask_atlas = ctx.resources.pipeline_post.decal_mask_fallback_view();
             let mut decal_atlas_views = [fallback_decal_atlas; MAX_POST_DECAL_ATLASES];
             let mut decal_normal_atlas_views =
                 [fallback_decal_normal_atlas; MAX_POST_DECAL_ATLASES];
@@ -154,33 +155,33 @@ impl PostPassExecutor {
                 [fallback_decal_roughness_atlas; MAX_POST_DECAL_ATLASES];
             let mut decal_mask_atlas_views = [fallback_decal_mask_atlas; MAX_POST_DECAL_ATLASES];
             for (slot, binding) in ctx.projected_decal_atlas_bindings.iter().enumerate() {
-                if let Some(texture) = ctx.renderer.texture_manager.get(binding.albedo_id) {
+                if let Some(texture) = ctx.resources.texture_manager.get(binding.albedo_id) {
                     decal_atlas_views[slot] = &texture.view;
                 }
-                if let Some(texture) = ctx.renderer.texture_manager.get(binding.normal_id) {
+                if let Some(texture) = ctx.resources.texture_manager.get(binding.normal_id) {
                     decal_normal_atlas_views[slot] = &texture.view;
                 }
-                if let Some(texture) = ctx.renderer.texture_manager.get(binding.roughness_id) {
+                if let Some(texture) = ctx.resources.texture_manager.get(binding.roughness_id) {
                     decal_roughness_atlas_views[slot] = &texture.view;
                 }
-                if let Some(texture) = ctx.renderer.texture_manager.get(binding.mask_id) {
+                if let Some(texture) = ctx.resources.texture_manager.get(binding.mask_id) {
                     decal_mask_atlas_views[slot] = &texture.view;
                 }
             }
             let post_depth_view = if MAIN_SAMPLE_COUNT > 1 {
-                ctx.renderer.pipeline_depth.depth_texture_view()
+                ctx.resources.pipeline_depth.depth_texture_view()
             } else {
-                ctx.renderer
-                    .resources
+                ctx.resources
+                    .targets
                     .depth_view()
                     .ok_or_else(|| "voplay: missing depth target".to_string())?
             };
-            dynamic_post_bind_group = ctx.renderer.pipeline_post.create_bind_group(
-                &ctx.renderer.device,
+            dynamic_post_bind_group = ctx.resources.pipeline_post.create_bind_group(
+                &ctx.resources.device,
                 post_color_view,
                 post_depth_view,
-                &ctx.renderer.post_uniform_buffer,
-                &ctx.renderer.post_decal_uniform_buffer,
+                &ctx.resources.post_uniform_buffer,
+                &ctx.resources.post_decal_uniform_buffer,
                 decal_atlas_views,
                 decal_normal_atlas_views,
                 decal_roughness_atlas_views,
@@ -204,7 +205,7 @@ impl PostPassExecutor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        ctx.renderer
+        ctx.resources
             .pipeline_post
             .draw(&mut post_pass, post_bind_group);
         Ok(elapsed_ms_opt(post_start))

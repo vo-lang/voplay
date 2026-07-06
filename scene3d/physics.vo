@@ -138,8 +138,23 @@ const (
 	physicsCmdSetRot byte = 5
 	physicsCmdSetAngVel byte = 6
 	physicsContactDetailBytes = 8 + 12 * 8 + 1
+	PhysicsBackendPacketSchemaVersion = 1
+	PhysicsBackendPacketKind = 1
+	PhysicsBackendPacketLength = physicsContactDetailBytes
+	PhysicsBackendCapability = "physics-backend-contact-packet-v1"
 	physicsSurfaceMaterialIDBytes = 32
 )
+
+func PhysicsBackendPacketHash(bytes []byte) int {
+	hash := PhysicsBackendPacketSchemaVersion * 16777619
+	for _, b := range bytes {
+		hash = (hash ^ int(b)) * 16777619
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return hash
+}
 
 func physicsSurfaceMaterialKind(kind string) int {
 	if kind == SurfaceMaterialOffroad || kind == TrackSurfaceOffroad {

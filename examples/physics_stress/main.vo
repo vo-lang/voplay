@@ -60,6 +60,8 @@ type ReplayReport struct {
 	ReferenceScenario string `json:"referenceScenario"`
 	StepHash int `json:"stepHash"`
 	BackendPacketHash int `json:"backendPacketHash"`
+	Samples int `json:"samples"`
+	Mismatches int `json:"mismatches"`
 	Status string `json:"status"`
 	Issues []StressIssue `json:"issues"`
 }
@@ -165,9 +167,28 @@ func scenarioDefinitions() []ScenarioDefinition {
 }
 
 func runScenario(def ScenarioDefinition) ScenarioReport {
+	report, _ := runScenarioWithReplay(def, false)
+	return report
+}
+
+func runScenarioWithReplay(def ScenarioDefinition, recordReplay bool) (ScenarioReport, scene3d.PhysicsReplayTrace) {
 	runtime := newScenarioRuntime(def)
 	defer runtime.Scene.Close()
+	if recordReplay {
+		for _, session := range runtime.Sessions {
+			session.Replay = scene3d.NewPhysicsReplayTraceRecorder(stressDt)
+		}
+	}
 	setupScenario(def.Name, runtime)
+	report := executeScenario(def, runtime)
+	trace := scene3d.PhysicsReplayTrace{}
+	if recordReplay && len(runtime.Sessions) > 0 {
+		trace = runtime.Sessions[0].Trace()
+	}
+	return report, trace
+}
+
+func executeScenario(def ScenarioDefinition, runtime *ScenarioRuntime) ScenarioReport {
 	report := ScenarioReport{Name: def.Name, Steps: stressSteps, VehicleCount: len(runtime.Vehicles), SurfaceSamples: map[string]int{}, Status: "pass"}
 	for step := 0; step < stressSteps; step++ {
 		intents := []scene3d.VehicleIntent{}
@@ -474,19 +495,88 @@ func makeSample(step, vehicleIndex int, telemetry scene3d.VehicleTelemetry, stat
 }
 
 func replayContract(def ScenarioDefinition) ReplayReport {
-	reference := runScenario(def)
-	stepHash := 0
-	backendPacketHash := 0
-	for _, sample := range reference.Final {
-		stepHash += sample.Step + int(sample.Speed*1000)
-		backendPacketHash += sample.ContactCount + int(sample.AngularVelocity.Length()*1000)
+	reference, trace := runScenarioWithReplay(def, true)
+	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), Samples: len(trace.Samples), Status: "pass"}
+	if reference.Status != "pass" {
+		report.Status = "fail"
+		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "reference scenario failed"})
 	}
-	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: stepHash, BackendPacketHash: backendPacketHash, Status: "pass"}
-	if len(reference.Final) == 0 {
+	if len(trace.Samples) == 0 {
 		report.Status = "fail"
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay final sample"})
+		return report
+	}
+	if err := scene3d.ValidatePhysicsReplayTrace(trace); err != nil {
+		report.Status = "fail"
+		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: err.Error()})
+		return report
+	}
+	replayRuntime := newScenarioRuntime(def)
+	defer replayRuntime.Scene.Close()
+	setupScenario(def.Name, replayRuntime)
+	for _, sample := range trace.Samples {
+		if len(replayRuntime.Sessions) == 0 {
+			report.Mismatches++
+			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay session"})
+			break
+		}
+		telemetry := replayRuntime.Sessions[0].Step(stressDt, sample.Intent)
+		if replayRuntime.Sessions[0].StepIndex != sample.Step {
+			report.Mismatches++
+			if report.Mismatches <= 4 {
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "step mismatch " + strconv.Itoa(replayRuntime.Sessions[0].StepIndex) + " != " + strconv.Itoa(sample.Step)})
+			}
+		}
+		if telemetry.BackendApplyHash != sample.BackendApplyHash {
+			report.Mismatches++
+			if report.Mismatches <= 4 {
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "backend apply hash mismatch at step " + strconv.Itoa(sample.Step)})
+			}
+		}
+		poseHash := scene3d.PhysicsPoseHash(telemetry.Position, telemetry.Rotation)
+		if math.Abs(poseHash-sample.PoseHash) > 0.001 {
+			report.Mismatches++
+			if report.Mismatches <= 4 {
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "pose hash mismatch at step " + strconv.Itoa(sample.Step)})
+			}
+		}
+		telemetryHash := scene3d.PhysicsTelemetryHash(telemetry)
+		if math.Abs(telemetryHash-sample.TelemetryHash) > 0.001 {
+			report.Mismatches++
+			if report.Mismatches <= 4 {
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "telemetry hash mismatch at step " + strconv.Itoa(sample.Step)})
+			}
+		}
+	}
+	if report.Mismatches > 0 {
+		report.Status = "fail"
 	}
 	return report
+}
+
+func physicsReplayStepHash(trace scene3d.PhysicsReplayTrace) int {
+	hash := 17
+	for _, sample := range trace.Samples {
+		hash = hash*31 + sample.Step
+		hash = hash*31 + int(sample.PoseHash*1000)
+		hash = hash*31 + int(sample.TelemetryHash*1000)
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return hash
+}
+
+func physicsReplayBackendPacketHash(trace scene3d.PhysicsReplayTrace) int {
+	hash := 23
+	for _, sample := range trace.Samples {
+		hash = hash*31 + sample.BackendApplyHash
+		hash = hash*31 + sample.ContactCount
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return hash
 }
 
 func vecFinite(v voplay.Vec3) bool {

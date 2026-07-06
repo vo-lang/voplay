@@ -285,6 +285,13 @@ func (b *BlockKartPrimitiveBatch) Add(desc BlockKartPrimitivePlacement) BlockKar
 	return b.batch.Add(desc.primitive())
 }
 
+func (b *BlockKartPrimitiveBatch) Reserve(additional int) {
+	if b == nil || b.batch == nil {
+		return
+	}
+	b.batch.Reserve(additional)
+}
+
 func (b *BlockKartPrimitiveBatch) End() int {
 	if b == nil || b.batch == nil {
 		return 0

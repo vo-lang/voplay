@@ -169,6 +169,20 @@ func (l *Layer) BeginBulkAdd() *LayerBulkAdd {
 	return &LayerBulkAdd{layer: l, active: true, validShapes: map[int]bool{}, validMaterials: map[int]bool{}}
 }
 
+func (b *LayerBulkAdd) Reserve(additional int) {
+	if b == nil || b.layer == nil || !b.active || additional <= 0 {
+		return
+	}
+	l := b.layer
+	required := len(l.order) + additional
+	if cap(l.order) >= required {
+		return
+	}
+	order := make([]ObjectID, len(l.order), required)
+	copy(order, l.order)
+	l.order = order
+}
+
 func (b *LayerBulkAdd) Add(instance Instance) ObjectID {
 	if b == nil || b.layer == nil || !b.active {
 		panic("primitive3d.LayerBulkAdd.Add: batch is not active")

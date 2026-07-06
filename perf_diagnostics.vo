@@ -2110,6 +2110,15 @@ func (g *GameCtx) DisablePerfStats() {
 	g.overlay.setPerfMode(PerfModeOff)
 }
 
+func (g *GameCtx) ResetPerfStats(mode string) {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	targetFrameRate := g.overlay.targetFrameRate
+	g.overlay.perf = newPerfCore(targetFrameRate)
+	g.overlay.setPerfMode(mode)
+}
+
 func (g *GameCtx) TogglePerfHud() {
 	if g.overlay == nil {
 		g.overlay = newDebugOverlay(0)

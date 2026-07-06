@@ -13,6 +13,7 @@ const (
 	blockKartPrimitiveSmallDetailLayer = "blockkart_small_detail_primitives"
 	blockKartPrimitiveFlowerDetailLayer = "blockkart_flower_detail_primitives"
 	blockKartPrimitiveScatterLayer = "blockkart_scatter_primitives"
+	blockKartPrimitiveStressLayer = "blockkart_stress_primitives"
 	blockKartPrimitiveDynamicLayer = "blockkart_dynamic_primitives"
 	blockKartPrimitiveStaticCellSize = 72.0
 	blockKartPrimitiveTreeDetailCellSize = 36.0
@@ -20,6 +21,7 @@ const (
 	blockKartPrimitiveSmallDetailCellSize = 24.0
 	blockKartPrimitiveFlowerDetailCellSize = 16.0
 	blockKartPrimitiveScatterCellSize = 36.0
+	blockKartPrimitiveStressCellSize = 512.0
 	blockKartPrimitiveTreeLodFar = 320.0
 	blockKartPrimitiveRoadsidePropLodFar = 190.0
 	blockKartPrimitiveFlowerClumpLodFar = 88.0
@@ -184,6 +186,10 @@ func (c *BlockKartPrimitiveContent) BeginStaticBatch() *BlockKartPrimitiveBatch 
 
 func (c *BlockKartPrimitiveContent) BeginScatterBatch() *BlockKartPrimitiveBatch {
 	return c.beginBatch(blockKartPrimitiveScatterLayer)
+}
+
+func (c *BlockKartPrimitiveContent) BeginStressBatch() *BlockKartPrimitiveBatch {
+	return c.beginBatch(blockKartPrimitiveStressLayer)
 }
 
 func (c *BlockKartPrimitiveContent) BeginSmallDetailBatch() *BlockKartPrimitiveBatch {
@@ -382,6 +388,7 @@ func blockKartPrimitiveLayers() []PrimitiveBatchAuthoring {
 		blockKartPrimitiveLayer(blockKartPrimitiveSmallDetailLayer, primitive3d.StaticLayer, blockKartPrimitiveSmallDetailCellSize, true),
 		blockKartPrimitiveLayer(blockKartPrimitiveFlowerDetailLayer, primitive3d.StaticLayer, blockKartPrimitiveFlowerDetailCellSize, true),
 		blockKartPrimitiveLayer(blockKartPrimitiveScatterLayer, primitive3d.StaticLayer, blockKartPrimitiveScatterCellSize, true),
+		blockKartPrimitiveLayer(blockKartPrimitiveStressLayer, primitive3d.StaticLayer, blockKartPrimitiveStressCellSize, false),
 		blockKartPrimitiveLayer(blockKartPrimitiveDynamicLayer, primitive3d.DynamicLayer, 0, false),
 	}
 }

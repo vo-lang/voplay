@@ -8,4 +8,5 @@ export interface WebViewBootstrapConfig {
 }
 export declare function bootstrapWebView(config: WebViewBootstrapConfig, voWeb: VoWebModule, channel: IslandChannel, debugLog?: (message: string) => void, onError?: (message: string) => void): Promise<RenderIsland>;
 export declare function stopWebView(island?: RenderIsland): void;
+export declare function quiesceWebViewForCapture(): number;
 export declare function installInputHandlers(canvasId: string): () => void;

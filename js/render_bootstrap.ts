@@ -882,6 +882,24 @@ export class RenderIsland {
     this.vm = null;
   }
 
+  quiesceForCapture(): void {
+    this.stopped = true;
+    for (const handle of this.hostTimers.values()) {
+      if (handle.kind === "raf") {
+        cancelAnimationFrame(handle.id);
+      } else if (handle.kind === "timeout") {
+        clearTimeout(handle.id);
+      }
+    }
+    this.hostTimers.clear();
+    this.displayPulseWaiters.clear();
+    this.clearDisplayPulseSchedule();
+    for (const id of this.perfLivenessTimerIds) {
+      window.clearTimeout(id);
+    }
+    this.perfLivenessTimerIds = [];
+  }
+
   private flush(): void {
     if (!this.vm) return;
     const cmds = this.vm.takeOutboundCommands();

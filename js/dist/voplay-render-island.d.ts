@@ -30,9 +30,13 @@ interface VfsCapability {
 export declare function init(host: RendererHost): Promise<void>;
 export declare function render(_container: HTMLElement, _bytes: Uint8Array): void;
 export declare function stop(): void;
+export declare function quiesceForCapture(): {
+    stopped: number;
+};
 declare const _default: {
     init: typeof init;
     render: typeof render;
     stop: typeof stop;
+    quiesceForCapture: typeof quiesceForCapture;
 };
 export default _default;

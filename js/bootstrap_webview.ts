@@ -51,6 +51,15 @@ export function stopWebView(island?: RenderIsland): void {
   activeIslands.clear();
 }
 
+export function quiesceWebViewForCapture(): number {
+  let stopped = 0;
+  for (const activeIsland of activeIslands) {
+    activeIsland.quiesceForCapture();
+    stopped++;
+  }
+  return stopped;
+}
+
 export function installInputHandlers(canvasId: string): () => void {
   const canvas = document.getElementById(canvasId) as HTMLCanvasElement | null;
   if (!canvas) return () => {};

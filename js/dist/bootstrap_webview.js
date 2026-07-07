@@ -29,6 +29,14 @@ export function stopWebView(island) {
     }
     activeIslands.clear();
 }
+export function quiesceWebViewForCapture() {
+    let stopped = 0;
+    for (const activeIsland of activeIslands) {
+        activeIsland.quiesceForCapture();
+        stopped++;
+    }
+    return stopped;
+}
 export function installInputHandlers(canvasId) {
     const canvas = document.getElementById(canvasId);
     if (!canvas)

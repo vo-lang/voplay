@@ -2,7 +2,7 @@
 // Implements the RendererModule interface for Studio's framework-neutral render island.
 // Studio loads this file dynamically from the VFS snapshot and calls init(host).
 
-import { bootstrapWebView, stopWebView } from "./bootstrap_webview";
+import { bootstrapWebView, quiesceWebViewForCapture, stopWebView } from "./bootstrap_webview";
 import type { IslandChannel } from "./island_channel";
 import type { RenderIsland, VoWebModule } from "./render_bootstrap";
 
@@ -407,4 +407,8 @@ export function stop(): void {
   stopWebView();
 }
 
-export default { init, render, stop };
+export function quiesceForCapture(): { stopped: number } {
+  return { stopped: quiesceWebViewForCapture() };
+}
+
+export default { init, render, stop, quiesceForCapture };

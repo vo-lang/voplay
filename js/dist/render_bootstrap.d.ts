@@ -73,6 +73,7 @@ export declare class RenderIsland {
     start(): void;
     private reportBootstrapStart;
     stop(): void;
+    quiesceForCapture(): void;
     private flush;
     private scheduleHostEvents;
     private schedulePerfLivenessProbes;

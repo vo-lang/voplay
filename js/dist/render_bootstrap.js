@@ -766,6 +766,24 @@ export class RenderIsland {
         this.config.channel.close();
         this.vm = null;
     }
+    quiesceForCapture() {
+        this.stopped = true;
+        for (const handle of this.hostTimers.values()) {
+            if (handle.kind === "raf") {
+                cancelAnimationFrame(handle.id);
+            }
+            else if (handle.kind === "timeout") {
+                clearTimeout(handle.id);
+            }
+        }
+        this.hostTimers.clear();
+        this.displayPulseWaiters.clear();
+        this.clearDisplayPulseSchedule();
+        for (const id of this.perfLivenessTimerIds) {
+            window.clearTimeout(id);
+        }
+        this.perfLivenessTimerIds = [];
+    }
     flush() {
         if (!this.vm)
             return;

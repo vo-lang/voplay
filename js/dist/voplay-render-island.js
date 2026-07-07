@@ -1,7 +1,7 @@
 // voplay-render-island.ts
 // Implements the RendererModule interface for Studio's framework-neutral render island.
 // Studio loads this file dynamically from the VFS snapshot and calls init(host).
-import { bootstrapWebView, stopWebView } from "./bootstrap_webview";
+import { bootstrapWebView, quiesceWebViewForCapture, stopWebView } from "./bootstrap_webview";
 // Relative paths within the framework's VFS snapshot for the island WASM.
 // These match wasm-pack output names for the `wasm-island` feature build.
 const WASM_BG_PATH = "wasm/voplay_island_bg.wasm";
@@ -312,4 +312,7 @@ export function stop() {
     hostServices = null;
     stopWebView();
 }
-export default { init, render, stop };
+export function quiesceForCapture() {
+    return { stopped: quiesceWebViewForCapture() };
+}
+export default { init, render, stop, quiesceForCapture };

@@ -301,6 +301,16 @@ func (e *Entity) SetPosition(pos voplay.Vec3) {
 	e.ApplyPhysicsTarget(PhysicsBackendTargetCommand{Position: pos, ApplyPosition: true, Reason: "entity_set_position_compat"})
 }
 
+func MoveEntityPhysicsTarget(entity *Entity, position voplay.Vec3, reason string) {
+	if entity == nil {
+		return
+	}
+	if reason == "" {
+		reason = "entity_move_target"
+	}
+	entity.ApplyPhysicsTarget(PhysicsBackendTargetCommand{Position: position, ApplyPosition: true, Reason: reason})
+}
+
 func (e *Entity) SetRotation(rot voplay.Quat) {
 	e.rotation = rot
 	if e.scene != nil && e.Physics != nil {

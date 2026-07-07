@@ -23,8 +23,8 @@ use vo_runtime::ffi::ExternRegistry;
 /// Set the renderer from pre-initialized wgpu parts (used by host/studio integration).
 #[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
-pub fn set_renderer(renderer: crate::renderer::Renderer) {
-    crate::renderer_runtime::set_renderer(renderer);
+pub fn set_renderer(renderer: crate::renderer::Renderer) -> Result<(), String> {
+    crate::renderer_runtime::set_renderer(renderer)
 }
 
 /// Access the renderer, dispatching to hosted runtime state or native APP.

@@ -1,5 +1,69 @@
 use super::*;
 
+fn primitive_pass_keys_for_draw(
+    draw: &PrimitiveDraw,
+    models: &ModelManager,
+    shadow_only: bool,
+) -> Option<Vec<PrimitivePassBatchKey>> {
+    if !primitive_participates_in_depth_pass(draw, shadow_only) {
+        return Some(Vec::new());
+    }
+    let gpu_model = models.get(draw.model_id)?;
+    let mut keys = Vec::new();
+    for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
+        if mesh.skinned {
+            continue;
+        }
+        keys.push(PrimitivePassBatchKey {
+            model_id: draw.model_id,
+            mesh_index,
+        });
+    }
+    Some(keys)
+}
+
+fn resident_pass_keys_stable(
+    previous: &PrimitiveDraw,
+    next: &PrimitiveDraw,
+    models: &ModelManager,
+) -> bool {
+    for shadow_only in [false, true] {
+        let Some(previous_keys) = primitive_pass_keys_for_draw(previous, models, shadow_only)
+        else {
+            return false;
+        };
+        let Some(next_keys) = primitive_pass_keys_for_draw(next, models, shadow_only) else {
+            return false;
+        };
+        if previous_keys != next_keys {
+            return false;
+        }
+    }
+    true
+}
+
+fn resident_pass_batch_offset(
+    instances: &[ResidentPrimitiveInstance],
+    dirty_index: usize,
+    key: PrimitivePassBatchKey,
+    models: &ModelManager,
+    shadow_only: bool,
+) -> Option<u32> {
+    let mut batch_offset = 0u32;
+    for (index, instance) in instances.iter().enumerate() {
+        let keys = primitive_pass_keys_for_draw(&instance.draw, models, shadow_only)?;
+        for instance_key in keys {
+            if instance_key == key {
+                if index == dirty_index {
+                    return Some(batch_offset);
+                }
+                batch_offset = batch_offset.saturating_add(1);
+            }
+        }
+    }
+    None
+}
+
 impl PrimitivePipeline {
     pub fn new(
         device: &wgpu::Device,
@@ -637,13 +701,16 @@ impl PrimitivePipeline {
             self.object_chunks.remove(&object_key);
             return;
         };
+        let mut requires_full_rebuild = true;
         let dirty_index = if let Some((index, instance)) = chunk
             .instances
             .iter_mut()
             .enumerate()
             .find(|(_, instance)| instance.object_id == update.object_id)
         {
-            instance.draw = PrimitiveDraw::from_update(update);
+            let next_draw = PrimitiveDraw::from_update(update);
+            requires_full_rebuild = !resident_pass_keys_stable(&instance.draw, &next_draw, models);
+            instance.draw = next_draw;
             index
         } else {
             chunk.instances.push(ResidentPrimitiveInstance {
@@ -652,7 +719,7 @@ impl PrimitivePipeline {
             });
             chunk.instances.len().saturating_sub(1)
         };
-        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1);
+        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1, requires_full_rebuild);
     }
 
     pub fn destroy_instance(
@@ -1128,7 +1195,7 @@ impl PrimitivePipeline {
             return;
         };
         chunk.instances.remove(dirty_index);
-        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1);
+        self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1, true);
     }
 
     fn queue_resident_rebuild(
@@ -1136,6 +1203,7 @@ impl PrimitivePipeline {
         chunk_ref: PrimitiveChunkRef,
         dirty_start: u32,
         dirty_count: u32,
+        requires_full_rebuild: bool,
     ) {
         let dirty_count = dirty_count.max(1);
         if let Some(range) = self
@@ -1150,11 +1218,13 @@ impl PrimitivePipeline {
                 .max(dirty_start.saturating_add(dirty_count));
             range.dirty_start = start;
             range.dirty_count = end.saturating_sub(start).max(1);
+            range.requires_full_rebuild |= requires_full_rebuild;
         } else {
             self.rebuild_queue.push(PrimitiveChunkDirtyRange {
                 chunk_ref,
                 dirty_start,
                 dirty_count,
+                requires_full_rebuild,
             });
         }
         self.rebuild_queue_peak = self
@@ -1176,6 +1246,7 @@ impl PrimitivePipeline {
         let queue_peak = self.rebuild_queue_peak;
         self.rebuild_queue_peak = 0;
         let mut resident_chunk_rebuilds = 0u32;
+        let mut partial_uploads = 0u32;
         let mut dirty_upload_bytes = 0u64;
         for range in pending {
             let dirty_upload_range =
@@ -1183,25 +1254,93 @@ impl PrimitivePipeline {
             let dirty_upload_count = dirty_upload_range
                 .end
                 .saturating_sub(dirty_upload_range.start);
+            let _queue_peak = queue_peak;
+            if !range.requires_full_rebuild {
+                if let Some(uploaded_bytes) = self.upload_resident_dirty_range(
+                    queue,
+                    range.chunk_ref,
+                    range.dirty_start,
+                    dirty_upload_count,
+                    models,
+                ) {
+                    dirty_upload_bytes = dirty_upload_bytes.saturating_add(uploaded_bytes);
+                    partial_uploads = partial_uploads.saturating_add(1);
+                    continue;
+                }
+            }
             dirty_upload_bytes = dirty_upload_bytes.saturating_add(
                 u64::from(dirty_upload_count)
                     .saturating_mul(std::mem::size_of::<PrimitivePassInstanceGpu>() as u64),
             );
-            let _queue_peak = queue_peak;
-            if self.rebuild_resident_chunk(device, queue, range.chunk_ref, models) {
+            if self.rebuild_resident_chunk_full(device, queue, range.chunk_ref, models) {
                 resident_chunk_rebuilds = resident_chunk_rebuilds.saturating_add(1);
             }
         }
         self.last_resident_chunk_rebuilds = resident_chunk_rebuilds;
+        let rebuild_reason = match (partial_uploads > 0, resident_chunk_rebuilds > 0) {
+            (true, false) => "dirty-range-partial-upload",
+            (true, true) => "dirty-range-mixed-partial-full",
+            (false, true) => "dirty-range-structural-full-rebuild",
+            (false, false) => "dirty-range-noop",
+        };
         self.last_resident_rebuild_policy = ResidentRebuildPolicy {
             dirty_upload_bytes,
             full_rebuild_count: resident_chunk_rebuilds,
-            rebuild_reason: "dirty-range-resident-chunk-rebuild",
+            rebuild_reason,
         };
         self.last_resident_chunk_rebuilds
     }
 
-    fn rebuild_resident_chunk(
+    fn upload_resident_dirty_range(
+        &self,
+        queue: &wgpu::Queue,
+        chunk_ref: PrimitiveChunkRef,
+        dirty_start: u32,
+        dirty_count: u32,
+        models: &ModelManager,
+    ) -> Option<u64> {
+        if dirty_count != 1 {
+            return None;
+        }
+        let dirty_index = dirty_start as usize;
+        let chunk = self.resident_chunks.get(&chunk_ref)?;
+        let instance = chunk.instances.get(dirty_index)?;
+        let mut uploaded_bytes = 0u64;
+        for shadow_only in [false, true] {
+            let batches = if shadow_only {
+                &chunk.shadow_batches
+            } else {
+                &chunk.depth_batches
+            };
+            for key in primitive_pass_keys_for_draw(&instance.draw, models, shadow_only)? {
+                let batch = batches.iter().find(|batch| batch.key == key)?;
+                let batch_offset = resident_pass_batch_offset(
+                    &chunk.instances,
+                    dirty_index,
+                    key,
+                    models,
+                    shadow_only,
+                )?;
+                if batch_offset >= batch.count {
+                    return None;
+                }
+                let gpu_instance =
+                    PrimitivePassInstanceGpu::from_model(instance.draw.model_uniform.model);
+                let byte_offset = u64::from(batch_offset)
+                    .saturating_mul(std::mem::size_of::<PrimitivePassInstanceGpu>() as u64);
+                queue.write_buffer(
+                    &batch.buffer,
+                    byte_offset,
+                    bytemuck::bytes_of(&gpu_instance),
+                );
+                uploaded_bytes = uploaded_bytes
+                    .saturating_add(std::mem::size_of::<PrimitivePassInstanceGpu>() as u64);
+            }
+        }
+        Some(uploaded_bytes)
+    }
+
+    fn rebuild_resident_chunk_full(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

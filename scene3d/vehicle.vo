@@ -96,18 +96,6 @@ type VehicleRecoveryCommand struct {
 	Reason string
 }
 
-type vehicleBackendConstraintCommand struct {
-	Position voplay.Vec3
-	Rotation voplay.Quat
-	LinearVelocity voplay.Vec3
-	AngularVelocity voplay.Vec3
-	ApplyPosition bool
-	ApplyRotation bool
-	ApplyLinearVelocity bool
-	ApplyAngularVelocity bool
-	Reason string
-}
-
 type VehicleWheelVisualSample struct {
 	WheelIndex int
 	Center voplay.Vec3
@@ -202,10 +190,10 @@ func (v *Vehicle) UpdateIntent(intent VehicleIntent, dt float64) {
 	v.LastIntent = result.Intent
 	v.Drifting = result.Drifting
 	v.LastForceCommand = result.ForceCommand
-	v.ApplyForceCommand(result.ForceCommand, dt)
+	v.applyForceCommand(result.ForceCommand, dt)
 }
 
-func (v *Vehicle) ApplyForceCommand(command VehicleForceCommand, dt float64) {
+func (v *Vehicle) applyForceCommand(command VehicleForceCommand, dt float64) {
 	if v == nil || dt <= 0 {
 		return
 	}
@@ -297,11 +285,11 @@ func ApplyVehicleRecovery(vehicle *Vehicle, command VehicleRecoveryCommand) {
 	vehicle.applyRecoveryToBackend(command)
 }
 
-func applyVehicleConstraint(vehicle *Vehicle, command vehicleBackendConstraintCommand) {
+func applyVehicleBackendTarget(vehicle *Vehicle, command PhysicsBackendTargetCommand) {
 	if vehicle == nil {
 		return
 	}
-	vehicle.applyConstraintToBackend(command)
+	vehicle.applyBackendTarget(command)
 }
 
 func (v *Vehicle) resetRuntimeMotionState() {
@@ -404,7 +392,7 @@ func (v *Vehicle) applyRecoveryToBackend(command VehicleRecoveryCommand) {
 	}
 }
 
-func (v *Vehicle) applyConstraintToBackend(command vehicleBackendConstraintCommand) {
+func (v *Vehicle) applyBackendTarget(command PhysicsBackendTargetCommand) {
 	if v == nil || v.Body == nil {
 		return
 	}
@@ -413,7 +401,7 @@ func (v *Vehicle) applyConstraintToBackend(command vehicleBackendConstraintComma
 		scene = v.Body.scene
 	}
 	if scene != nil {
-		scene.applyEntityPhysicsConstraint(v.Body, command)
+		scene.applyEntityPhysicsTarget(v.Body, command)
 	}
 	if command.ApplyRotation {
 		v.Yaw = vehicleYawFromRotation(command.Rotation)

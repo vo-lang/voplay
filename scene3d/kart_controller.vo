@@ -110,7 +110,7 @@ func (k *KartController) UpdateIntentFromSyncedState(intent VehicleIntent, dt fl
 	k.BoostTimer = k.Dynamics.BoostTimer
 	k.DriftCharge = k.Dynamics.DriftCharge
 	k.Vehicle.Config = resolved.VehicleConfig
-	k.Vehicle.ApplyForceCommand(resolved.ForceCommand, dt)
+	k.Vehicle.applyForceCommand(resolved.ForceCommand, dt)
 	recovery := k.updateRecovery(resolved.RecoveryInput, dt)
 	k.state.SurfaceID = surface.Name
 	k.state.SurfaceFriction = surface.Friction

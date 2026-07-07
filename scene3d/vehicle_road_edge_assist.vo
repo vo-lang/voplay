@@ -86,7 +86,7 @@ func ApplyVehicleRoadEdgeAssist(vehicle *Vehicle, command VehicleRoadEdgeAssistC
 		result.VelocityAdjusted = true
 	}
 	if result.VelocityAdjusted {
-		applyVehicleConstraint(vehicle, vehicleBackendConstraintCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_assist_velocity"})
+		applyVehicleBackendTarget(vehicle, PhysicsBackendTargetCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_assist_velocity"})
 	}
 	corrected := pos
 	penetration := command.LateralAbs - command.EdgeHalfWidth
@@ -104,7 +104,7 @@ func ApplyVehicleRoadEdgeAssist(vehicle *Vehicle, command VehicleRoadEdgeAssistC
 	}
 	corrected, result.Lifted, vel = vehicleRoadEdgeLift(vehicle, corrected, vel, command)
 	if result.PositionAdjusted || result.Lifted {
-		applyVehicleConstraint(vehicle, vehicleBackendConstraintCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_assist_position"})
+		applyVehicleBackendTarget(vehicle, PhysicsBackendTargetCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_assist_position"})
 	}
 	result.Position = corrected
 	result.LinearVelocity = vel
@@ -133,7 +133,7 @@ func ResolveVehicleRoadEdgeAssistPose(vehicle *Vehicle, command VehicleRoadEdgeA
 	vel := vehicle.LinearVelocity()
 	corrected, result.Lifted, vel = vehicleRoadEdgeLift(vehicle, corrected, vel, command)
 	if result.PositionAdjusted || result.Lifted {
-		applyVehicleConstraint(vehicle, vehicleBackendConstraintCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_post_position"})
+		applyVehicleBackendTarget(vehicle, PhysicsBackendTargetCommand{Position: corrected, ApplyPosition: true, Reason: "vehicle_road_edge_post_position"})
 	}
 	result.Position = corrected
 	result.LinearVelocity = vel
@@ -148,7 +148,7 @@ func vehicleRoadEdgeLift(vehicle *Vehicle, pos, vel voplay.Vec3, command Vehicle
 	pos.Y = minY
 	if vel.Y < 0 {
 		vel.Y = 0
-		applyVehicleConstraint(vehicle, vehicleBackendConstraintCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_clear_downward_velocity"})
+		applyVehicleBackendTarget(vehicle, PhysicsBackendTargetCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "vehicle_road_edge_clear_downward_velocity"})
 	}
 	return pos, true, vel
 }

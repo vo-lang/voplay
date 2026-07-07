@@ -3009,6 +3009,10 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(contactEvents[0].A == body && contactEvents[0].B == wall, "scene3d contact events resolve entities")
 	assert(contactEvents[0].RelativeSpeed >= 0, "scene3d contact events report relative speed")
 	assert(!contactEvents[0].Fallback && contactEvents[0].Source == scene3d.ContactEventSourceBackendManifold, "scene3d contact events require schema-backed backend manifold")
+	pb.contacts = []byte{1, 2, 3}
+	malformedContacts := s.Contacts()
+	packetErrors := s.PhysicsBackendPacketErrors()
+	assert(len(malformedContacts) == 0 && len(packetErrors) == 1 && packetErrors[0].Source == "contact", "scene3d malformed contact packet records backend packet error")
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle wheel count before sync")
 	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: 1}, 1.0 / 60.0)
 	assert(len(pb.vehicleApplyCommands) > 0, "scene3d vehicle sends backend apply command")
@@ -3087,6 +3091,10 @@ func testScene3DVehicleTelemetryAndKartController() {
 	issues := badTelemetry.ValidationIssues(scene3d.VehicleIntent{Throttle: 1}, scene3d.VehicleTelemetryBudget{MaxVelocity: 20})
 	assert(telemetryIssuesHaveCode(issues, scene3d.VehicleTelemetryIssueInvalidNumber), "scene3d vehicle telemetry flags invalid numbers")
 	assert(telemetryIssuesHaveCode(issues, scene3d.VehicleTelemetryIssueInvalidQuaternion), "scene3d vehicle telemetry flags invalid quaternion")
+	pb.bodyState = []byte{9, 9}
+	s.StepAndSyncPhysics(1.0 / 60.0)
+	packetErrors = s.PhysicsBackendPacketErrors()
+	assert(len(packetErrors) >= 2 && packetErrors[len(packetErrors)-1].Source == "body", "scene3d malformed body packet records backend packet error")
 	racingOverlay, err := scene3d.SpawnRacingDebugOverlay(s, track, vehicle, scene3d.RacingDebugOptions{Model: voplay.ModelID(405), SurfaceMarker: true})
 	assert(err == nil, "scene3d racing debug overlay spawns")
 	assert(racingOverlay.TrackOverlay != nil && len(racingOverlay.TrackOverlay.Entities) > 0, "scene3d racing debug overlay track layer")

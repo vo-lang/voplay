@@ -45,35 +45,39 @@ fn hosted_renderer() -> &'static Mutex<HostedRendererState> {
 }
 
 #[cfg(feature = "wasm")]
-fn with_hosted_renderer_mut<R>(f: impl FnOnce(&mut HostedRendererState) -> R) -> R {
+fn with_hosted_renderer_mut<R>(f: impl FnOnce(&mut HostedRendererState) -> R) -> Result<R, String> {
     HOSTED_RENDERER.with(|state| {
         let mut state = state.borrow_mut();
-        f(&mut state)
+        Ok(f(&mut state))
     })
 }
 
 #[cfg(not(feature = "wasm"))]
-fn with_hosted_renderer_mut<R>(f: impl FnOnce(&mut HostedRendererState) -> R) -> R {
-    let mut state = hosted_renderer().lock().unwrap();
-    f(&mut state)
+fn with_hosted_renderer_mut<R>(f: impl FnOnce(&mut HostedRendererState) -> R) -> Result<R, String> {
+    let mut state = hosted_renderer()
+        .lock()
+        .map_err(|_| "voplay: hosted renderer mutex poisoned".to_string())?;
+    Ok(f(&mut state))
 }
 
 #[cfg(feature = "wasm")]
-fn with_hosted_renderer_ref<R>(f: impl FnOnce(&HostedRendererState) -> R) -> R {
+fn with_hosted_renderer_ref<R>(f: impl FnOnce(&HostedRendererState) -> R) -> Result<R, String> {
     HOSTED_RENDERER.with(|state| {
         let state = state.borrow();
-        f(&state)
+        Ok(f(&state))
     })
 }
 
 #[cfg(not(feature = "wasm"))]
-fn with_hosted_renderer_ref<R>(f: impl FnOnce(&HostedRendererState) -> R) -> R {
-    let state = hosted_renderer().lock().unwrap();
-    f(&state)
+fn with_hosted_renderer_ref<R>(f: impl FnOnce(&HostedRendererState) -> R) -> Result<R, String> {
+    let state = hosted_renderer()
+        .lock()
+        .map_err(|_| "voplay: hosted renderer mutex poisoned".to_string())?;
+    Ok(f(&state))
 }
 
 #[allow(dead_code)] // owner: voplay/runtime; expiry: 2026-07-12; used by wasm/island entrypoints outside scoped unit filters.
-pub fn reset_renderer() -> u64 {
+pub fn reset_renderer() -> Result<u64, String> {
     with_hosted_renderer_mut(|state| {
         state.generation = state.generation.wrapping_add(1);
         state.renderer = HostedRenderer::Empty;
@@ -95,32 +99,32 @@ pub fn begin_renderer_init(generation: u64) -> Result<bool, String> {
             HostedRenderer::Initializing | HostedRenderer::Ready(_) => Ok(false),
             HostedRenderer::Failed(msg) => Err(msg.clone()),
         }
-    })
+    })?
 }
 
 #[cfg(feature = "wasm")]
-pub fn fail_renderer_init(generation: u64, msg: String) {
+pub fn fail_renderer_init(generation: u64, msg: String) -> Result<(), String> {
     with_hosted_renderer_mut(|state| {
         if state.generation == generation {
             state.renderer = HostedRenderer::Failed(msg);
         }
-    });
+    })
 }
 
 #[cfg(feature = "wasm")]
-pub fn set_renderer_for_generation(generation: u64, renderer: Renderer) {
+pub fn set_renderer_for_generation(generation: u64, renderer: Renderer) -> Result<(), String> {
     with_hosted_renderer_mut(|state| {
         if state.generation == generation {
             state.renderer = HostedRenderer::Ready(renderer);
         }
-    });
+    })
 }
 
 #[cfg(not(feature = "wasm"))]
-pub fn set_renderer(renderer: Renderer) {
+pub fn set_renderer(renderer: Renderer) -> Result<(), String> {
     with_hosted_renderer_mut(|state| {
         state.renderer = HostedRenderer::Ready(renderer);
-    });
+    })
 }
 
 pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String> {
@@ -131,7 +135,7 @@ pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String>
         #[cfg(feature = "wasm")]
         HostedRenderer::Failed(msg) => Err(msg.clone()),
         HostedRenderer::Empty => Err("voplay: renderer not initialized".to_string()),
-    })
+    })?
 }
 
 pub fn renderer_ready() -> bool {
@@ -146,7 +150,7 @@ pub fn renderer_ready_result() -> Result<bool, String> {
         #[cfg(feature = "wasm")]
         HostedRenderer::Failed(msg) => Err(msg.clone()),
         HostedRenderer::Empty => Err("voplay: renderer not initialized".to_string()),
-    })
+    })?
 }
 
 pub fn submit_renderer_frame(data: &[u8]) -> Result<(), String> {

@@ -1,5 +1,5 @@
-use super::*;
 use super::pass_dispatch::RenderPassResources;
+use super::*;
 use crate::pipeline3d::PrimitiveSubmitter;
 
 pub(super) struct MainOpaquePassExecutor;
@@ -43,12 +43,12 @@ impl MainOpaquePassExecutor {
         };
         let post_color_view = ctx
             .resources
-            .targets
+            .target_registry
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
             ctx.resources
-                .targets
+                .target_registry
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -57,7 +57,7 @@ impl MainOpaquePassExecutor {
         let receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(
                 ctx.resources
-                    .targets
+                    .target_registry
                     .receiver_mask_view()
                     .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
             )
@@ -67,7 +67,7 @@ impl MainOpaquePassExecutor {
         let surface_props_view = if ctx.main_aux_targets_enabled {
             Some(
                 ctx.resources
-                    .targets
+                    .target_registry
                     .surface_props_view()
                     .ok_or_else(|| "voplay: missing surface props target".to_string())?,
             )
@@ -77,7 +77,7 @@ impl MainOpaquePassExecutor {
         let main_receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
                 ctx.resources
-                    .targets
+                    .target_registry
                     .msaa_receiver_mask_view()
                     .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
             } else {
@@ -90,7 +90,7 @@ impl MainOpaquePassExecutor {
         let main_surface_props_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
                 ctx.resources
-                    .targets
+                    .target_registry
                     .msaa_surface_props_view()
                     .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
             } else {
@@ -152,7 +152,7 @@ impl MainOpaquePassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_main"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.resources.targets.depth_view().map(|dv| {
+            depth_stencil_attachment: ctx.resources.target_registry.depth_view().map(|dv| {
                 wgpu::RenderPassDepthStencilAttachment {
                     view: dv,
                     depth_ops: Some(wgpu::Operations {
@@ -170,7 +170,7 @@ impl MainOpaquePassExecutor {
         if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
             (ctx.skybox_cubemap_id, ctx.camera3d_state)
         {
-            if let Some(cubemap) = ctx.resources.texture_manager.get_cubemap(cubemap_id) {
+            if let Some(cubemap) = ctx.resources.assets.textures.get_cubemap(cubemap_id) {
                 let skybox_start = if ctx.perf_enabled {
                     Some(perf_now())
                 } else {
@@ -181,9 +181,10 @@ impl MainOpaquePassExecutor {
                 let vp = math3d::mat4_mul(&proj, &view_rot);
                 let inv_vp = math3d::mat4_inverse(&vp).unwrap_or(math3d::MAT4_IDENTITY);
                 ctx.resources
-                    .pipeline_skybox
-                    .set_camera(&ctx.resources.queue, &inv_vp);
-                ctx.resources.pipeline_skybox.draw(
+                    .pipelines
+                    .skybox
+                    .set_camera(&ctx.resources.gpu.gpu_queue, &inv_vp);
+                ctx.resources.pipelines.skybox.draw(
                     &mut render_pass,
                     cubemap,
                     ctx.main_aux_targets_enabled,
@@ -199,19 +200,19 @@ impl MainOpaquePassExecutor {
                 } else {
                     None
                 };
-                ctx.resources.pipeline3d.set_camera_and_lights(
-                    &ctx.resources.queue,
+                ctx.resources.pipelines.mesh3d.set_camera_and_lights(
+                    &ctx.resources.gpu.gpu_queue,
                     cam3d,
                     ctx.light_uniform,
                 );
-                let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
-                ctx.resources.pipeline3d.draw_models(
-                    &ctx.resources.device,
-                    &ctx.resources.queue,
+                let shadow_view = ctx.resources.pipelines.shadow.shadow_texture_view();
+                ctx.resources.pipelines.mesh3d.draw_models(
+                    &ctx.resources.gpu.gpu_device,
+                    &ctx.resources.gpu.gpu_queue,
                     &mut render_pass,
                     ctx.model_draws,
-                    &ctx.resources.model_manager,
-                    &ctx.resources.texture_manager,
+                    &ctx.resources.assets.models,
+                    &ctx.resources.assets.textures,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
                 );
@@ -227,27 +228,25 @@ impl MainOpaquePassExecutor {
                 } else {
                     None
                 };
-                ctx.resources.primitive_pipeline.set_camera_and_lights(
-                    &ctx.resources.queue,
+                ctx.resources.pipelines.primitive.set_camera_and_lights(
+                    &ctx.resources.gpu.gpu_queue,
                     cam3d,
                     ctx.light_uniform,
                 );
-                let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+                let shadow_view = ctx.resources.pipelines.shadow.shadow_texture_view();
                 let primitive_submit_plan = PrimitiveSubmitter::draw(
                     crate::primitive_pipeline::PrimitiveRenderFilter::Main,
                 );
-                let _primitive_submit_report = (
-                    primitive_submit_plan.owner,
-                    primitive_submit_plan.report,
-                );
-                primitive_stats = ctx.resources.primitive_pipeline.draw(
-                    &ctx.resources.device,
-                    &ctx.resources.queue,
+                let _primitive_submit_report =
+                    (primitive_submit_plan.owner, primitive_submit_plan.report);
+                primitive_stats = ctx.resources.pipelines.primitive.draw(
+                    &ctx.resources.gpu.gpu_device,
+                    &ctx.resources.gpu.gpu_queue,
                     &mut render_pass,
                     ctx.primitive_draws,
                     ctx.primitive_chunks,
-                    &ctx.resources.model_manager,
-                    &ctx.resources.texture_manager,
+                    &ctx.resources.assets.models,
+                    &ctx.resources.assets.textures,
                     shadow_view,
                     ctx.main_aux_targets_enabled,
                     primitive_submit_plan.filter,

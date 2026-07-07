@@ -1,5 +1,5 @@
-use super::*;
 use super::pass_dispatch::RenderPassResources;
+use super::*;
 use crate::pipeline3d::WaterSubmitter;
 
 pub(super) struct WaterPassExecutor;
@@ -33,12 +33,12 @@ impl WaterPassExecutor {
         };
         let post_color_view = ctx
             .resources
-            .targets
+            .target_registry
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
             ctx.resources
-                .targets
+                .target_registry
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -47,7 +47,7 @@ impl WaterPassExecutor {
         let receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(
                 ctx.resources
-                    .targets
+                    .target_registry
                     .receiver_mask_view()
                     .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
             )
@@ -57,7 +57,7 @@ impl WaterPassExecutor {
         let surface_props_view = if ctx.main_aux_targets_enabled {
             Some(
                 ctx.resources
-                    .targets
+                    .target_registry
                     .surface_props_view()
                     .ok_or_else(|| "voplay: missing surface props target".to_string())?,
             )
@@ -67,7 +67,7 @@ impl WaterPassExecutor {
         let main_receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
                 ctx.resources
-                    .targets
+                    .target_registry
                     .msaa_receiver_mask_view()
                     .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
             } else {
@@ -80,7 +80,7 @@ impl WaterPassExecutor {
         let main_surface_props_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
                 ctx.resources
-                    .targets
+                    .target_registry
                     .msaa_surface_props_view()
                     .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
             } else {
@@ -146,7 +146,7 @@ impl WaterPassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_water"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.resources.targets.depth_view().map(|dv| {
+            depth_stencil_attachment: ctx.resources.target_registry.depth_view().map(|dv| {
                 wgpu::RenderPassDepthStencilAttachment {
                     view: dv,
                     depth_ops: Some(wgpu::Operations {
@@ -159,22 +159,22 @@ impl WaterPassExecutor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        ctx.resources.primitive_pipeline.set_camera_and_lights(
-            &ctx.resources.queue,
+        ctx.resources.pipelines.primitive.set_camera_and_lights(
+            &ctx.resources.gpu.gpu_queue,
             cam3d,
             ctx.light_uniform,
         );
-        let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+        let shadow_view = ctx.resources.pipelines.shadow.shadow_texture_view();
         let water_submit_plan = WaterSubmitter::draw();
         let _water_submit_report = (water_submit_plan.owner, water_submit_plan.report);
-        let stats = ctx.resources.primitive_pipeline.draw(
-            &ctx.resources.device,
-            &ctx.resources.queue,
+        let stats = ctx.resources.pipelines.primitive.draw(
+            &ctx.resources.gpu.gpu_device,
+            &ctx.resources.gpu.gpu_queue,
             &mut render_pass,
             ctx.primitive_draws,
             ctx.primitive_chunks,
-            &ctx.resources.model_manager,
-            &ctx.resources.texture_manager,
+            &ctx.resources.assets.models,
+            &ctx.resources.assets.textures,
             shadow_view,
             ctx.main_aux_targets_enabled,
             water_submit_plan.filter,

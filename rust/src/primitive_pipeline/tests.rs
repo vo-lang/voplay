@@ -124,6 +124,89 @@ fn primitive_pipeline_tracks_resident_chunks() {
 }
 
 #[test]
+fn primitive_pipeline_single_instance_update_uses_partial_upload() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let Some(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+    else {
+        return;
+    };
+    let adapter_limits = adapter.limits();
+    if adapter_limits.max_inter_stage_shader_components < 44 {
+        return;
+    }
+    let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+    limits.max_inter_stage_shader_components = adapter_limits
+        .max_inter_stage_shader_components
+        .min(wgpu::Limits::default().max_inter_stage_shader_components);
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("voplay_primitive_partial_upload_test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::default(),
+        },
+        None,
+    ))
+    .expect("request device");
+    let mut pipeline = PrimitivePipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+        1,
+    );
+    let mut models = ModelManager::new();
+    let model_id = models.create_cube(&device, &queue);
+    let textures = TextureManager::new(&device);
+    let mut update = PrimitiveObjectUpdate {
+        scene_id: 1,
+        layer_id: 2,
+        object_id: 3,
+        model_id,
+        pos: Vec3::ZERO,
+        rot: Quat::IDENTITY,
+        scale: Vec3::ONE,
+        material: MaterialOverride::default(),
+        visible: true,
+        flags: 0,
+        lod_near: 0.0,
+        lod_far: 0.0,
+        wind_strength: 0.0,
+        atlas_uv: [0.0, 0.0, 1.0, 1.0],
+    };
+    pipeline.replace_chunk(&device, &queue, 1, 2, 5, &[update], &models, &textures);
+    assert_eq!(pipeline.resident_chunks.len(), 1);
+    assert!(pipeline
+        .resident_chunks
+        .values()
+        .any(|chunk| !chunk.depth_batches.is_empty()));
+
+    update.pos = Vec3 {
+        x: 1.0,
+        y: 0.25,
+        z: -0.5,
+    };
+    pipeline.upsert_instance(&device, &queue, update, &models, &textures);
+    assert_eq!(pipeline.rebuild_queue.len(), 1);
+    assert_eq!(
+        pipeline.flush_resident_rebuild_queue(&device, &queue, &models),
+        0
+    );
+    assert_eq!(pipeline.last_resident_rebuild_policy.full_rebuild_count, 0);
+    assert!(pipeline.last_resident_rebuild_policy.dirty_upload_bytes > 0);
+    assert_eq!(
+        pipeline.last_resident_rebuild_policy.rebuild_reason,
+        "dirty-range-partial-upload"
+    );
+}
+
+#[test]
 fn primitive_pipeline_classifies_render_modes() {
     let mut draw = PrimitiveDraw {
         model_id: 1,

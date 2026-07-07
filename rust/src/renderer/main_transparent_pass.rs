@@ -1,5 +1,5 @@
-use super::*;
 use super::pass_dispatch::RenderPassResources;
+use super::*;
 use crate::pipeline3d::PrimitiveSubmitter;
 use std::cmp::Ordering;
 
@@ -101,12 +101,12 @@ impl MainTransparentPassExecutor {
         }
         let post_color_view = ctx
             .resources
-            .targets
+            .target_registry
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
             ctx.resources
-                .targets
+                .target_registry
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -133,25 +133,25 @@ impl MainTransparentPassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_main_transparent"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.resources.targets.depth_view().map(|depth_view| {
-                wgpu::RenderPassDepthStencilAttachment {
+            depth_stencil_attachment: ctx.resources.target_registry.depth_view().map(
+                |depth_view| wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
-                }
-            }),
+                },
+            ),
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        ctx.resources.primitive_pipeline.set_camera_and_lights(
-            &ctx.resources.queue,
+        ctx.resources.pipelines.primitive.set_camera_and_lights(
+            &ctx.resources.gpu.gpu_queue,
             cam3d,
             ctx.light_uniform,
         );
-        let shadow_view = ctx.resources.pipeline_shadow.shadow_texture_view();
+        let shadow_view = ctx.resources.pipelines.shadow.shadow_texture_view();
         let sorted_items = sorted_transparent_draw_items(cam3d, ctx.primitive_draws);
         let sorted_primitive_draws = sorted_items
             .iter()
@@ -163,18 +163,16 @@ impl MainTransparentPassExecutor {
             let primitive_submit_plan = PrimitiveSubmitter::draw(
                 crate::primitive_pipeline::PrimitiveRenderFilter::Translucent,
             );
-            let _primitive_submit_report = (
-                primitive_submit_plan.owner,
-                primitive_submit_plan.report,
-            );
-            let stats = ctx.resources.primitive_pipeline.draw(
-                &ctx.resources.device,
-                &ctx.resources.queue,
+            let _primitive_submit_report =
+                (primitive_submit_plan.owner, primitive_submit_plan.report);
+            let stats = ctx.resources.pipelines.primitive.draw(
+                &ctx.resources.gpu.gpu_device,
+                &ctx.resources.gpu.gpu_queue,
                 &mut render_pass,
                 &sorted_primitive_draws,
                 ctx.primitive_chunks,
-                &ctx.resources.model_manager,
-                &ctx.resources.texture_manager,
+                &ctx.resources.assets.models,
+                &ctx.resources.assets.textures,
                 shadow_view,
                 false,
                 primitive_submit_plan.filter,

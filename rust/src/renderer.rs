@@ -123,7 +123,9 @@ fn raw_mesh_read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
     if data.len().saturating_sub(*pos) < 4 {
         return Err("raw mesh payload ended before u32".to_string());
     }
-    let value = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&data[*pos..*pos + 4]);
+    let value = u32::from_le_bytes(bytes);
     *pos += 4;
     Ok(value)
 }
@@ -132,7 +134,9 @@ fn raw_mesh_read_f32(data: &[u8], pos: &mut usize) -> Result<f32, String> {
     if data.len().saturating_sub(*pos) < 4 {
         return Err("raw mesh payload ended before f32".to_string());
     }
-    let value = f32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&data[*pos..*pos + 4]);
+    let value = f32::from_le_bytes(bytes);
     *pos += 4;
     Ok(value)
 }
@@ -592,14 +596,14 @@ impl Renderer {
     }
 
     /// Resize the surface and depth buffer.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 {
-            return;
+            return Ok(());
         }
         #[cfg(not(feature = "wasm"))]
         self.set_logical_screen_size(width as f32, height as f32);
         if self.surface_config.width == width && self.surface_config.height == height {
-            return;
+            return Ok(());
         }
         self.surface_config.width = width;
         self.surface_config.height = height;
@@ -623,20 +627,20 @@ impl Renderer {
         } else {
             self.resources
                 .depth_view()
-                .expect("voplay: missing depth target after resize")
+                .ok_or_else(|| "voplay: missing depth target after resize".to_string())?
         };
         let post_color_view = self
             .resources
             .post_color_view()
-            .expect("voplay: missing post target after resize");
+            .ok_or_else(|| "voplay: missing post target after resize".to_string())?;
         let receiver_mask_view = self
             .resources
             .receiver_mask_view()
-            .expect("voplay: missing receiver mask target after resize");
+            .ok_or_else(|| "voplay: missing receiver mask target after resize".to_string())?;
         let surface_props_view = self
             .resources
             .surface_props_view()
-            .expect("voplay: missing surface props target after resize");
+            .ok_or_else(|| "voplay: missing surface props target after resize".to_string())?;
         let post_bind_group = self.pipeline_post.create_bind_group(
             &self.device,
             post_color_view,
@@ -651,6 +655,7 @@ impl Renderer {
             surface_props_view,
         );
         self.post_bind_group = Some(post_bind_group);
+        Ok(())
     }
 
     // --- Model management ---
@@ -1136,7 +1141,9 @@ impl Renderer {
             );
             canvas.set_width(w);
             canvas.set_height(h);
-            self.resize(w, h);
+            if let Err(err) = self.resize(w, h) {
+                eprintln!("voplay: canvas resize failed: {err}");
+            }
         }
     }
 

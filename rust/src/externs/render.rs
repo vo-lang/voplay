@@ -65,7 +65,7 @@ fn create_wasm_renderer(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
         canvas_id, no_vsync
     ));
     crate::input::reset_wasm_input_handlers();
-    let generation = crate::renderer_runtime::reset_renderer();
+    let generation = crate::renderer_runtime::reset_renderer()?;
     let should_start = crate::renderer_runtime::begin_renderer_init(generation)?;
     if !should_start {
         wasm_debug(&format!(
@@ -119,7 +119,15 @@ fn create_wasm_renderer(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
             match Renderer::new(&instance, surface, width, height, no_vsync).await {
                 Ok(mut renderer) => {
                     renderer.set_canvas_id(canvas_id_owned);
-                    crate::renderer_runtime::set_renderer_for_generation(generation, renderer);
+                    if let Err(msg) =
+                        crate::renderer_runtime::set_renderer_for_generation(generation, renderer)
+                    {
+                        wasm_debug(&format!(
+                            "voplay renderer async device ready but publish failed generation={} error={}",
+                            generation, msg
+                        ));
+                        log::error!("voplay: WASM renderer publish failed: {}", msg);
+                    }
                     wasm_debug(&format!(
                         "voplay renderer async device ready generation={}",
                         generation
@@ -127,7 +135,7 @@ fn create_wasm_renderer(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
                     log::info!("voplay: WASM renderer initialized ({}x{})", width, height);
                 }
                 Err(msg) => {
-                    crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
+                    let _ = crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
                     wasm_debug(&format!(
                         "voplay renderer async device failed generation={} error={}",
                         generation, msg
@@ -141,7 +149,7 @@ fn create_wasm_renderer(canvas_id: &str, no_vsync: bool) -> Result<(), String> {
     })();
 
     if let Err(msg) = &result {
-        crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
+        let _ = crate::renderer_runtime::fail_renderer_init(generation, msg.clone());
         wasm_debug(&format!(
             "voplay renderer init failed before async generation={} error={}",
             generation, msg
@@ -253,7 +261,7 @@ fn create_native_renderer(canvas_ref: &str, no_vsync: bool) -> Result<(), String
         desc.height.max(1),
         no_vsync,
     ))?;
-    crate::renderer_runtime::set_renderer(renderer);
+    crate::renderer_runtime::set_renderer(renderer)?;
     Ok(())
 }
 

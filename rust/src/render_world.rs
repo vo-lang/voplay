@@ -183,7 +183,10 @@ impl RenderBatchPlan {
         batches
     }
 
-    pub fn primitive_chunk_batches(&mut self, chunks: &[PrimitiveChunkRef]) -> Vec<PrimitiveChunkRef> {
+    pub fn primitive_chunk_batches(
+        &mut self,
+        chunks: &[PrimitiveChunkRef],
+    ) -> Vec<PrimitiveChunkRef> {
         let (batches, invalid) = collect_indexed_batches(&self.primitive_chunk_indices, chunks);
         self.record_invalid_batch_indices(invalid, "invalid-primitive-chunk-index");
         batches
@@ -308,7 +311,7 @@ impl RenderBatchPlanner {
                     primitive_chunk_info
                         .iter()
                         .find(|info| info.chunk == *chunk)
-            })
+                })
             else {
                 plan.missing_chunk_info = plan.missing_chunk_info.saturating_add(1);
                 plan.skip_reasons.push("missing-primitive-chunk-info");

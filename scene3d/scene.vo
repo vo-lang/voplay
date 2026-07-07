@@ -142,6 +142,9 @@ type Scene struct {
 	physCmds codec.ByteWriter
 	bodyMap map[int]*Entity
 	vehicles []*Vehicle
+	physicsPacketErrors []PhysicsBackendPacketError
+	physicsDirectBypassHits int
+	physicsConstraintBypassHits int
 	animationInfoCache map[int]AnimationModelInfo
 	renderSceneID int
 	renderSceneCreated bool
@@ -647,6 +650,9 @@ func (s *Scene) Clear() {
 	s.nextAnimationTargetID = 1
 	s.nextVehicleID = 1
 	s.vehicles = nil
+	s.physicsPacketErrors = nil
+	s.physicsDirectBypassHits = 0
+	s.physicsConstraintBypassHits = 0
 	s.physCmds.Reset()
 	if s.renderSceneCreated {
 		s.renderSceneCleared = true
@@ -658,6 +664,45 @@ func (s *Scene) Clear() {
 
 func (s *Scene) EntityCount() int {
 	return len(s.entities)
+}
+
+func (s *Scene) recordPhysicsBackendPacketError(err PhysicsBackendPacketError) {
+	if s == nil {
+		return
+	}
+	s.physicsPacketErrors = append(s.physicsPacketErrors, err)
+}
+
+func (s *Scene) PhysicsBackendPacketErrors() []PhysicsBackendPacketError {
+	out := []PhysicsBackendPacketError{}
+	if s == nil {
+		return out
+	}
+	for _, err := range s.physicsPacketErrors {
+		out = append(out, err)
+	}
+	return out
+}
+
+func (s *Scene) PhysicsPacketErrorCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.physicsPacketErrors)
+}
+
+func (s *Scene) PhysicsDirectBypassHits() int {
+	if s == nil {
+		return 0
+	}
+	return s.physicsDirectBypassHits
+}
+
+func (s *Scene) PhysicsConstraintBypassHits() int {
+	if s == nil {
+		return 0
+	}
+	return s.physicsConstraintBypassHits
 }
 
 func (s *Scene) FindByID(id int) *Entity {
@@ -825,13 +870,6 @@ func (s *Scene) UpdateAudio() {
 	voplay.UpdateSpatialAudio()
 }
 
-func ProductStepAndSyncPhysics(scene *Scene, dt float64) {
-	if scene == nil {
-		return
-	}
-	scene.StepAndSyncPhysics(dt)
-}
-
 func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
@@ -840,12 +878,18 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	state := physBackend.Step(s.worldID, dt, cmdBytes)
 	s.physCmds.Reset()
 	r := codec.NewByteReader(state)
-	_, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendBodyPacketKind)
-	if !ok || r.Remaining() < 4 {
+	header, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendBodyPacketKind)
+	if !ok {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: "invalid_header", ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(state)})
+		return
+	}
+	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
 		return
 	}
 	count := r.ReadU32()
 	if r.Remaining() != count * physics3DBodyStateBytes {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "body_payload_length_mismatch", ExpectedBytes: count * physics3DBodyStateBytes, ActualBytes: r.Remaining()})
 		return
 	}
 	for i := 0; i < count; i++ {
@@ -922,17 +966,23 @@ func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
 
 func (s *Scene) Contacts() []Contact {
 	if s.worldID == 0 {
-		return nil
+		return []Contact{}
 	}
 	data := physBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
-	_, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendContactPacketKind)
-	if !ok || r.Remaining() < 4 {
-		return nil
+	header, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendContactPacketKind)
+	if !ok {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: PhysicsBackendContactPacketKind, Reason: "invalid_header", ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(data)})
+		return []Contact{}
+	}
+	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: header.Kind, Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
+		return []Contact{}
 	}
 	count := r.ReadU32()
 	if r.Remaining() != count * physicsContactDetailBytes {
-		return nil
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: header.Kind, Reason: "contact_payload_length_mismatch", ExpectedBytes: count * physicsContactDetailBytes, ActualBytes: r.Remaining()})
+		return []Contact{}
 	}
 	var contacts []Contact
 	for i := 0; i < count; i++ {

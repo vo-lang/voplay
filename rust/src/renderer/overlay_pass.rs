@@ -1,5 +1,5 @@
-use super::*;
 use super::pass_dispatch::RenderPassResources;
+use super::*;
 use crate::draw_list::Frame2D;
 
 pub(super) struct OverlayPassExecutor;
@@ -38,7 +38,7 @@ impl OverlayPassExecutor {
             let cam_offset = dc.camera_idx as u32 * ctx.camera_alignment;
             match &dc.kind {
                 DrawCallKind::Shapes { start, count } => {
-                    ctx.resources.pipeline2d.draw_range(
+                    ctx.resources.pipelines.two_d.draw_range(
                         &mut overlay_pass,
                         &ctx.resources.camera_bind_group,
                         &[cam_offset],
@@ -51,8 +51,8 @@ impl OverlayPassExecutor {
                     start,
                     count,
                 } => {
-                    if let Some(tex) = ctx.resources.texture_manager.get(*texture_id) {
-                        ctx.resources.pipeline_sprite.draw_range(
+                    if let Some(tex) = ctx.resources.assets.textures.get(*texture_id) {
+                        ctx.resources.pipelines.sprite.draw_range(
                             &mut overlay_pass,
                             &ctx.resources.camera_bind_group,
                             &[cam_offset],

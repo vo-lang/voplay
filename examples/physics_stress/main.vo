@@ -48,6 +48,9 @@ type ScenarioReport struct {
 	MaxContactCount int `json:"maxContactCount"`
 	MaxContactEvents int `json:"maxContactEvents"`
 	FallbackContactEvents int `json:"fallbackContactEvents"`
+	PacketErrors int `json:"packetErrors"`
+	DirectBypassHits int `json:"directBypassHits"`
+	ConstraintBypassHits int `json:"constraintBypassHits"`
 	MaxStuckSeconds float64 `json:"maxStuckSeconds"`
 	InvalidSamples int `json:"invalidSamples"`
 	RecoveryRequests int `json:"recoveryRequests"`
@@ -237,6 +240,9 @@ func executeScenario(def ScenarioDefinition, runtime *ScenarioRuntime) ScenarioR
 	for i, vehicle := range runtime.Vehicles {
 		report.Final = append(report.Final, makeSample(stressSteps, i, vehicle.Telemetry(), runtime.LastStates[i]))
 	}
+	report.PacketErrors = runtime.Scene.PhysicsPacketErrorCount()
+	report.DirectBypassHits = runtime.Scene.PhysicsDirectBypassHits()
+	report.ConstraintBypassHits = runtime.Scene.PhysicsConstraintBypassHits()
 	report.validate()
 	if len(report.Issues) > 0 {
 		report.Status = "fail"
@@ -492,6 +498,15 @@ func (r *ScenarioReport) validate() {
 	}
 	if r.FallbackContactEvents > 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.contact_fallback", Severity: 0, Detail: strconv.Itoa(r.FallbackContactEvents) + " fallback contact events"})
+	}
+	if r.PacketErrors > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.packet_errors", Severity: 0, Detail: strconv.Itoa(r.PacketErrors) + " backend packet errors"})
+	}
+	if r.DirectBypassHits > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.direct_bypass", Severity: 0, Detail: strconv.Itoa(r.DirectBypassHits) + " direct bypass hits"})
+	}
+	if r.ConstraintBypassHits > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.constraint_bypass", Severity: 0, Detail: strconv.Itoa(r.ConstraintBypassHits) + " constraint bypass hits"})
 	}
 	if r.Name == "multi-vehicle-scripted-soak" && r.VehicleCount < 24 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.multi_vehicle_count", Severity: 0, Detail: strconv.Itoa(r.VehicleCount) + " vehicles < 24"})

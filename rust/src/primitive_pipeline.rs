@@ -202,6 +202,7 @@ struct PrimitiveChunkDirtyRange {
     chunk_ref: PrimitiveChunkRef,
     dirty_start: u32,
     dirty_count: u32,
+    requires_full_rebuild: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

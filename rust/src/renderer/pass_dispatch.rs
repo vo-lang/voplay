@@ -10,32 +10,48 @@ use super::*;
 use crate::draw_list::Frame2D;
 use crate::renderer_frame::RenderPassNodeDispatcher;
 
+pub(super) struct RenderGpuScope<'a> {
+    pub(super) gpu_device: &'a wgpu::Device,
+    pub(super) gpu_queue: &'a wgpu::Queue,
+    pub(super) surface: &'a wgpu::SurfaceConfiguration,
+}
+
+pub(super) struct RenderPostBindings<'a> {
+    pub(super) uniform_buffer: &'a wgpu::Buffer,
+    pub(super) decal_uniform_buffer: &'a wgpu::Buffer,
+    pub(super) bind_group: &'a Option<wgpu::BindGroup>,
+}
+
+pub(super) struct RenderPipelineScope<'a> {
+    pub(super) two_d: &'a mut Pipeline2D,
+    pub(super) sprite: &'a mut PipelineSprite,
+    pub(super) mesh3d: &'a mut Pipeline3D,
+    pub(super) primitive: &'a mut PrimitivePipeline,
+    pub(super) depth: &'a mut PipelineDepth,
+    pub(super) shadow: &'a mut PipelineShadow,
+    pub(super) skybox: &'a mut PipelineSkybox,
+    pub(super) post: &'a PipelinePost,
+}
+
+pub(super) struct RenderAssetScope<'a> {
+    pub(super) models: &'a ModelManager,
+    pub(super) textures: &'a TextureManager,
+    pub(super) world: &'a RenderWorld,
+}
+
 pub(super) struct RenderPassResources<'a> {
-    pub(super) device: &'a wgpu::Device,
-    pub(super) queue: &'a wgpu::Queue,
-    pub(super) surface_config: &'a wgpu::SurfaceConfiguration,
-    pub(super) targets: &'a RenderResourceRegistry,
-    pub(super) post_uniform_buffer: &'a wgpu::Buffer,
-    pub(super) post_decal_uniform_buffer: &'a wgpu::Buffer,
-    pub(super) post_bind_group: &'a Option<wgpu::BindGroup>,
+    pub(super) gpu: RenderGpuScope<'a>,
+    pub(super) target_registry: &'a RenderResourceRegistry,
+    pub(super) post_bindings: RenderPostBindings<'a>,
     pub(super) camera_bind_group: &'a wgpu::BindGroup,
-    pub(super) pipeline2d: &'a mut Pipeline2D,
-    pub(super) pipeline_sprite: &'a mut PipelineSprite,
-    pub(super) pipeline3d: &'a mut Pipeline3D,
-    pub(super) primitive_pipeline: &'a mut PrimitivePipeline,
-    pub(super) pipeline_depth: &'a mut PipelineDepth,
-    pub(super) pipeline_shadow: &'a mut PipelineShadow,
-    pub(super) pipeline_skybox: &'a mut PipelineSkybox,
-    pub(super) pipeline_post: &'a PipelinePost,
-    pub(super) model_manager: &'a ModelManager,
-    pub(super) texture_manager: &'a TextureManager,
-    pub(super) render_world: &'a RenderWorld,
+    pub(super) pipelines: RenderPipelineScope<'a>,
+    pub(super) assets: RenderAssetScope<'a>,
 }
 
 impl RenderPassResources<'_> {
     pub(super) fn clear_texture_bind_group_caches(&mut self) {
-        self.pipeline3d.clear_texture_bind_group_cache();
-        self.primitive_pipeline.clear_texture_bind_group_cache();
+        self.pipelines.mesh3d.clear_texture_bind_group_cache();
+        self.pipelines.primitive.clear_texture_bind_group_cache();
     }
 }
 

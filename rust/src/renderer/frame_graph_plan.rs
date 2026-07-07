@@ -32,20 +32,35 @@ impl Renderer {
         };
         let mut frame_graph = FrameGraph::single_view(desc.frame_id, desc.diagnostic_flags);
         frame_graph.declare_external_target(RES_SURFACE_COLOR, true);
-        frame_graph.declare_target(RES_MAIN_COLOR, self.resources.main_color_ready());
-        frame_graph.declare_target(RES_DEPTH, self.resources.depth_view().is_some());
+        frame_graph.declare_target(
+            RES_MAIN_COLOR,
+            self.resources.validate_backing_generation(RES_MAIN_COLOR),
+        );
+        frame_graph.declare_target(
+            RES_DEPTH,
+            self.resources.validate_backing_generation(RES_DEPTH),
+        );
         frame_graph.declare_target(RES_SHADOW_MAP, true);
-        frame_graph.declare_target(RES_POST_COLOR, self.resources.post_color_view().is_some());
+        frame_graph.declare_target(
+            RES_POST_COLOR,
+            self.resources.validate_backing_generation(RES_POST_COLOR),
+        );
         frame_graph.declare_external_target(RES_OVERLAY, true);
         frame_graph.declare_transient_target(RES_CAPTURE, false);
         frame_graph.declare_external_target(RES_READBACK, false);
         frame_graph.declare_target(
             RES_RECEIVER_MASK,
-            !desc.post_depth_active || self.resources.receiver_mask_view().is_some(),
+            !desc.post_depth_active
+                || self
+                    .resources
+                    .validate_backing_generation(RES_RECEIVER_MASK),
         );
         frame_graph.declare_target(
             RES_SURFACE_PROPS,
-            !desc.post_depth_active || self.resources.surface_props_view().is_some(),
+            !desc.post_depth_active
+                || self
+                    .resources
+                    .validate_backing_generation(RES_SURFACE_PROPS),
         );
         frame_graph.plan_pass(
             RenderPassKind::DepthPrepass,

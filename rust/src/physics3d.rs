@@ -33,7 +33,8 @@ fn serialize_backend_packet(kind: u8, payload: Vec<u8>) -> Vec<u8> {
     packet.push(kind);
     packet.extend_from_slice(&PHYSICS_BACKEND_PACKET_SCHEMA_VERSION.to_le_bytes());
     packet.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    packet.extend_from_slice(&physics_backend_packet_schema_hash(kind, payload.len()).to_le_bytes());
+    packet
+        .extend_from_slice(&physics_backend_packet_schema_hash(kind, payload.len()).to_le_bytes());
     packet.extend_from_slice(&payload);
     packet
 }
@@ -1037,8 +1038,14 @@ mod tests {
         assert_eq!(version, PHYSICS_BACKEND_PACKET_SCHEMA_VERSION);
         let payload_len = u32::from_le_bytes(packet[5..9].try_into().unwrap()) as usize;
         let schema_hash = u32::from_le_bytes(packet[9..13].try_into().unwrap());
-        assert_eq!(schema_hash, physics_backend_packet_schema_hash(kind, payload_len));
-        assert_eq!(packet.len(), PHYSICS_BACKEND_PACKET_HEADER_BYTES + payload_len);
+        assert_eq!(
+            schema_hash,
+            physics_backend_packet_schema_hash(kind, payload_len)
+        );
+        assert_eq!(
+            packet.len(),
+            PHYSICS_BACKEND_PACKET_HEADER_BYTES + payload_len
+        );
         &packet[PHYSICS_BACKEND_PACKET_HEADER_BYTES..]
     }
 

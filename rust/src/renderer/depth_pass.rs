@@ -1,5 +1,5 @@
-use super::*;
 use super::pass_dispatch::RenderPassResources;
+use super::*;
 
 pub(super) struct DepthPassExecutor;
 
@@ -31,7 +31,8 @@ impl DepthPassExecutor {
         let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
         if !ctx.primitive_depth_chunks.is_empty() {
             ctx.resources
-                .primitive_pipeline
+                .pipelines
+                .primitive
                 .append_resident_depth_draws(ctx.primitive_depth_chunks, ctx.primitive_depth_draws);
         }
         let (depth_model_draws, depth_primitive_draws, depth_view_proj) =
@@ -48,20 +49,20 @@ impl DepthPassExecutor {
                     math3d::MAT4_IDENTITY,
                 )
             };
-        ctx.resources.pipeline_depth.render_depth_pass(
-            &ctx.resources.device,
+        ctx.resources.pipelines.depth.render_depth_pass(
+            &ctx.resources.gpu.gpu_device,
             ctx.encoder,
-            &ctx.resources.queue,
+            &ctx.resources.gpu.gpu_queue,
             &depth_view_proj,
             depth_model_draws,
             depth_primitive_draws,
             empty_primitive_chunks,
-            &ctx.resources.primitive_pipeline,
-            &ctx.resources.model_manager,
+            &ctx.resources.pipelines.primitive,
+            &ctx.resources.assets.models,
         );
         Ok(DepthPassResult {
             elapsed_ms: elapsed_ms_opt(depth_start),
-            primitive_draw_calls: ctx.resources.pipeline_depth.last_primitive_batch_count(),
+            primitive_draw_calls: ctx.resources.pipelines.depth.last_primitive_batch_count(),
         })
     }
 

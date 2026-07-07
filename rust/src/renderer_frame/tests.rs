@@ -210,6 +210,23 @@ fn frame_graph_registry_tracks_resize_and_lifetime_churn() {
 }
 
 #[test]
+fn frame_graph_registry_requires_actual_backing_generation_for_ready_targets() {
+    let mut registry = RenderResourceRegistry::default();
+    registry.declare_target(RES_DEPTH, true, RenderResourceLifetime::Persistent);
+    assert!(registry.is_ready(RES_DEPTH));
+    assert!(!registry.validate_backing_generation(RES_DEPTH));
+    assert!(registry.actual_texture_view(RES_DEPTH).is_none());
+    registry.mark_resize_generation(3);
+    let target = registry
+        .targets()
+        .iter()
+        .find(|target| target.resource == RES_DEPTH)
+        .expect("depth target status");
+    assert_eq!(target.backing_generation, 0);
+    assert!(!registry.validate_backing_generation(RES_DEPTH));
+}
+
+#[test]
 fn frame_graph_declares_capture_and_readback_lifetimes() {
     let mut graph = FrameGraph::single_view(11, 0);
     graph.declare_target(RES_SHADOW_MAP, true);

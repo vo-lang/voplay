@@ -2,7 +2,7 @@
 // Provides canvas from DOM and a host-provided transport.
 
 import type { IslandChannel } from "./island_channel";
-import { RenderIsland, type VoWebModule } from "./render_bootstrap";
+import { RenderIsland, type RenderIslandQuiesceResult, type VoWebModule } from "./render_bootstrap";
 
 export interface WebViewBootstrapConfig {
   canvasId: string;
@@ -13,6 +13,11 @@ export interface WebViewBootstrapConfig {
 }
 
 const activeIslands = new Set<RenderIsland>();
+
+export interface WebViewQuiesceResult {
+  islands: RenderIslandQuiesceResult[];
+  stopped: number;
+}
 
 export async function bootstrapWebView(
   config: WebViewBootstrapConfig,
@@ -51,13 +56,14 @@ export function stopWebView(island?: RenderIsland): void {
   activeIslands.clear();
 }
 
-export function quiesceWebViewForCapture(): number {
+export function quiesceWebViewForCapture(): WebViewQuiesceResult {
+  const islands: RenderIslandQuiesceResult[] = [];
   let stopped = 0;
-  for (const activeIsland of activeIslands) {
-    activeIsland.quiesceForCapture();
+  for (const activeIsland of Array.from(activeIslands)) {
+    islands.push(activeIsland.quiesceForCapture());
     stopped++;
   }
-  return stopped;
+  return { islands, stopped };
 }
 
 export function installInputHandlers(canvasId: string): () => void {

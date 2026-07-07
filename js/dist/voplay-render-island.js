@@ -313,6 +313,6 @@ export function stop() {
     stopWebView();
 }
 export function quiesceForCapture() {
-    return { stopped: quiesceWebViewForCapture() };
+    return quiesceWebViewForCapture();
 }
 export default { init, render, stop, quiesceForCapture };

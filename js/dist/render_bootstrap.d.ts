@@ -29,6 +29,12 @@ export interface RenderIslandConfig {
     debugLog?: (message: string) => void;
     onError?: (message: string) => void;
 }
+export interface RenderIslandQuiesceResult {
+    displayPulseScheduled: boolean;
+    displayPulseWaiters: number;
+    hostTimers: number;
+    perfLivenessTimers: number;
+}
 export declare class RenderIsland {
     private config;
     private vm;
@@ -73,7 +79,7 @@ export declare class RenderIsland {
     start(): void;
     private reportBootstrapStart;
     stop(): void;
-    quiesceForCapture(): void;
+    quiesceForCapture(): RenderIslandQuiesceResult;
     private flush;
     private scheduleHostEvents;
     private schedulePerfLivenessProbes;

@@ -767,15 +767,13 @@ export class RenderIsland {
         this.vm = null;
     }
     quiesceForCapture() {
+        const result = {
+            displayPulseScheduled: this.displayPulseRafId !== null || this.displayPulseTimerId !== null,
+            displayPulseWaiters: this.displayPulseWaiters.size,
+            hostTimers: this.hostTimers.size,
+            perfLivenessTimers: this.perfLivenessTimerIds.length,
+        };
         this.stopped = true;
-        for (const handle of this.hostTimers.values()) {
-            if (handle.kind === "raf") {
-                cancelAnimationFrame(handle.id);
-            }
-            else if (handle.kind === "timeout") {
-                clearTimeout(handle.id);
-            }
-        }
         this.hostTimers.clear();
         this.displayPulseWaiters.clear();
         this.clearDisplayPulseSchedule();
@@ -783,6 +781,7 @@ export class RenderIsland {
             window.clearTimeout(id);
         }
         this.perfLivenessTimerIds = [];
+        return result;
     }
     flush() {
         if (!this.vm)

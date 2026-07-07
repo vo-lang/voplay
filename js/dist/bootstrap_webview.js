@@ -30,12 +30,13 @@ export function stopWebView(island) {
     activeIslands.clear();
 }
 export function quiesceWebViewForCapture() {
+    const islands = [];
     let stopped = 0;
-    for (const activeIsland of activeIslands) {
-        activeIsland.quiesceForCapture();
+    for (const activeIsland of Array.from(activeIslands)) {
+        islands.push(activeIsland.quiesceForCapture());
         stopped++;
     }
-    return stopped;
+    return { islands, stopped };
 }
 export function installInputHandlers(canvasId) {
     const canvas = document.getElementById(canvasId);

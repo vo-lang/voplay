@@ -1,3 +1,4 @@
+import { type WebViewQuiesceResult } from "./bootstrap_webview";
 import type { IslandChannel } from "./island_channel";
 import type { VoWebModule } from "./render_bootstrap";
 interface RendererHost {
@@ -30,9 +31,7 @@ interface VfsCapability {
 export declare function init(host: RendererHost): Promise<void>;
 export declare function render(_container: HTMLElement, _bytes: Uint8Array): void;
 export declare function stop(): void;
-export declare function quiesceForCapture(): {
-    stopped: number;
-};
+export declare function quiesceForCapture(): WebViewQuiesceResult;
 declare const _default: {
     init: typeof init;
     render: typeof render;

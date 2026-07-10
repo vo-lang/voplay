@@ -479,23 +479,12 @@ function postVoplayPerfReports(payloads) {
         return;
     }
     try {
-        if (globalThis.navigator?.sendBeacon) {
-            const blob = new Blob([body], { type: "application/json" });
-            if (globalThis.navigator.sendBeacon("/__voplay_perf_report", blob)) {
-                return;
-            }
-        }
-    }
-    catch {
-        // Fall through to fetch.
-    }
-    try {
         void fetch("/__voplay_perf_report", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body,
-            keepalive: true,
-        }).catch(() => { });
+            cache: "no-store",
+        }).then((response) => response.arrayBuffer()).catch(() => { });
         return;
     }
     catch {

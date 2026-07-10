@@ -612,7 +612,7 @@ func replayContracts(executions []ScenarioExecution) ([]ReplayReport, ReplayRepo
 	suite := ReplaySuite{SchemaVersion: 1}
 	aggregate := ReplayReport{Name: "PhysicsReplayVerifierSuite", ReferenceScenario: "all", Status: "pass"}
 	for _, execution := range executions {
-		report := verifyReplayTrace(execution.Definition, execution.Trace)
+		report := replayTraceContractReport(execution.Definition, execution.Trace)
 		if execution.Report.Status != "pass" {
 			report.Status = "fail"
 			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "reference scenario failed"})
@@ -652,7 +652,7 @@ func replayContracts(executions []ScenarioExecution) ([]ReplayReport, ReplayRepo
 	return reports, aggregate
 }
 
-func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) ReplayReport {
+func replayTraceContractReport(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) ReplayReport {
 	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), BackendCommandHash: physicsReplayBackendCommandHash(trace), Samples: len(trace.Samples), VehicleCount: def.VehicleCount, BackendCommandCount: len(trace.BackendCommands), Status: "pass"}
 	if len(trace.Samples) == 0 {
 		report.Status = "fail"
@@ -668,6 +668,13 @@ func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace)
 	if trace.ScenarioDigest != expectedContract.ScenarioDigest || trace.TrackDigest != expectedContract.TrackDigest || trace.ConfigDigest != expectedContract.ConfigDigest {
 		report.Status = "fail"
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayContractMismatch", Severity: 1, Detail: "scenario, track, or config digest mismatch"})
+	}
+	return report
+}
+
+func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) ReplayReport {
+	report := replayTraceContractReport(def, trace)
+	if report.Status != "pass" {
 		return report
 	}
 	replayRuntime := newScenarioRuntime(def)

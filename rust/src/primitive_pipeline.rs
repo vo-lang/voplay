@@ -11,10 +11,13 @@ use crate::primitive_scene::{
     PRIMITIVE_FLAG_BILLBOARD, PRIMITIVE_FLAG_NO_SHADOW, PRIMITIVE_FLAG_WATER_SURFACE,
     PRIMITIVE_FLAG_Y_BILLBOARD,
 };
+use crate::render_world::RenderSkipStats;
 use crate::renderer_perf::{elapsed_ms, perf_now};
 use crate::texture::TextureManager;
 
 mod runtime;
+mod texture_resolution;
+use texture_resolution::resolve_texture_key;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -119,8 +122,11 @@ pub enum PrimitiveRenderFilter {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrimitiveDrawStats {
     pub batch_count: u32,
+    pub prepared_batch_count: u32,
     pub instance_count: u32,
     pub triangle_count: u32,
+    pub upload_bytes: u32,
+    pub skips: RenderSkipStats,
 }
 
 #[allow(dead_code)]
@@ -406,66 +412,6 @@ fn create_material_sampler(device: &wgpu::Device, key: MaterialSamplerKey) -> wg
         anisotropy_clamp,
         ..Default::default()
     })
-}
-
-fn valid_texture_id(textures: &TextureManager, texture_id: Option<u32>) -> u32 {
-    texture_id
-        .filter(|id| *id != 0 && textures.get(*id).is_some())
-        .unwrap_or(0)
-}
-
-fn resolve_texture_key(
-    material: &MaterialOverride,
-    mesh_material: &MeshMaterial,
-    textures: &TextureManager,
-) -> PrimitiveTextureKey {
-    let albedo =
-        if material.albedo_texture_id != 0 && textures.get(material.albedo_texture_id).is_some() {
-            material.albedo_texture_id
-        } else {
-            valid_texture_id(textures, mesh_material.texture_id)
-        };
-    let normal =
-        if material.normal_texture_id != 0 && textures.get(material.normal_texture_id).is_some() {
-            material.normal_texture_id
-        } else {
-            valid_texture_id(textures, mesh_material.normal_texture_id)
-        };
-    let metallic_roughness = if material.metallic_roughness_texture_id != 0
-        && textures
-            .get(material.metallic_roughness_texture_id)
-            .is_some()
-    {
-        material.metallic_roughness_texture_id
-    } else {
-        valid_texture_id(textures, mesh_material.metallic_roughness_texture_id)
-    };
-    let emissive = if material.emissive_texture_id != 0
-        && textures.get(material.emissive_texture_id).is_some()
-    {
-        material.emissive_texture_id
-    } else {
-        valid_texture_id(textures, mesh_material.emissive_texture_id)
-    };
-    let toon_ramp = if material.toon_ramp_texture_id != 0
-        && textures.get(material.toon_ramp_texture_id).is_some()
-    {
-        material.toon_ramp_texture_id
-    } else {
-        valid_texture_id(textures, mesh_material.toon_ramp_texture_id)
-    };
-    PrimitiveTextureKey {
-        albedo,
-        normal,
-        metallic_roughness,
-        emissive,
-        toon_ramp,
-        sampler: MaterialSamplerKey::resolve(
-            material.wrap_mode,
-            material.filter_mode,
-            mesh_material.sampler,
-        ),
-    }
 }
 
 fn combined_base_color(material: &MaterialOverride, mesh_color: &[f32; 4]) -> [f32; 4] {

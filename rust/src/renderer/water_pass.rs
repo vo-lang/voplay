@@ -1,11 +1,17 @@
-use super::pass_dispatch::RenderPassResources;
 use super::*;
-use crate::pipeline3d::WaterSubmitter;
+use crate::pipeline3d::PrimitiveSubmitter;
+use crate::primitive_pipeline::PrimitiveRenderFilter;
 
 pub(super) struct WaterPassExecutor;
 
-pub(super) struct WaterPassContext<'a, 'r> {
-    pub(super) resources: &'a mut RenderPassResources<'r>,
+pub(super) struct WaterPassContext<'a> {
+    pub(super) device: &'a wgpu::Device,
+    pub(super) queue: &'a wgpu::Queue,
+    pub(super) targets: &'a RenderResourceRegistry,
+    pub(super) primitive_pipeline: &'a mut PrimitivePipeline,
+    pub(super) shadow_pipeline: &'a PipelineShadow,
+    pub(super) models: &'a ModelManager,
+    pub(super) textures: &'a TextureManager,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
     pub(super) light_uniform: &'a LightUniform,
@@ -22,7 +28,7 @@ pub(super) struct WaterPassResult {
 }
 
 impl WaterPassExecutor {
-    pub(super) fn execute(ctx: &mut WaterPassContext<'_, '_>) -> Result<WaterPassResult, String> {
+    pub(super) fn execute(ctx: &mut WaterPassContext<'_>) -> Result<WaterPassResult, String> {
         let water_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
@@ -32,13 +38,11 @@ impl WaterPassExecutor {
             return Ok(WaterPassResult::default());
         };
         let post_color_view = ctx
-            .resources
-            .target_registry
+            .targets
             .post_color_view()
             .ok_or_else(|| "voplay: missing post color target".to_string())?;
         let main_color_view = if MAIN_SAMPLE_COUNT > 1 {
-            ctx.resources
-                .target_registry
+            ctx.targets
                 .msaa_color_view()
                 .ok_or_else(|| "voplay: missing MSAA color target".to_string())?
         } else {
@@ -46,8 +50,7 @@ impl WaterPassExecutor {
         };
         let receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.resources
-                    .target_registry
+                ctx.targets
                     .receiver_mask_view()
                     .ok_or_else(|| "voplay: missing receiver mask target".to_string())?,
             )
@@ -56,8 +59,7 @@ impl WaterPassExecutor {
         };
         let surface_props_view = if ctx.main_aux_targets_enabled {
             Some(
-                ctx.resources
-                    .target_registry
+                ctx.targets
                     .surface_props_view()
                     .ok_or_else(|| "voplay: missing surface props target".to_string())?,
             )
@@ -66,8 +68,7 @@ impl WaterPassExecutor {
         };
         let main_receiver_mask_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.resources
-                    .target_registry
+                ctx.targets
                     .msaa_receiver_mask_view()
                     .ok_or_else(|| "voplay: missing MSAA receiver mask target".to_string())?
             } else {
@@ -79,8 +80,7 @@ impl WaterPassExecutor {
         };
         let main_surface_props_view = if ctx.main_aux_targets_enabled {
             Some(if MAIN_SAMPLE_COUNT > 1 {
-                ctx.resources
-                    .target_registry
+                ctx.targets
                     .msaa_surface_props_view()
                     .ok_or_else(|| "voplay: missing MSAA surface props target".to_string())?
             } else {
@@ -146,12 +146,13 @@ impl WaterPassExecutor {
         let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("voplay_water"),
             color_attachments: &color_attachments,
-            depth_stencil_attachment: ctx.resources.target_registry.depth_view().map(|dv| {
+            depth_stencil_attachment: ctx.targets.depth_view().map(|dv| {
                 wgpu::RenderPassDepthStencilAttachment {
                     view: dv,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
+                        store: depth_attachment_store_contract(RenderPassKind::Water)
+                            .wgpu_store_op(),
                     }),
                     stencil_ops: None,
                 }
@@ -159,26 +160,28 @@ impl WaterPassExecutor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        ctx.resources.pipelines.primitive.set_camera_and_lights(
-            &ctx.resources.gpu.gpu_queue,
-            cam3d,
-            ctx.light_uniform,
-        );
-        let shadow_view = ctx.resources.pipelines.shadow.shadow_texture_view();
-        let water_submit_plan = WaterSubmitter::draw();
-        let _water_submit_report = (water_submit_plan.owner, water_submit_plan.report);
-        let stats = ctx.resources.pipelines.primitive.draw(
-            &ctx.resources.gpu.gpu_device,
-            &ctx.resources.gpu.gpu_queue,
+        ctx.primitive_pipeline
+            .set_camera_and_lights(ctx.queue, cam3d, ctx.light_uniform);
+        let shadow_view = ctx.shadow_pipeline.shadow_texture_view();
+        let water_submit_report = PrimitiveSubmitter::submit(
+            ctx.primitive_pipeline,
+            ctx.device,
+            ctx.queue,
             &mut render_pass,
             ctx.primitive_draws,
             ctx.primitive_chunks,
-            &ctx.resources.assets.models,
-            &ctx.resources.assets.textures,
+            ctx.models,
+            ctx.textures,
             shadow_view,
             ctx.main_aux_targets_enabled,
-            water_submit_plan.filter,
+            PrimitiveRenderFilter::Water,
         );
+        let _submit_identity = (
+            water_submit_report.owner,
+            water_submit_report.outcome,
+            water_submit_report.filter,
+        );
+        let stats = water_submit_report.stats;
         drop(render_pass);
         Ok(WaterPassResult {
             elapsed_ms: elapsed_ms_opt(water_start),
@@ -192,7 +195,8 @@ impl WaterPassExecutor {
             batches: stats.batch_count,
             instances: stats.instance_count,
             triangles: stats.triangle_count,
-            upload_bytes: 0,
+            upload_bytes: stats.upload_bytes,
+            skips: stats.skips,
         }
     }
 }

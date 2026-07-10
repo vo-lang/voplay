@@ -1,30 +1,24 @@
 use super::{
-    RenderResource, RenderResourceChurn, RenderResourceKind, RenderResourceLifetime,
-    RenderTargetStatus,
+    RenderBackingDescriptor, RenderBackingIdentity, RenderBackingSlot, RenderResource,
+    RenderResourceBackingError, RenderResourceChurn, RenderResourceLifetime, RenderTargetStatus,
 };
 use crate::renderer_frame_resources::*;
 use crate::renderer_targets::{
     create_depth_view, create_msaa_color_view, create_msaa_receiver_mask_view,
     create_msaa_surface_props_view, create_post_color_view, create_receiver_mask_view,
-    create_surface_props_view, MAIN_SAMPLE_COUNT,
+    create_surface_props_view, MAIN_DEPTH_FORMAT, MAIN_SAMPLE_COUNT, RECEIVER_MASK_FORMAT,
+    SURFACE_PROPS_FORMAT,
 };
-
-#[derive(Default)]
-struct RenderTargetStore {
-    depth_view: Option<wgpu::TextureView>,
-    msaa_color_view: Option<wgpu::TextureView>,
-    post_color_view: Option<wgpu::TextureView>,
-    msaa_receiver_mask_view: Option<wgpu::TextureView>,
-    receiver_mask_view: Option<wgpu::TextureView>,
-    msaa_surface_props_view: Option<wgpu::TextureView>,
-    surface_props_view: Option<wgpu::TextureView>,
-}
+mod target_store;
+mod view_access;
+use target_store::RenderTargetStore;
 
 pub(crate) struct RenderResourceRegistry {
     targets: Vec<RenderTargetStatus>,
     pub(crate) churn: RenderResourceChurn,
     pub(crate) resize_generation: u32,
     store: RenderTargetStore,
+    next_backing_serial: u64,
 }
 
 impl Default for RenderResourceRegistry {
@@ -34,11 +28,22 @@ impl Default for RenderResourceRegistry {
             churn: RenderResourceChurn::default(),
             resize_generation: 0,
             store: RenderTargetStore::default(),
+            next_backing_serial: 1,
         }
     }
 }
 
 impl RenderResourceRegistry {
+    fn allocate_backing_identity(&mut self, slot: RenderBackingSlot) -> RenderBackingIdentity {
+        let identity = RenderBackingIdentity {
+            serial: self.next_backing_serial,
+            generation: self.resize_generation,
+            slot,
+        };
+        self.next_backing_serial = self.next_backing_serial.saturating_add(1);
+        identity
+    }
+
     pub(crate) fn new_render_targets(
         device: &wgpu::Device,
         width: u32,
@@ -57,52 +62,84 @@ impl RenderResourceRegistry {
         height: u32,
         surface_format: wgpu::TextureFormat,
     ) {
-        self.store = RenderTargetStore {
-            depth_view: Some(create_depth_view(device, width, height, MAIN_SAMPLE_COUNT)),
-            msaa_color_view: create_msaa_color_view(
-                device,
-                width,
-                height,
-                surface_format,
-                MAIN_SAMPLE_COUNT,
-            ),
-            post_color_view: Some(create_post_color_view(
-                device,
-                width,
-                height,
-                surface_format,
-            )),
-            msaa_receiver_mask_view: create_msaa_receiver_mask_view(
-                device,
-                width,
-                height,
-                MAIN_SAMPLE_COUNT,
-            ),
-            receiver_mask_view: Some(create_receiver_mask_view(
-                device,
-                width,
-                height,
-                1,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                "voplay_receiver_mask",
-            )),
-            msaa_surface_props_view: create_msaa_surface_props_view(
-                device,
-                width,
-                height,
-                MAIN_SAMPLE_COUNT,
-            ),
-            surface_props_view: Some(create_surface_props_view(
-                device,
-                width,
-                height,
-                1,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                "voplay_surface_props",
-            )),
-        };
         let next_generation = self.resize_generation.saturating_add(1);
         self.mark_resize_generation(next_generation);
+        let depth_view = Some(create_depth_view(device, width, height, MAIN_SAMPLE_COUNT));
+        let msaa_color_view =
+            create_msaa_color_view(device, width, height, surface_format, MAIN_SAMPLE_COUNT);
+        let post_color_view = Some(create_post_color_view(
+            device,
+            width,
+            height,
+            surface_format,
+        ));
+        let msaa_receiver_mask_view =
+            create_msaa_receiver_mask_view(device, width, height, MAIN_SAMPLE_COUNT);
+        let receiver_mask_view = Some(create_receiver_mask_view(
+            device,
+            width,
+            height,
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            "voplay_receiver_mask",
+        ));
+        let msaa_surface_props_view =
+            create_msaa_surface_props_view(device, width, height, MAIN_SAMPLE_COUNT);
+        let surface_props_view = Some(create_surface_props_view(
+            device,
+            width,
+            height,
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            "voplay_surface_props",
+        ));
+        let depth_identity = self.allocate_backing_identity(RenderBackingSlot::Depth);
+        let msaa_color_identity = msaa_color_view
+            .as_ref()
+            .map(|_| self.allocate_backing_identity(RenderBackingSlot::MsaaColor));
+        let post_color_identity = self.allocate_backing_identity(RenderBackingSlot::PostColor);
+        let msaa_receiver_mask_identity = msaa_receiver_mask_view
+            .as_ref()
+            .map(|_| self.allocate_backing_identity(RenderBackingSlot::MsaaReceiverMask));
+        let receiver_mask_identity =
+            self.allocate_backing_identity(RenderBackingSlot::ReceiverMask);
+        let msaa_surface_props_identity = msaa_surface_props_view
+            .as_ref()
+            .map(|_| self.allocate_backing_identity(RenderBackingSlot::MsaaSurfaceProps));
+        let surface_props_identity =
+            self.allocate_backing_identity(RenderBackingSlot::SurfaceProps);
+        let descriptor = |format, sample_count| RenderBackingDescriptor {
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            sample_count,
+        };
+        self.store = RenderTargetStore {
+            depth_view,
+            msaa_color_view,
+            post_color_view,
+            msaa_receiver_mask_view,
+            receiver_mask_view,
+            msaa_surface_props_view,
+            surface_props_view,
+            depth_identity: Some(depth_identity),
+            msaa_color_identity,
+            post_color_identity: Some(post_color_identity),
+            msaa_receiver_mask_identity,
+            receiver_mask_identity: Some(receiver_mask_identity),
+            msaa_surface_props_identity,
+            surface_props_identity: Some(surface_props_identity),
+            depth_descriptor: Some(descriptor(MAIN_DEPTH_FORMAT, MAIN_SAMPLE_COUNT)),
+            msaa_color_descriptor: msaa_color_identity
+                .map(|_| descriptor(surface_format, MAIN_SAMPLE_COUNT)),
+            post_color_descriptor: Some(descriptor(surface_format, 1)),
+            msaa_receiver_mask_descriptor: msaa_receiver_mask_identity
+                .map(|_| descriptor(RECEIVER_MASK_FORMAT, MAIN_SAMPLE_COUNT)),
+            receiver_mask_descriptor: Some(descriptor(RECEIVER_MASK_FORMAT, 1)),
+            msaa_surface_props_descriptor: msaa_surface_props_identity
+                .map(|_| descriptor(SURFACE_PROPS_FORMAT, MAIN_SAMPLE_COUNT)),
+            surface_props_descriptor: Some(descriptor(SURFACE_PROPS_FORMAT, 1)),
+        };
         self.declare_target(
             RES_DEPTH,
             self.store.depth_view.is_some(),
@@ -147,82 +184,6 @@ impl RenderResourceRegistry {
         );
     }
 
-    pub(crate) fn main_color_ready(&self) -> bool {
-        self.actual_texture_view(RES_MAIN_COLOR).is_some()
-    }
-
-    pub(crate) fn actual_texture_view(
-        &self,
-        resource: RenderResource,
-    ) -> Option<&wgpu::TextureView> {
-        match resource.kind {
-            RenderResourceKind::MainColor => self
-                .store
-                .msaa_color_view
-                .as_ref()
-                .or(self.store.post_color_view.as_ref()),
-            RenderResourceKind::Depth => self.store.depth_view.as_ref(),
-            RenderResourceKind::ReceiverMask => self
-                .store
-                .msaa_receiver_mask_view
-                .as_ref()
-                .or(self.store.receiver_mask_view.as_ref()),
-            RenderResourceKind::SurfaceProps => self
-                .store
-                .msaa_surface_props_view
-                .as_ref()
-                .or(self.store.surface_props_view.as_ref()),
-            RenderResourceKind::PostColor => self.store.post_color_view.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn validate_backing_generation(&self, resource: RenderResource) -> bool {
-        let Some(target) = self
-            .targets
-            .iter()
-            .find(|target| target.resource == resource)
-        else {
-            return false;
-        };
-        target.ready
-            && target.backing_generation == self.resize_generation
-            && self.actual_texture_view(resource).is_some()
-    }
-
-    pub(crate) fn depth_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.depth_view.as_ref()
-    }
-
-    pub(crate) fn msaa_color_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.msaa_color_view.as_ref()
-    }
-
-    pub(crate) fn post_color_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.post_color_view.as_ref()
-    }
-
-    pub(crate) fn msaa_receiver_mask_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.msaa_receiver_mask_view.as_ref()
-    }
-
-    pub(crate) fn receiver_mask_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.receiver_mask_view.as_ref()
-    }
-
-    pub(crate) fn msaa_surface_props_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.msaa_surface_props_view.as_ref()
-    }
-
-    pub(crate) fn surface_props_view(&self) -> Option<&wgpu::TextureView> {
-        self.store.surface_props_view.as_ref()
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; exposed for resize/recreate stress probes.
-    pub(crate) fn resize_generation(&self) -> u32 {
-        self.resize_generation
-    }
-
     pub(crate) fn declare_target(
         &mut self,
         resource: RenderResource,
@@ -250,6 +211,16 @@ impl RenderResourceRegistry {
         backing_owner: &'static str,
         ready_cause: &'static str,
     ) {
+        let backing_identity = if ready {
+            self.actual_backing_identity(resource)
+        } else {
+            None
+        };
+        let backing_descriptor = if ready {
+            self.actual_backing_descriptor(resource)
+        } else {
+            None
+        };
         if let Some(existing) = self
             .targets
             .iter_mut()
@@ -260,6 +231,8 @@ impl RenderResourceRegistry {
             if ready {
                 existing.ready_cause = ready_cause;
                 existing.backing_generation = self.resize_generation;
+                existing.backing_identity = backing_identity;
+                existing.backing_descriptor = backing_descriptor;
             }
             if existing.lifetime == RenderResourceLifetime::Transient
                 && lifetime == RenderResourceLifetime::Transient
@@ -280,58 +253,24 @@ impl RenderResourceRegistry {
             lifetime,
             revision: self.resize_generation,
             backing_generation: if ready { self.resize_generation } else { 0 },
+            backing_identity,
+            backing_descriptor,
             backing_owner,
             ready_cause,
         });
         self.churn.target_creates = self.churn.target_creates.saturating_add(1);
     }
 
-    pub(crate) fn mark_ready_with_cause(
-        &mut self,
-        resource: RenderResource,
-        ready_cause: &'static str,
-    ) {
-        if let Some(target) = self
-            .targets
-            .iter_mut()
-            .find(|target| target.resource == resource)
-        {
-            target.ready = true;
-            target.ready_cause = ready_cause;
-            target.backing_generation = self.resize_generation;
-            return;
-        }
-        self.declare_target_with_owner(
-            resource,
-            true,
-            RenderResourceLifetime::Persistent,
-            resource.name,
-            ready_cause,
-        );
-    }
-
+    #[cfg(test)]
     pub(crate) fn is_ready(&self, resource: RenderResource) -> bool {
         self.targets
             .iter()
             .any(|target| target.resource == resource && target.ready)
     }
 
-    pub(crate) fn is_declared(&self, resource: RenderResource) -> bool {
-        self.targets
-            .iter()
-            .any(|target| target.resource == resource)
-    }
-
+    #[cfg(test)]
     pub(crate) fn targets(&self) -> &[RenderTargetStatus] {
         &self.targets
-    }
-
-    pub(crate) fn count_lifetime(&self, lifetime: RenderResourceLifetime) -> u32 {
-        self.targets
-            .iter()
-            .filter(|target| target.lifetime == lifetime)
-            .count()
-            .min(u32::MAX as usize) as u32
     }
 
     pub(crate) fn mark_resize_generation(&mut self, generation: u32) {
@@ -342,6 +281,8 @@ impl RenderResourceRegistry {
         for target in &mut self.targets {
             target.revision = generation;
             target.backing_generation = 0;
+            target.backing_identity = None;
+            target.backing_descriptor = None;
             target.ready = false;
         }
         self.churn.target_recreates = self

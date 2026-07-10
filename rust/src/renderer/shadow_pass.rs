@@ -1,10 +1,15 @@
-use super::pass_dispatch::RenderPassResources;
 use super::*;
 
 pub(super) struct ShadowPassExecutor;
 
-pub(super) struct ShadowPassContext<'a, 'r> {
-    pub(super) resources: &'a mut RenderPassResources<'r>,
+pub(super) struct ShadowPassContext<'a> {
+    pub(super) device: &'a wgpu::Device,
+    pub(super) queue: &'a wgpu::Queue,
+    pub(super) mesh_pipeline: &'a mut Pipeline3D,
+    pub(super) primitive_pipeline: &'a mut PrimitivePipeline,
+    pub(super) shadow_pipeline: &'a mut PipelineShadow,
+    pub(super) world: &'a RenderWorld,
+    pub(super) models: &'a ModelManager,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
     pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
@@ -31,7 +36,7 @@ pub(super) struct ShadowPassResult {
 }
 
 impl ShadowPassExecutor {
-    pub(super) fn execute(ctx: &mut ShadowPassContext<'_, '_>) -> Result<ShadowPassResult, String> {
+    pub(super) fn execute(ctx: &mut ShadowPassContext<'_>) -> Result<ShadowPassResult, String> {
         let shadow_start = if ctx.perf_enabled {
             Some(perf_now())
         } else {
@@ -60,12 +65,10 @@ impl ShadowPassExecutor {
                     } else {
                         shadow_atlas_size
                     };
-                    if ctx.resources.pipelines.shadow.size() != shadow_atlas_size {
-                        ctx.resources.clear_texture_bind_group_caches();
-                        ctx.resources
-                            .pipelines
-                            .shadow
-                            .resize(&ctx.resources.gpu.gpu_device, shadow_atlas_size);
+                    if ctx.shadow_pipeline.size() != shadow_atlas_size {
+                        ctx.mesh_pipeline.clear_texture_bind_group_cache();
+                        ctx.primitive_pipeline.clear_texture_bind_group_cache();
+                        ctx.shadow_pipeline.resize(ctx.device, shadow_atlas_size);
                     }
                     let mut shadow_cascade_vps = [math3d::MAT4_IDENTITY; 4];
                     let mut shadow_cascade_splits = [0.0; 4];
@@ -147,18 +150,14 @@ impl ShadowPassExecutor {
                                 let mut cascade_shadow_draws = Vec::new();
                                 let mut cascade_shadow_chunks = Vec::new();
                                 for scene_id in ctx.retained_scene_draws {
-                                    ctx.resources
-                                        .assets
-                                        .world
+                                    ctx.world
                                         .collect_scene_primitive_shadow_objects_for_light_view(
                                             *scene_id,
                                             ctx.camera3d_uniform,
                                             &light_camera,
                                             &mut cascade_shadow_draws,
                                         );
-                                    ctx.resources
-                                        .assets
-                                        .world
+                                    ctx.world
                                         .collect_scene_primitive_shadow_chunks_for_light_view(
                                             *scene_id,
                                             ctx.camera3d_uniform,
@@ -168,53 +167,47 @@ impl ShadowPassExecutor {
                                         );
                                 }
                                 if !cascade_shadow_chunks.is_empty() {
-                                    ctx.resources
-                                        .pipelines
-                                        .primitive
-                                        .append_resident_shadow_draws(
-                                            &cascade_shadow_chunks,
-                                            &mut cascade_shadow_draws,
-                                        );
+                                    ctx.primitive_pipeline.append_resident_shadow_draws(
+                                        &cascade_shadow_chunks,
+                                        &mut cascade_shadow_draws,
+                                    );
                                 }
                                 cascade_primitive_shadow_draws.push(cascade_shadow_draws);
                                 cascade_primitive_shadow_chunks.push(Vec::new());
                             }
                         }
                         let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
-                        ctx.resources.pipelines.shadow.render_shadow_cascade_pass(
-                            &ctx.resources.gpu.gpu_device,
+                        ctx.shadow_pipeline.render_shadow_cascade_pass(
+                            ctx.device,
                             ctx.encoder,
-                            &ctx.resources.gpu.gpu_queue,
+                            ctx.queue,
                             &shadow_cascade_vps[..cascade_count],
                             ctx.model_draws,
                             ctx.primitive_shadow_draws,
                             &cascade_primitive_shadow_draws,
                             empty_primitive_chunks,
                             &cascade_primitive_shadow_chunks,
-                            &ctx.resources.pipelines.primitive,
-                            &ctx.resources.assets.models,
+                            ctx.primitive_pipeline,
+                            ctx.models,
                         );
                     } else {
                         let empty_primitive_chunks: &[PrimitiveChunkRef] = &[];
                         if !ctx.primitive_shadow_chunks.is_empty() {
-                            ctx.resources
-                                .pipelines
-                                .primitive
-                                .append_resident_shadow_draws(
-                                    ctx.primitive_shadow_chunks,
-                                    ctx.primitive_shadow_draws,
-                                );
+                            ctx.primitive_pipeline.append_resident_shadow_draws(
+                                ctx.primitive_shadow_chunks,
+                                ctx.primitive_shadow_draws,
+                            );
                         }
-                        ctx.resources.pipelines.shadow.render_shadow_pass(
-                            &ctx.resources.gpu.gpu_device,
+                        ctx.shadow_pipeline.render_shadow_pass(
+                            ctx.device,
                             ctx.encoder,
-                            &ctx.resources.gpu.gpu_queue,
+                            ctx.queue,
                             &shadow_vp,
                             ctx.model_draws,
                             ctx.primitive_shadow_draws,
                             empty_primitive_chunks,
-                            &ctx.resources.pipelines.primitive,
-                            &ctx.resources.assets.models,
+                            ctx.primitive_pipeline,
+                            ctx.models,
                         );
                     }
                     ctx.light_uniform.shadow_vp = shadow_vp;
@@ -236,7 +229,7 @@ impl ShadowPassExecutor {
         Ok(ShadowPassResult {
             elapsed_ms: elapsed_ms_opt(shadow_start),
             active,
-            primitive_draw_calls: ctx.resources.pipelines.shadow.last_primitive_batch_count(),
+            primitive_draw_calls: ctx.shadow_pipeline.last_primitive_batch_count(),
         })
     }
 

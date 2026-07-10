@@ -71,7 +71,9 @@ pub fn request_surface(canvas_ref: &str) -> Result<NativeSurfaceDesc, String> {
 
 #[cfg(feature = "native")]
 #[no_mangle]
-pub extern "C" fn vo_voplay_set_host_api(api: *const HostApi) {
+/// # Safety
+/// `api` must point to a readable `HostApi` value that remains valid for this call.
+pub unsafe extern "C" fn vo_voplay_set_host_api(api: *const HostApi) {
     assert!(!api.is_null(), "voplay: host API pointer must not be null");
     let api = unsafe { *api };
     assert!(
@@ -83,7 +85,9 @@ pub extern "C" fn vo_voplay_set_host_api(api: *const HostApi) {
 
 #[cfg(feature = "native")]
 #[no_mangle]
-pub extern "C" fn vo_voplay_push_key_event(down: bool, key_ptr: *const u8, key_len: usize) {
+/// # Safety
+/// `key_ptr` must address `key_len` readable bytes containing valid UTF-8.
+pub unsafe extern "C" fn vo_voplay_push_key_event(down: bool, key_ptr: *const u8, key_len: usize) {
     assert!(!key_ptr.is_null(), "voplay: key pointer must not be null");
     let key_bytes = unsafe { std::slice::from_raw_parts(key_ptr, key_len) };
     let key = std::str::from_utf8(key_bytes).expect("voplay: key must be valid UTF-8");

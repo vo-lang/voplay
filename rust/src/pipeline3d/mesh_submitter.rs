@@ -8,20 +8,38 @@ pub(crate) struct MeshSubmitter;
 pub(crate) struct MeshSubmitProfile {
     pub(crate) instance_count: u32,
     pub(crate) batch_hint: usize,
+    pub(crate) skips: crate::render_world::RenderSkipStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MeshDrawStats {
+    pub(crate) draw_calls: u32,
+    pub(crate) batches: u32,
+    pub(crate) instances: u32,
+    pub(crate) triangles: u32,
+    pub(crate) upload_bytes: u32,
+    pub(crate) skips: crate::render_world::RenderSkipStats,
 }
 
 impl MeshSubmitter {
     pub(crate) fn prepare(
         draws: &[super::ModelDraw],
         models: &crate::model_loader::ModelManager,
+        textures: &crate::texture::TextureManager,
     ) -> MeshSubmitProfile {
         let mut instance_count = 0u32;
         let mut batch_hint = 0usize;
+        let mut skips = crate::render_world::RenderSkipStats::default();
         for draw in draws {
             let Some(model) = models.get(draw.model_id) else {
+                skips.missing_models = skips.missing_models.saturating_add(1);
                 continue;
             };
             for mesh in &model.meshes {
+                let (missing_textures, fallback_paths) =
+                    missing_mesh_texture_references(&draw.material, &mesh.material, textures);
+                skips.missing_textures = skips.missing_textures.saturating_add(missing_textures);
+                skips.fallback_paths = skips.fallback_paths.saturating_add(fallback_paths);
                 if mesh.skinned || mesh.material.control_texture_id.is_some() {
                     continue;
                 }
@@ -32,8 +50,74 @@ impl MeshSubmitter {
         MeshSubmitProfile {
             instance_count,
             batch_hint,
+            skips,
         }
     }
+}
+
+fn missing_texture_reference(textures: &TextureManager, texture_id: Option<u32>) -> u32 {
+    match texture_id.filter(|id| *id != 0) {
+        Some(id) if textures.get(id).is_none() => 1,
+        _ => 0,
+    }
+}
+
+fn texture_reference_stats(
+    textures: &TextureManager,
+    preferred: u32,
+    fallback: Option<u32>,
+) -> (u32, u32) {
+    let resolved = crate::texture::resolve_texture_reference(preferred, fallback, |id| {
+        textures.get(id).is_some()
+    });
+    (resolved.missing_count, resolved.fallback_path_count)
+}
+
+fn missing_mesh_texture_references(
+    material: &MaterialOverride,
+    mesh: &MeshMaterial,
+    textures: &TextureManager,
+) -> (u32, u32) {
+    if mesh.control_texture_id.is_some() {
+        let mut missing = missing_texture_reference(textures, mesh.control_texture_id);
+        for ids in [
+            &mesh.layer_texture_ids,
+            &mesh.layer_normal_texture_ids,
+            &mesh.layer_metallic_roughness_texture_ids,
+        ] {
+            for id in ids {
+                missing = missing.saturating_add(missing_texture_reference(textures, *id));
+            }
+        }
+        return (missing, 0);
+    }
+    [
+        texture_reference_stats(textures, material.albedo_texture_id, mesh.texture_id),
+        texture_reference_stats(textures, material.normal_texture_id, mesh.normal_texture_id),
+        texture_reference_stats(
+            textures,
+            material.metallic_roughness_texture_id,
+            mesh.metallic_roughness_texture_id,
+        ),
+        texture_reference_stats(
+            textures,
+            material.emissive_texture_id,
+            mesh.emissive_texture_id,
+        ),
+        texture_reference_stats(
+            textures,
+            material.toon_ramp_texture_id,
+            mesh.toon_ramp_texture_id,
+        ),
+        texture_reference_stats(textures, material.mask_texture_id, mesh.mask_texture_id),
+    ]
+    .into_iter()
+    .fold((0u32, 0u32), |(missing, fallbacks), item| {
+        (
+            missing.saturating_add(item.0),
+            fallbacks.saturating_add(item.1),
+        )
+    })
 }
 
 impl Pipeline3D {
@@ -47,12 +131,17 @@ impl Pipeline3D {
         textures: &'a TextureManager,
         shadow_view: &'a wgpu::TextureView,
         aux_targets_enabled: bool,
-    ) {
+    ) -> MeshDrawStats {
         if draws.is_empty() {
-            return;
+            return MeshDrawStats::default();
         }
 
-        let mesh_submit_profile = super::mesh_submitter::MeshSubmitter::prepare(draws, models);
+        let mesh_submit_profile =
+            super::mesh_submitter::MeshSubmitter::prepare(draws, models, textures);
+        let mut stats = MeshDrawStats {
+            skips: mesh_submit_profile.skips,
+            ..MeshDrawStats::default()
+        };
         let skinned_slot_hint = super::skinned_submitter::SkinnedSubmitter::prepare(draws, models);
         let terrain_slot_hint = super::terrain_submitter::TerrainSubmitter::prepare(draws, models);
 
@@ -151,6 +240,10 @@ impl Pipeline3D {
                 0,
                 bytemuck::cast_slice(&instance_data),
             );
+            stats.upload_bytes = instance_data
+                .len()
+                .saturating_mul(std::mem::size_of::<InstanceData>())
+                .min(u32::MAX as usize) as u32;
         }
 
         static_slot = 0;
@@ -201,6 +294,8 @@ impl Pipeline3D {
                     };
                     let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
                     if joint_palette.len() > MAX_JOINTS {
+                        stats.skips.incompatible_draws =
+                            stats.skips.incompatible_draws.saturating_add(1);
                         continue;
                     }
                     skinned_uniform.joint_count[0] = joint_palette.len() as u32;
@@ -302,6 +397,15 @@ impl Pipeline3D {
 
             for mesh in &gpu_model.meshes {
                 if mesh.skinned {
+                    let palette = if draw.animation_world_id != 0 && draw.animation_target_id != 0 {
+                        animation::get_palette(draw.animation_world_id, draw.animation_target_id)
+                    } else {
+                        None
+                    };
+                    let joint_palette = palette.as_ref().unwrap_or(&gpu_model.rest_joint_palette);
+                    if joint_palette.len() > MAX_JOINTS {
+                        continue;
+                    }
                     let dyn_offset = skinned_slot * aligned_skinned_stride;
                     MaterialBinder::bind_model_group(
                         pass,
@@ -315,6 +419,8 @@ impl Pipeline3D {
                     let Some(main_texture_bind_group) =
                         self.main_texture_bind_groups.get(&texture_key)
                     else {
+                        stats.skips.missing_bind_groups =
+                            stats.skips.missing_bind_groups.saturating_add(1);
                         continue;
                     };
                     let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
@@ -324,7 +430,7 @@ impl Pipeline3D {
                         (false, false) => &self.pipeline_skinned_untextured_color,
                     };
                     pass.set_pipeline(pipeline);
-                    pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+                    pass.set_bind_group(3, main_texture_bind_group, &[]);
                 } else {
                     if mesh.material.control_texture_id.is_none() {
                         continue;
@@ -362,6 +468,8 @@ impl Pipeline3D {
                         let Some(terrain_texture_entry) =
                             self.terrain_texture_bind_groups.get(&terrain_key)
                         else {
+                            stats.skips.missing_bind_groups =
+                                stats.skips.missing_bind_groups.saturating_add(1);
                             continue;
                         };
                         let terrain_texture_bind_group = &terrain_texture_entry.bind_group;
@@ -372,11 +480,15 @@ impl Pipeline3D {
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                stats.draw_calls = stats.draw_calls.saturating_add(1);
+                stats.batches = stats.batches.saturating_add(1);
+                stats.instances = stats.instances.saturating_add(1);
+                stats.triangles = stats.triangles.saturating_add(mesh.index_count / 3);
             }
         }
 
         if instance_batch_draws.is_empty() {
-            return;
+            return stats;
         }
 
         MaterialBinder::bind_model_group(pass, &self.model_bind_group, 0);
@@ -385,14 +497,19 @@ impl Pipeline3D {
         for batch in &instance_batch_draws {
             let gpu_model = match models.get(batch.key.model_id) {
                 Some(m) => m,
-                None => continue,
+                None => {
+                    stats.skips.missing_models = stats.skips.missing_models.saturating_add(1);
+                    continue;
+                }
             };
             let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
+                stats.skips.missing_meshes = stats.skips.missing_meshes.saturating_add(1);
                 continue;
             };
             let texture_key = batch.key.textures;
             let Some(main_texture_bind_group) = self.main_texture_bind_groups.get(&texture_key)
             else {
+                stats.skips.missing_bind_groups = stats.skips.missing_bind_groups.saturating_add(1);
                 continue;
             };
             let pipeline = match (texture_key.has_albedo(), aux_targets_enabled) {
@@ -402,7 +519,7 @@ impl Pipeline3D {
                 (false, false) => &self.pipeline_instanced_untextured_color,
             };
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(3, &*main_texture_bind_group, &[]);
+            pass.set_bind_group(3, main_texture_bind_group, &[]);
 
             let start = batch.start as u64 * instance_stride;
             let end = start + batch.count as u64 * instance_stride;
@@ -410,6 +527,13 @@ impl Pipeline3D {
             pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
+            stats.draw_calls = stats.draw_calls.saturating_add(1);
+            stats.batches = stats.batches.saturating_add(1);
+            stats.instances = stats.instances.saturating_add(batch.count);
+            stats.triangles = stats
+                .triangles
+                .saturating_add((mesh.index_count / 3).saturating_mul(batch.count));
         }
+        stats
     }
 }

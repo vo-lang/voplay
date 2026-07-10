@@ -155,6 +155,20 @@ type PerfRendererWorkloadStats struct {
 	FrameGraphTargetReuses int
 	FrameGraphTargetRecreates int
 	FrameGraphAliasReuses int
+	FrameGraphSkippedPasses int
+	FrameGraphFailures int
+	FilteredDraws int
+	MissingResources int
+	InvalidBatches int
+	FallbackPaths int
+	MissingModels int
+	MissingMeshes int
+	MissingTextures int
+	MissingBindGroups int
+	MissingChunks int
+	MissingTargets int
+	InvalidBatchIndices int
+	IncompatibleDraws int
 	AsyncWindow bool
 }
 
@@ -499,6 +513,20 @@ type perfRendererPacketStats struct {
 	FrameGraphTargetReuses int
 	FrameGraphTargetRecreates int
 	FrameGraphAliasReuses int
+	FrameGraphSkippedPasses int
+	FrameGraphFailures int
+	FilteredDraws int
+	MissingResources int
+	InvalidBatches int
+	FallbackPaths int
+	MissingModels int
+	MissingMeshes int
+	MissingTextures int
+	MissingBindGroups int
+	MissingChunks int
+	MissingTargets int
+	InvalidBatchIndices int
+	IncompatibleDraws int
 	AsyncWindow bool
 }
 
@@ -1402,7 +1430,7 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	}
 	r := codec.NewByteReader(payload)
 	version := r.ReadU32()
-	if version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6 {
+	if version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 {
 		return perfRendererPacketStats{}
 	}
 	minRemaining := 11 * 8 + 20 * 4
@@ -1417,6 +1445,12 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 	}
 	if version >= 6 {
 		minRemaining += 1 * 8 + 3 * 4
+	}
+	if version >= 7 {
+		minRemaining += 6 * 4
+	}
+	if version >= 8 {
+		minRemaining += 8 * 4
 	}
 	if r.Remaining() < minRemaining {
 		return perfRendererPacketStats{}
@@ -1487,6 +1521,24 @@ func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
 		stats.FrameGraphTargetReuses = r.ReadU32()
 		stats.FrameGraphTargetRecreates = r.ReadU32()
 		stats.FrameGraphAliasReuses = r.ReadU32()
+	}
+	if version >= 7 && r.Remaining() >= 24 {
+		stats.FrameGraphSkippedPasses = r.ReadU32()
+		stats.FrameGraphFailures = r.ReadU32()
+		stats.FilteredDraws = r.ReadU32()
+		stats.MissingResources = r.ReadU32()
+		stats.InvalidBatches = r.ReadU32()
+		stats.FallbackPaths = r.ReadU32()
+	}
+	if version >= 8 && r.Remaining() >= 32 {
+		stats.MissingModels = r.ReadU32()
+		stats.MissingMeshes = r.ReadU32()
+		stats.MissingTextures = r.ReadU32()
+		stats.MissingBindGroups = r.ReadU32()
+		stats.MissingChunks = r.ReadU32()
+		stats.MissingTargets = r.ReadU32()
+		stats.InvalidBatchIndices = r.ReadU32()
+		stats.IncompatibleDraws = r.ReadU32()
 	}
 	return stats
 }
@@ -1701,6 +1753,20 @@ func (o *DebugOverlay) recordPerfFrame() {
 			FrameGraphTargetReuses: renderer.FrameGraphTargetReuses,
 			FrameGraphTargetRecreates: renderer.FrameGraphTargetRecreates,
 			FrameGraphAliasReuses: renderer.FrameGraphAliasReuses,
+			FrameGraphSkippedPasses: renderer.FrameGraphSkippedPasses,
+			FrameGraphFailures: renderer.FrameGraphFailures,
+			FilteredDraws: renderer.FilteredDraws,
+			MissingResources: renderer.MissingResources,
+			InvalidBatches: renderer.InvalidBatches,
+			FallbackPaths: renderer.FallbackPaths,
+			MissingModels: renderer.MissingModels,
+			MissingMeshes: renderer.MissingMeshes,
+			MissingTextures: renderer.MissingTextures,
+			MissingBindGroups: renderer.MissingBindGroups,
+			MissingChunks: renderer.MissingChunks,
+			MissingTargets: renderer.MissingTargets,
+			InvalidBatchIndices: renderer.InvalidBatchIndices,
+			IncompatibleDraws: renderer.IncompatibleDraws,
 			UploadBytes: uploadBytes,
 			AsyncWindow: true,
 		},
@@ -2386,7 +2452,11 @@ func EncodePerfSummaryReport(source string, frame int, snapshot PerfSnapshot, wi
 	latestSpike := perfSummaryLatestSpike(snapshot)
 	windowWorst := snapshot.WindowWorstFrame
 	screenMPixels := float64(screen.PixelWidth * screen.PixelHeight) / 1000000.0
-	return "{" + "\"schemaVersion\":1" + ",\"source\":" + perfSummaryJSONString(source) + ",\"kind\":\"perf-summary\"" + ",\"frame\":" + strconv.Itoa(frame) + ",\"mode\":" + perfSummaryJSONString(snapshot.Mode) + ",\"status\":" + perfSummaryJSONString(status) + ",\"gatePassed\":" + perfSummaryJSONBool(gate.Passed) + ",\"failure\":" + perfSummaryJSONString(gate.PrimaryFailure) + ",\"gate\":{" + "\"checkedFrames\":" + strconv.Itoa(gate.CheckedFrames) + ",\"slowFrames\":" + strconv.Itoa(gate.SlowFrames) + ",\"maxSlowFrames\":" + strconv.Itoa(fixed.MaxSlowFrames) + ",\"frameP99Ms\":" + perfSummaryJSONFloat(gate.FrameP99Ms) + ",\"frameMaxMs\":" + perfSummaryJSONFloat(gate.FrameMaxMs) + ",\"activeWorkP90Ms\":" + perfSummaryJSONFloat(gate.ActiveWorkP90Ms) + ",\"activeWorkP99Ms\":" + perfSummaryJSONFloat(gate.ActiveWorkP99Ms) + "}" + ",\"targetHz\":" + strconv.Itoa(snapshot.TargetHz) + ",\"budgetMs\":" + perfSummaryJSONFloat(snapshot.BudgetMs) + ",\"screen\":{" + "\"cssWidth\":" + strconv.Itoa(screen.Width) + ",\"cssHeight\":" + strconv.Itoa(screen.Height) + ",\"pixelWidth\":" + strconv.Itoa(screen.PixelWidth) + ",\"pixelHeight\":" + strconv.Itoa(screen.PixelHeight) + ",\"devicePixelRatio\":" + perfSummaryJSONFloat(screen.DevicePixelRatio) + ",\"mpix\":" + perfSummaryJSONFloat(screenMPixels) + "}" + ",\"window\":{" + "\"frames\":" + strconv.Itoa(window.Frames) + ",\"slowFrames\":" + strconv.Itoa(window.SlowFrames) + ",\"frameP50Ms\":" + perfSummaryJSONFloat(window.FrameP50Ms) + ",\"frameP90Ms\":" + perfSummaryJSONFloat(window.FrameP90Ms) + ",\"frameP99Ms\":" + perfSummaryJSONFloat(window.FrameP99Ms) + ",\"frameMaxMs\":" + perfSummaryJSONFloat(window.FrameMaxMs) + ",\"gameCpuP90Ms\":" + perfSummaryJSONFloat(window.GameCpuP90Ms) + ",\"drawEncodeP90Ms\":" + perfSummaryJSONFloat(window.DrawEncodeP90Ms) + ",\"renderLoopP90Ms\":" + perfSummaryJSONFloat(window.RenderLoopP90Ms) + ",\"renderWorkP90Ms\":" + perfSummaryJSONFloat(window.RenderWorkP90Ms) + ",\"renderSubmitP90Ms\":" + perfSummaryJSONFloat(window.RenderSubmitP90Ms) + ",\"gpuWorkDoneP90Ms\":" + perfSummaryJSONFloat(window.GpuWorkDoneP90Ms) + ",\"activeWorkP90Ms\":" + perfSummaryJSONFloat(window.ActiveWorkP90Ms) + ",\"activeWorkP99Ms\":" + perfSummaryJSONFloat(window.ActiveWorkP99Ms) + ",\"hudP90Ms\":" + perfSummaryJSONFloat(window.HudP90Ms) + "}" + ",\"histogram\":{" + "\"leBudget\":" + strconv.Itoa(hist.LeBudget) + ",\"le12Ms\":" + strconv.Itoa(hist.Le12Ms) + ",\"le16Ms\":" + strconv.Itoa(hist.Le16Ms) + ",\"le25Ms\":" + strconv.Itoa(hist.Le25Ms) + ",\"le33Ms\":" + strconv.Itoa(hist.Le33Ms) + ",\"le50Ms\":" + strconv.Itoa(hist.Le50Ms) + ",\"le100Ms\":" + strconv.Itoa(hist.Le100Ms) + ",\"gt100Ms\":" + strconv.Itoa(hist.Gt100Ms) + "}" + ",\"classification\":{" + "\"primaryCause\":" + perfSummaryJSONString(current.Classification.PrimaryCause) + ",\"secondaryCause\":" + perfSummaryJSONString(current.Classification.SecondaryCause) + ",\"mixed\":" + perfSummaryJSONBool(current.Classification.Mixed) + ",\"latestSpikeFrame\":" + strconv.Itoa(latestSpike.FrameId) + ",\"latestSpikeMs\":" + perfSummaryJSONFloat(latestSpike.FrameMs) + ",\"latestSpikeCause\":" + perfSummaryJSONString(latestSpike.PrimaryCause) + ",\"windowWorstFrame\":" + strconv.Itoa(windowWorst.FrameId) + ",\"windowWorstMs\":" + perfSummaryJSONFloat(windowWorst.FrameMs) + ",\"windowWorstCause\":" + perfSummaryJSONString(windowWorst.Classification.PrimaryCause) + ",\"latestSpike\":" + perfSummarySpikeJSON(latestSpike) + ",\"windowWorst\":" + perfSummaryFrameBreakdownJSON(windowWorst) + "}" + ",\"current\":{" + "\"frameMs\":" + perfSummaryJSONFloat(current.FrameMs) + ",\"gameCpuMs\":" + perfSummaryJSONFloat(current.GameCpu.TotalMs) + ",\"fixedSteps\":" + strconv.Itoa(current.GameCpu.FixedSteps) + ",\"drawEncodeMs\":" + perfSummaryJSONFloat(current.GameCpu.DrawEncodeMs) + ",\"renderLoopMs\":" + perfSummaryJSONFloat(current.RenderWorker.LoopTotalMs) + ",\"displayPulseMs\":" + perfSummaryJSONFloat(current.RenderWorker.DisplayPulseMs) + ",\"paceWaitMs\":" + perfSummaryJSONFloat(current.RenderWorker.PaceWaitMs) + ",\"frameDivisor\":" + strconv.Itoa(current.RenderWorker.FrameDivisor) + ",\"replyWaitMs\":" + perfSummaryJSONFloat(current.RenderWorker.ReplyWaitMs) + ",\"requestSendMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestSendMs) + ",\"requestEncodeMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestEncodeMs) + ",\"requestPortSendMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestPortSendMs) + ",\"submitCpuMs\":" + perfSummaryJSONFloat(current.RenderWorker.SubmitCpuMs) + ",\"renderWorkMs\":" + perfSummaryJSONFloat(current.RenderWorker.WorkMs) + ",\"gpuWorkDoneMs\":" + perfSummaryJSONFloat(gpu.SubmittedWorkDoneMs) + ",\"gpuQueueDepth\":" + perfSummaryJSONString(gpu.QueueDepthClass) + "}" + ",\"renderer\":{" + "\"submitFrameMs\":" + perfSummaryJSONFloat(renderer.SubmitFrameMs) + ",\"decodeMs\":" + perfSummaryJSONFloat(renderer.DecodeMs) + ",\"sceneUpdateMs\":" + perfSummaryJSONFloat(renderer.SceneUpdateMs) + ",\"depthPassMs\":" + perfSummaryJSONFloat(renderer.DepthPassMs) + ",\"shadowPassMs\":" + perfSummaryJSONFloat(renderer.ShadowPassMs) + ",\"mainPassMs\":" + perfSummaryJSONFloat(renderer.MainPassMs) + ",\"mainPassSetupMs\":" + perfSummaryJSONFloat(renderer.MainPassSetupMs) + ",\"mainSkyboxMs\":" + perfSummaryJSONFloat(renderer.MainSkyboxMs) + ",\"mainModelMs\":" + perfSummaryJSONFloat(renderer.MainModelMs) + ",\"mainPrimitiveMs\":" + perfSummaryJSONFloat(renderer.MainPrimitiveMs) + ",\"mainPassCloseMs\":" + perfSummaryJSONFloat(renderer.MainPassCloseMs) + ",\"waterPassMs\":" + perfSummaryJSONFloat(renderer.WaterPassMs) + ",\"postPassMs\":" + perfSummaryJSONFloat(renderer.PostPassMs) + ",\"overlayPassMs\":" + perfSummaryJSONFloat(renderer.OverlayPassMs) + ",\"queueSubmitCpuMs\":" + perfSummaryJSONFloat(renderer.QueueSubmitCpuMs) + ",\"presentCpuMs\":" + perfSummaryJSONFloat(renderer.PresentCpuMs) + "}" + ",\"workload\":{" + "\"drawCalls\":" + strconv.Itoa(workload.DrawCalls) + ",\"modelDraws\":" + strconv.Itoa(workload.ModelDraws) + ",\"primitiveDraws\":" + strconv.Itoa(workload.PrimitiveDraws) + ",\"waterDraws\":" + strconv.Itoa(workload.WaterDraws) + ",\"waterInstances\":" + strconv.Itoa(workload.WaterInstances) + ",\"waterTriangles\":" + strconv.Itoa(workload.WaterTriangles) + ",\"instancedBatches\":" + strconv.Itoa(workload.InstancedBatches) + ",\"shadowCascades\":" + strconv.Itoa(workload.ShadowCascades) + ",\"primitiveChunks\":" + strconv.Itoa(workload.PrimitiveChunks) + ",\"postEffects\":" + strconv.Itoa(workload.PostEffects) + ",\"instances\":" + strconv.Itoa(workload.Instances) + ",\"triangles\":" + strconv.Itoa(workload.Triangles) + ",\"uploadBytes\":" + strconv.Itoa(workload.UploadBytes) + ",\"bufferCreates\":" + strconv.Itoa(workload.BufferCreates) + ",\"bindGroupCreates\":" + strconv.Itoa(workload.BindGroupCreates) + ",\"textureUploads\":" + strconv.Itoa(workload.TextureUploads) + ",\"residentChunkRebuilds\":" + strconv.Itoa(workload.ResidentChunkRebuilds) + ",\"diagnosticFlags\":" + strconv.Itoa(workload.DiagnosticFlags) + ",\"frameGraphPasses\":" + strconv.Itoa(workload.FrameGraphPasses) + ",\"frameGraphResources\":" + strconv.Itoa(workload.FrameGraphResources) + ",\"frameGraphTargets\":" + strconv.Itoa(workload.FrameGraphTargets) + ",\"frameGraphReadyTargets\":" + strconv.Itoa(workload.FrameGraphReadyTargets) + "}" + ",\"fixed\":{" + "\"totalMs\":" + perfSummaryJSONFloat(fixed.TotalMs) + ",\"peakTotalMs\":" + perfSummaryJSONFloat(fixed.PeakTotalMs) + ",\"slowFrames\":" + strconv.Itoa(fixed.SlowFrames) + ",\"frames\":" + strconv.Itoa(fixed.Frames) + ",\"slowestPhase\":" + perfSummaryJSONString(fixed.SlowestPhase) + ",\"slowestPhaseMs\":" + perfSummaryJSONFloat(fixed.SlowestPhaseMs) + "}" + "}"
+	return "{" + "\"schemaVersion\":1" + ",\"source\":" + perfSummaryJSONString(source) + ",\"kind\":\"perf-summary\"" + ",\"frame\":" + strconv.Itoa(frame) + ",\"mode\":" + perfSummaryJSONString(snapshot.Mode) + ",\"status\":" + perfSummaryJSONString(status) + ",\"gatePassed\":" + perfSummaryJSONBool(gate.Passed) + ",\"failure\":" + perfSummaryJSONString(gate.PrimaryFailure) + ",\"gate\":{" + "\"checkedFrames\":" + strconv.Itoa(gate.CheckedFrames) + ",\"slowFrames\":" + strconv.Itoa(gate.SlowFrames) + ",\"maxSlowFrames\":" + strconv.Itoa(fixed.MaxSlowFrames) + ",\"frameP99Ms\":" + perfSummaryJSONFloat(gate.FrameP99Ms) + ",\"frameMaxMs\":" + perfSummaryJSONFloat(gate.FrameMaxMs) + ",\"activeWorkP90Ms\":" + perfSummaryJSONFloat(gate.ActiveWorkP90Ms) + ",\"activeWorkP99Ms\":" + perfSummaryJSONFloat(gate.ActiveWorkP99Ms) + "}" + ",\"targetHz\":" + strconv.Itoa(snapshot.TargetHz) + ",\"budgetMs\":" + perfSummaryJSONFloat(snapshot.BudgetMs) + ",\"screen\":{" + "\"cssWidth\":" + strconv.Itoa(screen.Width) + ",\"cssHeight\":" + strconv.Itoa(screen.Height) + ",\"pixelWidth\":" + strconv.Itoa(screen.PixelWidth) + ",\"pixelHeight\":" + strconv.Itoa(screen.PixelHeight) + ",\"devicePixelRatio\":" + perfSummaryJSONFloat(screen.DevicePixelRatio) + ",\"mpix\":" + perfSummaryJSONFloat(screenMPixels) + "}" + ",\"window\":{" + "\"frames\":" + strconv.Itoa(window.Frames) + ",\"slowFrames\":" + strconv.Itoa(window.SlowFrames) + ",\"frameP50Ms\":" + perfSummaryJSONFloat(window.FrameP50Ms) + ",\"frameP90Ms\":" + perfSummaryJSONFloat(window.FrameP90Ms) + ",\"frameP99Ms\":" + perfSummaryJSONFloat(window.FrameP99Ms) + ",\"frameMaxMs\":" + perfSummaryJSONFloat(window.FrameMaxMs) + ",\"gameCpuP90Ms\":" + perfSummaryJSONFloat(window.GameCpuP90Ms) + ",\"drawEncodeP90Ms\":" + perfSummaryJSONFloat(window.DrawEncodeP90Ms) + ",\"renderLoopP90Ms\":" + perfSummaryJSONFloat(window.RenderLoopP90Ms) + ",\"renderWorkP90Ms\":" + perfSummaryJSONFloat(window.RenderWorkP90Ms) + ",\"renderSubmitP90Ms\":" + perfSummaryJSONFloat(window.RenderSubmitP90Ms) + ",\"gpuWorkDoneP90Ms\":" + perfSummaryJSONFloat(window.GpuWorkDoneP90Ms) + ",\"activeWorkP90Ms\":" + perfSummaryJSONFloat(window.ActiveWorkP90Ms) + ",\"activeWorkP99Ms\":" + perfSummaryJSONFloat(window.ActiveWorkP99Ms) + ",\"hudP90Ms\":" + perfSummaryJSONFloat(window.HudP90Ms) + "}" + ",\"histogram\":{" + "\"leBudget\":" + strconv.Itoa(hist.LeBudget) + ",\"le12Ms\":" + strconv.Itoa(hist.Le12Ms) + ",\"le16Ms\":" + strconv.Itoa(hist.Le16Ms) + ",\"le25Ms\":" + strconv.Itoa(hist.Le25Ms) + ",\"le33Ms\":" + strconv.Itoa(hist.Le33Ms) + ",\"le50Ms\":" + strconv.Itoa(hist.Le50Ms) + ",\"le100Ms\":" + strconv.Itoa(hist.Le100Ms) + ",\"gt100Ms\":" + strconv.Itoa(hist.Gt100Ms) + "}" + ",\"classification\":{" + "\"primaryCause\":" + perfSummaryJSONString(current.Classification.PrimaryCause) + ",\"secondaryCause\":" + perfSummaryJSONString(current.Classification.SecondaryCause) + ",\"mixed\":" + perfSummaryJSONBool(current.Classification.Mixed) + ",\"latestSpikeFrame\":" + strconv.Itoa(latestSpike.FrameId) + ",\"latestSpikeMs\":" + perfSummaryJSONFloat(latestSpike.FrameMs) + ",\"latestSpikeCause\":" + perfSummaryJSONString(latestSpike.PrimaryCause) + ",\"windowWorstFrame\":" + strconv.Itoa(windowWorst.FrameId) + ",\"windowWorstMs\":" + perfSummaryJSONFloat(windowWorst.FrameMs) + ",\"windowWorstCause\":" + perfSummaryJSONString(windowWorst.Classification.PrimaryCause) + ",\"latestSpike\":" + perfSummarySpikeJSON(latestSpike) + ",\"windowWorst\":" + perfSummaryFrameBreakdownJSON(windowWorst) + "}" + ",\"current\":{" + "\"frameMs\":" + perfSummaryJSONFloat(current.FrameMs) + ",\"gameCpuMs\":" + perfSummaryJSONFloat(current.GameCpu.TotalMs) + ",\"fixedSteps\":" + strconv.Itoa(current.GameCpu.FixedSteps) + ",\"drawEncodeMs\":" + perfSummaryJSONFloat(current.GameCpu.DrawEncodeMs) + ",\"renderLoopMs\":" + perfSummaryJSONFloat(current.RenderWorker.LoopTotalMs) + ",\"displayPulseMs\":" + perfSummaryJSONFloat(current.RenderWorker.DisplayPulseMs) + ",\"paceWaitMs\":" + perfSummaryJSONFloat(current.RenderWorker.PaceWaitMs) + ",\"frameDivisor\":" + strconv.Itoa(current.RenderWorker.FrameDivisor) + ",\"replyWaitMs\":" + perfSummaryJSONFloat(current.RenderWorker.ReplyWaitMs) + ",\"requestSendMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestSendMs) + ",\"requestEncodeMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestEncodeMs) + ",\"requestPortSendMs\":" + perfSummaryJSONFloat(current.RenderWorker.RequestPortSendMs) + ",\"submitCpuMs\":" + perfSummaryJSONFloat(current.RenderWorker.SubmitCpuMs) + ",\"renderWorkMs\":" + perfSummaryJSONFloat(current.RenderWorker.WorkMs) + ",\"gpuWorkDoneMs\":" + perfSummaryJSONFloat(gpu.SubmittedWorkDoneMs) + ",\"gpuQueueDepth\":" + perfSummaryJSONString(gpu.QueueDepthClass) + "}" + ",\"renderer\":{" + "\"submitFrameMs\":" + perfSummaryJSONFloat(renderer.SubmitFrameMs) + ",\"decodeMs\":" + perfSummaryJSONFloat(renderer.DecodeMs) + ",\"sceneUpdateMs\":" + perfSummaryJSONFloat(renderer.SceneUpdateMs) + ",\"depthPassMs\":" + perfSummaryJSONFloat(renderer.DepthPassMs) + ",\"shadowPassMs\":" + perfSummaryJSONFloat(renderer.ShadowPassMs) + ",\"mainPassMs\":" + perfSummaryJSONFloat(renderer.MainPassMs) + ",\"mainPassSetupMs\":" + perfSummaryJSONFloat(renderer.MainPassSetupMs) + ",\"mainSkyboxMs\":" + perfSummaryJSONFloat(renderer.MainSkyboxMs) + ",\"mainModelMs\":" + perfSummaryJSONFloat(renderer.MainModelMs) + ",\"mainPrimitiveMs\":" + perfSummaryJSONFloat(renderer.MainPrimitiveMs) + ",\"mainPassCloseMs\":" + perfSummaryJSONFloat(renderer.MainPassCloseMs) + ",\"waterPassMs\":" + perfSummaryJSONFloat(renderer.WaterPassMs) + ",\"postPassMs\":" + perfSummaryJSONFloat(renderer.PostPassMs) + ",\"overlayPassMs\":" + perfSummaryJSONFloat(renderer.OverlayPassMs) + ",\"queueSubmitCpuMs\":" + perfSummaryJSONFloat(renderer.QueueSubmitCpuMs) + ",\"presentCpuMs\":" + perfSummaryJSONFloat(renderer.PresentCpuMs) + "}" + ",\"workload\":{" + "\"drawCalls\":" + strconv.Itoa(workload.DrawCalls) + ",\"modelDraws\":" + strconv.Itoa(workload.ModelDraws) + ",\"primitiveDraws\":" + strconv.Itoa(workload.PrimitiveDraws) + ",\"waterDraws\":" + strconv.Itoa(workload.WaterDraws) + ",\"waterInstances\":" + strconv.Itoa(workload.WaterInstances) + ",\"waterTriangles\":" + strconv.Itoa(workload.WaterTriangles) + ",\"instancedBatches\":" + strconv.Itoa(workload.InstancedBatches) + ",\"shadowCascades\":" + strconv.Itoa(workload.ShadowCascades) + ",\"primitiveChunks\":" + strconv.Itoa(workload.PrimitiveChunks) + ",\"postEffects\":" + strconv.Itoa(workload.PostEffects) + ",\"instances\":" + strconv.Itoa(workload.Instances) + ",\"triangles\":" + strconv.Itoa(workload.Triangles) + ",\"uploadBytes\":" + strconv.Itoa(workload.UploadBytes) + ",\"bufferCreates\":" + strconv.Itoa(workload.BufferCreates) + ",\"bindGroupCreates\":" + strconv.Itoa(workload.BindGroupCreates) + ",\"textureUploads\":" + strconv.Itoa(workload.TextureUploads) + ",\"residentChunkRebuilds\":" + strconv.Itoa(workload.ResidentChunkRebuilds) + ",\"diagnosticFlags\":" + strconv.Itoa(workload.DiagnosticFlags) + ",\"frameGraphPasses\":" + strconv.Itoa(workload.FrameGraphPasses) + ",\"frameGraphResources\":" + strconv.Itoa(workload.FrameGraphResources) + ",\"frameGraphTargets\":" + strconv.Itoa(workload.FrameGraphTargets) + ",\"frameGraphReadyTargets\":" + strconv.Itoa(workload.FrameGraphReadyTargets) + ",\"frameGraphSkippedPasses\":" + strconv.Itoa(workload.FrameGraphSkippedPasses) + ",\"frameGraphFailures\":" + strconv.Itoa(workload.FrameGraphFailures) + ",\"filteredDraws\":" + strconv.Itoa(workload.FilteredDraws) + ",\"missingResources\":" + strconv.Itoa(workload.MissingResources) + ",\"invalidBatches\":" + strconv.Itoa(workload.InvalidBatches) + ",\"fallbackPaths\":" + strconv.Itoa(workload.FallbackPaths) + "}" + ",\"fixed\":{" + "\"totalMs\":" + perfSummaryJSONFloat(fixed.TotalMs) + ",\"peakTotalMs\":" + perfSummaryJSONFloat(fixed.PeakTotalMs) + ",\"slowFrames\":" + strconv.Itoa(fixed.SlowFrames) + ",\"frames\":" + strconv.Itoa(fixed.Frames) + ",\"slowestPhase\":" + perfSummaryJSONString(fixed.SlowestPhase) + ",\"slowestPhaseMs\":" + perfSummaryJSONFloat(fixed.SlowestPhaseMs) + "}" + "}"
+}
+
+func EncodePerfSkipSummaryReport(source string, frame int, workload PerfRendererWorkloadStats) string {
+	return "{" + "\"schemaVersion\":1" + ",\"source\":" + perfSummaryJSONString(source) + ",\"kind\":\"perf-skip-summary\"" + ",\"frame\":" + strconv.Itoa(frame) + ",\"workload\":{" + "\"filteredDraws\":" + strconv.Itoa(workload.FilteredDraws) + ",\"missingResources\":" + strconv.Itoa(workload.MissingResources) + ",\"invalidBatches\":" + strconv.Itoa(workload.InvalidBatches) + ",\"fallbackPaths\":" + strconv.Itoa(workload.FallbackPaths) + ",\"missingModels\":" + strconv.Itoa(workload.MissingModels) + ",\"missingMeshes\":" + strconv.Itoa(workload.MissingMeshes) + ",\"missingTextures\":" + strconv.Itoa(workload.MissingTextures) + ",\"missingBindGroups\":" + strconv.Itoa(workload.MissingBindGroups) + ",\"missingChunks\":" + strconv.Itoa(workload.MissingChunks) + ",\"missingTargets\":" + strconv.Itoa(workload.MissingTargets) + ",\"invalidBatchIndices\":" + strconv.Itoa(workload.InvalidBatchIndices) + ",\"incompatibleDraws\":" + strconv.Itoa(workload.IncompatibleDraws) + "}" + "}"
 }
 
 func perfSummaryLatestSpike(snapshot PerfSnapshot) PerfSpike {

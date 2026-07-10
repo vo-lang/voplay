@@ -3,12 +3,17 @@ package scene3d
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"github.com/vo-lang/voplay"
 )
 
 const RacingReplayFormatVersion = 1
 
 const RacingReplayEngineVersion = "voplay-racing-1"
+
+const PhysicsReplayFormatVersion = 2
+
+const PhysicsReplayEngineVersion = "voplay-physics-2"
 
 type RacingReplay struct {
 	FormatVersion int `json:"formatVersion"`
@@ -40,15 +45,29 @@ type PhysicsReplayTrace struct {
 	FormatVersion int `json:"formatVersion"`
 	EngineVersion string `json:"engineVersion"`
 	FixedStep float64 `json:"fixedStep"`
+	ScenarioDigest string `json:"scenarioDigest"`
+	TrackDigest string `json:"trackDigest"`
+	ConfigDigest string `json:"configDigest"`
 	Samples []PhysicsReplaySample `json:"samples"`
+	BackendCommands []PhysicsBackendCommandEvent `json:"backendCommands"`
+}
+
+type PhysicsReplayContractIdentity struct {
+	ScenarioDigest string
+	TrackDigest string
+	ConfigDigest string
 }
 
 type PhysicsReplaySample struct {
 	Step int `json:"step"`
+	VehicleIndex int `json:"vehicleIndex"`
 	Intent VehicleIntent `json:"intent"`
 	Position voplay.Vec3 `json:"position"`
 	Rotation voplay.Quat `json:"rotation"`
 	Velocity voplay.Vec3 `json:"velocity"`
+	AngularVelocity voplay.Vec3 `json:"angularVelocity"`
+	Speed float64 `json:"speed"`
+	Grounded bool `json:"grounded"`
 	SurfaceID string `json:"surfaceId"`
 	ContactCount int `json:"contactCount"`
 	BackendApplyHash int `json:"backendApplyHash"`
@@ -62,6 +81,7 @@ type RacingReplayRecorder struct {
 
 type PhysicsReplayTraceRecorder struct {
 	trace PhysicsReplayTrace
+	lastBackendCommandSequence int
 }
 
 type RacingReplayCursor struct {
@@ -117,17 +137,56 @@ func NewPhysicsReplayTraceRecorder(fixedStep float64) *PhysicsReplayTraceRecorde
 	if fixedStep <= 0 {
 		panic("scene3d.NewPhysicsReplayTraceRecorder: fixedStep must be > 0")
 	}
-	return &PhysicsReplayTraceRecorder{trace: PhysicsReplayTrace{FormatVersion: RacingReplayFormatVersion, EngineVersion: RacingReplayEngineVersion, FixedStep: fixedStep, Samples: []PhysicsReplaySample{}}}
+	return &PhysicsReplayTraceRecorder{trace: PhysicsReplayTrace{FormatVersion: PhysicsReplayFormatVersion, EngineVersion: PhysicsReplayEngineVersion, FixedStep: fixedStep, Samples: []PhysicsReplaySample{}, BackendCommands: []PhysicsBackendCommandEvent{}}}
+}
+
+func (r *PhysicsReplayTraceRecorder) BindContract(identity PhysicsReplayContractIdentity) {
+	if r == nil {
+		panic("scene3d.PhysicsReplayTraceRecorder.BindContract: recorder is nil")
+	}
+	if identity.ScenarioDigest == "" || identity.TrackDigest == "" || identity.ConfigDigest == "" {
+		panic("scene3d.PhysicsReplayTraceRecorder.BindContract: scenario, track, and config digests must not be empty")
+	}
+	if len(r.trace.Samples) > 0 || len(r.trace.BackendCommands) > 0 {
+		panic("scene3d.PhysicsReplayTraceRecorder.BindContract: contract must be bound before recording")
+	}
+	if r.trace.ScenarioDigest != "" && (r.trace.ScenarioDigest != identity.ScenarioDigest || r.trace.TrackDigest != identity.TrackDigest || r.trace.ConfigDigest != identity.ConfigDigest) {
+		panic("scene3d.PhysicsReplayTraceRecorder.BindContract: contract is already bound")
+	}
+	r.trace.ScenarioDigest = identity.ScenarioDigest
+	r.trace.TrackDigest = identity.TrackDigest
+	r.trace.ConfigDigest = identity.ConfigDigest
 }
 
 func (r *PhysicsReplayTraceRecorder) RecordVehicle(step int, intent VehicleIntent, telemetry VehicleTelemetry) {
+	r.RecordVehicleAt(step, 0, intent, telemetry, nil)
+}
+
+func (r *PhysicsReplayTraceRecorder) LastBackendCommandSequence() int {
+	if r == nil {
+		return 0
+	}
+	return r.lastBackendCommandSequence
+}
+
+func (r *PhysicsReplayTraceRecorder) RecordVehicleAt(step int, vehicleIndex int, intent VehicleIntent, telemetry VehicleTelemetry, backendCommands []PhysicsBackendCommandEvent) {
 	if r == nil {
 		panic("scene3d.PhysicsReplayTraceRecorder: recorder is nil")
 	}
 	if step < 0 {
 		panic("scene3d.PhysicsReplayTraceRecorder: step must be >= 0")
 	}
-	r.trace.Samples = append(r.trace.Samples, PhysicsReplaySample{Step: step, Intent: intent.Normalized(), Position: telemetry.Position, Rotation: telemetry.Rotation, Velocity: telemetry.Velocity, SurfaceID: telemetry.SurfaceID, ContactCount: telemetry.ContactCount, BackendApplyHash: telemetry.BackendApplyHash, PoseHash: PhysicsPoseHash(telemetry.Position, telemetry.Rotation), TelemetryHash: PhysicsTelemetryHash(telemetry)})
+	if vehicleIndex < 0 {
+		panic("scene3d.PhysicsReplayTraceRecorder: vehicleIndex must be >= 0")
+	}
+	r.trace.Samples = append(r.trace.Samples, PhysicsReplaySample{Step: step, VehicleIndex: vehicleIndex, Intent: intent.Normalized(), Position: telemetry.Position, Rotation: telemetry.Rotation, Velocity: telemetry.Velocity, AngularVelocity: telemetry.AngularVelocity, Speed: telemetry.Speed, Grounded: telemetry.Grounded, SurfaceID: telemetry.SurfaceID, ContactCount: telemetry.ContactCount, BackendApplyHash: telemetry.BackendApplyHash, PoseHash: PhysicsPoseHash(telemetry.Position, telemetry.Rotation), TelemetryHash: PhysicsTelemetryHash(telemetry)})
+	for _, command := range backendCommands {
+		if command.Sequence <= r.lastBackendCommandSequence {
+			continue
+		}
+		r.trace.BackendCommands = append(r.trace.BackendCommands, clonePhysicsBackendCommandEvent(command))
+		r.lastBackendCommandSequence = command.Sequence
+	}
 }
 
 func (r *PhysicsReplayTraceRecorder) Trace() PhysicsReplayTrace {
@@ -138,23 +197,151 @@ func (r *PhysicsReplayTraceRecorder) Trace() PhysicsReplayTrace {
 }
 
 func ValidatePhysicsReplayTrace(trace PhysicsReplayTrace) error {
-	if trace.FormatVersion != RacingReplayFormatVersion {
+	if trace.FormatVersion != PhysicsReplayFormatVersion {
 		return errors.New("scene3d.ValidatePhysicsReplayTrace: unsupported format version")
 	}
-	if trace.EngineVersion == "" {
-		return errors.New("scene3d.ValidatePhysicsReplayTrace: engineVersion must not be empty")
+	if trace.EngineVersion != PhysicsReplayEngineVersion {
+		return errors.New("scene3d.ValidatePhysicsReplayTrace: unsupported engine version")
 	}
 	if trace.FixedStep <= 0 {
 		return errors.New("scene3d.ValidatePhysicsReplayTrace: fixedStep must be > 0")
 	}
-	prev := -1
+	if trace.ScenarioDigest == "" || trace.TrackDigest == "" || trace.ConfigDigest == "" {
+		return errors.New("scene3d.ValidatePhysicsReplayTrace: scenario, track, and config digests must not be empty")
+	}
+	prevStep := -1
+	prevVehicle := -1
 	for _, sample := range trace.Samples {
-		if sample.Step < prev {
-			return errors.New("scene3d.ValidatePhysicsReplayTrace: sample steps must be non-decreasing")
+		if sample.Step < 0 || sample.VehicleIndex < 0 {
+			return errors.New("scene3d.ValidatePhysicsReplayTrace: sample identity must be non-negative")
 		}
-		prev = sample.Step
+		if sample.Step < prevStep || (sample.Step == prevStep && sample.VehicleIndex <= prevVehicle) {
+			return errors.New("scene3d.ValidatePhysicsReplayTrace: samples must be strictly ordered by step and vehicle")
+		}
+		prevStep = sample.Step
+		prevVehicle = sample.VehicleIndex
+	}
+	prevSequence := 0
+	for _, command := range trace.BackendCommands {
+		if command.Sequence <= prevSequence {
+			return errors.New("scene3d.ValidatePhysicsReplayTrace: backend command sequences must be strictly increasing")
+		}
+		prevSequence = command.Sequence
 	}
 	return nil
+}
+
+func ValidatePhysicsReplaySample(sample PhysicsReplaySample, telemetry VehicleTelemetry, epsilon float64) error {
+	if epsilon <= 0 {
+		epsilon = 0.000001
+	}
+	if !physicsReplayVec3Near(sample.Position, telemetry.Position, epsilon) {
+		return errors.New("position mismatch")
+	}
+	if !physicsReplayQuatNear(sample.Rotation, telemetry.Rotation, epsilon) {
+		return errors.New("rotation mismatch")
+	}
+	if !physicsReplayVec3Near(sample.Velocity, telemetry.Velocity, epsilon) {
+		return errors.New("velocity mismatch")
+	}
+	if !physicsReplayVec3Near(sample.AngularVelocity, telemetry.AngularVelocity, epsilon) {
+		return errors.New("angular velocity mismatch")
+	}
+	if math.Abs(sample.Speed-telemetry.Speed) > epsilon {
+		return errors.New("speed mismatch")
+	}
+	if sample.Grounded != telemetry.Grounded {
+		return errors.New("grounded mismatch")
+	}
+	if sample.SurfaceID != telemetry.SurfaceID {
+		return errors.New("surface mismatch")
+	}
+	if sample.ContactCount != telemetry.ContactCount {
+		return errors.New("contact count mismatch")
+	}
+	if sample.BackendApplyHash != telemetry.BackendApplyHash {
+		return errors.New("backend apply mismatch")
+	}
+	return nil
+}
+
+func ValidatePhysicsBackendCommandReplay(expected []PhysicsBackendCommandEvent, actual []PhysicsBackendCommandEvent) error {
+	canonicalExpected := canonicalPhysicsBackendCommandEvents(expected)
+	canonicalActual := canonicalPhysicsBackendCommandEvents(actual)
+	expectedJSON, expectedErr := json.Marshal(canonicalExpected)
+	if expectedErr != nil {
+		return expectedErr
+	}
+	actualJSON, actualErr := json.Marshal(canonicalActual)
+	if actualErr != nil {
+		return actualErr
+	}
+	if string(expectedJSON) != string(actualJSON) {
+		if len(canonicalExpected) != len(canonicalActual) {
+			return errors.New("physics backend command event count mismatch")
+		}
+		for i := range canonicalExpected {
+			expectedEvent, _ := json.Marshal(canonicalExpected[i])
+			actualEvent, _ := json.Marshal(canonicalActual[i])
+			if string(expectedEvent) != string(actualEvent) {
+				return errors.New("physics backend command event mismatch expected=" + string(expectedEvent) + " actual=" + string(actualEvent))
+			}
+		}
+		return errors.New("physics backend command event mismatch without divergent element")
+	}
+	return nil
+}
+
+func canonicalPhysicsBackendCommandEvents(events []PhysicsBackendCommandEvent) []PhysicsBackendCommandEvent {
+	out := []PhysicsBackendCommandEvent{}
+	worldIDs := map[int]int{}
+	bodyIDs := map[int]int{}
+	vehicleIDs := map[int]int{}
+	nextWorldID := 1
+	nextBodyID := 1
+	nextVehicleID := 1
+	for _, source := range events {
+		event := clonePhysicsBackendCommandEvent(source)
+		event.Sequence = len(out) + 1
+		if event.WorldID != 0 {
+			id, ok := worldIDs[event.WorldID]
+			if !ok {
+				id = nextWorldID
+				nextWorldID++
+				worldIDs[event.WorldID] = id
+			}
+			event.WorldID = id
+		}
+		if event.BodyID != 0 {
+			id, ok := bodyIDs[event.BodyID]
+			if !ok {
+				id = nextBodyID
+				nextBodyID++
+				bodyIDs[event.BodyID] = id
+			}
+			event.BodyID = id
+		}
+		if event.VehicleID != 0 {
+			id, ok := vehicleIDs[event.VehicleID]
+			if !ok {
+				id = nextVehicleID
+				nextVehicleID++
+				vehicleIDs[event.VehicleID] = id
+			}
+			event.VehicleID = id
+		}
+		event = canonicalPhysicsBackendCommandNumbers(event)
+		out = append(out, event)
+	}
+	return out
+}
+
+func physicsReplayVec3Near(a voplay.Vec3, b voplay.Vec3, epsilon float64) bool {
+	return math.Abs(a.X-b.X) <= epsilon && math.Abs(a.Y-b.Y) <= epsilon && math.Abs(a.Z-b.Z) <= epsilon
+}
+
+func physicsReplayQuatNear(a voplay.Quat, b voplay.Quat, epsilon float64) bool {
+	return math.Abs(a.X-b.X) <= epsilon && math.Abs(a.Y-b.Y) <= epsilon && math.Abs(a.Z-b.Z) <= epsilon && math.Abs(a.W-b.W) <= epsilon
 }
 
 func PhysicsPoseHash(position voplay.Vec3, rotation voplay.Quat) float64 {
@@ -267,7 +454,97 @@ func cloneRacingReplay(replay RacingReplay) RacingReplay {
 func clonePhysicsReplayTrace(trace PhysicsReplayTrace) PhysicsReplayTrace {
 	out := trace
 	out.Samples = append([]PhysicsReplaySample{}, trace.Samples...)
+	out.BackendCommands = []PhysicsBackendCommandEvent{}
+	for _, event := range trace.BackendCommands {
+		out.BackendCommands = append(out.BackendCommands, clonePhysicsBackendCommandEvent(event))
+	}
 	return out
+}
+
+func clonePhysicsBackendCommandEvent(event PhysicsBackendCommandEvent) PhysicsBackendCommandEvent {
+	out := event
+	out.Force.Wheels = append([]PhysicsBackendWheelCommand{}, event.Force.Wheels...)
+	return out
+}
+
+func canonicalPhysicsFloat(value float64) float64 {
+	if value == 0 {
+		return 0
+	}
+	return value
+}
+
+func canonicalPhysicsVec3(value voplay.Vec3) voplay.Vec3 {
+	value.X = canonicalPhysicsFloat(value.X)
+	value.Y = canonicalPhysicsFloat(value.Y)
+	value.Z = canonicalPhysicsFloat(value.Z)
+	return value
+}
+
+func canonicalPhysicsQuat(value voplay.Quat) voplay.Quat {
+	value.X = canonicalPhysicsFloat(value.X)
+	value.Y = canonicalPhysicsFloat(value.Y)
+	value.Z = canonicalPhysicsFloat(value.Z)
+	value.W = canonicalPhysicsFloat(value.W)
+	return value
+}
+
+func canonicalPhysicsSurface(value SurfaceMaterial) SurfaceMaterial {
+	value.Friction = canonicalPhysicsFloat(value.Friction)
+	value.GripScale = canonicalPhysicsFloat(value.GripScale)
+	value.SpeedScale = canonicalPhysicsFloat(value.SpeedScale)
+	value.EngineScale = canonicalPhysicsFloat(value.EngineScale)
+	value.Drag = canonicalPhysicsFloat(value.Drag)
+	value.Boost = canonicalPhysicsFloat(value.Boost)
+	return value
+}
+
+func canonicalPhysicsBackendCommandNumbers(event PhysicsBackendCommandEvent) PhysicsBackendCommandEvent {
+	force := event.Force
+	force.ForceCommand.VehicleInput.Throttle = canonicalPhysicsFloat(force.ForceCommand.VehicleInput.Throttle)
+	force.ForceCommand.VehicleInput.Steer = canonicalPhysicsFloat(force.ForceCommand.VehicleInput.Steer)
+	force.ForceCommand.SteeringAngle = canonicalPhysicsFloat(force.ForceCommand.SteeringAngle)
+	force.ForceCommand.EngineForce = canonicalPhysicsFloat(force.ForceCommand.EngineForce)
+	force.ForceCommand.BrakeForce = canonicalPhysicsFloat(force.ForceCommand.BrakeForce)
+	force.ForceCommand.DragForce = canonicalPhysicsFloat(force.ForceCommand.DragForce)
+	force.ForceCommand.Downforce = canonicalPhysicsFloat(force.ForceCommand.Downforce)
+	force.ForceCommand.AirControl = canonicalPhysicsFloat(force.ForceCommand.AirControl)
+	force.ForceCommand.WaterLift = canonicalPhysicsFloat(force.ForceCommand.WaterLift)
+	force.ForceCommand.WallGrip = canonicalPhysicsFloat(force.ForceCommand.WallGrip)
+	force.ForceCommand.RailGrip = canonicalPhysicsFloat(force.ForceCommand.RailGrip)
+	force.ForceCommand.Surface = canonicalPhysicsSurface(force.ForceCommand.Surface)
+	force.SteeringAngle = canonicalPhysicsFloat(force.SteeringAngle)
+	force.BodyForce = canonicalPhysicsVec3(force.BodyForce)
+	force.DragForce = canonicalPhysicsFloat(force.DragForce)
+	force.Downforce = canonicalPhysicsFloat(force.Downforce)
+	force.WaterLift = canonicalPhysicsFloat(force.WaterLift)
+	force.AirControl = canonicalPhysicsFloat(force.AirControl)
+	force.WallGrip = canonicalPhysicsFloat(force.WallGrip)
+	force.RailGrip = canonicalPhysicsFloat(force.RailGrip)
+	for i := range force.Wheels {
+		force.Wheels[i].SteeringAngle = canonicalPhysicsFloat(force.Wheels[i].SteeringAngle)
+		force.Wheels[i].EngineForce = canonicalPhysicsFloat(force.Wheels[i].EngineForce)
+		force.Wheels[i].BrakeForce = canonicalPhysicsFloat(force.Wheels[i].BrakeForce)
+	}
+	event.Force = force
+	event.Target.Position = canonicalPhysicsVec3(event.Target.Position)
+	event.Target.Rotation = canonicalPhysicsQuat(event.Target.Rotation)
+	event.Target.LinearVelocity = canonicalPhysicsVec3(event.Target.LinearVelocity)
+	event.Target.AngularVelocity = canonicalPhysicsVec3(event.Target.AngularVelocity)
+	event.Pose.Position = canonicalPhysicsVec3(event.Pose.Position)
+	event.Pose.Yaw = canonicalPhysicsFloat(event.Pose.Yaw)
+	event.Pose.LinearVelocity = canonicalPhysicsVec3(event.Pose.LinearVelocity)
+	event.Pose.AngularVelocity = canonicalPhysicsVec3(event.Pose.AngularVelocity)
+	event.Motion.LinearVelocity = canonicalPhysicsVec3(event.Motion.LinearVelocity)
+	event.Motion.AngularVelocity = canonicalPhysicsVec3(event.Motion.AngularVelocity)
+	event.Recovery.Pose.Position = canonicalPhysicsVec3(event.Recovery.Pose.Position)
+	event.Recovery.Pose.Yaw = canonicalPhysicsFloat(event.Recovery.Pose.Yaw)
+	event.Recovery.Pose.LinearVelocity = canonicalPhysicsVec3(event.Recovery.Pose.LinearVelocity)
+	event.Recovery.Pose.AngularVelocity = canonicalPhysicsVec3(event.Recovery.Pose.AngularVelocity)
+	event.Recovery.Motion.LinearVelocity = canonicalPhysicsVec3(event.Recovery.Motion.LinearVelocity)
+	event.Recovery.Motion.AngularVelocity = canonicalPhysicsVec3(event.Recovery.Motion.AngularVelocity)
+	event.Vector = canonicalPhysicsVec3(event.Vector)
+	return event
 }
 
 func replayStepsIncreasingInputs(samples []RacingReplayInputSample) bool {

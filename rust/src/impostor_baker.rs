@@ -291,10 +291,10 @@ fn decode_mesh(data: &[u8]) -> Result<Mesh, String> {
         return Err("impostor baker: model geometry is empty".to_string());
     }
     let expected = 24usize
-        .checked_add(position_count.checked_mul(48).unwrap_or(usize::MAX))
-        .and_then(|v| v.checked_add(material_count.checked_mul(84).unwrap_or(usize::MAX)))
-        .and_then(|v| v.checked_add(index_count.checked_mul(4).unwrap_or(usize::MAX)))
-        .and_then(|v| v.checked_add(triangle_material_count.checked_mul(4).unwrap_or(usize::MAX)))
+        .checked_add(position_count.saturating_mul(48))
+        .and_then(|v| v.checked_add(material_count.saturating_mul(84)))
+        .and_then(|v| v.checked_add(index_count.saturating_mul(4)))
+        .and_then(|v| v.checked_add(triangle_material_count.saturating_mul(4)))
         .ok_or_else(|| "impostor baker: model geometry size overflow".to_string())?;
     if data.len() != expected {
         return Err(format!(

@@ -24,6 +24,7 @@ type StressReport struct {
 	Kind string `json:"kind"`
 	FixedDt float64 `json:"fixedDt"`
 	Scenarios []ScenarioReport `json:"scenarios"`
+	Replays []ReplayReport `json:"replays"`
 	Replay ReplayReport `json:"replay"`
 	Summary StressSummary `json:"summary"`
 }
@@ -49,8 +50,9 @@ type ScenarioReport struct {
 	MaxContactEvents int `json:"maxContactEvents"`
 	FallbackContactEvents int `json:"fallbackContactEvents"`
 	PacketErrors int `json:"packetErrors"`
-	DirectBypassHits int `json:"directBypassHits"`
-	ConstraintBypassHits int `json:"constraintBypassHits"`
+	RejectedBackendCommands int `json:"rejectedBackendCommands"`
+	DroppedFixedSteps int `json:"droppedFixedSteps"`
+	BackendCommandSamples map[string]int `json:"backendCommandSamples"`
 	MaxStuckSeconds float64 `json:"maxStuckSeconds"`
 	InvalidSamples int `json:"invalidSamples"`
 	RecoveryRequests int `json:"recoveryRequests"`
@@ -65,11 +67,24 @@ type ReplayReport struct {
 	ReferenceScenario string `json:"referenceScenario"`
 	StepHash int `json:"stepHash"`
 	BackendPacketHash int `json:"backendPacketHash"`
+	BackendCommandHash int `json:"backendCommandHash"`
 	Samples int `json:"samples"`
+	VehicleCount int `json:"vehicleCount"`
+	BackendCommandCount int `json:"backendCommandCount"`
 	Mismatches int `json:"mismatches"`
 	FreshProcess bool `json:"freshProcess"`
 	Status string `json:"status"`
 	Issues []StressIssue `json:"issues"`
+}
+
+type ReplaySuiteEntry struct {
+	Scenario string `json:"scenario"`
+	Trace scene3d.PhysicsReplayTrace `json:"trace"`
+}
+
+type ReplaySuite struct {
+	SchemaVersion int `json:"schemaVersion"`
+	Entries []ReplaySuiteEntry `json:"entries"`
 }
 
 type TelemetrySample struct {
@@ -102,6 +117,12 @@ type ScenarioDefinition struct {
 	VehicleCount int
 }
 
+type ScenarioExecution struct {
+	Definition ScenarioDefinition
+	Report ScenarioReport
+	Trace scene3d.PhysicsReplayTrace
+}
+
 type ScenarioRuntime struct {
 	Scene *scene3d.Scene
 	Track *scene3d.Track
@@ -125,13 +146,15 @@ func main() {
 		return
 	}
 	report := StressReport{SchemaVersion: 1, Kind: "voplay.physicsStressReport", FixedDt: stressDt}
-	defs := scenarioDefinitions()
+	defs := selectedScenarioDefinitions()
+	executions := []ScenarioExecution{}
 	for _, def := range defs {
 		println("__VOPLAY_PHYSICS_STRESS_SCENARIO__" + def.Name)
-		scenario := runScenario(def)
+		scenario, trace := runScenarioWithReplay(def, true)
 		report.Scenarios = append(report.Scenarios, scenario)
+		executions = append(executions, ScenarioExecution{Definition: def, Report: scenario, Trace: trace})
 	}
-	report.Replay = replayContract(defs[1])
+	report.Replays, report.Replay = replayContracts(executions)
 	report.Summary.ScenarioCount = len(report.Scenarios)
 	for _, scenario := range report.Scenarios {
 		if scenario.Status == "pass" {
@@ -175,35 +198,49 @@ func scenarioDefinitions() []ScenarioDefinition {
 		ScenarioDefinition{Name: "wall-ride", VehicleCount: 1},
 		ScenarioDefinition{Name: "water-skim", VehicleCount: 1},
 		ScenarioDefinition{Name: "surface-transition", VehicleCount: 1},
+		ScenarioDefinition{Name: "road-edge-assist", VehicleCount: 1},
+		ScenarioDefinition{Name: "sleep-wake", VehicleCount: 1},
+		ScenarioDefinition{Name: "pose-reset", VehicleCount: 1},
 		ScenarioDefinition{Name: "recovery", VehicleCount: 1},
 		ScenarioDefinition{Name: "multi-vehicle-scripted-soak", VehicleCount: 24},
 	}
 }
 
-func runScenario(def ScenarioDefinition) ScenarioReport {
-	report, _ := runScenarioWithReplay(def, false)
-	return report
+func selectedScenarioDefinitions() []ScenarioDefinition {
+	name := os.Getenv("VOPLAY_PHYSICS_STRESS_ONLY")
+	if name == "" {
+		return scenarioDefinitions()
+	}
+	def, ok := scenarioDefinitionByName(name)
+	if !ok {
+		panic("unknown VOPLAY_PHYSICS_STRESS_ONLY scenario " + name)
+	}
+	return []ScenarioDefinition{def}
 }
 
 func runScenarioWithReplay(def ScenarioDefinition, recordReplay bool) (ScenarioReport, scene3d.PhysicsReplayTrace) {
 	runtime := newScenarioRuntime(def)
 	defer runtime.Scene.Close()
+	var recorder *scene3d.PhysicsReplayTraceRecorder
 	if recordReplay {
-		for _, session := range runtime.Sessions {
-			session.Replay = scene3d.NewPhysicsReplayTraceRecorder(stressDt)
+		recorder = scene3d.NewPhysicsReplayTraceRecorder(stressDt)
+		recorder.BindContract(stressReplayContract(def))
+		for i, session := range runtime.Sessions {
+			session.Replay = recorder
+			session.ReplayVehicleIndex = i
 		}
 	}
 	setupScenario(def.Name, runtime)
 	report := executeScenario(def, runtime)
 	trace := scene3d.PhysicsReplayTrace{}
-	if recordReplay && len(runtime.Sessions) > 0 {
-		trace = runtime.Sessions[0].Trace()
+	if recorder != nil {
+		trace = recorder.Trace()
 	}
 	return report, trace
 }
 
 func executeScenario(def ScenarioDefinition, runtime *ScenarioRuntime) ScenarioReport {
-	report := ScenarioReport{Name: def.Name, Steps: stressSteps, VehicleCount: len(runtime.Vehicles), SurfaceSamples: map[string]int{}, Status: "pass"}
+	report := ScenarioReport{Name: def.Name, Steps: stressSteps, VehicleCount: len(runtime.Vehicles), SurfaceSamples: map[string]int{}, BackendCommandSamples: map[string]int{}, Status: "pass"}
 	for step := 0; step < stressSteps; step++ {
 		intents := []scene3d.VehicleIntent{}
 		for i := range runtime.Controllers {
@@ -241,8 +278,11 @@ func executeScenario(def ScenarioDefinition, runtime *ScenarioRuntime) ScenarioR
 		report.Final = append(report.Final, makeSample(stressSteps, i, vehicle.Telemetry(), runtime.LastStates[i]))
 	}
 	report.PacketErrors = runtime.Scene.PhysicsPacketErrorCount()
-	report.DirectBypassHits = runtime.Scene.PhysicsDirectBypassHits()
-	report.ConstraintBypassHits = runtime.Scene.PhysicsConstraintBypassHits()
+	report.RejectedBackendCommands = runtime.Scene.PhysicsRejectedCommandCount()
+	report.DroppedFixedSteps = runtime.Physics.DroppedFixedStepCount
+	for _, event := range runtime.Scene.PhysicsBackendCommandEvents() {
+		report.BackendCommandSamples[event.Kind] = report.BackendCommandSamples[event.Kind] + 1
+	}
 	report.validate()
 	if len(report.Issues) > 0 {
 		report.Status = "fail"
@@ -270,6 +310,10 @@ func setupScenario(name string, r *ScenarioRuntime) {
 	}
 	if name == "water-skim" && len(r.Vehicles) > 0 {
 		r.Vehicles[0].SetPose(voplay.Vec3{Y: 1.2, Z: -30}, 0)
+		return
+	}
+	if name == "road-edge-assist" && len(r.Vehicles) > 0 {
+		r.Vehicles[0].SetPose(voplay.Vec3{X: 8, Y: 1.2, Z: -20}, 0)
 	}
 }
 
@@ -326,6 +370,18 @@ func scenarioIntent(name string, step int, vehicle int, r *ScenarioRuntime) scen
 		reset := step > 190 && step < 198
 		return scene3d.VehicleIntent{Throttle: 0.9, ResetRequest: reset}
 	}
+	if name == "road-edge-assist" {
+		return scene3d.VehicleIntent{Throttle: 0.58, Steering: 0.2}
+	}
+	if name == "sleep-wake" {
+		if step < 110 {
+			return scene3d.VehicleIntent{}
+		}
+		return scene3d.VehicleIntent{Throttle: 0.72}
+	}
+	if name == "pose-reset" {
+		return scene3d.VehicleIntent{Throttle: 0.62, Steering: 0.15}
+	}
 	if name == "multi-vehicle-scripted-soak" {
 		t := float64(step) * stressDt
 		offset := float64(vehicle) * 0.37
@@ -346,6 +402,24 @@ func afterScenarioStep(name string, step int, r *ScenarioRuntime) {
 	}
 	if name == "recovery" && step == 210 && len(r.Controllers) > 0 {
 		r.Controllers[0].Respawn(r.Track.PoseAt(0))
+		return
+	}
+	if name == "road-edge-assist" && (step == 60 || step == 120) && len(r.Vehicles) > 0 {
+		position := r.Vehicles[0].Position()
+		scene3d.ApplyVehicleRoadEdgeAssist(r.Vehicles[0], scene3d.VehicleRoadEdgeAssistCommand{RoadPosition: voplay.Vec3{Y: 0, Z: position.Z}, Right: voplay.Vec3{X: 1}, Inward: voplay.Vec3{X: -1}, EdgeHalfWidth: 6, AssistStart: 5, LateralAbs: 8, Side: 1, SoftZone: 2, MaxPushSpeed: 4, VelocityBlend: 8, PositionBlend: 8, MaxCorrection: 2, OutwardDamping: 1, RideHeight: 1.2}, stressDt)
+		return
+	}
+	if name == "sleep-wake" && len(r.Vehicles) > 0 {
+		if step == 60 {
+			scene3d.ApplyVehicleSleepState(r.Vehicles[0], scene3d.VehicleSleepCommand{Sleeping: true})
+		}
+		if step == 100 {
+			scene3d.ApplyVehicleSleepState(r.Vehicles[0], scene3d.VehicleSleepCommand{Sleeping: false})
+		}
+		return
+	}
+	if name == "pose-reset" && (step == 80 || step == 160) && len(r.Vehicles) > 0 {
+		r.Vehicles[0].SetPose(voplay.Vec3{X: 0, Y: 1.2, Z: -12 - float64(step) * 0.05}, 0)
 	}
 }
 
@@ -502,11 +576,11 @@ func (r *ScenarioReport) validate() {
 	if r.PacketErrors > 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.packet_errors", Severity: 0, Detail: strconv.Itoa(r.PacketErrors) + " backend packet errors"})
 	}
-	if r.DirectBypassHits > 0 {
-		r.Issues = append(r.Issues, StressIssue{Code: "physics.direct_bypass", Severity: 0, Detail: strconv.Itoa(r.DirectBypassHits) + " direct bypass hits"})
+	if r.RejectedBackendCommands > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.backend_command_rejected", Severity: 0, Detail: strconv.Itoa(r.RejectedBackendCommands) + " rejected backend commands"})
 	}
-	if r.ConstraintBypassHits > 0 {
-		r.Issues = append(r.Issues, StressIssue{Code: "physics.constraint_bypass", Severity: 0, Detail: strconv.Itoa(r.ConstraintBypassHits) + " constraint bypass hits"})
+	if r.DroppedFixedSteps > 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.fixed_steps_dropped", Severity: 0, Detail: strconv.Itoa(r.DroppedFixedSteps) + " dropped fixed steps"})
 	}
 	if r.Name == "multi-vehicle-scripted-soak" && r.VehicleCount < 24 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.multi_vehicle_count", Severity: 0, Detail: strconv.Itoa(r.VehicleCount) + " vehicles < 24"})
@@ -514,32 +588,71 @@ func (r *ScenarioReport) validate() {
 	if r.Name == "recovery" && r.RecoveryRequests <= 0 {
 		r.Issues = append(r.Issues, StressIssue{Code: "physics.recovery", Severity: 1, Detail: "expected recovery request"})
 	}
+	if r.Name == "recovery" && r.BackendCommandSamples[scene3d.PhysicsBackendCommandRecovery] <= 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.recovery_command", Severity: 1, Detail: "expected recovery backend command"})
+	}
+	if r.Name == "road-edge-assist" && r.BackendCommandSamples[scene3d.PhysicsBackendCommandTarget] <= 0 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.road_edge_command", Severity: 1, Detail: "expected road-edge target backend command"})
+	}
+	if r.Name == "sleep-wake" && r.BackendCommandSamples[scene3d.PhysicsBackendCommandSleepState] < 2 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.sleep_wake_command", Severity: 1, Detail: "expected sleep and wake backend commands"})
+	}
+	if r.Name == "pose-reset" && r.BackendCommandSamples[scene3d.PhysicsBackendCommandPoseReset] < 2 {
+		r.Issues = append(r.Issues, StressIssue{Code: "physics.pose_reset_command", Severity: 1, Detail: "expected repeated pose reset backend commands"})
+	}
 }
 
 func makeSample(step, vehicleIndex int, telemetry scene3d.VehicleTelemetry, state scene3d.KartControllerState) TelemetrySample {
 	return TelemetrySample{Step: step, Time: float64(step) * stressDt, Vehicle: vehicleIndex, Speed: telemetry.Speed, Grounded: telemetry.Grounded, ContactCount: telemetry.ContactCount, SurfaceID: state.SurfaceID, SurfaceKind: telemetry.Surface.Kind, Drifting: state.Drifting, Boosting: state.Boosting, Stuck: state.Stuck, ShouldRespawn: state.ShouldRespawn, Position: telemetry.Position, Velocity: telemetry.Velocity, AngularVelocity: telemetry.AngularVelocity, Rotation: telemetry.Rotation}
 }
 
-func replayContract(def ScenarioDefinition) ReplayReport {
-	reference, trace := runScenarioWithReplay(def, true)
-	report := verifyReplayTrace(def, trace)
-	if reference.Status != "pass" {
-		report.Status = "fail"
-		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "reference scenario failed"})
-	}
-	if report.Status == "pass" {
-		if RunPhysicsReplayVerifierProcess(def, trace) {
-			report.FreshProcess = true
-		} else {
+func replayContracts(executions []ScenarioExecution) ([]ReplayReport, ReplayReport) {
+	reports := []ReplayReport{}
+	suite := ReplaySuite{SchemaVersion: 1}
+	aggregate := ReplayReport{Name: "PhysicsReplayVerifierSuite", ReferenceScenario: "all", Status: "pass"}
+	for _, execution := range executions {
+		report := verifyReplayTrace(execution.Definition, execution.Trace)
+		if execution.Report.Status != "pass" {
 			report.Status = "fail"
-			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "fresh-process replay verifier failed"})
+			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "reference scenario failed"})
+		}
+		reports = append(reports, report)
+		suite.Entries = append(suite.Entries, ReplaySuiteEntry{Scenario: execution.Definition.Name, Trace: execution.Trace})
+		aggregate.Samples += report.Samples
+		aggregate.VehicleCount += report.VehicleCount
+		aggregate.BackendCommandCount += report.BackendCommandCount
+		aggregate.Mismatches += report.Mismatches
+		aggregate.StepHash = aggregate.StepHash*31 + report.StepHash
+		aggregate.BackendPacketHash = aggregate.BackendPacketHash*31 + report.BackendPacketHash
+		aggregate.BackendCommandHash = aggregate.BackendCommandHash*31 + report.BackendCommandHash
+		if report.Status != "pass" {
+			aggregate.Status = "fail"
+			aggregate.Issues = append(aggregate.Issues, report.Issues...)
 		}
 	}
-	return report
+	if aggregate.Status == "pass" && RunPhysicsReplayVerifierProcess(suite) {
+		aggregate.FreshProcess = true
+		for i := range reports {
+			reports[i].FreshProcess = true
+		}
+	} else if aggregate.Status == "pass" {
+		aggregate.Status = "fail"
+		aggregate.Issues = append(aggregate.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "fresh-process replay suite verifier failed"})
+	}
+	if aggregate.StepHash < 0 {
+		aggregate.StepHash = -aggregate.StepHash
+	}
+	if aggregate.BackendPacketHash < 0 {
+		aggregate.BackendPacketHash = -aggregate.BackendPacketHash
+	}
+	if aggregate.BackendCommandHash < 0 {
+		aggregate.BackendCommandHash = -aggregate.BackendCommandHash
+	}
+	return reports, aggregate
 }
 
 func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) ReplayReport {
-	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), Samples: len(trace.Samples), Status: "pass"}
+	report := ReplayReport{Name: "PhysicsReplayVerifier", ReferenceScenario: def.Name, StepHash: physicsReplayStepHash(trace), BackendPacketHash: physicsReplayBackendPacketHash(trace), BackendCommandHash: physicsReplayBackendCommandHash(trace), Samples: len(trace.Samples), VehicleCount: def.VehicleCount, BackendCommandCount: len(trace.BackendCommands), Status: "pass"}
 	if len(trace.Samples) == 0 {
 		report.Status = "fail"
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay final sample"})
@@ -550,42 +663,58 @@ func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace)
 		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: err.Error()})
 		return report
 	}
+	expectedContract := stressReplayContract(def)
+	if trace.ScenarioDigest != expectedContract.ScenarioDigest || trace.TrackDigest != expectedContract.TrackDigest || trace.ConfigDigest != expectedContract.ConfigDigest {
+		report.Status = "fail"
+		report.Issues = append(report.Issues, StressIssue{Code: "ReplayContractMismatch", Severity: 1, Detail: "scenario, track, or config digest mismatch"})
+		return report
+	}
 	replayRuntime := newScenarioRuntime(def)
 	defer replayRuntime.Scene.Close()
 	setupScenario(def.Name, replayRuntime)
-	for _, sample := range trace.Samples {
-		if len(replayRuntime.Sessions) == 0 {
+	index := 0
+	for index < len(trace.Samples) {
+		step := trace.Samples[index].Step
+		intents := make([]scene3d.VehicleIntent, len(replayRuntime.Sessions))
+		expected := []scene3d.PhysicsReplaySample{}
+		for index < len(trace.Samples) && trace.Samples[index].Step == step {
+			sample := trace.Samples[index]
+			index++
+			if sample.VehicleIndex >= len(intents) {
+				report.Mismatches++
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "vehicle index out of range at step " + strconv.Itoa(step)})
+				continue
+			}
+			intents[sample.VehicleIndex] = sample.Intent
+			expected = append(expected, sample)
+		}
+		if len(expected) != len(replayRuntime.Sessions) {
 			report.Mismatches++
-			report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "missing replay session"})
+			if report.Mismatches <= 4 {
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "incomplete fleet sample at step " + strconv.Itoa(step)})
+			}
 			break
 		}
-		telemetry := replayRuntime.Sessions[0].Step(stressDt, sample.Intent)
-		if replayRuntime.Sessions[0].StepIndex != sample.Step {
+		afterScenarioStep(def.Name, step-1, replayRuntime)
+		telemetrySet := replayRuntime.Physics.StepFleet(stressDt, replayRuntime.Sessions, intents)
+		if replayRuntime.Physics.StepIndex != step {
 			report.Mismatches++
 			if report.Mismatches <= 4 {
-				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "step mismatch " + strconv.Itoa(replayRuntime.Sessions[0].StepIndex) + " != " + strconv.Itoa(sample.Step)})
+				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "step mismatch " + strconv.Itoa(replayRuntime.Physics.StepIndex) + " != " + strconv.Itoa(step)})
 			}
 		}
-		if telemetry.BackendApplyHash != sample.BackendApplyHash {
-			report.Mismatches++
-			if report.Mismatches <= 4 {
-				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "backend apply hash mismatch at step " + strconv.Itoa(sample.Step)})
+		for _, sample := range expected {
+			if err := scene3d.ValidatePhysicsReplaySample(sample, telemetrySet[sample.VehicleIndex], 0.000001); err != nil {
+				report.Mismatches++
+				if report.Mismatches <= 4 {
+					report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: err.Error() + " at step " + strconv.Itoa(step) + " vehicle " + strconv.Itoa(sample.VehicleIndex)})
+				}
 			}
 		}
-		poseHash := scene3d.PhysicsPoseHash(telemetry.Position, telemetry.Rotation)
-		if math.Abs(poseHash-sample.PoseHash) > 0.001 {
-			report.Mismatches++
-			if report.Mismatches <= 4 {
-				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "pose hash mismatch at step " + strconv.Itoa(sample.Step)})
-			}
-		}
-		telemetryHash := scene3d.PhysicsTelemetryHash(telemetry)
-		if math.Abs(telemetryHash-sample.TelemetryHash) > 0.001 {
-			report.Mismatches++
-			if report.Mismatches <= 4 {
-				report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: "telemetry hash mismatch at step " + strconv.Itoa(sample.Step)})
-			}
-		}
+	}
+	if err := scene3d.ValidatePhysicsBackendCommandReplay(trace.BackendCommands, replayRuntime.Scene.PhysicsBackendCommandEvents()); err != nil {
+		report.Mismatches++
+		report.Issues = append(report.Issues, StressIssue{Code: "ReplayMismatch", Severity: 1, Detail: err.Error()})
 	}
 	if report.Mismatches > 0 {
 		report.Status = "fail"
@@ -593,12 +722,12 @@ func verifyReplayTrace(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace)
 	return report
 }
 
-func RunPhysicsReplayVerifierProcess(def ScenarioDefinition, trace scene3d.PhysicsReplayTrace) bool {
-	data, err := json.Marshal(trace)
+func RunPhysicsReplayVerifierProcess(suite ReplaySuite) bool {
+	data, err := json.Marshal(suite)
 	if err != nil {
 		return false
 	}
-	path := os.TempDir() + "/voplay-physics-replay-" + strconv.Itoa(os.Getpid()) + "-" + def.Name + ".json"
+	path := os.TempDir() + "/voplay-physics-replay-suite-" + strconv.Itoa(os.Getpid()) + ".json"
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return false
 	}
@@ -610,7 +739,7 @@ func RunPhysicsReplayVerifierProcess(def ScenarioDefinition, trace scene3d.Physi
 	}
 	cmd := exec.Command("./d.py", []string{"run", entry})
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "VOPLAY_PHYSICS_REPLAY_VERIFY=1", "VOPLAY_PHYSICS_REPLAY_SCENARIO=" + def.Name, "VOPLAY_PHYSICS_REPLAY_TRACE=" + path)
+	cmd.Env = append(os.Environ(), "VOPLAY_PHYSICS_REPLAY_VERIFY=1", "VOPLAY_PHYSICS_REPLAY_TRACE=" + path)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		println("physics replay fresh-process verifier failed: " + string(out))
@@ -620,28 +749,18 @@ func RunPhysicsReplayVerifierProcess(def ScenarioDefinition, trace scene3d.Physi
 }
 
 func runReplayVerifierProcessFromEnv() {
-	def, ok := scenarioDefinitionByName(os.Getenv("VOPLAY_PHYSICS_REPLAY_SCENARIO"))
-	if !ok {
-		println("physics replay verifier: unknown scenario " + os.Getenv("VOPLAY_PHYSICS_REPLAY_SCENARIO"))
-		os.Exit(2)
-	}
-	verifyReplayTraceFile(def, os.Getenv("VOPLAY_PHYSICS_REPLAY_TRACE"))
+	verifyReplaySuiteFile(os.Getenv("VOPLAY_PHYSICS_REPLAY_TRACE"))
 }
 
 func runReplayVerifierProcess() {
-	if len(os.Args) < 4 {
-		println("physics replay verifier: missing scenario or trace path")
+	if len(os.Args) < 3 {
+		println("physics replay verifier: missing replay suite path")
 		os.Exit(2)
 	}
-	def, ok := scenarioDefinitionByName(os.Args[2])
-	if !ok {
-		println("physics replay verifier: unknown scenario " + os.Args[2])
-		os.Exit(2)
-	}
-	verifyReplayTraceFile(def, os.Args[3])
+	verifyReplaySuiteFile(os.Args[2])
 }
 
-func verifyReplayTraceFile(def ScenarioDefinition, path string) {
+func verifyReplaySuiteFile(path string) {
 	if path == "" {
 		println("physics replay verifier: missing trace path")
 		os.Exit(2)
@@ -651,17 +770,33 @@ func verifyReplayTraceFile(def ScenarioDefinition, path string) {
 		println("physics replay verifier: read failed " + err.Error())
 		os.Exit(2)
 	}
-	trace := scene3d.PhysicsReplayTrace{}
-	if err := json.Unmarshal(data, &trace); err != nil {
+	suite := ReplaySuite{}
+	if err := json.Unmarshal(data, &suite); err != nil {
 		println("physics replay verifier: json failed " + err.Error())
 		os.Exit(2)
 	}
-	report := verifyReplayTrace(def, trace)
-	if report.Status != "pass" || report.Mismatches != 0 {
-		println("physics replay verifier: mismatch")
-		os.Exit(1)
+	if suite.SchemaVersion != 1 || len(suite.Entries) != len(selectedScenarioDefinitions()) {
+		println("physics replay verifier: invalid suite coverage")
+		os.Exit(2)
 	}
-	println("physics replay verifier: pass")
+	for _, entry := range suite.Entries {
+		def, ok := scenarioDefinitionByName(entry.Scenario)
+		if !ok {
+			println("physics replay verifier: unknown scenario " + entry.Scenario)
+			os.Exit(2)
+		}
+		report := verifyReplayTrace(def, entry.Trace)
+		if report.Status != "pass" || report.Mismatches != 0 {
+			encoded, encodeErr := json.Marshal(report)
+			if encodeErr != nil {
+				println("physics replay verifier: mismatch " + entry.Scenario + " report encode failed " + encodeErr.Error())
+			} else {
+				println("physics replay verifier: mismatch " + entry.Scenario + " " + string(encoded))
+			}
+			os.Exit(1)
+		}
+	}
+	println("physics replay verifier: suite pass")
 }
 
 func scenarioDefinitionByName(name string) (ScenarioDefinition, bool) {
@@ -671,6 +806,37 @@ func scenarioDefinitionByName(name string) (ScenarioDefinition, bool) {
 		}
 	}
 	return ScenarioDefinition{}, false
+}
+
+func stressReplayContract(def ScenarioDefinition) scene3d.PhysicsReplayContractIdentity {
+	trackData, trackErr := json.Marshal(stressTrackAsset())
+	if trackErr != nil {
+		panic(trackErr)
+	}
+	config := scene3d.DefaultKartControllerConfig()
+	config.Recovery.StuckSeconds = 2.0
+	configData, configErr := json.Marshal(config)
+	if configErr != nil {
+		panic(configErr)
+	}
+	scenarioContract := def.Name + "|vehicles=" + strconv.Itoa(def.VehicleCount) + "|steps=" + strconv.Itoa(stressSteps) + "|fixedDt=" + formatFloat(stressDt) + "|gravityY=-18|collider=v1"
+	return scene3d.PhysicsReplayContractIdentity{
+		ScenarioDigest: physicsReplayContractDigest(scenarioContract),
+		TrackDigest: physicsReplayContractDigest(string(trackData)),
+		ConfigDigest: physicsReplayContractDigest(string(configData)),
+	}
+}
+
+func physicsReplayContractDigest(value string) string {
+	return strconv.Itoa(physicsReplayStringHash(value))
+}
+
+func physicsReplayStringHash(value string) int {
+	hash := 17
+	for i := 0; i < len(value); i++ {
+		hash = (hash*31 + int(value[i])) % 2147483647
+	}
+	return hash
 }
 
 func physicsReplayStepHash(trace scene3d.PhysicsReplayTrace) int {
@@ -696,6 +862,14 @@ func physicsReplayBackendPacketHash(trace scene3d.PhysicsReplayTrace) int {
 		hash = -hash
 	}
 	return hash
+}
+
+func physicsReplayBackendCommandHash(trace scene3d.PhysicsReplayTrace) int {
+	data, err := json.Marshal(trace.BackendCommands)
+	if err != nil {
+		return 0
+	}
+	return physicsReplayStringHash(string(data))
 }
 
 func vecFinite(v voplay.Vec3) bool {

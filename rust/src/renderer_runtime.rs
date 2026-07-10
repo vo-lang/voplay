@@ -16,7 +16,7 @@ enum HostedRenderer {
     Empty,
     #[cfg(feature = "wasm")]
     Initializing,
-    Ready(Renderer),
+    Ready(Box<Renderer>),
     #[cfg(feature = "wasm")]
     Failed(String),
 }
@@ -115,7 +115,7 @@ pub fn fail_renderer_init(generation: u64, msg: String) -> Result<(), String> {
 pub fn set_renderer_for_generation(generation: u64, renderer: Renderer) -> Result<(), String> {
     with_hosted_renderer_mut(|state| {
         if state.generation == generation {
-            state.renderer = HostedRenderer::Ready(renderer);
+            state.renderer = HostedRenderer::Ready(Box::new(renderer));
         }
     })
 }
@@ -123,13 +123,13 @@ pub fn set_renderer_for_generation(generation: u64, renderer: Renderer) -> Resul
 #[cfg(not(feature = "wasm"))]
 pub fn set_renderer(renderer: Renderer) -> Result<(), String> {
     with_hosted_renderer_mut(|state| {
-        state.renderer = HostedRenderer::Ready(renderer);
+        state.renderer = HostedRenderer::Ready(Box::new(renderer));
     })
 }
 
 pub fn with_renderer<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String> {
     with_hosted_renderer_mut(|state| match &mut state.renderer {
-        HostedRenderer::Ready(renderer) => Ok(f(renderer)),
+        HostedRenderer::Ready(renderer) => Ok(f(renderer.as_mut())),
         #[cfg(feature = "wasm")]
         HostedRenderer::Initializing => Err("voplay: renderer is initializing".to_string()),
         #[cfg(feature = "wasm")]

@@ -19,7 +19,14 @@ const PHYSICS_BACKEND_PACKET_SCHEMA_VERSION: u32 = 1;
 const PHYSICS_BACKEND_BODY_PACKET_KIND: u8 = 1;
 const PHYSICS_BACKEND_CONTACT_PACKET_KIND: u8 = 2;
 const PHYSICS_BACKEND_WHEEL_PACKET_KIND: u8 = 3;
+const PHYSICS_BACKEND_VEHICLE_FLEET_PACKET_KIND: u8 = 4;
 const PHYSICS_BACKEND_PACKET_HEADER_BYTES: usize = 13;
+
+fn sorted_u32_keys<V>(values: &HashMap<u32, V>) -> Vec<u32> {
+    let mut keys: Vec<u32> = values.keys().copied().collect();
+    keys.sort_unstable();
+    keys
+}
 
 fn physics_backend_packet_schema_hash(kind: u8, payload_len: usize) -> u32 {
     PHYSICS_BACKEND_PACKET_SCHEMA_VERSION
@@ -355,7 +362,7 @@ impl PhysicsWorld3D {
             "voplay: trimesh collider requires at least one vertex"
         );
         assert!(
-            indices.len() >= 3 && indices.len() % 3 == 0,
+            indices.len() >= 3 && indices.len().is_multiple_of(3),
             "voplay: trimesh collider indices must contain whole triangles"
         );
 
@@ -629,7 +636,11 @@ impl PhysicsWorld3D {
             return;
         }
         self.query_pipeline.update(&self.collider_set);
-        for vehicle in self.raycast_vehicles.values_mut() {
+        for vehicle_id in sorted_u32_keys(&self.raycast_vehicles) {
+            let vehicle = self
+                .raycast_vehicles
+                .get_mut(&vehicle_id)
+                .expect("voplay: sorted vehicle id must remain present during fixed step");
             let chassis = vehicle.controller.chassis;
             let filter = QueryFilter::default().exclude_rigid_body(chassis);
             vehicle.controller.update_vehicle(
@@ -686,6 +697,23 @@ impl PhysicsWorld3D {
             buf.extend_from_slice(&material.kind.to_le_bytes());
         }
         serialize_backend_packet(PHYSICS_BACKEND_WHEEL_PACKET_KIND, buf)
+    }
+
+    /// Serialize every raycast vehicle in stable vehicle-id order.
+    ///
+    /// The fleet packet owns the synchronization boundary so one physics step
+    /// crosses the Vo/native boundary once, regardless of vehicle count.
+    pub fn serialize_raycast_vehicle_states(&self) -> Vec<u8> {
+        let vehicle_ids = sorted_u32_keys(&self.raycast_vehicles);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(vehicle_ids.len() as u32).to_le_bytes());
+        for vehicle_id in vehicle_ids {
+            let state = self.serialize_raycast_vehicle_state(vehicle_id);
+            payload.extend_from_slice(&vehicle_id.to_le_bytes());
+            payload.extend_from_slice(&(state.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&state);
+        }
+        serialize_backend_packet(PHYSICS_BACKEND_VEHICLE_FLEET_PACKET_KIND, payload)
     }
 
     /// Apply batch commands from Vo.
@@ -823,7 +851,11 @@ impl PhysicsWorld3D {
         let mut buf = Vec::with_capacity(4 + count * BODY_STATE_BYTES_3D);
         buf.extend_from_slice(&(count as u32).to_le_bytes());
 
-        for (body_id, handle) in &self.handle_map {
+        for body_id in sorted_u32_keys(&self.handle_map) {
+            let handle = self
+                .handle_map
+                .get(&body_id)
+                .expect("voplay: sorted body id must remain present during serialization");
             let rb = match self.rigid_body_set.get(*handle) {
                 Some(rb) => rb,
                 None => continue,
@@ -1047,6 +1079,15 @@ mod tests {
             PHYSICS_BACKEND_PACKET_HEADER_BYTES + payload_len
         );
         &packet[PHYSICS_BACKEND_PACKET_HEADER_BYTES..]
+    }
+
+    #[test]
+    fn physics_backend_map_keys_are_consumed_in_stable_id_order() {
+        let mut values = HashMap::new();
+        values.insert(24, ());
+        values.insert(3, ());
+        values.insert(11, ());
+        assert_eq!(sorted_u32_keys(&values), vec![3, 11, 24]);
     }
 
     #[test]
@@ -1300,6 +1341,14 @@ mod tests {
         assert_near(avx, 0.0, 0.0001);
         assert_near(avy, 0.0, 0.0001);
         assert_near(avz, 0.0, 0.0001);
+    }
+
+    #[test]
+    fn serialize_vehicle_fleet_uses_typed_empty_packet() {
+        let world = PhysicsWorld3D::new(0.0, 0.0, 0.0);
+        let packet = world.serialize_raycast_vehicle_states();
+        let payload = packet_payload(&packet, PHYSICS_BACKEND_VEHICLE_FLEET_PACKET_KIND);
+        assert_eq!(payload, &[0, 0, 0, 0]);
     }
 
     #[test]

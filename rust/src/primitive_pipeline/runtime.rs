@@ -584,6 +584,22 @@ impl PrimitivePipeline {
         self.append_resident_pass_draws(chunk_refs, out, true);
     }
 
+    pub fn append_resident_draws(
+        &self,
+        chunk_refs: &[PrimitiveChunkRef],
+        out: &mut Vec<PrimitiveDraw>,
+    ) -> u32 {
+        let mut missing = 0u32;
+        for chunk_ref in chunk_refs {
+            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                missing = missing.saturating_add(1);
+                continue;
+            };
+            out.extend(chunk.instances.iter().map(|instance| instance.draw));
+        }
+        missing
+    }
+
     fn append_resident_pass_draws(
         &self,
         chunk_refs: &[PrimitiveChunkRef],
@@ -789,7 +805,18 @@ impl PrimitivePipeline {
         let mut batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
         let mut instance_count = 0u32;
         for draw in draws {
-            instance_count += self.push_draw_batches(
+            if !primitive_draw_matches_filter(draw, filter) {
+                stats.skips.filtered_draws = stats.skips.filtered_draws.saturating_add(1);
+                continue;
+            }
+            if models.get(draw.model_id).is_none() {
+                stats.skips.missing_models = stats.skips.missing_models.saturating_add(1);
+                continue;
+            }
+            if filter == PrimitiveRenderFilter::Translucent {
+                batch_index.clear();
+            }
+            let (pushed, texture_skips) = self.push_draw_batches(
                 draw,
                 models,
                 textures,
@@ -797,13 +824,30 @@ impl PrimitivePipeline {
                 &mut batch_index,
                 filter,
             );
+            stats.skips.merge(texture_skips);
+            if pushed == 0 {
+                stats.skips.incompatible_draws = stats.skips.incompatible_draws.saturating_add(1);
+            }
+            instance_count = instance_count.saturating_add(pushed);
         }
         for chunk_ref in chunk_refs {
             let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                stats.skips.missing_chunks = stats.skips.missing_chunks.saturating_add(1);
                 continue;
             };
             for instance in &chunk.instances {
-                instance_count += self.push_draw_batches(
+                if !primitive_draw_matches_filter(&instance.draw, filter) {
+                    stats.skips.filtered_draws = stats.skips.filtered_draws.saturating_add(1);
+                    continue;
+                }
+                if models.get(instance.draw.model_id).is_none() {
+                    stats.skips.missing_models = stats.skips.missing_models.saturating_add(1);
+                    continue;
+                }
+                if filter == PrimitiveRenderFilter::Translucent {
+                    batch_index.clear();
+                }
+                let (pushed, texture_skips) = self.push_draw_batches(
                     &instance.draw,
                     models,
                     textures,
@@ -811,13 +855,21 @@ impl PrimitivePipeline {
                     &mut batch_index,
                     filter,
                 );
+                stats.skips.merge(texture_skips);
+                if pushed == 0 {
+                    stats.skips.incompatible_draws =
+                        stats.skips.incompatible_draws.saturating_add(1);
+                }
+                instance_count = instance_count.saturating_add(pushed);
             }
         }
         if instance_count > 0 {
             self.ensure_instance_capacity(device, instance_count);
             let mut instance_data = Vec::with_capacity(instance_count as usize);
             batch_draws = Vec::with_capacity(batches.len());
-            sort_primitive_batches(&mut batches);
+            if filter != PrimitiveRenderFilter::Translucent {
+                sort_primitive_batches(&mut batches);
+            }
             for batch in &batches {
                 let start = instance_data.len() as u32;
                 instance_data.extend_from_slice(&batch.instances);
@@ -827,12 +879,11 @@ impl PrimitivePipeline {
                     count: batch.instances.len() as u32,
                 });
             }
-            stats.batch_count = batch_draws.len() as u32;
-            stats.instance_count = instance_count;
-            stats.triangle_count = primitive_batch_triangle_count(&batch_draws, models);
-            self.last_main_batch_count = stats.batch_count;
-            self.last_main_instance_count = stats.instance_count;
-            self.last_main_triangle_count = stats.triangle_count;
+            stats.prepared_batch_count = batch_draws.len().min(u32::MAX as usize) as u32;
+            stats.upload_bytes = instance_data
+                .len()
+                .saturating_mul(std::mem::size_of::<PrimitiveInstanceGpu>())
+                .min(u32::MAX as usize) as u32;
             queue.write_buffer(
                 &self.instance_buffer,
                 0,
@@ -849,13 +900,16 @@ impl PrimitivePipeline {
         let instance_stride = std::mem::size_of::<PrimitiveInstanceGpu>() as u64;
         for batch in &batch_draws {
             let Some(gpu_model) = models.get(batch.key.model_id) else {
+                stats.skips.missing_models = stats.skips.missing_models.saturating_add(1);
                 continue;
             };
             let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
+                stats.skips.missing_meshes = stats.skips.missing_meshes.saturating_add(1);
                 continue;
             };
             let texture_key = batch.key.textures;
             let Some(texture_bind_group) = self.texture_bind_groups.get(&texture_key) else {
+                stats.skips.missing_bind_groups = stats.skips.missing_bind_groups.saturating_add(1);
                 continue;
             };
             pass.set_pipeline(self.pipeline_for_batch(batch.key, aux_targets_enabled));
@@ -866,7 +920,15 @@ impl PrimitivePipeline {
             pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
+            stats.batch_count = stats.batch_count.saturating_add(1);
+            stats.instance_count = stats.instance_count.saturating_add(batch.count);
+            stats.triangle_count = stats
+                .triangle_count
+                .saturating_add((mesh.index_count / 3).saturating_mul(batch.count));
         }
+        self.last_main_batch_count = stats.batch_count;
+        self.last_main_instance_count = stats.instance_count;
+        self.last_main_triangle_count = stats.triangle_count;
         stats
     }
 
@@ -896,9 +958,11 @@ impl PrimitivePipeline {
         let mut water_batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
         let mut main_instance_count = 0u32;
         let mut water_instance_count = 0u32;
+        let mut main_skips = RenderSkipStats::default();
+        let mut water_skips = RenderSkipStats::default();
 
         for draw in draws {
-            main_instance_count += self.push_draw_batches(
+            let (main_pushed, main_texture_skips) = self.push_draw_batches(
                 draw,
                 models,
                 textures,
@@ -906,7 +970,9 @@ impl PrimitivePipeline {
                 &mut main_batch_index,
                 PrimitiveRenderFilter::Main,
             );
-            water_instance_count += self.push_draw_batches(
+            main_instance_count = main_instance_count.saturating_add(main_pushed);
+            main_skips.merge(main_texture_skips);
+            let (water_pushed, water_texture_skips) = self.push_draw_batches(
                 draw,
                 models,
                 textures,
@@ -914,13 +980,17 @@ impl PrimitivePipeline {
                 &mut water_batch_index,
                 PrimitiveRenderFilter::Water,
             );
+            water_instance_count = water_instance_count.saturating_add(water_pushed);
+            water_skips.merge(water_texture_skips);
         }
         for chunk_ref in chunk_refs {
             let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
+                main_skips.missing_chunks = main_skips.missing_chunks.saturating_add(1);
+                water_skips.missing_chunks = water_skips.missing_chunks.saturating_add(1);
                 continue;
             };
             for instance in &chunk.instances {
-                main_instance_count += self.push_draw_batches(
+                let (main_pushed, main_texture_skips) = self.push_draw_batches(
                     &instance.draw,
                     models,
                     textures,
@@ -928,7 +998,9 @@ impl PrimitivePipeline {
                     &mut main_batch_index,
                     PrimitiveRenderFilter::Main,
                 );
-                water_instance_count += self.push_draw_batches(
+                main_instance_count = main_instance_count.saturating_add(main_pushed);
+                main_skips.merge(main_texture_skips);
+                let (water_pushed, water_texture_skips) = self.push_draw_batches(
                     &instance.draw,
                     models,
                     textures,
@@ -936,6 +1008,8 @@ impl PrimitivePipeline {
                     &mut water_batch_index,
                     PrimitiveRenderFilter::Water,
                 );
+                water_instance_count = water_instance_count.saturating_add(water_pushed);
+                water_skips.merge(water_texture_skips);
             }
         }
 
@@ -951,13 +1025,19 @@ impl PrimitivePipeline {
             append_primitive_batch_draws(&mut water_batches, &mut instance_data);
         let main = PrimitiveDrawStats {
             batch_count: main_batch_draws.len() as u32,
+            prepared_batch_count: main_batch_draws.len() as u32,
             instance_count: main_instance_count,
             triangle_count: primitive_batch_triangle_count(&main_batch_draws, models),
+            skips: main_skips,
+            ..PrimitiveDrawStats::default()
         };
         let water = PrimitiveDrawStats {
             batch_count: water_batch_draws.len() as u32,
+            prepared_batch_count: water_batch_draws.len() as u32,
             instance_count: water_instance_count,
             triangle_count: primitive_batch_triangle_count(&water_batch_draws, models),
+            skips: water_skips,
+            ..PrimitiveDrawStats::default()
         };
         self.last_main_batch_count = main.batch_count;
         self.last_main_instance_count = main.instance_count;
@@ -1105,19 +1185,22 @@ impl PrimitivePipeline {
         batches: &mut Vec<PrimitiveBatch>,
         batch_index: &mut HashMap<PrimitiveBatchKey, usize>,
         filter: PrimitiveRenderFilter,
-    ) -> u32 {
+    ) -> (u32, RenderSkipStats) {
         if !primitive_draw_matches_filter(draw, filter) {
-            return 0;
+            return (0, RenderSkipStats::default());
         }
         let Some(gpu_model) = models.get(draw.model_id) else {
-            return 0;
+            return (0, RenderSkipStats::default());
         };
         let mut pushed = 0u32;
+        let mut texture_skips = RenderSkipStats::default();
         for (mesh_index, mesh) in gpu_model.meshes.iter().enumerate() {
             if mesh.skinned || mesh.material.control_texture_id.is_some() {
                 continue;
             }
-            let texture_key = resolve_texture_key(&draw.material, &mesh.material, textures);
+            let (texture_key, resolved_skips) =
+                resolve_texture_key(&draw.material, &mesh.material, textures);
+            texture_skips.merge(resolved_skips);
             let mut uniform = draw.model_uniform;
             uniform.base_color = combined_base_color(&draw.material, &mesh.material.base_color);
             let (material_params, emissive_color, texture_flags) =
@@ -1150,7 +1233,7 @@ impl PrimitivePipeline {
                 .push(PrimitiveInstanceGpu::from_draw(draw, &uniform));
             pushed += 1;
         }
-        pushed
+        (pushed, texture_skips)
     }
 
     fn draw_has_render_mode(

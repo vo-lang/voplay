@@ -2990,6 +2990,16 @@ func telemetryIssuesHaveCode(issues []scene3d.VehicleTelemetryIssue, code string
 	return false
 }
 
+func physicsCommandEventCount(events []scene3d.PhysicsBackendCommandEvent, kind string) int {
+	count := 0
+	for _, event := range events {
+		if event.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
 func testScene3DVehicleTelemetryAndKartController() {
 	pb := &testScene3DPhysicsBackend{vehicleState: makeRaycastVehicleState()}
 	prevPhys := scene3d.SetPhysicsBackend(pb)
@@ -3016,6 +3026,12 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle wheel count before sync")
 	vehicle.Update(scene3d.VehicleInput{Throttle: 1, Steer: 1}, 1.0 / 60.0)
 	assert(len(pb.vehicleApplyCommands) > 0, "scene3d vehicle sends backend apply command")
+	commandEvents := s.PhysicsBackendCommandEvents()
+	assert(physicsCommandEventCount(commandEvents, scene3d.PhysicsBackendCommandForce) > 0, "scene3d vehicle force apply records canonical backend command event")
+	lastCommandSequence := commandEvents[len(commandEvents)-1].Sequence
+	incrementalCommands := s.PhysicsBackendCommandEventsAfter(lastCommandSequence - 1)
+	assert(len(incrementalCommands) == 1 && incrementalCommands[0].Sequence == lastCommandSequence, "scene3d backend command event cursor returns only the incremental suffix")
+	assert(len(s.PhysicsBackendCommandEventsAfter(lastCommandSequence)) == 0, "scene3d backend command event cursor returns empty at the current sequence")
 	assert(len(pb.vehicleControls) > 0, "scene3d vehicle sends wheel controls")
 	assert(pb.vehicleControls[0].steering < 0, "scene3d right steer uses backend sign convention")
 	state, ok := vehicle.WheelState(0)
@@ -3066,11 +3082,19 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assertFloatNear(brakeCommand.BodyForce.Y, -5, 0.000001, "scene3d physics backend apply command maps rigid body force")
 	pb.bodyState = makePhysicsBodyState(body.ID(), body.Position(), body.Rotation(), voplay.Vec3{X: 4, Z: -12})
 	pb.vehicleState = makeRaycastVehicleStateWith(12, voplay.Vec3{Y: 0.2, Z: -20}, voplay.Vec3{Z: -20}, 0.28, 0, 18)
+	individualStateCallsBeforeStep := pb.vehicleStateCalls
+	fleetStateCallsBeforeStep := pb.vehicleFleetStateCalls
 	s.StepAndSyncPhysics(1.0 / 60.0)
+	assert(pb.vehicleFleetStateCalls == fleetStateCallsBeforeStep + 1, "scene3d physics step synchronizes the vehicle fleet with one backend packet")
+	assert(pb.vehicleStateCalls == individualStateCallsBeforeStep, "scene3d physics step avoids per-vehicle state queries")
 	state, ok = vehicle.WheelState(0)
 	assert(ok, "scene3d vehicle wheel state exists after physics sync")
 	assert(state.LateralSlip > 3.9 && state.LateralSlip < 4.1, "scene3d vehicle lateral slip approximated from body velocity")
 	assert(state.LongitudinalSlip > 3.6 && state.LongitudinalSlip < 3.8, "scene3d vehicle longitudinal slip uses body local velocity")
+	contactCallsBeforeTelemetry := pb.contactCalls
+	_ = scene3d.ProductVehicleTelemetry(vehicle)
+	_ = scene3d.ProductVehicleTelemetry(vehicle)
+	assert(pb.contactCalls == contactCallsBeforeTelemetry + 1, "scene3d telemetry shares one contact snapshot per physics step")
 	debugSnapshot := scene3d.BuildVehicleDebugSnapshot(vehicle, track)
 	assertFiniteFloat(debugSnapshot.Speed, "scene3d vehicle debug snapshot speed")
 	assert(debugSnapshot.Grounded, "scene3d vehicle debug snapshot grounded")
@@ -3081,11 +3105,35 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(telemetry.WheelCount == 1 && telemetry.ContactCount == 1, "scene3d vehicle telemetry summarizes wheels")
 	assert(telemetry.Surface.ID != "", "scene3d vehicle telemetry includes surface material")
 	assert(telemetry.BackendApplyHash != 0, "scene3d vehicle telemetry records backend apply hash")
+	unboundTraceRecorder := scene3d.NewPhysicsReplayTraceRecorder(1.0 / 60.0)
+	unboundTraceRecorder.RecordVehicle(1, scene3d.VehicleIntent{Throttle: 1}, telemetry)
+	assert(scene3d.ValidatePhysicsReplayTrace(unboundTraceRecorder.Trace()) != nil, "scene3d physics replay rejects missing contract digests")
 	traceRecorder := scene3d.NewPhysicsReplayTraceRecorder(1.0 / 60.0)
+	traceRecorder.BindContract(scene3d.PhysicsReplayContractIdentity{ScenarioDigest: "scenario-v1", TrackDigest: "track-v1", ConfigDigest: "config-v1"})
 	traceRecorder.RecordVehicle(1, scene3d.VehicleIntent{Throttle: 1}, telemetry)
 	trace := traceRecorder.Trace()
 	assert(len(trace.Samples) == 1, "scene3d physics replay records sample")
+	assert(trace.FormatVersion == scene3d.PhysicsReplayFormatVersion, "scene3d physics replay uses dedicated format version")
+	assert(trace.ScenarioDigest == "scenario-v1" && trace.TrackDigest == "track-v1" && trace.ConfigDigest == "config-v1", "scene3d physics replay binds content contract digests")
+	assert(scene3d.ValidatePhysicsReplayTrace(trace) == nil, "scene3d physics replay validates bound contract")
 	assert(trace.Samples[0].BackendApplyHash == telemetry.BackendApplyHash, "scene3d physics replay records backend apply hash")
+	assert(scene3d.ValidatePhysicsReplaySample(trace.Samples[0], telemetry, 0.000001) == nil, "scene3d physics replay validates direct state")
+	collisionTelemetry := telemetry
+	collisionTelemetry.Position = voplay.Vec3{X: telemetry.Position.X + 0.19, Y: telemetry.Position.Y - 0.17, Z: telemetry.Position.Z}
+	assertFloatNear(scene3d.PhysicsPoseHash(collisionTelemetry.Position, collisionTelemetry.Rotation), trace.Samples[0].PoseHash, 0.0000001, "scene3d legacy pose hash collision fixture")
+	assert(scene3d.ValidatePhysicsReplaySample(trace.Samples[0], collisionTelemetry, 0.000001) != nil, "scene3d physics replay rejects direct-state drift hidden by hash collision")
+	traceRecorder.RecordVehicleAt(2, 0, scene3d.VehicleIntent{Throttle: 1}, telemetry, s.PhysicsBackendCommandEvents())
+	trace = traceRecorder.Trace()
+	assert(len(trace.BackendCommands) > 0, "scene3d physics replay records backend command events")
+	assert(traceRecorder.LastBackendCommandSequence() == trace.BackendCommands[len(trace.BackendCommands)-1].Sequence, "scene3d physics replay exposes the consumed backend command cursor")
+	assert(scene3d.ValidatePhysicsBackendCommandReplay(trace.BackendCommands, trace.BackendCommands) == nil, "scene3d physics replay validates backend command events")
+	positiveZeroCommands := append([]scene3d.PhysicsBackendCommandEvent{}, trace.BackendCommands...)
+	positiveZeroCommands[0].Force.Wheels = append([]scene3d.PhysicsBackendWheelCommand{}, trace.BackendCommands[0].Force.Wheels...)
+	positiveZeroCommands[0].Force.Wheels[0].SteeringAngle = 0
+	negativeZeroCommands := append([]scene3d.PhysicsBackendCommandEvent{}, positiveZeroCommands...)
+	negativeZeroCommands[0].Force.Wheels = append([]scene3d.PhysicsBackendWheelCommand{}, positiveZeroCommands[0].Force.Wheels...)
+	negativeZeroCommands[0].Force.Wheels[0].SteeringAngle = math.Copysign(0, -1)
+	assert(scene3d.ValidatePhysicsBackendCommandReplay(positiveZeroCommands, negativeZeroCommands) == nil, "scene3d physics replay canonicalizes signed zero in command events")
 	assert(telemetry.IsHealthy(scene3d.VehicleIntent{Throttle: 0.1}, scene3d.VehicleTelemetryBudget{}), "scene3d vehicle telemetry healthy under budget")
 	badTelemetry := scene3d.VehicleTelemetry{Rotation: voplay.Quat{}, Velocity: voplay.Vec3{X: math.Inf(1)}, GroundNormal: voplay.Vec3{Y: 1}}
 	issues := badTelemetry.ValidationIssues(scene3d.VehicleIntent{Throttle: 1}, scene3d.VehicleTelemetryBudget{MaxVelocity: 20})
@@ -3113,6 +3161,8 @@ func testScene3DVehicleTelemetryAndKartController() {
 	assert(vehicle.WheelCount() == 1, "scene3d vehicle bad backend count is capped")
 	assertFiniteFloat(vehicle.Speed, "scene3d vehicle speed sanitized")
 	assertFiniteVec3(state.Center, "scene3d vehicle wheel center sanitized")
+	packetErrors = s.PhysicsBackendPacketErrors()
+	assert(len(packetErrors) > 0 && packetErrors[len(packetErrors)-1].Source == "wheel" && packetErrors[len(packetErrors)-1].Reason == "wheel_count_exceeds_config", "scene3d malformed wheel packet records structured packet error")
 	assertFiniteVec3(state.ContactNormal, "scene3d vehicle wheel normal sanitized")
 	assertFiniteFloat(state.SuspensionLength, "scene3d vehicle suspension length sanitized")
 	assertFiniteFloat(state.Steering, "scene3d vehicle steering sanitized")
@@ -3140,13 +3190,23 @@ func testScene3DVehicleTelemetryAndKartController() {
 	kart.ActivateBoost(0.5)
 	kstate := kart.UpdateIntent(scene3d.VehicleIntent{Throttle: 1, Steering: 0.5}, 1.0 / 60.0)
 	assert(kstate.Boosting, "scene3d kart controller boosting state")
+	poseResetCountBeforeRecovery := len(pb.poseResetCommands)
+	motionResetCountBeforeRecovery := len(pb.motionResetCommands)
+	recoveryCountBefore := len(pb.recoveryCommands)
+	recoveryEventCountBefore := physicsCommandEventCount(s.PhysicsBackendCommandEvents(), scene3d.PhysicsBackendCommandRecovery)
 	kart.Respawn(track.PoseAt(0))
-	assert(len(pb.recoveryCommands) > 0, "scene3d kart respawn sends backend recovery command")
+	assert(len(pb.recoveryCommands) == recoveryCountBefore + 1, "scene3d kart respawn sends exactly one backend recovery command")
+	assert(len(pb.poseResetCommands) == poseResetCountBeforeRecovery, "scene3d kart recovery does not duplicate backend pose reset")
+	assert(len(pb.motionResetCommands) == motionResetCountBeforeRecovery, "scene3d kart recovery does not duplicate backend motion reset")
+	assert(physicsCommandEventCount(s.PhysicsBackendCommandEvents(), scene3d.PhysicsBackendCommandRecovery) == recoveryEventCountBefore + 1, "scene3d kart respawn records exactly one recovery command event")
 	assertFloatNear(kart.BoostTimer, 0, 0.000001, "scene3d kart respawn clears boost")
 	vehicle.Destroy()
 	assert(len(pb.destroyVehicles) == 1, "scene3d vehicle destroy releases backend vehicle")
 	_, ok = vehicle.WheelState(0)
 	assert(!ok, "scene3d vehicle wheel state unavailable after destruction")
+	stepBudgetSession := scene3d.NewVehiclePhysicsSession(scene3d.VehiclePhysicsSessionDesc{FixedDt: 1.0 / 60.0})
+	_ = stepBudgetSession.StepFleet(1.0, nil, nil)
+	assert(stepBudgetSession.DroppedFixedStepCount > 0, "scene3d fleet step budget records dropped fixed steps")
 	s.Close()
 }
 
@@ -3509,6 +3569,10 @@ type testScene3DPhysicsBackend struct {
 	destroyVehicles []int
 	panicOnSpawn bool
 	vehicleState []byte
+	vehicleIDs []int
+	vehicleStateCalls int
+	vehicleFleetStateCalls int
+	contactCalls int
 	bodyState []byte
 	contacts []byte
 	vehicleControls []testVehicleControl
@@ -3557,7 +3621,9 @@ func (b *testScene3DPhysicsBackend) DestroyBody(worldID, bodyID int) {
 	b.destroyBodies = append(b.destroyBodies, bodyID)
 }
 
-func (b *testScene3DPhysicsBackend) CreateRaycastVehicle(worldID, vehicleID, bodyID int) {}
+func (b *testScene3DPhysicsBackend) CreateRaycastVehicle(worldID, vehicleID, bodyID int) {
+	b.vehicleIDs = append(b.vehicleIDs, vehicleID)
+}
 
 func (b *testScene3DPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int) {
 	b.destroyVehicles = append(b.destroyVehicles, vehicleID)
@@ -3593,7 +3659,20 @@ func (b *testScene3DPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehic
 }
 
 func (b *testScene3DPhysicsBackend) RaycastVehicleState(worldID, vehicleID int) []byte {
+	b.vehicleStateCalls++
 	return b.vehicleState
+}
+
+func (b *testScene3DPhysicsBackend) RaycastVehicleStates(worldID int) []byte {
+	b.vehicleFleetStateCalls++
+	w := codec.NewByteWriter(64 + len(b.vehicleIDs) * (8 + len(b.vehicleState)))
+	w.WriteU32(len(b.vehicleIDs))
+	for _, vehicleID := range b.vehicleIDs {
+		w.WriteU32(vehicleID)
+		w.WriteU32(len(b.vehicleState))
+		w.WriteRawBytes(b.vehicleState)
+	}
+	return wrapPhysicsBackendPacket(scene3d.PhysicsBackendVehicleFleetPacketKind, w.Bytes())
 }
 
 func (b *testScene3DPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
@@ -3601,6 +3680,7 @@ func (b *testScene3DPhysicsBackend) Step(worldID int, dt float64, cmds []byte) [
 }
 
 func (b *testScene3DPhysicsBackend) Contacts(worldID int) []byte {
+	b.contactCalls++
 	return b.contacts
 }
 
@@ -4158,6 +4238,8 @@ func testDrawStatsContract() {
 }
 
 func testPerfDiagnosticsApiContract() {
+	skipReport := voplay.EncodePerfSkipSummaryReport("test", 7, voplay.PerfRendererWorkloadStats{MissingModels: 1, MissingMeshes: 2, MissingTextures: 3, MissingBindGroups: 4, MissingChunks: 5, MissingTargets: 6, InvalidBatchIndices: 7, IncompatibleDraws: 8})
+	assert(strings.Contains(skipReport, `"kind":"perf-skip-summary"`) && strings.Contains(skipReport, `"missingBindGroups":4`) && strings.Contains(skipReport, `"invalidBatchIndices":7`), "perf skip summary exposes structured draw-loop causes")
 	ctx := newTestCtx()
 	snapshot := ctx.GetPerfSnapshot()
 	assert(!snapshot.Enabled, "perf snapshot defaults disabled")

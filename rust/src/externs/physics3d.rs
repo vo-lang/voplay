@@ -212,7 +212,7 @@ pub(crate) fn spawn_trimesh_body_from_geometry(
 
 fn decode_heightfield_data(data: &[u8]) -> Vec<f32> {
     assert!(
-        data.len() % 4 == 0,
+        data.len().is_multiple_of(4),
         "voplay: heightfield bytes length must be a multiple of 4, got {}",
         data.len()
     );
@@ -492,6 +492,15 @@ pub fn physics3d_raycast_vehicle_state(call: &mut ExternCallContext) -> ExternRe
     let state = crate::physics3d::with_world(world_id, |world| {
         world.serialize_raycast_vehicle_state(vehicle_id)
     });
+    ret_bytes(call, 0, &state);
+    ExternResult::Ok
+}
+
+#[vo_fn("voplay/scene3d", "physicsRaycastVehicleStates")]
+pub fn physics3d_raycast_vehicle_states(call: &mut ExternCallContext) -> ExternResult {
+    let world_id = call.arg_u64(0) as u32;
+    let state =
+        crate::physics3d::with_world(world_id, |world| world.serialize_raycast_vehicle_states());
     ret_bytes(call, 0, &state);
     ExternResult::Ok
 }

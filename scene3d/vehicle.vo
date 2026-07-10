@@ -184,6 +184,13 @@ func (v *Vehicle) UpdateIntent(intent VehicleIntent, dt float64) {
 		return
 	}
 	v.syncState()
+	v.updateIntentFromSyncedState(intent, dt)
+}
+
+func (v *Vehicle) updateIntentFromSyncedState(intent VehicleIntent, dt float64) {
+	if v == nil || v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		return
+	}
 	intent = intent.Normalized()
 	surface := v.CurrentSurfaceMaterial()
 	result := v.Dynamics.Step(intent, surface, v.Speed, v.Grounded, dt)
@@ -208,15 +215,22 @@ func (v *Vehicle) applyForceCommandToBackend(command VehicleForceCommand, dt flo
 	}
 	backendCommand := BuildPhysicsBackendApplyCommand(command, v.Config, v.SteerAngle, dt)
 	if v.Body == nil || v.Body.Physics == nil || v.vehicleID == 0 || dt <= 0 {
+		if v.scene != nil {
+			v.scene.recordPhysicsBackendCommandEvent(PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandForce, Outcome: PhysicsBackendCommandOutcomeRejected, Rejection: "invalid_vehicle", Reason: "vehicle_force", VehicleID: v.vehicleID, Force: backendCommand})
+		}
 		return backendCommand
 	}
 	scene := v.scene
 	if scene == nil || scene.worldID == 0 {
+		if scene != nil {
+			scene.recordPhysicsBackendCommandEvent(PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandForce, Outcome: PhysicsBackendCommandOutcomeRejected, Rejection: "world_not_initialized", Reason: "vehicle_force", BodyID: v.Body.Physics.bodyID, VehicleID: v.vehicleID, Force: backendCommand})
+		}
 		return backendCommand
 	}
 	v.Drifting = backendCommand.ForceCommand.Drifting
 	v.SteerAngle = backendCommand.SteeringAngle
 	physBackend.ApplyVehicleForces(scene.worldID, v.vehicleID, backendCommand)
+	scene.recordPhysicsBackendCommandEvent(PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandForce, Outcome: PhysicsBackendCommandOutcomeApplied, Reason: "vehicle_force", BodyID: v.Body.Physics.bodyID, VehicleID: v.vehicleID, Force: backendCommand})
 	return backendCommand
 }
 
@@ -505,22 +519,37 @@ func (v *Vehicle) syncState() {
 	if v == nil || v.scene == nil || v.scene.worldID == 0 || v.vehicleID == 0 {
 		return
 	}
-	v.RawInvalidSampleCount = 0
 	data := physBackend.RaycastVehicleState(v.scene.worldID, v.vehicleID)
+	v.syncStateFromPacket(data)
+}
+
+func (v *Vehicle) syncStateFromPacket(data []byte) {
+	if v == nil || v.scene == nil || v.vehicleID == 0 {
+		return
+	}
+	v.RawInvalidSampleCount = 0
 	r := codec.NewByteReader(data)
-	_, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendWheelPacketKind)
-	if !ok || r.Remaining() < 12 {
+	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendWheelPacketKind)
+	if headerError != "" {
 		v.RawInvalidSampleCount++
+		v.scene.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel", Kind: PhysicsBackendWheelPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(data)})
+		return
+	}
+	if r.Remaining() < 12 {
+		v.RawInvalidSampleCount++
+		v.scene.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel", Kind: header.Kind, Reason: "missing_speed_or_count", ExpectedBytes: 12, ActualBytes: r.Remaining()})
 		return
 	}
 	v.Speed = vehicleFiniteOr(r.ReadF64(), 0)
 	count := r.ReadU32()
 	if len(v.Config.Wheels) > 0 && count > len(v.Config.Wheels) {
 		v.RawInvalidSampleCount++
+		v.scene.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel", Kind: header.Kind, Reason: "wheel_count_exceeds_config", ExpectedBytes: len(v.Config.Wheels), ActualBytes: count})
 		return
 	}
 	if r.Remaining() != count * raycastVehicleWheelStateBytes {
 		v.RawInvalidSampleCount++
+		v.scene.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel", Kind: header.Kind, Reason: "wheel_payload_length_mismatch", ExpectedBytes: count * raycastVehicleWheelStateBytes, ActualBytes: r.Remaining()})
 		return
 	}
 	if len(v.Wheels) != count {
@@ -532,6 +561,7 @@ func (v *Vehicle) syncState() {
 	normalSum := voplay.Vec3{}
 	pointSum := voplay.Vec3{}
 	contactCount := 0
+	nonfiniteSample := false
 	for i := 0; i < count; i++ {
 		state := VehicleWheelState{}
 		state.InContact = r.ReadBool()
@@ -543,6 +573,7 @@ func (v *Vehicle) syncState() {
 		rawRotation := r.ReadF64()
 		if !vehicleVec3Finite(state.Center) || !vehicleVec3Finite(state.ContactPoint) || !vehicleVec3Finite(state.ContactNormal) || !vehicleFinite(rawSuspensionLength) || !vehicleFinite(rawSteering) || !vehicleFinite(rawRotation) {
 			v.RawInvalidSampleCount++
+			nonfiniteSample = true
 		}
 		state.SuspensionLength = vehicleFiniteOr(rawSuspensionLength, 0)
 		state.Steering = vehicleFiniteOr(rawSteering, 0)
@@ -584,6 +615,9 @@ func (v *Vehicle) syncState() {
 			pointSum = pointSum.Add(state.ContactPoint)
 			contactCount++
 		}
+	}
+	if nonfiniteSample {
+		v.scene.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel", Kind: header.Kind, Reason: "nonfinite_sample", ExpectedBytes: count * raycastVehicleWheelStateBytes, ActualBytes: count * raycastVehicleWheelStateBytes})
 	}
 	if contactCount > 0 {
 		v.Grounded = true
@@ -664,12 +698,75 @@ func (s *Scene) destroyVehiclesForBody(body *Entity) {
 }
 
 func (s *Scene) syncVehicles() {
+	if s == nil || s.worldID == 0 {
+		return
+	}
+	expected := 0
 	for _, vehicle := range s.vehicles {
-		if vehicle == nil || vehicle.Body == nil || !vehicle.Body.Active {
+		if vehicle != nil && vehicle.Body != nil && vehicle.Body.Active && vehicle.vehicleID != 0 {
+			expected++
+		}
+	}
+	if expected == 0 {
+		return
+	}
+	data := physBackend.RaycastVehicleStates(s.worldID)
+	r := codec.NewByteReader(data)
+	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendVehicleFleetPacketKind)
+	if headerError != "" {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: PhysicsBackendVehicleFleetPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(data)})
+		return
+	}
+	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
+		return
+	}
+	count := r.ReadU32()
+	if count != expected {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "vehicle_count_mismatch", ExpectedBytes: expected, ActualBytes: count})
+	}
+	seen := make(map[int]bool)
+	for i := 0; i < count; i++ {
+		if r.Remaining() < 8 {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "entry_header_too_short", ExpectedBytes: 8, ActualBytes: r.Remaining()})
+			return
+		}
+		vehicleID := r.ReadU32()
+		packetLength := r.ReadU32()
+		if packetLength < 0 || packetLength > r.Remaining() {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "entry_length_mismatch", ExpectedBytes: packetLength, ActualBytes: r.Remaining()})
+			return
+		}
+		packet := r.ReadBytes(packetLength)
+		vehicle := s.vehicleByBackendID(vehicleID)
+		if vehicle == nil {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "unknown_vehicle", ExpectedBytes: expected, ActualBytes: vehicleID})
 			continue
 		}
-		vehicle.syncState()
+		if seen[vehicleID] {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "duplicate_vehicle", ExpectedBytes: expected, ActualBytes: vehicleID})
+			continue
+		}
+		seen[vehicleID] = true
+		vehicle.syncStateFromPacket(packet)
 	}
+	if r.Remaining() != 0 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "trailing_bytes", ExpectedBytes: 0, ActualBytes: r.Remaining()})
+	}
+	for _, vehicle := range s.vehicles {
+		if vehicle != nil && vehicle.Body != nil && vehicle.Body.Active && vehicle.vehicleID != 0 && !seen[vehicle.vehicleID] {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "wheel_fleet", Kind: header.Kind, Reason: "missing_vehicle", ExpectedBytes: vehicle.vehicleID, ActualBytes: 0})
+		}
+	}
+}
+
+func (s *Scene) vehicleByBackendID(vehicleID int) *Vehicle {
+	for _, vehicle := range s.vehicles {
+		if vehicle != nil && vehicle.vehicleID == vehicleID && vehicle.Body != nil && vehicle.Body.Active {
+			return vehicle
+		}
+	}
+	return nil
 }
 
 func serializeVehicleWheelConfig(wheel VehicleWheelConfig) []byte {

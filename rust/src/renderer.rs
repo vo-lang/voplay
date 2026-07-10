@@ -12,7 +12,7 @@ use crate::model_loader::{
 };
 use crate::pipeline2d::{CameraUniform, Pipeline2D};
 use crate::pipeline3d::{
-    Camera3DUniform, LightData, LightUniform, ModelDraw, ModelUniform, Pipeline3D,
+    Camera3DUniform, LightData, LightUniform, MeshDrawStats, ModelDraw, ModelUniform, Pipeline3D,
 };
 use crate::pipeline_depth::PipelineDepth;
 use crate::pipeline_post::{
@@ -26,13 +26,12 @@ use crate::primitive_scene::{
     PrimitiveChunkBatchInfo, PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate,
 };
 use crate::render_world::{
-    RenderBatchPlanner, RenderBatchQualityProfile, RenderObjectUpdate, RenderWorld,
+    RenderBatchPlanner, RenderBatchQualityProfile, RenderObjectUpdate, RenderSkipStats, RenderWorld,
 };
 use crate::renderer_frame::{
-    FrameGraph, FrameGraphReport, RenderFramePipeline, RenderPassKind, RenderPassWorkload,
-    RenderResourceRegistry, RES_CAPTURE, RES_DEPTH, RES_MAIN_COLOR, RES_OVERLAY, RES_POST_COLOR,
-    RES_READBACK, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
-    RES_WATER_COLOR,
+    depth_attachment_store_contract, FrameGraph, FrameGraphPassOptions, FrameGraphReport,
+    RenderFramePipeline, RenderPassKind, RenderPassWorkload, RenderResourceRegistry, RES_DEPTH,
+    RES_MAIN_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
 };
 use crate::renderer_perf::{
     elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
@@ -87,7 +86,7 @@ fn shadow_atlas_resolution(resolution: u32, cascade_count: usize) -> u32 {
     if cascade_count <= 1 {
         return resolution;
     }
-    let even = if resolution % 2 == 0 {
+    let even = if resolution.is_multiple_of(2) {
         resolution
     } else {
         resolution + 1
@@ -152,7 +151,7 @@ fn decode_raw_mesh(data: &[u8]) -> Result<(Vec<MeshVertex>, Vec<u32>, [f32; 4]),
     if vertex_count == 0 || index_count == 0 {
         return Err("raw mesh must contain vertices and indices".to_string());
     }
-    if index_count % 3 != 0 {
+    if !index_count.is_multiple_of(3) {
         return Err("raw mesh index count must be divisible by 3".to_string());
     }
     let base_color = [
@@ -1194,7 +1193,7 @@ impl Renderer {
     }
 
     fn debug_should_log_frame(frame_count: u64) -> bool {
-        if !(frame_count <= 4 || frame_count % 60 == 0) {
+        if !(frame_count <= 4 || frame_count.is_multiple_of(60)) {
             return false;
         }
         #[cfg(feature = "wasm")]

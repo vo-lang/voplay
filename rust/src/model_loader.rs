@@ -658,7 +658,7 @@ impl ModelManager {
     ) -> GpuMesh {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_mesh_vb"),
-            size: (vertices.len() * std::mem::size_of::<MeshVertex>()) as u64,
+            size: std::mem::size_of_val(vertices) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -666,7 +666,7 @@ impl ModelManager {
 
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_mesh_ib"),
-            size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+            size: std::mem::size_of_val(indices) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -690,7 +690,7 @@ impl ModelManager {
     ) -> GpuMesh {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_skinned_mesh_vb"),
-            size: (vertices.len() * std::mem::size_of::<SkinnedMeshVertex>()) as u64,
+            size: std::mem::size_of_val(vertices) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -698,7 +698,7 @@ impl ModelManager {
 
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_skinned_mesh_ib"),
-            size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+            size: std::mem::size_of_val(indices) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

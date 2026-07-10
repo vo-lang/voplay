@@ -13,6 +13,44 @@ pub type TextureId = u32;
 
 pub type CubemapId = u32;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TextureReferenceResolution {
+    pub(crate) texture_id: u32,
+    pub(crate) missing_count: u32,
+    pub(crate) fallback_path_count: u32,
+}
+
+pub(crate) fn resolve_texture_reference(
+    preferred: u32,
+    fallback: Option<u32>,
+    mut available: impl FnMut(u32) -> bool,
+) -> TextureReferenceResolution {
+    if preferred != 0 && available(preferred) {
+        return TextureReferenceResolution {
+            texture_id: preferred,
+            ..TextureReferenceResolution::default()
+        };
+    }
+    let preferred_missing = u32::from(preferred != 0);
+    if let Some(fallback) = fallback.filter(|id| *id != 0) {
+        if available(fallback) {
+            return TextureReferenceResolution {
+                texture_id: fallback,
+                missing_count: preferred_missing,
+                fallback_path_count: preferred_missing,
+            };
+        }
+        return TextureReferenceResolution {
+            missing_count: preferred_missing.saturating_add(1),
+            ..TextureReferenceResolution::default()
+        };
+    }
+    TextureReferenceResolution {
+        missing_count: preferred_missing,
+        ..TextureReferenceResolution::default()
+    }
+}
+
 /// A loaded GPU texture with its bind group for sprite rendering.
 #[allow(dead_code)]
 pub struct GpuTexture {
@@ -545,7 +583,20 @@ fn write_rgba_mip_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::build_rgba_mip_chain;
+    use super::{build_rgba_mip_chain, resolve_texture_reference};
+
+    #[test]
+    fn texture_reference_resolution_reports_successful_fallback() {
+        let resolution = resolve_texture_reference(7, Some(9), |id| id == 9);
+        assert_eq!(resolution.texture_id, 9);
+        assert_eq!(resolution.missing_count, 1);
+        assert_eq!(resolution.fallback_path_count, 1);
+
+        let missing = resolve_texture_reference(7, Some(9), |_| false);
+        assert_eq!(missing.texture_id, 0);
+        assert_eq!(missing.missing_count, 2);
+        assert_eq!(missing.fallback_path_count, 0);
+    }
 
     #[test]
     fn rgba_mip_chain_halves_until_single_pixel() {

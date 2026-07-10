@@ -631,13 +631,12 @@ impl PipelinePost {
     }
 
     pub fn create_decal_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voplay_post_decal_uniform"),
             size: std::mem::size_of::<PostDecalUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
-        buffer
+        })
     }
 
     pub fn create_bind_group(

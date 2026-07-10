@@ -147,12 +147,9 @@ func VehicleTelemetryFromVehicle(vehicle *Vehicle) VehicleTelemetry {
 		t.AirborneTime = 1.0 / 60.0
 	}
 	if vehicle.Body != nil && vehicle.Body.scene != nil {
-		for _, event := range vehicle.Body.scene.ContactEvents() {
-			if event.A == vehicle.Body || event.B == vehicle.Body {
-				t.LastImpulse = event.NormalImpulse
-				t.LastTangentImpulse = event.TangentImpulse
-				break
-			}
+		if normal, tangent, ok := vehicle.Body.scene.contactImpulseForEntity(vehicle.Body); ok {
+			t.LastImpulse = normal
+			t.LastTangentImpulse = tangent
 		}
 	}
 	return t

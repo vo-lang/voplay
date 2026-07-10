@@ -294,3 +294,37 @@ fn batch_planner_counts_frustum_and_distance_culls() {
     assert_eq!(plan.distance_culled_chunks, 1);
     assert_eq!(plan.visible_objects, 0);
 }
+
+#[test]
+fn render_skip_stats_preserve_structured_causes_and_derived_totals() {
+    let mut stats = RenderSkipStats {
+        filtered_draws: 1,
+        missing_models: 2,
+        missing_meshes: 3,
+        missing_textures: 4,
+        missing_bind_groups: 5,
+        missing_chunks: 6,
+        missing_targets: 7,
+        invalid_batch_indices: 8,
+        incompatible_draws: 9,
+        fallback_paths: 10,
+    };
+    assert_eq!(stats.missing_resources(), 27);
+    assert_eq!(stats.invalid_batches(), 17);
+    stats.merge(RenderSkipStats {
+        missing_textures: 1,
+        invalid_batch_indices: 2,
+        ..RenderSkipStats::default()
+    });
+    assert_eq!(stats.missing_textures, 5);
+    assert_eq!(stats.invalid_batch_indices, 10);
+
+    let mut plan = RenderBatchPlan {
+        model_batch_indices: vec![0, 4],
+        ..RenderBatchPlan::default()
+    };
+    let draws = vec![model_draw(7, Vec3::new(0.0, 0.0, 0.0), 0)];
+    assert_eq!(plan.model_batches(&draws).len(), 1);
+    assert_eq!(plan.skips.invalid_batch_indices, 1);
+    assert_eq!(plan.skip_reasons, vec!["invalid-model-batch-index"]);
+}

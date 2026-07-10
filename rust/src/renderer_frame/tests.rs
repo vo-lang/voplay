@@ -29,6 +29,112 @@ fn execute_test_pass(
         .map(|diagnostic| diagnostic.elapsed_ms))
 }
 
+fn standard_test_graph(options: FrameGraphPassOptions) -> FrameGraph {
+    let mut graph = FrameGraph::single_view(99, 0);
+    graph.declare_external_target(RES_SURFACE_COLOR, true);
+    graph.declare_target(RES_MAIN_COLOR, true);
+    graph.declare_target(RES_DEPTH, true);
+    graph.declare_target(RES_SHADOW_MAP, true);
+    graph.declare_target(RES_RECEIVER_MASK, true);
+    graph.declare_target(RES_SURFACE_PROPS, true);
+    graph.plan_standard_passes(options);
+    graph
+}
+
+#[test]
+fn frame_graph_standard_plan_executes_all_feature_combinations_without_cycles() {
+    for mask in 0u8..16 {
+        let options = FrameGraphPassOptions {
+            depth_prepass: mask & 1 != 0,
+            shadow: mask & 2 != 0,
+            transparent: mask & 4 != 0,
+            water: mask & 8 != 0,
+        };
+        let mut graph = standard_test_graph(options);
+        let diagnostics = graph
+            .executor()
+            .execute_all(&mut TimedTestDispatcher { elapsed_ms: 0.1 })
+            .unwrap_or_else(|error| panic!("feature mask {mask:#06b} failed: {error}"));
+        let executed = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.kind)
+            .collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        if options.depth_prepass {
+            expected.push(RenderPassKind::DepthPrepass);
+        }
+        if options.shadow {
+            expected.push(RenderPassKind::Shadow);
+        }
+        expected.push(RenderPassKind::MainOpaque);
+        if options.transparent {
+            expected.push(RenderPassKind::MainTransparent);
+        }
+        if options.water {
+            expected.push(RenderPassKind::Water);
+        }
+        expected.extend([
+            RenderPassKind::Post,
+            RenderPassKind::Overlay,
+            RenderPassKind::BackendSubmit,
+        ]);
+        assert_eq!(executed, expected, "feature mask {mask:#06b}");
+    }
+}
+
+#[test]
+fn frame_graph_reads_bind_to_latest_prior_resource_version() {
+    let graph = standard_test_graph(FrameGraphPassOptions {
+        depth_prepass: true,
+        shadow: true,
+        transparent: true,
+        water: true,
+    });
+    let nodes = graph.nodes();
+    let post = nodes
+        .iter()
+        .find(|node| node.kind == RenderPassKind::Post)
+        .expect("post node");
+    let post_main_color = post
+        .read_versions
+        .iter()
+        .find(|version| version.resource == RES_MAIN_COLOR)
+        .expect("post main color read");
+    assert_eq!(post_main_color.version, 3);
+
+    let overlay = nodes
+        .iter()
+        .find(|node| node.kind == RenderPassKind::Overlay)
+        .expect("overlay node");
+    assert_eq!(overlay.read_versions[0].resource, RES_SURFACE_COLOR);
+    assert_eq!(overlay.read_versions[0].version, 1);
+    assert_eq!(overlay.write_versions[0].version, 2);
+
+    let backend = nodes
+        .iter()
+        .find(|node| node.kind == RenderPassKind::BackendSubmit)
+        .expect("backend submit node");
+    assert_eq!(backend.read_versions[0].resource, RES_SURFACE_COLOR);
+    assert_eq!(backend.read_versions[0].version, 2);
+    assert!(backend.write_versions.is_empty());
+}
+
+#[test]
+fn frame_graph_depth_attachment_contract_preserves_downstream_depth_reads() {
+    for kind in [
+        RenderPassKind::MainOpaque,
+        RenderPassKind::MainTransparent,
+        RenderPassKind::Water,
+    ] {
+        assert_eq!(
+            depth_attachment_store_contract(kind),
+            RenderAttachmentStoreContract::Store,
+            "{} must preserve depth for downstream load or sampling",
+            kind.name(),
+        );
+    }
+}
+
 #[test]
 fn frame_graph_reports_passes_resources_and_slowest_pass() {
     let mut graph = FrameGraph::single_view(42, 0);
@@ -154,7 +260,9 @@ fn frame_graph_executor_fails_on_missing_required_read() {
         .execute_node(&node, true, &mut TimedTestDispatcher { elapsed_ms: 0.7 })
         .unwrap_err();
     assert!(err.contains("missing required read depth"));
+    assert!(err.contains("voplay.render.failure pass=water stage=validate_reads"));
     assert_eq!(graph.report().missing_read_count, 1);
+    assert_eq!(graph.report().failure_count, 1);
 }
 
 #[test]
@@ -173,6 +281,8 @@ fn frame_graph_executor_fails_on_missing_required_write() {
         .execute_node(&node, true, &mut TimedTestDispatcher { elapsed_ms: 0.7 })
         .unwrap_err();
     assert!(err.contains("missing required write shadow-map"));
+    assert!(err.contains("voplay.render.failure pass=shadow stage=validate_writes"));
+    assert_eq!(graph.report().failure_count, 1);
 }
 
 #[test]
@@ -214,7 +324,11 @@ fn frame_graph_registry_requires_actual_backing_generation_for_ready_targets() {
     let mut registry = RenderResourceRegistry::default();
     registry.declare_target(RES_DEPTH, true, RenderResourceLifetime::Persistent);
     assert!(registry.is_ready(RES_DEPTH));
-    assert!(!registry.validate_backing_generation(RES_DEPTH));
+    let failure = registry.validate_backing(RES_DEPTH).unwrap_err();
+    assert_eq!(failure.code, "identity_missing");
+    assert!(failure
+        .structured_message()
+        .contains("stage=frame_graph_resource"));
     assert!(registry.actual_texture_view(RES_DEPTH).is_none());
     registry.mark_resize_generation(3);
     let target = registry
@@ -223,7 +337,11 @@ fn frame_graph_registry_requires_actual_backing_generation_for_ready_targets() {
         .find(|target| target.resource == RES_DEPTH)
         .expect("depth target status");
     assert_eq!(target.backing_generation, 0);
-    assert!(!registry.validate_backing_generation(RES_DEPTH));
+    assert!(target.backing_identity.is_none());
+    assert_eq!(
+        registry.validate_backing(RES_DEPTH).unwrap_err().code,
+        "target_not_ready"
+    );
 }
 
 #[test]
@@ -280,6 +398,13 @@ fn frame_graph_executor_dispatches_node_and_reports_workload() {
             instances: 8,
             triangles: 96,
             upload_bytes: 128,
+            skips: RenderSkipStats {
+                filtered_draws: 4,
+                missing_textures: 1,
+                invalid_batch_indices: 2,
+                fallback_paths: 3,
+                ..RenderSkipStats::default()
+            },
         },
     };
     let diagnostic = graph
@@ -293,6 +418,10 @@ fn frame_graph_executor_dispatches_node_and_reports_workload() {
     let report = graph.report();
     assert_eq!(report.pass_count, 1);
     assert_eq!(report.ready_target_count, 2);
+    assert_eq!(report.skip_stats.filtered_draws, 4);
+    assert_eq!(report.skip_stats.missing_resources(), 1);
+    assert_eq!(report.skip_stats.invalid_batches(), 2);
+    assert_eq!(report.skip_stats.fallback_paths, 3);
 }
 
 #[test]
@@ -333,4 +462,76 @@ fn render_frame_pipeline_captures_stage_metrics() {
     );
     assert_eq!(pipeline.graph_execute.executed_pass_count, 1);
     assert_eq!(pipeline.perf_packet.payload_version, 6);
+}
+
+#[test]
+fn render_target_status_rejects_stale_or_mismatched_physical_backing() {
+    let identity = RenderBackingIdentity {
+        serial: 41,
+        generation: 7,
+        slot: RenderBackingSlot::PostColor,
+    };
+    let descriptor = RenderBackingDescriptor {
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        width: 1280,
+        height: 720,
+        sample_count: 1,
+    };
+    let target = RenderTargetStatus {
+        resource: RES_POST_COLOR,
+        ready: true,
+        lifetime: RenderResourceLifetime::Persistent,
+        revision: 7,
+        backing_generation: 7,
+        backing_identity: Some(identity),
+        backing_descriptor: Some(descriptor),
+        backing_owner: "post",
+        ready_cause: "allocated",
+    };
+
+    assert!(target.matches_backing(7, Some(identity), Some(descriptor), true));
+    assert!(!target.matches_backing(8, Some(identity), Some(descriptor), true));
+    assert!(!target.matches_backing(
+        7,
+        Some(RenderBackingIdentity {
+            serial: identity.serial + 1,
+            ..identity
+        }),
+        Some(descriptor),
+        true
+    ));
+    assert!(!target.matches_backing(
+        7,
+        Some(identity),
+        Some(RenderBackingDescriptor {
+            width: descriptor.width + 1,
+            ..descriptor
+        }),
+        true
+    ));
+    assert!(!target.matches_backing(
+        7,
+        Some(identity),
+        Some(RenderBackingDescriptor {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            ..descriptor
+        }),
+        true
+    ));
+    let descriptor_failure = target
+        .validate_backing(
+            7,
+            Some(identity),
+            Some(RenderBackingDescriptor {
+                sample_count: 4,
+                ..descriptor
+            }),
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(descriptor_failure.code, "descriptor_mismatch");
+    assert!(descriptor_failure
+        .structured_message()
+        .contains(&format!("resource={}", RES_POST_COLOR.name)));
+    assert!(!target.matches_backing(7, Some(identity), Some(descriptor), false));
 }

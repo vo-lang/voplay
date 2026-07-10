@@ -1,4 +1,4 @@
-use super::pass_dispatch::{FramePassDispatcher, RenderPassResources};
+use super::pass_dispatch::{FramePassDispatcher, FramePassResources};
 use super::*;
 use crate::draw_list::Frame2D;
 
@@ -39,6 +39,7 @@ pub(super) struct FramePassSequenceContext<'a> {
     pub(super) perf: &'a mut RendererPerfStats,
     pub(super) primitive_depth_draw_calls: &'a mut u32,
     pub(super) primitive_shadow_draw_calls: &'a mut u32,
+    pub(super) mesh_main_stats: &'a mut MeshDrawStats,
     pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
     pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
     pub(super) primitive_main_submitted: &'a mut bool,
@@ -73,7 +74,7 @@ impl Renderer {
     ) -> Result<FramePassSequenceTimings, String> {
         let mut shadow_active = false;
         let mut dispatcher = FramePassDispatcher {
-            resources: RenderPassResources {
+            resources: FramePassResources {
                 gpu: super::pass_dispatch::RenderGpuScope {
                     gpu_device: &self.device,
                     gpu_queue: &self.queue,
@@ -137,10 +138,15 @@ impl Renderer {
             perf: context.perf,
             primitive_depth_draw_calls: context.primitive_depth_draw_calls,
             primitive_shadow_draw_calls: context.primitive_shadow_draw_calls,
+            mesh_main_stats: context.mesh_main_stats,
             primitive_main_stats: context.primitive_main_stats,
             primitive_transparent_stats: context.primitive_transparent_stats,
             primitive_main_submitted: context.primitive_main_submitted,
             primitive_water_stats: context.primitive_water_stats,
+            post_fallback_path_count: 0,
+            post_rejected_decal_count: 0,
+            post_upload_bytes: 0,
+            overlay_missing_texture_count: 0,
             shadow_active: &mut shadow_active,
             post_uniforms_uploaded: false,
             bloom_threshold: context.bloom_threshold,

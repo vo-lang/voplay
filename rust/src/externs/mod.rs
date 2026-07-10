@@ -142,6 +142,7 @@ vo_ext::export_extensions!(
     physics3d::__EXT_voplay_scene3d_physicsSetBodyMotion,
     physics3d::__EXT_voplay_scene3d_physicsSetBodySleepState,
     physics3d::__EXT_voplay_scene3d_physicsRaycastVehicleState,
+    physics3d::__EXT_voplay_scene3d_physicsRaycastVehicleStates,
     physics3d::__EXT_voplay_scene3d_physicsStep,
     physics3d::__EXT_voplay_scene3d_physicsSetGravity,
     physics3d::__EXT_voplay_scene3d_physicsContacts,

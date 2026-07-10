@@ -123,6 +123,7 @@ impl Renderer {
         let mut primitive_depth_draw_calls = 0u32;
         let mut primitive_shadow_draw_calls = 0u32;
         let mut primitive_main_submitted = false;
+        let mut mesh_main_stats = MeshDrawStats::default();
         let mut primitive_main_stats = PrimitiveDrawStats::default();
         let mut primitive_transparent_stats = PrimitiveDrawStats::default();
         let mut primitive_water_stats = PrimitiveDrawStats::default();
@@ -216,6 +217,7 @@ impl Renderer {
             perf: &mut perf,
             primitive_depth_draw_calls: &mut primitive_depth_draw_calls,
             primitive_shadow_draw_calls: &mut primitive_shadow_draw_calls,
+            mesh_main_stats: &mut mesh_main_stats,
             primitive_main_stats: &mut primitive_main_stats,
             primitive_transparent_stats: &mut primitive_transparent_stats,
             primitive_main_submitted: &mut primitive_main_submitted,

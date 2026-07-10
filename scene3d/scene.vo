@@ -143,8 +143,13 @@ type Scene struct {
 	bodyMap map[int]*Entity
 	vehicles []*Vehicle
 	physicsPacketErrors []PhysicsBackendPacketError
-	physicsDirectBypassHits int
-	physicsConstraintBypassHits int
+	physicsCommandEvents []PhysicsBackendCommandEvent
+	physicsContacts []Contact
+	physicsContactsReady bool
+	physicsContactEvents []ContactEvent
+	physicsContactEventsReady bool
+	physicsSnapshotReady bool
+	nextPhysicsCommandSequence int
 	animationInfoCache map[int]AnimationModelInfo
 	renderSceneID int
 	renderSceneCreated bool
@@ -651,8 +656,13 @@ func (s *Scene) Clear() {
 	s.nextVehicleID = 1
 	s.vehicles = nil
 	s.physicsPacketErrors = nil
-	s.physicsDirectBypassHits = 0
-	s.physicsConstraintBypassHits = 0
+	s.physicsCommandEvents = nil
+	s.physicsContacts = nil
+	s.physicsContactsReady = false
+	s.physicsContactEvents = nil
+	s.physicsContactEventsReady = false
+	s.physicsSnapshotReady = false
+	s.nextPhysicsCommandSequence = 0
 	s.physCmds.Reset()
 	if s.renderSceneCreated {
 		s.renderSceneCleared = true
@@ -691,18 +701,54 @@ func (s *Scene) PhysicsPacketErrorCount() int {
 	return len(s.physicsPacketErrors)
 }
 
-func (s *Scene) PhysicsDirectBypassHits() int {
+func (s *Scene) recordPhysicsBackendCommandEvent(event PhysicsBackendCommandEvent) {
 	if s == nil {
-		return 0
+		return
 	}
-	return s.physicsDirectBypassHits
+	s.nextPhysicsCommandSequence++
+	event.Sequence = s.nextPhysicsCommandSequence
+	event.WorldID = s.worldID
+	s.physicsCommandEvents = append(s.physicsCommandEvents, event)
 }
 
-func (s *Scene) PhysicsConstraintBypassHits() int {
+func (s *Scene) PhysicsBackendCommandEvents() []PhysicsBackendCommandEvent {
+	return s.PhysicsBackendCommandEventsAfter(0)
+}
+
+func (s *Scene) PhysicsBackendCommandEventsAfter(sequence int) []PhysicsBackendCommandEvent {
+	out := []PhysicsBackendCommandEvent{}
+	if s == nil {
+		return out
+	}
+	for _, event := range s.physicsCommandEvents {
+		if event.Sequence <= sequence {
+			continue
+		}
+		copy := event
+		copy.Force.Wheels = append([]PhysicsBackendWheelCommand{}, event.Force.Wheels...)
+		out = append(out, copy)
+	}
+	return out
+}
+
+func (s *Scene) PhysicsBackendCommandEventCount() int {
 	if s == nil {
 		return 0
 	}
-	return s.physicsConstraintBypassHits
+	return len(s.physicsCommandEvents)
+}
+
+func (s *Scene) PhysicsRejectedCommandCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, event := range s.physicsCommandEvents {
+		if event.Outcome == PhysicsBackendCommandOutcomeRejected {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Scene) FindByID(id int) *Entity {
@@ -874,13 +920,18 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
 	}
+	s.physicsContacts = nil
+	s.physicsContactsReady = false
+	s.physicsContactEvents = nil
+	s.physicsContactEventsReady = false
+	s.physicsSnapshotReady = false
 	cmdBytes := s.physCmds.Bytes()
 	state := physBackend.Step(s.worldID, dt, cmdBytes)
 	s.physCmds.Reset()
 	r := codec.NewByteReader(state)
-	header, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendBodyPacketKind)
-	if !ok {
-		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: "invalid_header", ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(state)})
+	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendBodyPacketKind)
+	if headerError != "" {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(state)})
 		return
 	}
 	if r.Remaining() < 4 {
@@ -915,6 +966,7 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 		}
 	}
 	s.syncVehicles()
+	s.physicsSnapshotReady = true
 }
 
 func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
@@ -968,11 +1020,15 @@ func (s *Scene) Contacts() []Contact {
 	if s.worldID == 0 {
 		return []Contact{}
 	}
+	if s.physicsSnapshotReady && s.physicsContactsReady {
+		return append([]Contact{}, s.physicsContacts...)
+	}
+	s.physicsContactsReady = s.physicsSnapshotReady
 	data := physBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
-	header, ok := ReadPhysicsBackendPacketHeader(&r, PhysicsBackendContactPacketKind)
-	if !ok {
-		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: PhysicsBackendContactPacketKind, Reason: "invalid_header", ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(data)})
+	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendContactPacketKind)
+	if headerError != "" {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: PhysicsBackendContactPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(data)})
 		return []Contact{}
 	}
 	if r.Remaining() < 4 {
@@ -984,7 +1040,7 @@ func (s *Scene) Contacts() []Contact {
 		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Kind: header.Kind, Reason: "contact_payload_length_mismatch", ExpectedBytes: count * physicsContactDetailBytes, ActualBytes: r.Remaining()})
 		return []Contact{}
 	}
-	var contacts []Contact
+	contacts := []Contact{}
 	for i := 0; i < count; i++ {
 		idA := r.ReadU32()
 		idB := r.ReadU32()
@@ -1002,5 +1058,6 @@ func (s *Scene) Contacts() []Contact {
 			contacts = append(contacts, contact)
 		}
 	}
-	return contacts
+	s.physicsContacts = contacts
+	return append([]Contact{}, contacts...)
 }

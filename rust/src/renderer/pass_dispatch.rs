@@ -39,7 +39,7 @@ pub(super) struct RenderAssetScope<'a> {
     pub(super) world: &'a RenderWorld,
 }
 
-pub(super) struct RenderPassResources<'a> {
+pub(super) struct FramePassResources<'a> {
     pub(super) gpu: RenderGpuScope<'a>,
     pub(super) target_registry: &'a RenderResourceRegistry,
     pub(super) post_bindings: RenderPostBindings<'a>,
@@ -48,15 +48,8 @@ pub(super) struct RenderPassResources<'a> {
     pub(super) assets: RenderAssetScope<'a>,
 }
 
-impl RenderPassResources<'_> {
-    pub(super) fn clear_texture_bind_group_caches(&mut self) {
-        self.pipelines.mesh3d.clear_texture_bind_group_cache();
-        self.pipelines.primitive.clear_texture_bind_group_cache();
-    }
-}
-
 pub(super) struct FramePassDispatcher<'a> {
-    pub(super) resources: RenderPassResources<'a>,
+    pub(super) resources: FramePassResources<'a>,
     pub(super) encoder: Option<wgpu::CommandEncoder>,
     pub(super) output: Option<wgpu::SurfaceTexture>,
     pub(super) surface_view: &'a wgpu::TextureView,
@@ -92,10 +85,15 @@ pub(super) struct FramePassDispatcher<'a> {
     pub(super) perf: &'a mut RendererPerfStats,
     pub(super) primitive_depth_draw_calls: &'a mut u32,
     pub(super) primitive_shadow_draw_calls: &'a mut u32,
+    pub(super) mesh_main_stats: &'a mut MeshDrawStats,
     pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
     pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
     pub(super) primitive_main_submitted: &'a mut bool,
     pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
+    pub(super) post_fallback_path_count: u32,
+    pub(super) post_rejected_decal_count: u32,
+    pub(super) post_upload_bytes: u32,
+    pub(super) overlay_missing_texture_count: u32,
     pub(super) shadow_active: &'a mut bool,
     pub(super) post_uniforms_uploaded: bool,
     pub(super) bloom_threshold: f32,
@@ -130,7 +128,11 @@ impl FramePassDispatcher<'_> {
             ];
         }
         let mut post_setup = PostPassSetupContext {
-            resources: &mut self.resources,
+            queue: self.resources.gpu.gpu_queue,
+            surface_width: self.resources.gpu.surface.width,
+            surface_height: self.resources.gpu.surface.height,
+            uniform_buffer: self.resources.post_bindings.uniform_buffer,
+            decal_uniform_buffer: self.resources.post_bindings.decal_uniform_buffer,
             camera3d_uniform: self.camera3d_uniform,
             camera3d_state: self.camera3d_state,
             light_uniform: &mut *self.light_uniform,
@@ -148,7 +150,11 @@ impl FramePassDispatcher<'_> {
             contact_ao_normal_bias: self.contact_ao_normal_bias,
             contact_ao_quality: self.contact_ao_quality,
         };
-        PostPassSetup::upload_uniforms(&mut post_setup);
+        let decal_report = PostPassSetup::upload_uniforms(&mut post_setup);
+        self.post_rejected_decal_count = decal_report.rejected_count.min(u32::MAX as usize) as u32;
+        self.post_upload_bytes = decal_report
+            .upload_bytes
+            .saturating_add(std::mem::size_of::<PostUniform>().min(u32::MAX as usize) as u32);
         self.post_uniforms_uploaded = true;
     }
 }
@@ -172,7 +178,11 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = DepthPassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    queue: self.resources.gpu.gpu_queue,
+                    depth_pipeline: &mut *self.resources.pipelines.depth,
+                    primitive_pipeline: &mut *self.resources.pipelines.primitive,
+                    models: self.resources.assets.models,
                     encoder,
                     camera3d_uniform,
                     model_draws,
@@ -202,7 +212,13 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = ShadowPassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    queue: self.resources.gpu.gpu_queue,
+                    mesh_pipeline: &mut *self.resources.pipelines.mesh3d,
+                    primitive_pipeline: &mut *self.resources.pipelines.primitive,
+                    shadow_pipeline: &mut *self.resources.pipelines.shadow,
+                    world: self.resources.assets.world,
+                    models: self.resources.assets.models,
                     encoder,
                     camera3d_uniform,
                     camera3d_state,
@@ -241,7 +257,15 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = MainOpaquePassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    queue: self.resources.gpu.gpu_queue,
+                    targets: self.resources.target_registry,
+                    mesh_pipeline: &mut *self.resources.pipelines.mesh3d,
+                    primitive_pipeline: &mut *self.resources.pipelines.primitive,
+                    shadow_pipeline: &*self.resources.pipelines.shadow,
+                    skybox_pipeline: &mut *self.resources.pipelines.skybox,
+                    models: self.resources.assets.models,
+                    textures: self.resources.assets.textures,
                     encoder,
                     clear_color,
                     camera3d_uniform,
@@ -257,6 +281,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf: &mut *self.perf,
                 };
                 let result = MainOpaquePassExecutor::execute(&mut context)?;
+                *self.mesh_main_stats = result.mesh_stats;
                 *self.primitive_main_stats = result.primitive_stats;
                 *self.primitive_main_submitted = self.primitive_main_stats.batch_count > 0;
                 Ok(result.elapsed_ms)
@@ -271,7 +296,13 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = MainTransparentPassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    queue: self.resources.gpu.gpu_queue,
+                    targets: self.resources.target_registry,
+                    primitive_pipeline: &mut *self.resources.pipelines.primitive,
+                    shadow_pipeline: &*self.resources.pipelines.shadow,
+                    models: self.resources.assets.models,
+                    textures: self.resources.assets.textures,
                     encoder,
                     camera3d_uniform,
                     light_uniform,
@@ -294,7 +325,13 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = WaterPassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    queue: self.resources.gpu.gpu_queue,
+                    targets: self.resources.target_registry,
+                    primitive_pipeline: &mut *self.resources.pipelines.primitive,
+                    shadow_pipeline: &*self.resources.pipelines.shadow,
+                    models: self.resources.assets.models,
+                    textures: self.resources.assets.textures,
                     encoder,
                     camera3d_uniform,
                     light_uniform,
@@ -315,13 +352,22 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = PostPassContext {
-                    resources: &mut self.resources,
+                    device: self.resources.gpu.gpu_device,
+                    targets: self.resources.target_registry,
+                    post_pipeline: self.resources.pipelines.post,
+                    depth_pipeline: &*self.resources.pipelines.depth,
+                    uniform_buffer: self.resources.post_bindings.uniform_buffer,
+                    decal_uniform_buffer: self.resources.post_bindings.decal_uniform_buffer,
+                    default_bind_group: self.resources.post_bindings.bind_group,
+                    textures: self.resources.assets.textures,
                     encoder,
                     surface_view,
                     projected_decal_atlas_bindings,
                     perf_enabled,
                 };
-                PostPassExecutor::execute(&mut context)
+                let result = PostPassExecutor::execute(&mut context)?;
+                self.post_fallback_path_count = result.fallback_path_count;
+                Ok(result.elapsed_ms)
             }
             RenderPassKind::Overlay => {
                 let perf_enabled = self.perf_enabled;
@@ -332,18 +378,23 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
                 let mut context = OverlayPassContext {
-                    resources: &mut self.resources,
+                    two_d_pipeline: &mut *self.resources.pipelines.two_d,
+                    sprite_pipeline: &mut *self.resources.pipelines.sprite,
+                    camera_bind_group: self.resources.camera_bind_group,
+                    textures: self.resources.assets.textures,
                     encoder,
                     surface_view,
                     frame,
                     camera_alignment,
                     perf_enabled,
                 };
-                OverlayPassExecutor::execute(&mut context)
+                let result = OverlayPassExecutor::execute(&mut context)?;
+                self.overlay_missing_texture_count = result.missing_texture_count;
+                Ok(result.elapsed_ms)
             }
             RenderPassKind::BackendSubmit => {
                 let mut context = BackendSubmitPassContext {
-                    resources: &mut self.resources,
+                    queue: self.resources.gpu.gpu_queue,
                     encoder: self.encoder.take(),
                     output: self.output.take(),
                     perf_enabled: self.perf_enabled,
@@ -358,17 +409,21 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
         match kind {
             RenderPassKind::DepthPrepass => DepthPassExecutor::workload(),
             RenderPassKind::Shadow => ShadowPassExecutor::workload(),
-            RenderPassKind::MainOpaque => MainOpaquePassExecutor::workload(
-                self.planned_model_draws.len(),
-                self.planned_primitive_draws.len(),
-                self.planned_primitive_chunks.len(),
-            ),
+            RenderPassKind::MainOpaque => {
+                MainOpaquePassExecutor::workload(*self.mesh_main_stats, *self.primitive_main_stats)
+            }
             RenderPassKind::MainTransparent => {
                 MainTransparentPassExecutor::workload(*self.primitive_transparent_stats)
             }
             RenderPassKind::Water => WaterPassExecutor::workload(*self.primitive_water_stats),
-            RenderPassKind::Post => PostPassExecutor::workload(),
-            RenderPassKind::Overlay => OverlayPassExecutor::workload(self.frame),
+            RenderPassKind::Post => PostPassExecutor::workload(
+                self.post_fallback_path_count,
+                self.post_rejected_decal_count,
+                self.post_upload_bytes,
+            ),
+            RenderPassKind::Overlay => {
+                OverlayPassExecutor::workload(self.frame, self.overlay_missing_texture_count)
+            }
             RenderPassKind::BackendSubmit => BackendSubmitPassExecutor::workload(),
         }
     }

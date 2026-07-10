@@ -4,11 +4,13 @@ use std::time::Instant;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;
 
+use crate::render_world::RenderSkipStats;
+
 pub(crate) const PERF_PACKET_MAGIC: u8 = 0xf9;
 pub(crate) const PERF_PACKET_VERSION: u8 = 1;
 pub(crate) const PERF_PACKET_SCHEMA_VERSION: u32 = 1;
 pub(crate) const PERF_PACKET_SOURCE_RENDERER: u32 = 2;
-pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 6;
+pub(crate) const RENDERER_PERF_PAYLOAD_VERSION: u32 = 8;
 
 pub(crate) const RENDERER_DIAG_DISABLE_SHADOWS: u32 = 1 << 0;
 pub(crate) const RENDERER_DIAG_DISABLE_POST_EFFECTS: u32 = 1 << 1;
@@ -164,6 +166,9 @@ pub(crate) struct RendererPerfStats {
     pub(crate) graph_target_reuses: u32,
     pub(crate) graph_target_recreates: u32,
     pub(crate) graph_alias_reuses: u32,
+    pub(crate) graph_skipped_passes: u32,
+    pub(crate) graph_failures: u32,
+    pub(crate) render_skips: RenderSkipStats,
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -211,7 +216,7 @@ fn push_f64(out: &mut Vec<u8>, value: f64) {
 }
 
 pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 17 * 8 + 28 * 4);
+    let mut out = Vec::with_capacity(4 + 17 * 8 + 36 * 4);
     push_u32(&mut out, RENDERER_PERF_PAYLOAD_VERSION);
     push_f64(&mut out, stats.submit_frame_ms);
     push_f64(&mut out, stats.surface_acquire_ms);
@@ -267,6 +272,20 @@ pub(crate) fn encode_renderer_perf_payload(stats: &RendererPerfStats) -> Vec<u8>
     push_u32(&mut out, stats.graph_target_reuses);
     push_u32(&mut out, stats.graph_target_recreates);
     push_u32(&mut out, stats.graph_alias_reuses);
+    push_u32(&mut out, stats.graph_skipped_passes);
+    push_u32(&mut out, stats.graph_failures);
+    push_u32(&mut out, stats.render_skips.filtered_draws);
+    push_u32(&mut out, stats.render_skips.missing_resources());
+    push_u32(&mut out, stats.render_skips.invalid_batches());
+    push_u32(&mut out, stats.render_skips.fallback_paths);
+    push_u32(&mut out, stats.render_skips.missing_models);
+    push_u32(&mut out, stats.render_skips.missing_meshes);
+    push_u32(&mut out, stats.render_skips.missing_textures);
+    push_u32(&mut out, stats.render_skips.missing_bind_groups);
+    push_u32(&mut out, stats.render_skips.missing_chunks);
+    push_u32(&mut out, stats.render_skips.missing_targets);
+    push_u32(&mut out, stats.render_skips.invalid_batch_indices);
+    push_u32(&mut out, stats.render_skips.incompatible_draws);
     out
 }
 
@@ -327,5 +346,34 @@ mod tests {
             u32::from_le_bytes(packet[14..18].try_into().unwrap()),
             PERF_PACKET_SOURCE_RENDERER
         );
+    }
+
+    #[test]
+    fn renderer_perf_v8_payload_preserves_structured_skip_causes() {
+        let stats = RendererPerfStats {
+            render_skips: RenderSkipStats {
+                missing_models: 1,
+                missing_meshes: 2,
+                missing_textures: 3,
+                missing_bind_groups: 4,
+                missing_chunks: 5,
+                missing_targets: 6,
+                invalid_batch_indices: 7,
+                incompatible_draws: 8,
+                ..RenderSkipStats::default()
+            },
+            ..RendererPerfStats::default()
+        };
+        let payload = encode_renderer_perf_payload(&stats);
+        assert_eq!(
+            u32::from_le_bytes(payload[0..4].try_into().unwrap()),
+            RENDERER_PERF_PAYLOAD_VERSION
+        );
+        let detail = &payload[payload.len() - 8 * 4..];
+        let values = detail
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
 }

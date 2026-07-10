@@ -9,7 +9,9 @@ use crate::primitive_scene::{
     PrimitiveRenderWorld,
 };
 
+mod skip_stats;
 mod store;
+pub use skip_stats::RenderSkipStats;
 pub use store::{RenderObjectUpdate, RenderWorld};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,32 +42,22 @@ struct RenderLodRange {
     far_applies_to_all: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RenderBatchKind {
     Mesh,
+    #[default]
     Primitive,
     Terrain,
     Water,
     Decal,
 }
 
-impl Default for RenderBatchKind {
-    fn default() -> Self {
-        Self::Primitive
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RenderWorldChunkResidentState {
+    #[default]
     Missing,
     Resident,
     Dirty,
-}
-
-impl Default for RenderWorldChunkResidentState {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -129,8 +121,7 @@ pub struct RenderBatchPlan {
     pub terrain_batches: u32,
     pub water_batches: u32,
     pub decal_batches: u32,
-    pub invalid_batch_indices: u32,
-    pub missing_chunk_info: u32,
+    pub skips: RenderSkipStats,
     pub skip_reasons: Vec<&'static str>,
 }
 
@@ -214,7 +205,7 @@ impl RenderBatchPlan {
         if invalid == 0 {
             return;
         }
-        self.invalid_batch_indices = self.invalid_batch_indices.saturating_add(invalid);
+        self.skips.invalid_batch_indices = self.skips.invalid_batch_indices.saturating_add(invalid);
         self.skip_reasons.push(reason);
     }
 }
@@ -313,7 +304,7 @@ impl RenderBatchPlanner {
                         .find(|info| info.chunk == *chunk)
                 })
             else {
-                plan.missing_chunk_info = plan.missing_chunk_info.saturating_add(1);
+                plan.skips.missing_chunks = plan.skips.missing_chunks.saturating_add(1);
                 plan.skip_reasons.push("missing-primitive-chunk-info");
                 continue;
             };

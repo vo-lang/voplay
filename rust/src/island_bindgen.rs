@@ -1534,6 +1534,18 @@ pub fn scene3d_physics_raycast_vehicle_state(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// scene3d_physicsRaycastVehicleStates(worldId) → []byte
+#[wasm_bindgen(js_name = "scene3d_physicsRaycastVehicleStates")]
+pub fn scene3d_physics_raycast_vehicle_states(input: &[u8]) -> Vec<u8> {
+    let mut pos = 0usize;
+    let world_id = in_value(input, &mut pos) as u32;
+    let state =
+        crate::physics3d::with_world(world_id, |world| world.serialize_raycast_vehicle_states());
+    let mut out = Vec::new();
+    out_bytes(&mut out, &state);
+    out
+}
+
 /// scene3d_physicsStep(worldId, dt, cmds []byte) → []byte
 #[wasm_bindgen(js_name = "scene3d_physicsStep")]
 pub fn scene3d_physics_step(input: &[u8]) -> Vec<u8> {

@@ -117,12 +117,39 @@ func (event ContactEvent) IndustrialReady() bool {
 }
 
 func (s *Scene) ContactEvents() []ContactEvent {
+	if s == nil {
+		return []ContactEvent{}
+	}
+	events := s.contactEventsSnapshot()
+	return append([]ContactEvent{}, events...)
+}
+
+func (s *Scene) contactEventsSnapshot() []ContactEvent {
+	if s.physicsSnapshotReady && s.physicsContactEventsReady {
+		return s.physicsContactEvents
+	}
 	contacts := s.Contacts()
 	events := make([]ContactEvent, 0, len(contacts))
 	for _, contact := range contacts {
 		events = append(events, ContactEventFromPair(contact))
 	}
+	if s.physicsSnapshotReady {
+		s.physicsContactEvents = events
+		s.physicsContactEventsReady = true
+	}
 	return events
+}
+
+func (s *Scene) contactImpulseForEntity(entity *Entity) (float64, float64, bool) {
+	if s == nil || entity == nil {
+		return 0, 0, false
+	}
+	for _, event := range s.contactEventsSnapshot() {
+		if event.A == entity || event.B == entity {
+			return event.NormalImpulse, event.TangentImpulse, true
+		}
+	}
+	return 0, 0, false
 }
 
 func (s *Scene) IndustrialContactEvents() []ContactEvent {

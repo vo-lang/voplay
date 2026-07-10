@@ -30,100 +30,37 @@ impl Renderer {
         } else {
             None
         };
+        self.resources
+            .validate_backing(RES_MAIN_COLOR)
+            .map_err(|failure| failure.structured_message())?;
+        self.resources
+            .validate_backing(RES_DEPTH)
+            .map_err(|failure| failure.structured_message())?;
+        if desc.post_depth_active {
+            self.resources
+                .validate_backing(RES_RECEIVER_MASK)
+                .map_err(|failure| failure.structured_message())?;
+            self.resources
+                .validate_backing(RES_SURFACE_PROPS)
+                .map_err(|failure| failure.structured_message())?;
+        }
         let mut frame_graph = FrameGraph::single_view(desc.frame_id, desc.diagnostic_flags);
         frame_graph.declare_external_target(RES_SURFACE_COLOR, true);
-        frame_graph.declare_target(
-            RES_MAIN_COLOR,
-            self.resources.validate_backing_generation(RES_MAIN_COLOR),
-        );
-        frame_graph.declare_target(
-            RES_DEPTH,
-            self.resources.validate_backing_generation(RES_DEPTH),
-        );
+        frame_graph.declare_target(RES_MAIN_COLOR, true);
+        frame_graph.declare_target(RES_DEPTH, true);
         frame_graph.declare_target(RES_SHADOW_MAP, true);
-        frame_graph.declare_target(
-            RES_POST_COLOR,
-            self.resources.validate_backing_generation(RES_POST_COLOR),
-        );
-        frame_graph.declare_external_target(RES_OVERLAY, true);
-        frame_graph.declare_transient_target(RES_CAPTURE, false);
-        frame_graph.declare_external_target(RES_READBACK, false);
-        frame_graph.declare_target(
-            RES_RECEIVER_MASK,
-            !desc.post_depth_active
-                || self
-                    .resources
-                    .validate_backing_generation(RES_RECEIVER_MASK),
-        );
-        frame_graph.declare_target(
-            RES_SURFACE_PROPS,
-            !desc.post_depth_active
-                || self
-                    .resources
-                    .validate_backing_generation(RES_SURFACE_PROPS),
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::DepthPrepass,
-            &[],
-            &[RES_DEPTH],
-            desc.depth_prepass_active,
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::Shadow,
-            &[RES_DEPTH],
-            &[RES_SHADOW_MAP],
-            desc.shadow_enabled
+        frame_graph.declare_target(RES_RECEIVER_MASK, true);
+        frame_graph.declare_target(RES_SURFACE_PROPS, true);
+        frame_graph.plan_standard_passes(FrameGraphPassOptions {
+            depth_prepass: desc.depth_prepass_active,
+            shadow: desc.shadow_enabled
                 && desc.camera3d_enabled
                 && (!desc.model_draws_empty
                     || !desc.primitive_shadow_draws_empty
                     || !desc.primitive_shadow_chunks_empty),
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::MainOpaque,
-            &[RES_SHADOW_MAP],
-            &[
-                RES_MAIN_COLOR,
-                RES_DEPTH,
-                RES_RECEIVER_MASK,
-                RES_SURFACE_PROPS,
-            ],
-            true,
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::MainTransparent,
-            &[RES_MAIN_COLOR, RES_DEPTH],
-            &[RES_MAIN_COLOR],
-            desc.transparent_pass_active,
-        );
-        frame_graph.plan_transient_pass(
-            RenderPassKind::Water,
-            &[RES_DEPTH, RES_MAIN_COLOR],
-            &[RES_WATER_COLOR, RES_MAIN_COLOR],
-            desc.water_pass_active,
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::Post,
-            &[
-                RES_MAIN_COLOR,
-                RES_DEPTH,
-                RES_RECEIVER_MASK,
-                RES_SURFACE_PROPS,
-            ],
-            &[RES_POST_COLOR, RES_SURFACE_COLOR],
-            true,
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::Overlay,
-            &[RES_SURFACE_COLOR],
-            &[RES_OVERLAY],
-            true,
-        );
-        frame_graph.plan_pass(
-            RenderPassKind::BackendSubmit,
-            &[RES_OVERLAY],
-            &[RES_SURFACE_COLOR],
-            true,
-        );
+            transparent: desc.transparent_pass_active,
+            water: desc.water_pass_active,
+        });
         let build_ms = elapsed_ms_opt(graph_build_start);
         Ok(FrameGraphPlanOutput {
             frame_graph,

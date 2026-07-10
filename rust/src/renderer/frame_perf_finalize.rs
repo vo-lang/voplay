@@ -156,6 +156,11 @@ impl Renderer {
         perf.graph_target_reuses = self.last_frame_graph_report.resource_churn.target_reuses;
         perf.graph_target_recreates = self.last_frame_graph_report.resource_churn.target_recreates;
         perf.graph_alias_reuses = self.last_frame_graph_report.resource_churn.alias_reuses;
+        perf.graph_skipped_passes = self.last_frame_graph_report.skipped_pass_count;
+        perf.graph_failures = self.last_frame_graph_report.failure_count;
+        let mut render_skips = self.last_frame_graph_report.skip_stats;
+        render_skips.merge(context.render_batch_plan.skips);
+        perf.render_skips = render_skips;
         perf.text_draws = context.text_count;
         perf.sprite_draws = context.sprite_count;
         perf.primitive_draws = primitive_draws;

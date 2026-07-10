@@ -27,9 +27,11 @@ mod primitive_submitter;
 mod shader_library;
 mod skinned_submitter;
 mod terrain_submitter;
+mod water_submitter;
 
 pub(crate) use decal_submitter::{DecalSubmitPlan, DecalSubmitter};
 pub(crate) use primitive_submitter::PrimitiveSubmitter;
+pub(crate) use water_submitter::WaterSubmitter;
 
 /// Maximum number of lights per frame.
 const MAX_LIGHTS: usize = 8;

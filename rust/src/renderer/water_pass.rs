@@ -1,6 +1,5 @@
 use super::*;
-use crate::pipeline3d::PrimitiveSubmitter;
-use crate::primitive_pipeline::PrimitiveRenderFilter;
+use crate::pipeline3d::WaterSubmitter;
 
 pub(super) struct WaterPassExecutor;
 
@@ -163,7 +162,7 @@ impl WaterPassExecutor {
         ctx.primitive_pipeline
             .set_camera_and_lights(ctx.queue, cam3d, ctx.light_uniform);
         let shadow_view = ctx.shadow_pipeline.shadow_texture_view();
-        let water_submit_report = PrimitiveSubmitter::submit(
+        let water_submit_report = WaterSubmitter::submit(
             ctx.primitive_pipeline,
             ctx.device,
             ctx.queue,
@@ -174,13 +173,8 @@ impl WaterPassExecutor {
             ctx.textures,
             shadow_view,
             ctx.main_aux_targets_enabled,
-            PrimitiveRenderFilter::Water,
         );
-        let _submit_identity = (
-            water_submit_report.owner,
-            water_submit_report.outcome,
-            water_submit_report.filter,
-        );
+        let _submit_identity = (water_submit_report.owner, water_submit_report.outcome);
         let stats = water_submit_report.stats;
         drop(render_pass);
         Ok(WaterPassResult {

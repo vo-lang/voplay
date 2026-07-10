@@ -429,6 +429,7 @@ func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
 		count = 1
 	}
 	scene := scene3d.New()
+	scene.SetPhysicsBackendCommandEventCapture(true)
 	scene.Gravity = voplay.Vec3{Y: -18}
 	track, err := scene3d.NewTrack(stressTrackAsset())
 	if err != nil {

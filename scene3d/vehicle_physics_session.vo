@@ -44,6 +44,9 @@ func NewVehiclePhysicsSession(desc VehiclePhysicsSessionDesc) *VehiclePhysicsSes
 	}
 	session := &VehiclePhysicsSession{Scene: desc.Scene, Vehicle: desc.Vehicle, Controller: desc.Controller, FixedDt: fixedDt}
 	if desc.RecordReplay {
+		if desc.Scene != nil {
+			desc.Scene.SetPhysicsBackendCommandEventCapture(true)
+		}
 		session.Replay = NewPhysicsReplayTraceRecorder(fixedDt)
 		session.Replay.BindContract(desc.ReplayContract)
 	}

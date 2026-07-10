@@ -143,6 +143,7 @@ type Scene struct {
 	bodyMap map[int]*Entity
 	vehicles []*Vehicle
 	physicsPacketErrors []PhysicsBackendPacketError
+	physicsCommandEventCaptureEnabled bool
 	physicsCommandEvents []PhysicsBackendCommandEvent
 	physicsContacts []Contact
 	physicsContactsReady bool
@@ -656,6 +657,7 @@ func (s *Scene) Clear() {
 	s.nextVehicleID = 1
 	s.vehicles = nil
 	s.physicsPacketErrors = nil
+	s.physicsCommandEventCaptureEnabled = false
 	s.physicsCommandEvents = nil
 	s.physicsContacts = nil
 	s.physicsContactsReady = false
@@ -702,7 +704,7 @@ func (s *Scene) PhysicsPacketErrorCount() int {
 }
 
 func (s *Scene) recordPhysicsBackendCommandEvent(event PhysicsBackendCommandEvent) {
-	if s == nil {
+	if s == nil || !s.physicsCommandEventCaptureEnabled {
 		return
 	}
 	// Command sequences are one-based and contiguous with the retained slice.
@@ -711,6 +713,19 @@ func (s *Scene) recordPhysicsBackendCommandEvent(event PhysicsBackendCommandEven
 	event.Sequence = s.nextPhysicsCommandSequence
 	event.WorldID = s.worldID
 	s.physicsCommandEvents = append(s.physicsCommandEvents, event)
+}
+
+func (s *Scene) SetPhysicsBackendCommandEventCapture(enabled bool) {
+	if s == nil || s.physicsCommandEventCaptureEnabled == enabled {
+		return
+	}
+	s.physicsCommandEventCaptureEnabled = enabled
+	s.physicsCommandEvents = nil
+	s.nextPhysicsCommandSequence = 0
+}
+
+func (s *Scene) PhysicsBackendCommandEventCaptureEnabled() bool {
+	return s != nil && s.physicsCommandEventCaptureEnabled
 }
 
 func (s *Scene) PhysicsBackendCommandEvents() []PhysicsBackendCommandEvent {

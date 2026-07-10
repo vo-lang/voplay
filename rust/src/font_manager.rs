@@ -15,6 +15,7 @@ const ATLAS_SIZE: u32 = 2048;
 /// Default embedded font (Liberation Mono — compact, readable, open-source).
 /// Included at compile time so text rendering works without loading any file.
 const DEFAULT_FONT_DATA: &[u8] = include_bytes!("fonts/default.ttf");
+#[cfg(not(feature = "wasm"))]
 const DEFAULT_FONT_PATHS: [&str; 6] = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",

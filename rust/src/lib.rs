@@ -10,6 +10,8 @@ mod animation;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod draw_list;
 #[cfg(any(feature = "native", feature = "wasm"))]
+mod draw_protocol;
+#[cfg(any(feature = "native", feature = "wasm"))]
 mod externs;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod file_io;
@@ -30,6 +32,7 @@ mod model_loader;
 mod physics;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics3d;
+mod physics_command;
 #[cfg(any(feature = "native", feature = "wasm"))]
 mod physics_registry;
 #[cfg(any(feature = "native", feature = "wasm"))]
@@ -79,6 +82,8 @@ mod texture;
 
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use renderer::Renderer;
+#[cfg(any(feature = "native", feature = "wasm"))]
+pub use renderer_runtime::EngineRuntime;
 
 #[cfg(feature = "native")]
 pub use host_api::{

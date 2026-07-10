@@ -1,4 +1,10 @@
-use super::pass_dispatch::{FramePassDispatcher, FramePassResources};
+use super::frame_decode::{
+    FramePostSettings, FrameScenePayload, FrameShadowSettings, FrameViewState,
+};
+use super::frame_workload_plan::FrameWorkloadPlan;
+use super::pass_dispatch::{
+    FrameExecutorResources, FramePassDispatcher, FramePassRuntimeState, FramePassStats,
+};
 use super::*;
 use crate::draw_list::Frame2D;
 
@@ -9,55 +15,18 @@ pub(super) struct FramePassSequenceContext<'a> {
     pub(super) surface_view: &'a wgpu::TextureView,
     pub(super) frame: &'a Frame2D,
     pub(super) camera_alignment: u32,
-    pub(super) clear_color: wgpu::Color,
-    pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
-    pub(super) skybox_cubemap_id: Option<u32>,
-    pub(super) light_uniform: &'a mut LightUniform,
-    pub(super) planned_model_draws: &'a [ModelDraw],
-    pub(super) primitive_depth_draws: &'a mut Vec<PrimitiveDraw>,
-    pub(super) primitive_depth_chunks: &'a [PrimitiveChunkRef],
-    pub(super) primitive_shadow_draws: &'a mut Vec<PrimitiveDraw>,
-    pub(super) primitive_shadow_chunks: &'a [PrimitiveChunkRef],
-    pub(super) retained_scene_draws: &'a [u32],
-    pub(super) planned_primitive_draws: &'a [PrimitiveDraw],
-    pub(super) planned_primitive_chunks: &'a [PrimitiveChunkRef],
-    pub(super) planned_water_draws: &'a [PrimitiveDraw],
-    pub(super) planned_water_chunks: &'a [PrimitiveChunkRef],
-    pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
-    pub(super) projected_decals: &'a [PostDecalGpu],
-    pub(super) projected_decal_atlas_binding_count: u32,
-    pub(super) shadow_resolution: u32,
-    pub(super) shadow_quality: u32,
-    pub(super) shadow_distance: f32,
-    pub(super) shadow_fade: f32,
-    pub(super) shadow_softness: f32,
-    pub(super) shadow_strength: f32,
-    pub(super) post_depth_active: bool,
     pub(super) aspect: f32,
     pub(super) perf_enabled: bool,
     pub(super) perf: &'a mut RendererPerfStats,
-    pub(super) primitive_depth_draw_calls: &'a mut u32,
-    pub(super) primitive_shadow_draw_calls: &'a mut u32,
-    pub(super) mesh_main_stats: &'a mut MeshDrawStats,
-    pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
-    pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
-    pub(super) primitive_main_submitted: &'a mut bool,
-    pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
-    pub(super) bloom_threshold: f32,
-    pub(super) bloom_strength: f32,
-    pub(super) sharpen_strength: f32,
-    pub(super) fxaa_strength: f32,
-    pub(super) contact_ao_strength: f32,
-    pub(super) contact_ao_radius: f32,
-    pub(super) contact_ao_depth_scale: f32,
-    pub(super) contact_ao_detail_strength: f32,
-    pub(super) contact_ao_detail_radius: f32,
-    pub(super) contact_ao_normal_bias: f32,
-    pub(super) contact_ao_quality: u32,
+    pub(super) view: &'a FrameViewState,
+    pub(super) shadow: &'a FrameShadowSettings,
+    pub(super) post: &'a FramePostSettings,
+    pub(super) scene: &'a mut FrameScenePayload,
+    pub(super) workload: &'a mut FrameWorkloadPlan,
 }
 
-pub(super) struct FramePassSequenceTimings {
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct FramePassTimings {
     pub(super) depth_pass_ms: f64,
     pub(super) shadow_pass_ms: f64,
     pub(super) main_pass_ms: f64,
@@ -67,14 +36,19 @@ pub(super) struct FramePassSequenceTimings {
     pub(super) shadow_active: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct FramePassSequenceResult {
+    pub(super) timings: FramePassTimings,
+    pub(super) stats: FramePassStats,
+}
+
 impl Renderer {
     pub(super) fn execute_frame_pass_sequence(
         &mut self,
         context: FramePassSequenceContext<'_>,
-    ) -> Result<FramePassSequenceTimings, String> {
-        let mut shadow_active = false;
+    ) -> Result<FramePassSequenceResult, String> {
         let mut dispatcher = FramePassDispatcher {
-            resources: FramePassResources {
+            resources: FrameExecutorResources {
                 gpu: super::pass_dispatch::RenderGpuScope {
                     gpu_device: &self.device,
                     gpu_queue: &self.queue,
@@ -108,63 +82,24 @@ impl Renderer {
             surface_view: context.surface_view,
             frame: context.frame,
             camera_alignment: context.camera_alignment,
-            clear_color: context.clear_color,
-            camera3d_uniform: context.camera3d_uniform,
-            camera3d_state: context.camera3d_state,
-            skybox_cubemap_id: context.skybox_cubemap_id,
-            light_uniform: context.light_uniform,
-            planned_model_draws: context.planned_model_draws,
-            primitive_depth_draws: context.primitive_depth_draws,
-            primitive_depth_chunks: context.primitive_depth_chunks,
-            primitive_shadow_draws: context.primitive_shadow_draws,
-            primitive_shadow_chunks: context.primitive_shadow_chunks,
-            retained_scene_draws: context.retained_scene_draws,
-            planned_primitive_draws: context.planned_primitive_draws,
-            planned_primitive_chunks: context.planned_primitive_chunks,
-            planned_water_draws: context.planned_water_draws,
-            planned_water_chunks: context.planned_water_chunks,
-            projected_decal_atlas_bindings: context.projected_decal_atlas_bindings,
-            projected_decals: context.projected_decals,
-            projected_decal_atlas_binding_count: context.projected_decal_atlas_binding_count,
-            shadow_resolution: context.shadow_resolution,
-            shadow_quality: context.shadow_quality,
-            shadow_distance: context.shadow_distance,
-            shadow_fade: context.shadow_fade,
-            shadow_softness: context.shadow_softness,
-            shadow_strength: context.shadow_strength,
-            main_aux_targets_enabled: context.post_depth_active,
             aspect: context.aspect,
             perf_enabled: context.perf_enabled,
             perf: context.perf,
-            primitive_depth_draw_calls: context.primitive_depth_draw_calls,
-            primitive_shadow_draw_calls: context.primitive_shadow_draw_calls,
-            mesh_main_stats: context.mesh_main_stats,
-            primitive_main_stats: context.primitive_main_stats,
-            primitive_transparent_stats: context.primitive_transparent_stats,
-            primitive_main_submitted: context.primitive_main_submitted,
-            primitive_water_stats: context.primitive_water_stats,
-            post_fallback_path_count: 0,
-            post_rejected_decal_count: 0,
-            post_upload_bytes: 0,
-            overlay_missing_texture_count: 0,
-            shadow_active: &mut shadow_active,
-            post_uniforms_uploaded: false,
-            bloom_threshold: context.bloom_threshold,
-            bloom_strength: context.bloom_strength,
-            sharpen_strength: context.sharpen_strength,
-            fxaa_strength: context.fxaa_strength,
-            contact_ao_strength: context.contact_ao_strength,
-            contact_ao_radius: context.contact_ao_radius,
-            contact_ao_depth_scale: context.contact_ao_depth_scale,
-            contact_ao_detail_strength: context.contact_ao_detail_strength,
-            contact_ao_detail_radius: context.contact_ao_detail_radius,
-            contact_ao_normal_bias: context.contact_ao_normal_bias,
-            contact_ao_quality: context.contact_ao_quality,
+            view: context.view,
+            shadow: context.shadow,
+            post: context.post,
+            scene: context.scene,
+            workload: context.workload,
+            stats: FramePassStats::default(),
+            runtime: FramePassRuntimeState::default(),
         };
         let diagnostics = context
             .frame_graph
             .executor()
             .execute_all(&mut dispatcher)?;
+        let stats = dispatcher.stats;
+        let shadow_active = dispatcher.runtime.shadow_active;
+        drop(dispatcher);
         let elapsed = |kind| {
             diagnostics
                 .iter()
@@ -172,14 +107,17 @@ impl Renderer {
                 .map(|diagnostic| diagnostic.elapsed_ms)
                 .unwrap_or(0.0)
         };
-        Ok(FramePassSequenceTimings {
-            depth_pass_ms: elapsed(RenderPassKind::DepthPrepass),
-            shadow_pass_ms: elapsed(RenderPassKind::Shadow),
-            main_pass_ms: elapsed(RenderPassKind::MainOpaque),
-            water_pass_ms: elapsed(RenderPassKind::Water),
-            post_pass_ms: elapsed(RenderPassKind::Post),
-            overlay_pass_ms: elapsed(RenderPassKind::Overlay),
-            shadow_active,
+        Ok(FramePassSequenceResult {
+            timings: FramePassTimings {
+                depth_pass_ms: elapsed(RenderPassKind::DepthPrepass),
+                shadow_pass_ms: elapsed(RenderPassKind::Shadow),
+                main_pass_ms: elapsed(RenderPassKind::MainOpaque),
+                water_pass_ms: elapsed(RenderPassKind::Water),
+                post_pass_ms: elapsed(RenderPassKind::Post),
+                overlay_pass_ms: elapsed(RenderPassKind::Overlay),
+                shadow_active,
+            },
+            stats,
         })
     }
 }

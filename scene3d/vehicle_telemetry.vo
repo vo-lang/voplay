@@ -159,10 +159,6 @@ func (v *Vehicle) Telemetry() VehicleTelemetry {
 	return VehicleTelemetryFromVehicle(v)
 }
 
-func ProductVehicleTelemetry(vehicle *Vehicle) VehicleTelemetry {
-	return VehicleTelemetryFromVehicle(vehicle)
-}
-
 func (t VehicleTelemetry) ValidationIssues(intent VehicleIntent, budget VehicleTelemetryBudget) []VehicleTelemetryIssue {
 	budget = normalizeVehicleTelemetryBudget(budget)
 	issues := []VehicleTelemetryIssue{}

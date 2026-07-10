@@ -35,6 +35,7 @@ pub(crate) fn with_renderer<R>(
 }
 
 /// Check if the renderer is ready.
+#[cfg(not(feature = "wasm"))]
 pub(crate) fn renderer_ready() -> bool {
     crate::renderer_runtime::renderer_ready()
 }

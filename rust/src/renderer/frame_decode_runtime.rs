@@ -1,6 +1,7 @@
 use super::frame_decode::FrameDecodeOutput;
 use super::frame_transaction_builder::FrameTransactionBuilder;
 use super::*;
+use crate::stream::DrawStreamError;
 
 impl Renderer {
     pub(super) fn decode_frame_commands(
@@ -11,7 +12,7 @@ impl Renderer {
         aspect: f32,
         debug_frame_count: u64,
         perf_enabled: bool,
-    ) -> FrameDecodeOutput {
+    ) -> Result<FrameDecodeOutput, DrawStreamError> {
         FrameTransactionBuilder::new(
             data,
             screen_w,
@@ -20,7 +21,6 @@ impl Renderer {
             debug_frame_count,
             perf_enabled,
             &self.texture_manager,
-            &mut self.font_manager,
         )
         .decode()
     }

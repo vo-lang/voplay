@@ -79,7 +79,7 @@ func ContactEventFromPair(contact Contact) ContactEvent {
 		event.Severity = event.NormalImpulse
 	}
 	if contact.A != nil && contact.A.scene != nil {
-		for _, vehicle := range contact.A.scene.vehicles {
+	for _, vehicle := range contact.A.scene.physicsWorld.vehicles {
 			if vehicle != nil && (vehicle.Body == contact.A || vehicle.Body == contact.B) && vehicle.Track != nil {
 				event.Kind = ContactEventKindSurface
 				event.Surface = vehicle.CurrentSurfaceMaterial()
@@ -125,17 +125,17 @@ func (s *Scene) ContactEvents() []ContactEvent {
 }
 
 func (s *Scene) contactEventsSnapshot() []ContactEvent {
-	if s.physicsSnapshotReady && s.physicsContactEventsReady {
-		return s.physicsContactEvents
+	if s.physicsWorld.snapshot.ready && s.physicsWorld.snapshot.contactEventsReady {
+		return s.physicsWorld.snapshot.contactEvents
 	}
 	contacts := s.Contacts()
 	events := make([]ContactEvent, 0, len(contacts))
 	for _, contact := range contacts {
 		events = append(events, ContactEventFromPair(contact))
 	}
-	if s.physicsSnapshotReady {
-		s.physicsContactEvents = events
-		s.physicsContactEventsReady = true
+	if s.physicsWorld.snapshot.ready {
+		s.physicsWorld.snapshot.contactEvents = events
+		s.physicsWorld.snapshot.contactEventsReady = true
 	}
 	return events
 }

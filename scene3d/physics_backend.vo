@@ -1,0 +1,245 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
+
+func serializeBodyDesc(e *Entity) []byte {
+	p := e.Physics
+	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
+	w := codec.NewByteWriter(154 + physicsSurfaceMaterialIDBytes + 4)
+	w.WriteByte(byte(p.Type))
+	w.WriteByte(byte(p.Collider.kind))
+	w.WriteBool(p.FixedRotation)
+	w.WriteBool(p.LockRotationX)
+	w.WriteBool(p.LockRotationY)
+	w.WriteBool(p.LockRotationZ)
+	w.WriteU16(p.Layer)
+	w.WriteU16(p.Mask)
+	w.WriteF64(e.position.X)
+	w.WriteF64(e.position.Y)
+	w.WriteF64(e.position.Z)
+	w.WriteF64(e.rotation.X)
+	w.WriteF64(e.rotation.Y)
+	w.WriteF64(e.rotation.Z)
+	w.WriteF64(e.rotation.W)
+	w.WriteF64(p.Collider.args[0])
+	w.WriteF64(p.Collider.args[1])
+	w.WriteF64(p.Collider.args[2])
+	w.WriteF64(p.Collider.offset.X)
+	w.WriteF64(p.Collider.offset.Y)
+	w.WriteF64(p.Collider.offset.Z)
+	w.WriteF64(p.Density)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	w.WriteF64(p.LinearDamping)
+	w.WriteF64(p.AngularDamping)
+	writePhysicsSurfaceMaterial(&w, p.SurfaceID, p.SurfaceKind)
+	return w.Bytes()
+}
+
+func serializeTrimeshDesc(e *Entity) []byte {
+	p := e.Physics
+	voplay.ValidateCollisionFilter(p.Layer, p.Mask)
+	w := codec.NewByteWriter(100)
+	w.WriteF64(e.position.X)
+	w.WriteF64(e.position.Y)
+	w.WriteF64(e.position.Z)
+	w.WriteF64(e.rotation.X)
+	w.WriteF64(e.rotation.Y)
+	w.WriteF64(e.rotation.Z)
+	w.WriteF64(e.rotation.W)
+	w.WriteF64(e.scale.X)
+	w.WriteF64(e.scale.Y)
+	w.WriteF64(e.scale.Z)
+	w.WriteU16(p.Layer)
+	w.WriteU16(p.Mask)
+	w.WriteF64(p.Friction)
+	w.WriteF64(p.Restitution)
+	return w.Bytes()
+}
+
+type PhysicsBackend interface {
+	Init(gravity voplay.Vec3) int
+	Destroy(worldID int)
+	SpawnBody(worldID, bodyID int, data []byte)
+	SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte)
+	SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc)
+	DestroyBody(worldID, bodyID int)
+	CreateRaycastVehicle(worldID, vehicleID, bodyID int)
+	DestroyRaycastVehicle(worldID, vehicleID int)
+	AddRaycastVehicleWheel(worldID, vehicleID int, data []byte)
+	ApplyVehicleForces(worldID, vehicleID int, command PhysicsBackendApplyCommand)
+	ApplyPoseReset(worldID, bodyID int, command VehiclePoseResetCommand)
+	ApplyMotionReset(worldID, bodyID int, command VehicleMotionResetCommand)
+	ApplySleepState(worldID, bodyID int, command VehicleSleepCommand)
+	ApplyRecovery(worldID, bodyID int, command VehicleRecoveryCommand)
+	SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64)
+	RaycastVehicleState(worldID, vehicleID int) []byte
+	RaycastVehicleStates(worldID int) []byte
+	Step(worldID int, dt float64, cmds []byte) []byte
+	Contacts(worldID int) []byte
+	SetGravity(worldID int, gravity voplay.Vec3)
+	RayCast(worldID int, origin, dir voplay.Vec3, maxDist float64) []byte
+	QueryAABB(worldID int, min, max voplay.Vec3) []byte
+}
+
+type defaultPhysicsBackend struct{}
+
+func (defaultPhysicsBackend) Init(gravity voplay.Vec3) int {
+	return physicsInit(gravity.X, gravity.Y, gravity.Z)
+}
+
+func (defaultPhysicsBackend) Destroy(worldID int) {
+	physicsDestroy(worldID)
+}
+
+func (defaultPhysicsBackend) SpawnBody(worldID, bodyID int, data []byte) {
+	physicsSpawnBody(worldID, bodyID, data)
+}
+
+func (defaultPhysicsBackend) SpawnTrimeshBody(worldID, bodyID, modelID int, data []byte) {
+	geometryData := voplay.ModelGeometryBytes(voplay.ModelID(modelID))
+	physicsSpawnTrimeshBodyData(worldID, bodyID, data, geometryData)
+}
+
+func (defaultPhysicsBackend) SpawnHeightfield(worldID, bodyID int, desc HeightfieldSpawnDesc) {
+	physicsSpawnHeightfield(worldID, bodyID, desc.HeightData, desc.Rows, desc.Cols, desc.Scale.X, desc.Scale.Y, desc.Scale.Z, desc.Position.X, desc.Position.Y, desc.Position.Z, desc.Layer, desc.Mask, desc.Friction, desc.Restitution)
+}
+
+func (defaultPhysicsBackend) DestroyBody(worldID, bodyID int) {
+	physicsDestroyBody(worldID, bodyID)
+}
+
+func (defaultPhysicsBackend) CreateRaycastVehicle(worldID, vehicleID, bodyID int) {
+	physicsCreateRaycastVehicle(worldID, vehicleID, bodyID)
+}
+
+func (defaultPhysicsBackend) DestroyRaycastVehicle(worldID, vehicleID int) {
+	physicsDestroyRaycastVehicle(worldID, vehicleID)
+}
+
+func (defaultPhysicsBackend) AddRaycastVehicleWheel(worldID, vehicleID int, data []byte) {
+	physicsAddRaycastVehicleWheel(worldID, vehicleID, data)
+}
+
+func (defaultPhysicsBackend) ApplyVehicleForces(worldID, vehicleID int, command PhysicsBackendApplyCommand) {
+	for _, wheel := range command.Wheels {
+		physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheel.WheelIndex, wheel.SteeringAngle, wheel.EngineForce, wheel.BrakeForce)
+	}
+	physicsApplyRaycastVehicleForces(worldID, vehicleID, command.BodyForce.X, command.BodyForce.Y, command.BodyForce.Z, command.DragForce, command.Downforce, command.WaterLift, command.AirControl, command.WallGrip, command.RailGrip)
+}
+
+func (defaultPhysicsBackend) ApplyPoseReset(worldID, bodyID int, command VehiclePoseResetCommand) {
+	rotation := voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Yaw)
+	physicsSetBodyPose(worldID, bodyID, command.Position.X, command.Position.Y, command.Position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W)
+	physicsSetBodyMotion(worldID, bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+}
+
+func (defaultPhysicsBackend) ApplyMotionReset(worldID, bodyID int, command VehicleMotionResetCommand) {
+	physicsSetBodyMotion(worldID, bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+}
+
+func (defaultPhysicsBackend) ApplySleepState(worldID, bodyID int, command VehicleSleepCommand) {
+	if command.Sleeping {
+		physicsSetBodySleepState(worldID, bodyID, 1)
+		return
+	}
+	physicsSetBodySleepState(worldID, bodyID, 0)
+}
+
+func (defaultPhysicsBackend) ApplyRecovery(worldID, bodyID int, command VehicleRecoveryCommand) {
+	rotation := voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Pose.Yaw)
+	physicsSetBodyPose(worldID, bodyID, command.Pose.Position.X, command.Pose.Position.Y, command.Pose.Position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W)
+	physicsSetBodyMotion(worldID, bodyID, command.Motion.LinearVelocity.X, command.Motion.LinearVelocity.Y, command.Motion.LinearVelocity.Z, command.Motion.AngularVelocity.X, command.Motion.AngularVelocity.Y, command.Motion.AngularVelocity.Z)
+}
+
+func (defaultPhysicsBackend) SetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64) {
+	physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheelID, steering, engineForce, brake)
+}
+
+func (defaultPhysicsBackend) RaycastVehicleState(worldID, vehicleID int) []byte {
+	return physicsRaycastVehicleState(worldID, vehicleID)
+}
+
+func (defaultPhysicsBackend) RaycastVehicleStates(worldID int) []byte {
+	return physicsRaycastVehicleStates(worldID)
+}
+
+func (defaultPhysicsBackend) Step(worldID int, dt float64, cmds []byte) []byte {
+	return physicsStep(worldID, dt, cmds)
+}
+
+func (defaultPhysicsBackend) Contacts(worldID int) []byte {
+	return physicsContacts(worldID)
+}
+
+func (defaultPhysicsBackend) SetGravity(worldID int, gravity voplay.Vec3) {
+	physicsSetGravity(worldID, gravity.X, gravity.Y, gravity.Z)
+}
+
+func (defaultPhysicsBackend) RayCast(worldID int, origin, dir voplay.Vec3, maxDist float64) []byte {
+	return physicsRayCast(worldID, origin.X, origin.Y, origin.Z, dir.X, dir.Y, dir.Z, maxDist)
+}
+
+func (defaultPhysicsBackend) QueryAABB(worldID int, min, max voplay.Vec3) []byte {
+	return physicsQueryAABB(worldID, min.X, min.Y, min.Z, max.X, max.Y, max.Z)
+}
+
+var defaultPhysicsBackendInstance PhysicsBackend = defaultPhysicsBackend{}
+
+// SetDefaultPhysicsBackend configures the backend captured by subsequently
+// constructed scenes. Existing scenes retain their own backend instance.
+func SetDefaultPhysicsBackend(b PhysicsBackend) PhysicsBackend {
+	if b == nil {
+		panic("scene3d.SetDefaultPhysicsBackend: backend must not be nil")
+	}
+	prev := defaultPhysicsBackendInstance
+	defaultPhysicsBackendInstance = b
+	return prev
+}
+
+func physicsInit(gravityX, gravityY, gravityZ float64) int
+
+func physicsDestroy(worldID int)
+
+func physicsSpawnBody(worldID int, bodyID int, data []byte)
+
+func physicsSpawnTrimeshBody(worldID int, bodyID int, modelID int, data []byte)
+
+func physicsSpawnTrimeshBodyData(worldID int, bodyID int, data []byte, meshData []byte)
+
+func physicsSpawnHeightfield(worldID, bodyID int, heightData []byte, rows, cols int, scaleX, scaleY, scaleZ, posX, posY, posZ float64, layer, mask int, friction, restitution float64)
+
+func physicsDestroyBody(worldID int, bodyID int)
+
+func physicsCreateRaycastVehicle(worldID, vehicleID, bodyID int)
+
+func physicsDestroyRaycastVehicle(worldID, vehicleID int)
+
+func physicsAddRaycastVehicleWheel(worldID, vehicleID int, data []byte)
+
+func physicsSetRaycastVehicleWheelControl(worldID, vehicleID, wheelID int, steering, engineForce, brake float64)
+
+func physicsApplyRaycastVehicleForces(worldID, vehicleID int, bodyForceX, bodyForceY, bodyForceZ, dragForce, downforce, waterLift, airControl, wallGrip, railGrip float64)
+
+func physicsSetBodyPose(worldID, bodyID int, posX, posY, posZ, rotX, rotY, rotZ, rotW float64)
+
+func physicsSetBodyMotion(worldID, bodyID int, linearX, linearY, linearZ, angularX, angularY, angularZ float64)
+
+func physicsSetBodySleepState(worldID, bodyID, sleeping int)
+
+func physicsRaycastVehicleState(worldID, vehicleID int) []byte
+
+func physicsRaycastVehicleStates(worldID int) []byte
+
+func physicsStep(worldID int, dt float64, cmds []byte) []byte
+
+func physicsContacts(worldID int) []byte
+
+func physicsSetGravity(worldID int, gx, gy, gz float64)
+
+func physicsRayCast(worldID int, ox, oy, oz, dx, dy, dz, maxDist float64) []byte
+
+func physicsQueryAABB(worldID int, minX, minY, minZ, maxX, maxY, maxZ float64) []byte

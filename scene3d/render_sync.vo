@@ -1,0 +1,108 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type renderObjectSnapshot struct {
+	model voplay.ModelID
+	material voplay.MaterialDesc
+	position voplay.Vec3
+	rotation voplay.Quat
+	scale voplay.Vec3
+	tint voplay.Color
+	visible bool
+	animationWorldID int
+	animationTargetID int
+}
+
+type renderObjectSyncState struct {
+	snapshot renderObjectSnapshot
+	batchKey sceneRenderBatchGroup
+	batchKeyModel voplay.ModelID
+	batchKeyMaterial voplay.MaterialDesc
+	batchKeyValid bool
+}
+
+// RenderSyncState owns the renderer mirror for one Scene. Scene entities remain
+// authoritative gameplay objects and carry no backend submission history.
+type RenderSyncState struct {
+	sceneID int
+	created bool
+	clearPending bool
+	destroyedIDs []int
+	objects map[int]renderObjectSyncState
+	stats SceneRenderStats
+	batchGroupScratch map[sceneRenderBatchGroup]bool
+}
+
+func newRenderSyncState() RenderSyncState {
+	return RenderSyncState{sceneID: allocateRenderSceneID(), objects: make(map[int]renderObjectSyncState)}
+}
+
+func (state *RenderSyncState) objectNeedsUpsert(id int, snapshot renderObjectSnapshot) bool {
+	current, ok := state.objects[id]
+	return !ok || current.snapshot != snapshot
+}
+
+func (state *RenderSyncState) rememberObject(id int, snapshot renderObjectSnapshot) {
+	state.ensureObjects()
+	current := state.objects[id]
+	current.snapshot = snapshot
+	state.objects[id] = current
+}
+
+func (state *RenderSyncState) forgetObject(id int) bool {
+	_, ok := state.objects[id]
+	if ok {
+		delete(state.objects, id)
+	}
+	return ok
+}
+
+func (state *RenderSyncState) queueObjectDestroy(id int) bool {
+	if !state.forgetObject(id) {
+		return false
+	}
+	state.destroyedIDs = append(state.destroyedIDs, id)
+	return true
+}
+
+func (state *RenderSyncState) clearObjects() {
+	for id := range state.objects {
+		delete(state.objects, id)
+	}
+	state.destroyedIDs = nil
+}
+
+func (state *RenderSyncState) objectBatchKey(id int, model voplay.ModelID, material voplay.MaterialDesc) sceneRenderBatchGroup {
+	state.ensureObjects()
+	current := state.objects[id]
+	if current.batchKeyValid && current.batchKeyModel == model && current.batchKeyMaterial == material {
+		return current.batchKey
+	}
+	key := sceneRenderBatchGroup{Model: model, Material: material}
+	current.batchKey = key
+	current.batchKeyModel = model
+	current.batchKeyMaterial = material
+	current.batchKeyValid = true
+	state.objects[id] = current
+	return key
+}
+
+func (state *RenderSyncState) ensureObjects() {
+	if state.objects == nil {
+		state.objects = make(map[int]renderObjectSyncState)
+	}
+}
+
+func (state *RenderSyncState) beginBatchGroups() map[sceneRenderBatchGroup]bool {
+	if state.batchGroupScratch == nil {
+		state.batchGroupScratch = map[sceneRenderBatchGroup]bool{}
+		return state.batchGroupScratch
+	}
+	for key := range state.batchGroupScratch {
+		delete(state.batchGroupScratch, key)
+	}
+	return state.batchGroupScratch
+}

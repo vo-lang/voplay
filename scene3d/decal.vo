@@ -54,8 +54,6 @@ type ProjectedDecalDesc struct {
 
 type Decal struct {
 	Entity *Entity
-	model voplay.ModelID
-	ownedModel bool
 }
 
 func (s *Scene) AddProjectedDecal(desc ProjectedDecalDesc) int {
@@ -83,17 +81,17 @@ func SpawnDecal(scene *Scene, desc DecalDesc) (*Decal, error) {
 	}
 	desc = normalizeDecalDesc(desc)
 	model := desc.Model
-	owned := false
+	var lease *voplay.ModelLease
 	if model == 0 {
 		model = PlaneMesh(desc.Width, desc.Height, 1, 1)
-		owned = true
+		lease = voplay.NewModelLease(model)
 	}
 	tag := desc.Tag
 	if tag == "" {
 		tag = "decal"
 	}
-	entity := scene.Spawn(EntityDesc{Position: desc.Position.Add(voplay.Vec3{Y: desc.SurfaceOffset}), Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, desc.Yaw), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, Model: model, Material: desc.Material, Tag: tag, PickMode: PickDisabled})
-	return &Decal{Entity: entity, model: model, ownedModel: owned}, nil
+	entity := scene.Spawn(EntityDesc{Position: desc.Position.Add(voplay.Vec3{Y: desc.SurfaceOffset}), Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, desc.Yaw), Scale: voplay.Vec3{X: 1, Y: 1, Z: 1}, Model: model, ModelLease: lease, Material: desc.Material, Tag: tag, PickMode: PickDisabled})
+	return &Decal{Entity: entity}, nil
 }
 
 func SpawnTrackDecal(scene *Scene, track *Track, distance, lateral float64, desc DecalDesc) (*Decal, error) {
@@ -148,11 +146,6 @@ func (d *Decal) Destroy(scene *Scene) {
 		scene.Destroy(d.Entity)
 	}
 	d.Entity = nil
-	if d.ownedModel && d.model != 0 {
-		d.model.Free()
-		d.model = 0
-		d.ownedModel = false
-	}
 }
 
 func normalizeDecalDesc(desc DecalDesc) DecalDesc {

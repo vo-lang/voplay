@@ -33,7 +33,7 @@ type AssetLoaders struct {
 	Cubemap       CubemapLoader
 }
 
-// managedAsset tracks a loaded asset handle with group-based ownership.
+// managedAsset tracks a loaded asset handle with scope-based ownership.
 type managedAsset struct {
 	id     int
 	source int
@@ -46,28 +46,26 @@ type assetStore struct {
 	label   string
 	loader  AssetLoader
 	entries map[string]*managedAsset
-	groups  map[string]map[string]bool
+	scopes  map[string]map[string]bool
 }
 
 type cubemapStore struct {
 	loader  CubemapLoader
 	entries map[string]*managedAsset
-	groups  map[string]map[string]bool
+	scopes  map[string]map[string]bool
 }
 
-// Assets manages game resource loading with vopack integration and group-based lifecycle.
+// Assets manages game resource loading with vopack integration and scoped lifecycle.
 //
 // Assets can optionally be backed by one or more .vpak archives via Mount.
 // When loading by path, mounted archives are searched first (highest priority wins),
 // then the filesystem is used as fallback. Path is the key for deduplication.
 //
-// Group-based ownership tracks which assets belong to which loading phase.
-// Multiple groups can share the same asset; the asset is freed only when its
-// last owning group is released.
+// Scope ownership tracks which assets belong to which lifetime. Multiple scopes
+// can share one asset; the asset is freed after its last scope closes.
 type Assets struct {
 	mounts     *vopack.MountSet
-	groupStack []string
-	groupNames map[string]bool
+	scopeNames map[string]bool
 	textures   *assetStore
 	linearTextures *assetStore
 	cubemaps   *cubemapStore
@@ -76,10 +74,26 @@ type Assets struct {
 	audio      *assetStore
 }
 
+// AssetScope is an explicit resource lease for one loading phase. Close releases
+// the scope's ownership; assets shared by another scope stay alive.
+type AssetScope struct {
+	assets *Assets
+	name string
+	closed bool
+}
+
+// AssetSource is the narrow scoped loader capability consumed by scene builders.
+type AssetSource interface {
+	Texture(path string) (TextureID, error)
+	TextureLinear(path string) (TextureID, error)
+	Model(path string) (ModelID, error)
+	Bytes(path string) ([]byte, error)
+	VerifyPackDependencies(path string) error
+}
+
 type AssetReport struct {
 	MountCount int
-	GroupCount int
-	ActiveGroupDepth int
+	ScopeCount int
 	TextureCount int
 	LinearTextureCount int
 	CubemapCount int
@@ -113,7 +127,7 @@ func newAssetStore(label string, loader AssetLoader) *assetStore {
 		label:   label,
 		loader:  loader,
 		entries: map[string]*managedAsset{},
-		groups:  map[string]map[string]bool{},
+		scopes:  map[string]map[string]bool{},
 	}
 }
 
@@ -121,7 +135,7 @@ func newCubemapStore(loader CubemapLoader) *cubemapStore {
 	return &cubemapStore{
 		loader:  loader,
 		entries: map[string]*managedAsset{},
-		groups:  map[string]map[string]bool{},
+		scopes:  map[string]map[string]bool{},
 	}
 }
 
@@ -133,7 +147,7 @@ func NewAssetsWithLoaders(loaders AssetLoaders) *Assets {
 	loaders = normalizeAssetLoaders(loaders)
 	validateAssetLoaders(loaders)
 	return &Assets{
-		groupNames: map[string]bool{},
+		scopeNames: map[string]bool{},
 		textures:   newAssetStore("Texture", loaders.Texture),
 		linearTextures: newAssetStore("TextureLinear", loaders.TextureLinear),
 		cubemaps:   newCubemapStore(loaders.Cubemap),
@@ -232,26 +246,126 @@ func (a *Assets) Unmount(path string) error {
 	return a.mounts.Unmount(path)
 }
 
-func (a *Assets) BeginGroup(name string) {
+// OpenScope creates an explicit asset lifetime passed to every load operation.
+func (a *Assets) OpenScope(name string) *AssetScope {
+	if a == nil {
+		panic("Assets.OpenScope: assets must not be nil")
+	}
 	if name == "" {
-		panic("Assets.BeginGroup: name must not be empty")
+		panic("Assets.OpenScope: name must not be empty")
 	}
-	a.groupNames[name] = true
-	a.groupStack = append(a.groupStack, name)
+	if a.scopeNames[name] {
+		panic("Assets.OpenScope: scope already exists: " + name)
+	}
+	a.scopeNames[name] = true
+	return &AssetScope{assets: a, name: name}
 }
 
-func (a *Assets) EndGroup() {
-	if len(a.groupStack) == 0 {
-		panic("Assets.EndGroup: no active group")
-	}
-	a.groupStack = a.groupStack[:len(a.groupStack)-1]
-}
-
-func (a *Assets) CurrentGroup() string {
-	if len(a.groupStack) == 0 {
+func (scope *AssetScope) Name() string {
+	if scope == nil {
 		return ""
 	}
-	return a.groupStack[len(a.groupStack)-1]
+	return scope.name
+}
+
+func (scope *AssetScope) Close() {
+	if scope == nil || scope.closed {
+		return
+	}
+	scope.closed = true
+	if scope.assets != nil && scope.assets.scopeNames[scope.name] {
+		scope.assets.releaseScope(scope.name)
+	}
+	scope.assets = nil
+}
+
+func (scope *AssetScope) requireOpen() (*Assets, string) {
+	if scope == nil || scope.closed || scope.assets == nil {
+		panic("AssetScope: scope is closed")
+	}
+	return scope.assets, scope.name
+}
+
+func (scope *AssetScope) Texture(path string) (TextureID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.textures.get(assets.mounts, owner, path)?
+	return TextureID(id), nil
+}
+
+func (scope *AssetScope) TextureBytes(key string, data []byte) (TextureID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.textures.getBytes(owner, key, data)?
+	return TextureID(id), nil
+}
+
+func (scope *AssetScope) TextureLinear(path string) (TextureID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.linearTextures.get(assets.mounts, owner, path)?
+	return TextureID(id), nil
+}
+
+func (scope *AssetScope) TextureBytesLinear(key string, data []byte) (TextureID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.linearTextures.getBytes(owner, key, data)?
+	return TextureID(id), nil
+}
+
+func (scope *AssetScope) Cubemap(right, left, top, bottom, front, back string) (CubemapID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.cubemaps.get(assets.mounts, owner, [6]string{right, left, top, bottom, front, back})?
+	return CubemapID(id), nil
+}
+
+func (scope *AssetScope) CubemapBytes(key string, right, left, top, bottom, front, back []byte) (CubemapID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.cubemaps.getBytes(owner, key, [6][]byte{right, left, top, bottom, front, back})?
+	return CubemapID(id), nil
+}
+
+func (scope *AssetScope) Font(path string) (FontID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.fonts.get(assets.mounts, owner, path)?
+	return FontID(id), nil
+}
+
+func (scope *AssetScope) FontBytes(key string, data []byte) (FontID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.fonts.getBytes(owner, key, data)?
+	return FontID(id), nil
+}
+
+func (scope *AssetScope) Model(path string) (ModelID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.models.get(assets.mounts, owner, path)?
+	return ModelID(id), nil
+}
+
+func (scope *AssetScope) ModelBytes(key string, data []byte) (ModelID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.models.getBytes(owner, key, data)?
+	return ModelID(id), nil
+}
+
+func (scope *AssetScope) Audio(path string) (AudioClipID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.audio.get(assets.mounts, owner, path)?
+	return AudioClipID(id), nil
+}
+
+func (scope *AssetScope) AudioBytes(key string, data []byte) (AudioClipID, error) {
+	assets, owner := scope.requireOpen()
+	id := assets.audio.getBytes(owner, key, data)?
+	return AudioClipID(id), nil
+}
+
+func (scope *AssetScope) Bytes(path string) ([]byte, error) {
+	assets, _ := scope.requireOpen()
+	return assets.Bytes(path)
+}
+
+func (scope *AssetScope) VerifyPackDependencies(path string) error {
+	assets, _ := scope.requireOpen()
+	return assets.VerifyPackDependencies(path)
 }
 
 func (a *Assets) Report() AssetReport {
@@ -264,8 +378,7 @@ func (a *Assets) Report() AssetReport {
 	}
 	return AssetReport{
 		MountCount: mountCount,
-		GroupCount: len(a.groupNames),
-		ActiveGroupDepth: len(a.groupStack),
+		ScopeCount: len(a.scopeNames),
 		TextureCount: assetStoreEntryCount(a.textures),
 		LinearTextureCount: assetStoreEntryCount(a.linearTextures),
 		CubemapCount: cubemapStoreEntryCount(a.cubemaps),
@@ -289,40 +402,35 @@ func cubemapStoreEntryCount(store *cubemapStore) int {
 	return len(store.entries)
 }
 
-func (a *Assets) ReleaseGroup(name string) {
+func (a *Assets) releaseScope(name string) {
 	if name == "" {
-		panic("Assets.ReleaseGroup: name must not be empty")
+		panic("Assets.releaseScope: name must not be empty")
 	}
-	for _, active := range a.groupStack {
-		if active == name {
-			panic("Assets.ReleaseGroup: group is currently active: " + name)
-		}
+	if !a.scopeNames[name] {
+		panic("Assets.releaseScope: unknown scope: " + name)
 	}
-	if !a.groupNames[name] {
-		panic("Assets.ReleaseGroup: unknown group: " + name)
-	}
-	a.textures.releaseGroup(name)
-	a.linearTextures.releaseGroup(name)
-	a.cubemaps.releaseGroup(name)
-	a.fonts.releaseGroup(name)
-	a.models.releaseGroup(name)
-	a.audio.releaseGroup(name)
-	delete(a.groupNames, name)
+	a.textures.releaseScope(name)
+	a.linearTextures.releaseScope(name)
+	a.cubemaps.releaseScope(name)
+	a.fonts.releaseScope(name)
+	a.models.releaseScope(name)
+	a.audio.releaseScope(name)
+	delete(a.scopeNames, name)
 }
 
-func (a *Assets) ReleaseAll() {
-	names := make([]string, 0, len(a.groupNames))
-	for name := range a.groupNames {
+func (a *Assets) releaseAll() {
+	names := make([]string, 0, len(a.scopeNames))
+	for name := range a.scopeNames {
 		names = append(names, name)
 	}
 	for _, name := range names {
-		a.ReleaseGroup(name)
+		a.releaseScope(name)
 	}
 }
 
 // Close releases all assets and closes any mounted archives.
 func (a *Assets) Close() error {
-	a.ReleaseAll()
+	a.releaseAll()
 	if a.mounts == nil {
 		return nil
 	}
@@ -331,78 +439,8 @@ func (a *Assets) Close() error {
 	return err
 }
 
-// Texture loads a texture by path. Mounted archives are searched first,
-// then the filesystem. The path is the deduplication key.
-func (a *Assets) Texture(path string) (TextureID, error) {
-	id := a.textures.get(a.mounts, a.requireCurrentGroup(), path)?
-	return TextureID(id), nil
-}
-
-// TextureBytes loads a texture from raw bytes under the given key.
-func (a *Assets) TextureBytes(key string, data []byte) (TextureID, error) {
-	id := a.textures.getBytes(a.requireCurrentGroup(), key, data)?
-	return TextureID(id), nil
-}
-
-// TextureLinear loads a non-sRGB texture by path. Use it for normal maps,
-// roughness/metallic maps, masks, height data, and other material data.
-func (a *Assets) TextureLinear(path string) (TextureID, error) {
-	id := a.linearTextures.get(a.mounts, a.requireCurrentGroup(), path)?
-	return TextureID(id), nil
-}
-
-// TextureBytesLinear loads a non-sRGB texture from encoded image bytes.
-func (a *Assets) TextureBytesLinear(key string, data []byte) (TextureID, error) {
-	id := a.linearTextures.getBytes(a.requireCurrentGroup(), key, data)?
-	return TextureID(id), nil
-}
-
-func (a *Assets) Cubemap(right, left, top, bottom, front, back string) (CubemapID, error) {
-	id := a.cubemaps.get(
-		a.mounts,
-		a.requireCurrentGroup(),
-		[6]string{right, left, top, bottom, front, back},
-	)?
-	return CubemapID(id), nil
-}
-
-func (a *Assets) CubemapBytes(key string, right, left, top, bottom, front, back []byte) (CubemapID, error) {
-	id := a.cubemaps.getBytes(
-		a.requireCurrentGroup(),
-		key,
-		[6][]byte{right, left, top, bottom, front, back},
-	)?
-	return CubemapID(id), nil
-}
-
-// Font loads a font by path. Mounted archives are searched first,
-// then the filesystem. The path is the deduplication key.
-func (a *Assets) Font(path string) (FontID, error) {
-	id := a.fonts.get(a.mounts, a.requireCurrentGroup(), path)?
-	return FontID(id), nil
-}
-
-// FontBytes loads a font from raw bytes under the given key.
-func (a *Assets) FontBytes(key string, data []byte) (FontID, error) {
-	id := a.fonts.getBytes(a.requireCurrentGroup(), key, data)?
-	return FontID(id), nil
-}
-
-// Model loads a model by path. Mounted archives are searched first,
-// then the filesystem. The path is the deduplication key.
-func (a *Assets) Model(path string) (ModelID, error) {
-	id := a.models.get(a.mounts, a.requireCurrentGroup(), path)?
-	return ModelID(id), nil
-}
-
-// ModelBytes loads a model from raw bytes under the given key.
-func (a *Assets) ModelBytes(key string, data []byte) (ModelID, error) {
-	id := a.models.getBytes(a.requireCurrentGroup(), key, data)?
-	return ModelID(id), nil
-}
-
 // Bytes reads a raw asset by path. Mounted archives are searched first,
-// then the filesystem. Raw bytes are not group-managed.
+// then the filesystem. Raw bytes are not scope-managed.
 func (a *Assets) Bytes(path string) ([]byte, error) {
 	return readAssetBytes(a.mounts, path)
 }
@@ -421,29 +459,16 @@ func (a *Assets) PackManifestFor(path string) (*vopack.Manifest, error) {
 	return a.mounts.ManifestFor(path)
 }
 
-// Audio loads an audio clip by path. Mounted archives are searched first,
-// then the filesystem. The path is the deduplication key.
-func (a *Assets) Audio(path string) (AudioClipID, error) {
-	id := a.audio.get(a.mounts, a.requireCurrentGroup(), path)?
-	return AudioClipID(id), nil
-}
-
-// AudioBytes loads an audio clip from raw bytes under the given key.
-func (a *Assets) AudioBytes(key string, data []byte) (AudioClipID, error) {
-	id := a.audio.getBytes(a.requireCurrentGroup(), key, data)?
-	return AudioClipID(id), nil
-}
-
 // --- assetStore methods ---
 
 // get loads an asset by path, using vopack mounts first, then filesystem.
-func (s *assetStore) get(mounts *vopack.MountSet, group, key string) (int, error) {
+func (s *assetStore) get(mounts *vopack.MountSet, scope, key string) (int, error) {
 	requireAssetKey(key)
 	if entry := s.entries[key]; entry != nil {
 		if entry.source != assetSourceFile {
 			panic("Assets." + s.label + ": key loaded via bytes, not path: " + key)
 		}
-		s.attachOwner(group, key, entry)
+		s.attachOwner(scope, key, entry)
 		return entry.id, nil
 	}
 	var id int
@@ -455,12 +480,12 @@ func (s *assetStore) get(mounts *vopack.MountSet, group, key string) (int, error
 	}
 	entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
 	s.entries[key] = entry
-	s.attachOwner(group, key, entry)
+	s.attachOwner(scope, key, entry)
 	return id, nil
 }
 
 // getBytes loads an asset from raw bytes under the given key.
-func (s *assetStore) getBytes(group, key string, data []byte) (int, error) {
+func (s *assetStore) getBytes(scope, key string, data []byte) (int, error) {
 	requireAssetKey(key)
 	if len(data) == 0 {
 		panic("Assets." + s.label + "Bytes: data must not be empty")
@@ -469,29 +494,29 @@ func (s *assetStore) getBytes(group, key string, data []byte) (int, error) {
 		if entry.source != assetSourceBytes {
 			panic("Assets." + s.label + ": key loaded via path, not bytes: " + key)
 		}
-		s.attachOwner(group, key, entry)
+		s.attachOwner(scope, key, entry)
 		return entry.id, nil
 	}
 	id := s.loader.LoadBytes(data)?
 	entry := &managedAsset{id: id, source: assetSourceBytes, owners: map[string]bool{}}
 	s.entries[key] = entry
-	s.attachOwner(group, key, entry)
+	s.attachOwner(scope, key, entry)
 	return id, nil
 }
 
-func (s *assetStore) attachOwner(group, key string, entry *managedAsset) {
-	if entry.owners[group] {
+func (s *assetStore) attachOwner(scope, key string, entry *managedAsset) {
+	if entry.owners[scope] {
 		return
 	}
-	entry.owners[group] = true
-	if s.groups[group] == nil {
-		s.groups[group] = map[string]bool{}
+	entry.owners[scope] = true
+	if s.scopes[scope] == nil {
+		s.scopes[scope] = map[string]bool{}
 	}
-	s.groups[group][key] = true
+	s.scopes[scope][key] = true
 }
 
-func (s *assetStore) releaseGroup(name string) {
-	keys := s.groups[name]
+func (s *assetStore) releaseScope(name string) {
+	keys := s.scopes[name]
 	if keys == nil {
 		return
 	}
@@ -503,24 +528,24 @@ func (s *assetStore) releaseGroup(name string) {
 			delete(s.entries, key)
 		}
 	}
-	delete(s.groups, name)
+	delete(s.scopes, name)
 }
 
-func (s *cubemapStore) get(mounts *vopack.MountSet, group string, paths [6]string) (int, error) {
+func (s *cubemapStore) get(mounts *vopack.MountSet, scope string, paths [6]string) (int, error) {
 	key := cubemapKey(paths)
 	requireAssetKey(key)
 	if entry := s.entries[key]; entry != nil {
 		if entry.source != assetSourceFile {
 			panic("Assets.Cubemap: key loaded via bytes, not path: " + key)
 		}
-		s.attachOwner(group, key, entry)
+		s.attachOwner(scope, key, entry)
 		return entry.id, nil
 	}
 	if mounts == nil {
 		id := s.loader.LoadFiles(paths)?
 		entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
 		s.entries[key] = entry
-		s.attachOwner(group, key, entry)
+		s.attachOwner(scope, key, entry)
 		return id, nil
 	}
 	faces := [6][]byte{}
@@ -534,11 +559,11 @@ func (s *cubemapStore) get(mounts *vopack.MountSet, group string, paths [6]strin
 	id := s.loader.LoadBytes(faces)?
 	entry := &managedAsset{id: id, source: assetSourceFile, owners: map[string]bool{}}
 	s.entries[key] = entry
-	s.attachOwner(group, key, entry)
+	s.attachOwner(scope, key, entry)
 	return id, nil
 }
 
-func (s *cubemapStore) getBytes(group, key string, faces [6][]byte) (int, error) {
+func (s *cubemapStore) getBytes(scope, key string, faces [6][]byte) (int, error) {
 	requireAssetKey(key)
 	for i := 0; i < 6; i++ {
 		if len(faces[i]) == 0 {
@@ -549,29 +574,29 @@ func (s *cubemapStore) getBytes(group, key string, faces [6][]byte) (int, error)
 		if entry.source != assetSourceBytes {
 			panic("Assets.Cubemap: key loaded via path, not bytes: " + key)
 		}
-		s.attachOwner(group, key, entry)
+		s.attachOwner(scope, key, entry)
 		return entry.id, nil
 	}
 	id := s.loader.LoadBytes(faces)?
 	entry := &managedAsset{id: id, source: assetSourceBytes, owners: map[string]bool{}}
 	s.entries[key] = entry
-	s.attachOwner(group, key, entry)
+	s.attachOwner(scope, key, entry)
 	return id, nil
 }
 
-func (s *cubemapStore) attachOwner(group, key string, entry *managedAsset) {
-	if entry.owners[group] {
+func (s *cubemapStore) attachOwner(scope, key string, entry *managedAsset) {
+	if entry.owners[scope] {
 		return
 	}
-	entry.owners[group] = true
-	if s.groups[group] == nil {
-		s.groups[group] = map[string]bool{}
+	entry.owners[scope] = true
+	if s.scopes[scope] == nil {
+		s.scopes[scope] = map[string]bool{}
 	}
-	s.groups[group][key] = true
+	s.scopes[scope][key] = true
 }
 
-func (s *cubemapStore) releaseGroup(name string) {
-	keys := s.groups[name]
+func (s *cubemapStore) releaseScope(name string) {
+	keys := s.scopes[name]
 	if keys == nil {
 		return
 	}
@@ -583,15 +608,7 @@ func (s *cubemapStore) releaseGroup(name string) {
 			delete(s.entries, key)
 		}
 	}
-	delete(s.groups, name)
-}
-
-func (a *Assets) requireCurrentGroup() string {
-	group := a.CurrentGroup()
-	if group == "" {
-		panic("Assets: no active group")
-	}
-	return group
+	delete(s.scopes, name)
 }
 
 func requireAssetKey(key string) {

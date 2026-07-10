@@ -1,0 +1,252 @@
+package scene3d
+
+import (
+	"errors"
+)
+
+func validateMapAsset(asset *MapAsset) error {
+	if asset.Version != 1 {
+		return errors.New("scene3d.LoadMapAsset: unsupported map version")
+	}
+	if asset.Terrain != nil {
+		validateMapTerrain(*asset.Terrain)?
+	}
+	seenMeshes := map[string]bool{}
+	for _, mesh := range asset.Meshes {
+		validateMapMesh(mesh)?
+		if seenMeshes[mesh.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate mesh name: " + mesh.Name)
+		}
+		seenMeshes[mesh.Name] = true
+	}
+	seenMeshTerrains := map[string]bool{}
+	for _, terrain := range asset.MeshTerrains {
+		validateMapMeshTerrain(terrain)?
+		if seenMeshTerrains[terrain.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate mesh terrain name: " + terrain.Name)
+		}
+		seenMeshTerrains[terrain.Name] = true
+	}
+	seenPrimitiveLayers := map[string]bool{}
+	for _, layer := range asset.PrimitiveLayers {
+		validateMapPrimitiveLayer(layer)?
+		if seenPrimitiveLayers[layer.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate primitive layer name: " + layer.Name)
+		}
+		seenPrimitiveLayers[layer.Name] = true
+	}
+	seenSpawns := map[string]bool{}
+	for _, spawn := range asset.Spawns {
+		if spawn.Name == "" {
+			return errors.New("scene3d.LoadMapAsset: spawn name must not be empty")
+		}
+		if seenSpawns[spawn.Name] {
+			return errors.New("scene3d.LoadMapAsset: duplicate spawn name: " + spawn.Name)
+		}
+		seenSpawns[spawn.Name] = true
+	}
+	return nil
+}
+
+func validateMapTerrain(terrain MapTerrain) error {
+	if terrain.Heightmap == "" {
+		return errors.New("scene3d.LoadMapAsset: terrain heightmap is required")
+	}
+	if terrain.Width <= 0 || terrain.Height <= 0 || terrain.Depth <= 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain width, height, and depth must be > 0")
+	}
+	if terrain.UVScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain uvScale must be >= 0")
+	}
+	if terrain.NormalScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain normalScale must be >= 0")
+	}
+	if terrain.Roughness < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain roughness must be >= 0")
+	}
+	if terrain.Metallic < 0 || terrain.Metallic > 1 {
+		return errors.New("scene3d.LoadMapAsset: terrain metallic must be in range 0..1")
+	}
+	if terrain.CullDistance < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain cullDistance must be >= 0")
+	}
+	if terrain.CullRadius < 0 {
+		return errors.New("scene3d.LoadMapAsset: terrain cullRadius must be >= 0")
+	}
+	if terrain.Splat != nil {
+		if terrain.Texture != "" || terrain.Normal != "" || terrain.MetallicRoughness != "" || terrain.UVScale != 0 || terrain.NormalScale != 0 || terrain.Roughness != 0 || terrain.Metallic != 0 {
+			return errors.New("scene3d.LoadMapAsset: terrain single-material fields cannot be mixed with splat")
+		}
+		validateMapTerrainSplat(terrain.Splat, "terrain")?
+	}
+	return nil
+}
+
+func validateMapTerrainSplat(splat *MapTerrainSplat, owner string) error {
+	if splat == nil {
+		return nil
+	}
+	if splat.Control == "" {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " splat control is required")
+	}
+	if len(splat.Layers) != 4 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " splat requires exactly 4 layers")
+	}
+	for _, layer := range splat.Layers {
+		if layer.Texture == "" {
+			return errors.New("scene3d.LoadMapAsset: " + owner + " splat layer texture is required")
+		}
+		if layer.UVScale < 0 {
+			return errors.New("scene3d.LoadMapAsset: " + owner + " splat layer uvScale must be >= 0")
+		}
+		if layer.NormalScale < 0 {
+			return errors.New("scene3d.LoadMapAsset: " + owner + " splat layer normalScale must be >= 0")
+		}
+	}
+	return nil
+}
+
+func validateMapMesh(mesh MapMesh) error {
+	if mesh.Name == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh name must not be empty")
+	}
+	if mesh.Model == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh model is required: " + mesh.Name)
+	}
+	validateMapLodLevels(mesh.LodLevels, "mesh " + mesh.Name)?
+	if mesh.Collision != "" && mesh.Collision != "none" && mesh.Collision != "trimesh" {
+		return errors.New("scene3d.LoadMapAsset: unsupported mesh collision: " + mesh.Name)
+	}
+	if mesh.CullDistance < 0 {
+		return errors.New("scene3d.LoadMapAsset: mesh cullDistance must be >= 0: " + mesh.Name)
+	}
+	if mesh.CullRadius < 0 {
+		return errors.New("scene3d.LoadMapAsset: mesh cullRadius must be >= 0: " + mesh.Name)
+	}
+	validateMapMaterial(mesh.Material, "mesh " + mesh.Name)?
+	validateMapPickMode(mesh.PickMode, "mesh " + mesh.Name)?
+	return nil
+}
+
+func validateMapLodLevels(levels []MapMeshLodLevel, owner string) error {
+	for _, lod := range levels {
+		if lod.Model == "" {
+			return errors.New("scene3d.LoadMapAsset: " + owner + " lod model is required")
+		}
+		if lod.Distance < 0 {
+			return errors.New("scene3d.LoadMapAsset: " + owner + " lod distance must be >= 0")
+		}
+	}
+	return nil
+}
+
+func validateMapMeshTerrain(terrain MapMeshTerrain) error {
+	if terrain.Name == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh terrain name must not be empty")
+	}
+	if terrain.Model == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh terrain model is required: " + terrain.Name)
+	}
+	if terrain.HeightGrid == "" {
+		return errors.New("scene3d.LoadMapAsset: mesh terrain heightGrid is required: " + terrain.Name)
+	}
+	validateMapLodLevels(terrain.LodLevels, "mesh terrain " + terrain.Name)?
+	if terrain.CullDistance < 0 {
+		return errors.New("scene3d.LoadMapAsset: mesh terrain cullDistance must be >= 0: " + terrain.Name)
+	}
+	if terrain.CullRadius < 0 {
+		return errors.New("scene3d.LoadMapAsset: mesh terrain cullRadius must be >= 0: " + terrain.Name)
+	}
+	validateMapTerrainSplat(terrain.Splat, "mesh terrain")?
+	validateMapMaterial(terrain.Material, "mesh terrain " + terrain.Name)?
+	validateMapPickMode(terrain.PickMode, "mesh terrain " + terrain.Name)?
+	return nil
+}
+
+func validateMapPrimitiveLayer(layer MapPrimitiveLayer) error {
+	if layer.Name == "" {
+		return errors.New("scene3d.LoadMapAsset: primitive layer name must not be empty")
+	}
+	if layer.Source == "" {
+		return errors.New("scene3d.LoadMapAsset: primitive layer source is required: " + layer.Name)
+	}
+	if layer.ChunkCellSize < 0 {
+		return errors.New("scene3d.LoadMapAsset: primitive layer chunkCellSize must be >= 0: " + layer.Name)
+	}
+	if len(layer.Slots) == 0 {
+		return errors.New("scene3d.LoadMapAsset: primitive layer slots are required: " + layer.Name)
+	}
+	_, err := mapPrimitiveLayerKind(layer.Kind)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, slot := range layer.Slots {
+		if slot == "" {
+			return errors.New("scene3d.LoadMapAsset: primitive layer slot name must not be empty: " + layer.Name)
+		}
+		if seen[slot] {
+			return errors.New("scene3d.LoadMapAsset: duplicate primitive layer slot: " + layer.Name + "/" + slot)
+		}
+		seen[slot] = true
+	}
+	return nil
+}
+
+func MapAssetDependencies(asset *MapAsset, baseDir string) []MapDependency {
+	deps := []MapDependency{}
+	seen := map[string]bool{}
+	if asset == nil {
+		return deps
+	}
+	if asset.Terrain != nil {
+		terrain := *asset.Terrain
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.Heightmap), "terrain-heightmap")
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.Texture), "terrain-texture")
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.Normal), "terrain-normal")
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.MetallicRoughness), "terrain-metallic-roughness")
+		deps = appendMapSplatDependencies(deps, seen, baseDir, terrain.Splat)
+	}
+	for _, mesh := range asset.Meshes {
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, mesh.Model), "mesh-model")
+		for _, lod := range mesh.LodLevels {
+			deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, lod.Model), "mesh-lod-model")
+		}
+	}
+	for _, terrain := range asset.MeshTerrains {
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.Model), "mesh-terrain-model")
+		for _, lod := range terrain.LodLevels {
+			deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, lod.Model), "mesh-terrain-lod-model")
+		}
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, terrain.HeightGrid), "mesh-terrain-height-grid")
+		deps = appendMapSplatDependencies(deps, seen, baseDir, terrain.Splat)
+	}
+	for _, layer := range asset.PrimitiveLayers {
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, layer.Source), "primitive-layer")
+	}
+	return deps
+}
+
+func appendMapSplatDependencies(deps []MapDependency, seen map[string]bool, baseDir string, splat *MapTerrainSplat) []MapDependency {
+	if splat == nil {
+		return deps
+	}
+	deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, splat.Control), "terrain-splat-control")
+	for _, layer := range splat.Layers {
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, layer.Texture), "terrain-splat-texture")
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, layer.Normal), "terrain-splat-normal")
+		deps = appendMapDependency(deps, seen, mapResolvePath(baseDir, layer.MetallicRoughness), "terrain-splat-metallic-roughness")
+	}
+	return deps
+}
+
+func appendMapDependency(deps []MapDependency, seen map[string]bool, path, kind string) []MapDependency {
+	if path == "" {
+		return deps
+	}
+	if seen[path] {
+		return deps
+	}
+	seen[path] = true
+	return append(deps, MapDependency{Path: path, Kind: kind})
+}

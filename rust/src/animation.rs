@@ -15,6 +15,7 @@ pub struct Transform {
 }
 
 impl Transform {
+    #[cfg(test)]
     pub const IDENTITY: Self = Self {
         translation: Vec3::ZERO,
         rotation: Quat::IDENTITY,

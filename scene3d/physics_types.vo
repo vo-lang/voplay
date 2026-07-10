@@ -1,0 +1,316 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
+
+type BodyType = voplay.BodyType
+
+const (
+	Dynamic = voplay.Dynamic
+	Static = voplay.Static
+	Kinematic = voplay.Kinematic
+)
+
+type Physics struct {
+	Type BodyType
+	Collider Collider
+	Trimesh *Trimesh
+	Heightfield *Heightfield
+	Layer int
+	Mask int
+	Density float64
+	Friction float64
+	Restitution float64
+	LinearDamping float64
+	AngularDamping float64
+	SurfaceID string
+	SurfaceKind string
+	FixedRotation bool
+	LockRotationX bool
+	LockRotationY bool
+	LockRotationZ bool
+	bodyID int
+	velocity voplay.Vec3
+	angularVelocity voplay.Vec3
+}
+
+type Trimesh struct {
+	Model voplay.ModelID
+}
+
+type Heightfield struct {
+	heightData []byte
+	rows int
+	cols int
+	scale voplay.Vec3
+}
+
+type HeightfieldSpawnDesc struct {
+	HeightData []byte
+	Rows int
+	Cols int
+	Scale voplay.Vec3
+	Position voplay.Vec3
+	Layer int
+	Mask int
+	Friction float64
+	Restitution float64
+}
+
+type Collider struct {
+	kind int
+	args [3]float64
+	offset voplay.Vec3
+}
+
+const (
+	colliderCapsule3D = 3
+	colliderBox3D = 4
+	colliderSphere = 5
+)
+
+const (
+	ColliderBox = colliderBox3D
+	ColliderSphere = colliderSphere
+	ColliderCapsule = colliderCapsule3D
+)
+
+func Box(halfX, halfY, halfZ float64) Collider {
+	return Collider{kind: colliderBox3D, args: [3]float64{halfX, halfY, halfZ}}
+}
+
+func Sphere(radius float64) Collider {
+	return Collider{kind: colliderSphere, args: [3]float64{radius, 0, 0}}
+}
+
+func Capsule(halfHeight, radius float64) Collider {
+	return Collider{kind: colliderCapsule3D, args: [3]float64{halfHeight, radius, 0}}
+}
+
+func TrimeshPhysics(model voplay.ModelID) *Physics {
+	return &Physics{Type: Static, Trimesh: &Trimesh{Model: model}, Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 0.5, Restitution: 0.0}
+}
+
+func (c Collider) Kind() int {
+	return c.kind
+}
+
+func (c Collider) Args() [3]float64 {
+	return c.args
+}
+
+func (c Collider) Offset() voplay.Vec3 {
+	return c.offset
+}
+
+func (c Collider) WithOffset(offset voplay.Vec3) Collider {
+	c.offset = offset
+	return c
+}
+
+type Contact struct {
+	A *Entity
+	B *Entity
+	Position voplay.Vec3
+	Normal voplay.Vec3
+	RelativeVelocity voplay.Vec3
+	RelativeSpeed float64
+	NormalImpulse float64
+	TangentImpulse float64
+	HasImpulse bool
+	Fallback bool
+}
+
+type RayCastHit struct {
+	Entity *Entity
+	Point voplay.Vec3
+	Normal voplay.Vec3
+	Distance float64
+}
+
+const (
+	physicsCmdForce byte = 1
+	physicsCmdImpulse byte = 2
+	physicsCmdSetVel byte = 3
+	physicsCmdSetPos byte = 4
+	physicsCmdSetRot byte = 5
+	physicsCmdSetAngVel byte = 6
+	physicsContactDetailBytes = 8 + 12 * 8 + 1
+	PhysicsBackendPacketSchemaVersion = 1
+	PhysicsBackendPacketHeaderBytes = 13
+	PhysicsBackendBodyPacketKind = 1
+	PhysicsBackendContactPacketKind = 2
+	PhysicsBackendWheelPacketKind = 3
+	PhysicsBackendVehicleFleetPacketKind = 4
+	PhysicsBackendPacketKind = PhysicsBackendContactPacketKind
+	PhysicsBackendPacketLength = physicsContactDetailBytes
+	PhysicsBackendCapability = "physics-backend-contact-packet-v1"
+	physicsSurfaceMaterialIDBytes = 32
+)
+
+type PhysicsBackendPacketHeader struct {
+	Kind int
+	SchemaVersion int
+	PayloadLength int
+	SchemaHash int
+}
+
+type PhysicsBackendPacketError struct {
+	Source string
+	Kind int
+	Reason string
+	ExpectedBytes int
+	ActualBytes int
+}
+
+type PhysicsBackendTargetCommand struct {
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	LinearVelocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+	ApplyPosition bool
+	ApplyRotation bool
+	ApplyLinearVelocity bool
+	ApplyAngularVelocity bool
+	Reason string
+}
+
+const (
+	PhysicsBackendCommandForce = "force"
+	PhysicsBackendCommandRawForce = "raw_force"
+	PhysicsBackendCommandRawImpulse = "raw_impulse"
+	PhysicsBackendCommandTarget = "target"
+	PhysicsBackendCommandPoseReset = "pose_reset"
+	PhysicsBackendCommandMotionReset = "motion_reset"
+	PhysicsBackendCommandSleepState = "sleep_state"
+	PhysicsBackendCommandRecovery = "recovery"
+	PhysicsBackendCommandOutcomeApplied = "applied"
+	PhysicsBackendCommandOutcomeQueued = "queued"
+	PhysicsBackendCommandOutcomeLocalOnly = "local_only"
+	PhysicsBackendCommandOutcomeRejected = "rejected"
+)
+
+type PhysicsBackendCommandEvent struct {
+	Sequence int `json:"sequence"`
+	Kind string `json:"kind"`
+	Outcome string `json:"outcome"`
+	Rejection string `json:"rejection,omitempty"`
+	Reason string `json:"reason"`
+	WorldID int `json:"worldId"`
+	BodyID int `json:"bodyId,omitempty"`
+	VehicleID int `json:"vehicleId,omitempty"`
+	Force PhysicsBackendApplyCommand `json:"force,omitempty"`
+	Target PhysicsBackendTargetCommand `json:"target,omitempty"`
+	Pose VehiclePoseResetCommand `json:"pose,omitempty"`
+	Motion VehicleMotionResetCommand `json:"motion,omitempty"`
+	Sleep VehicleSleepCommand `json:"sleep,omitempty"`
+	Recovery VehicleRecoveryCommand `json:"recovery,omitempty"`
+	Vector voplay.Vec3 `json:"vector,omitempty"`
+}
+
+func PhysicsBackendPacketSchemaHash(kind int, payloadLength int) int {
+	return PhysicsBackendPacketSchemaVersion * 16777619 + kind * 65537 + payloadLength
+}
+
+func PhysicsBackendPacketHash(bytes []byte) int {
+	hash := PhysicsBackendPacketSchemaVersion * 16777619
+	for _, b := range bytes {
+		hash = (hash ^ int(b)) * 16777619
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return hash
+}
+
+func WritePhysicsBackendPacketHeader(w *codec.ByteWriter, kind int, payloadLength int) {
+	if w == nil {
+		return
+	}
+	w.WriteByte(byte(kind))
+	w.WriteU32(PhysicsBackendPacketSchemaVersion)
+	w.WriteU32(payloadLength)
+	w.WriteU32(PhysicsBackendPacketSchemaHash(kind, payloadLength))
+}
+
+func ReadPhysicsBackendPacketHeader(r *codec.ByteReader, expectedKind int) (PhysicsBackendPacketHeader, bool) {
+	header, reason := ReadPhysicsBackendPacketHeaderDetailed(r, expectedKind)
+	return header, reason == ""
+}
+
+func ReadPhysicsBackendPacketHeaderDetailed(r *codec.ByteReader, expectedKind int) (PhysicsBackendPacketHeader, string) {
+	if r == nil || r.Remaining() < PhysicsBackendPacketHeaderBytes {
+		return PhysicsBackendPacketHeader{}, "header_too_short"
+	}
+	header := PhysicsBackendPacketHeader{
+		Kind: int(r.ReadByte()),
+		SchemaVersion: r.ReadU32(),
+		PayloadLength: r.ReadU32(),
+		SchemaHash: r.ReadU32(),
+	}
+	if header.Kind != expectedKind {
+		return header, "kind_mismatch"
+	}
+	if header.SchemaVersion != PhysicsBackendPacketSchemaVersion {
+		return header, "schema_version_mismatch"
+	}
+	if header.PayloadLength < 0 || header.PayloadLength != r.Remaining() {
+		return header, "payload_length_mismatch"
+	}
+	if header.SchemaHash != PhysicsBackendPacketSchemaHash(header.Kind, header.PayloadLength) {
+		return header, "schema_hash_mismatch"
+	}
+	return header, ""
+}
+
+func ValidatePhysicsBackendPacketHeader(header PhysicsBackendPacketHeader, expectedKind int, available int) bool {
+	if header.Kind != expectedKind {
+		return false
+	}
+	if header.SchemaVersion != PhysicsBackendPacketSchemaVersion {
+		return false
+	}
+	if header.PayloadLength < 0 || header.PayloadLength != available {
+		return false
+	}
+	return header.SchemaHash == PhysicsBackendPacketSchemaHash(header.Kind, header.PayloadLength)
+}
+
+func physicsSurfaceMaterialKind(kind string) int {
+	if kind == SurfaceMaterialOffroad || kind == TrackSurfaceOffroad {
+		return raycastVehicleWheelMaterialKindOffroad
+	}
+	if kind == SurfaceMaterialBoost || kind == TrackSurfaceBoost {
+		return raycastVehicleWheelMaterialKindBoost
+	}
+	if kind == SurfaceMaterialWater {
+		return raycastVehicleWheelMaterialKindWater
+	}
+	if kind == SurfaceMaterialRail {
+		return raycastVehicleWheelMaterialKindRail
+	}
+	if kind == SurfaceMaterialWall {
+		return raycastVehicleWheelMaterialKindWall
+	}
+	return raycastVehicleWheelMaterialKindRoad
+}
+
+func writePhysicsSurfaceMaterial(w *codec.ByteWriter, id, kind string) {
+	if id == "" {
+		id = TrackSurfaceRoad
+	}
+	if kind == "" {
+		kind = id
+	}
+	bytes := []byte(id)
+	for i := 0; i < physicsSurfaceMaterialIDBytes; i++ {
+		if i < len(bytes) {
+			w.WriteByte(bytes[i])
+		} else {
+			w.WriteByte(0)
+		}
+	}
+	w.WriteU32(physicsSurfaceMaterialKind(kind))
+}

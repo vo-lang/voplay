@@ -1,0 +1,831 @@
+package voplay
+
+import "strconv"
+
+const (
+	perfFineHistBucketCount = 64
+	perfFineHistScale = 1.0
+	perfFineSixtyHzBudgetMs = 16.7
+
+	perfMetricFrame = 0
+	perfMetricGame = 1
+	perfMetricDraw = 2
+	perfMetricRenderLoop = 3
+	perfMetricRenderWork = 4
+	perfMetricRenderSubmit = 5
+	perfMetricGpu = 6
+	perfMetricActiveWork = 7
+	perfMetricHud = 8
+)
+
+type PerfCore struct {
+	mode string
+	enabled bool
+	hudVisible bool
+	hudPage int
+	targetHz int
+	budgetMs float64
+	customScopeCount int
+	customScopeNames []string
+	customScopeLastMs []float64
+	customScopeMaxMs []float64
+	customScopeCounts []int
+	next int
+	count int
+	frames []perfFrameRingSample
+	fullFrames []PerfFrame
+	currentFrame PerfFrame
+	worstFrame PerfFrame
+	windowWorstFrame PerfFrame
+	windowWorstDirty bool
+	oneSecond perfWindowBucket
+	fiveSecond perfWindowBucket
+	thirtySecond perfWindowBucket
+	spikes [10]PerfSpike
+	spikeNext int
+	spikeCount int
+}
+
+func newPerfCore(targetHz int) PerfCore {
+	budgetMs := perfBudgetMs(targetHz)
+	return PerfCore{
+		mode: PerfModeOff,
+		targetHz: targetHz,
+		budgetMs: budgetMs,
+		customScopeNames: make([]string, 0, perfCustomScopeCount),
+		customScopeLastMs: make([]float64, 0, perfCustomScopeCount),
+		customScopeMaxMs: make([]float64, 0, perfCustomScopeCount),
+		customScopeCounts: make([]int, 0, perfCustomScopeCount),
+		frames: make([]perfFrameRingSample, perfFrameRingSize),
+		fullFrames: make([]PerfFrame, perfFrameRingSize),
+		oneSecond: newPerfWindowBucket(120),
+		fiveSecond: newPerfWindowBucket(600),
+		thirtySecond: newPerfWindowBucket(perfFrameRingSize),
+	}
+}
+
+func newPerfWindowBucket(capacity int) perfWindowBucket {
+	return perfWindowBucket{
+		capacity: capacity,
+		samples: make([]perfBucketSample, capacity),
+	}
+}
+
+func perfBudgetMs(targetHz int) float64 {
+	if targetHz <= 0 {
+		targetHz = 120
+	}
+	return 1000.0 / float64(targetHz)
+}
+
+func perfSlowFrameThresholdMs(targetHz int, budgetMs float64) float64 {
+	if budgetMs <= 0 {
+		budgetMs = perfBudgetMs(targetHz)
+	}
+	return budgetMs * 1.25
+}
+
+func perfFrameSlow(frame PerfFrame) bool {
+	return frame.FrameMs > perfSlowFrameThresholdMs(frame.TargetHz, frame.BudgetMs)
+}
+
+func perfHostSuspendedFrame(frame PerfFrame) bool {
+	budget := frame.BudgetMs
+	if budget <= 0 {
+		budget = perfBudgetMs(frame.TargetHz)
+	}
+	if frame.FrameMs < perfHostSuspendThresholdMs && frame.FrameMs < budget * 8.0 {
+		return false
+	}
+	workLimit := budget * 0.75
+	if frame.GameCpu.TotalMs > workLimit || frame.GameCpu.AdvanceMs > workLimit || frame.GameCpu.DrawEncodeMs > workLimit {
+		return false
+	}
+	if frame.Framewire.ReplyWaitMs > workLimit {
+		return false
+	}
+	if frame.RenderWorker.SubmitCpuMs > workLimit || frame.RenderWorker.WorkMs > workLimit {
+		return false
+	}
+	if frame.GpuQueue.QueueDepthClass == PerfQueueBacklogged || frame.GpuQueue.QueueDepthClass == PerfQueueSaturated {
+		return false
+	}
+	return true
+}
+
+func normalizePerfMode(mode string) string {
+	if mode == "" {
+		return PerfModeStats
+	}
+	if mode == PerfModeOff || mode == PerfModeStats || mode == PerfModeHud || mode == PerfModeTrace || mode == PerfModeDeep {
+		return mode
+	}
+	return PerfModeStats
+}
+
+func (c *PerfCore) setMode(mode string) {
+	c.ensureStorage()
+	mode = normalizePerfMode(mode)
+	c.mode = mode
+	c.enabled = mode != PerfModeOff
+	c.hudVisible = mode == PerfModeHud
+}
+
+func (c *PerfCore) ensureStorage() {
+	if len(c.frames) < perfFrameRingSize {
+		c.frames = make([]perfFrameRingSample, perfFrameRingSize)
+	}
+	if len(c.fullFrames) < perfFrameRingSize {
+		c.fullFrames = make([]PerfFrame, perfFrameRingSize)
+	}
+	if c.customScopeNames == nil {
+		c.customScopeNames = make([]string, 0, perfCustomScopeCount)
+	}
+	if c.customScopeLastMs == nil {
+		c.customScopeLastMs = make([]float64, 0, perfCustomScopeCount)
+	}
+	if c.customScopeMaxMs == nil {
+		c.customScopeMaxMs = make([]float64, 0, perfCustomScopeCount)
+	}
+	if c.customScopeCounts == nil {
+		c.customScopeCounts = make([]int, 0, perfCustomScopeCount)
+	}
+	if c.oneSecond.capacity <= 0 {
+		c.oneSecond = newPerfWindowBucket(120)
+	} else if len(c.oneSecond.samples) < c.oneSecond.capacity {
+		c.oneSecond.samples = make([]perfBucketSample, c.oneSecond.capacity)
+	}
+	if c.fiveSecond.capacity <= 0 {
+		c.fiveSecond = newPerfWindowBucket(600)
+	} else if len(c.fiveSecond.samples) < c.fiveSecond.capacity {
+		c.fiveSecond.samples = make([]perfBucketSample, c.fiveSecond.capacity)
+	}
+	if c.thirtySecond.capacity <= 0 {
+		c.thirtySecond = newPerfWindowBucket(perfFrameRingSize)
+	} else if len(c.thirtySecond.samples) < c.thirtySecond.capacity {
+		c.thirtySecond.samples = make([]perfBucketSample, c.thirtySecond.capacity)
+	}
+}
+
+func (c *PerfCore) nextHudPage() {
+	c.hudPage = (c.hudPage + 1) % 6
+}
+
+func (c *PerfCore) recordFrame(frame PerfFrame) {
+	if !c.enabled {
+		return
+	}
+	c.ensureStorage()
+	if frame.TargetHz <= 0 {
+		frame.TargetHz = c.targetHz
+	}
+	if frame.BudgetMs <= 0 {
+		frame.BudgetMs = c.budgetMs
+	}
+	frame.Hud.Page = c.hudPage
+	frame = classifyPerfFrame(frame)
+	hostSuspended := perfHostSuspendedFrame(frame)
+	if !hostSuspended && perfFrameSlow(frame) {
+		frame.Spike = perfSpikeFromFrame(frame)
+		c.recordSpike(frame.Spike)
+	}
+	c.currentFrame = frame
+	if hostSuspended {
+		return
+	}
+	oldFrame := PerfFrame{}
+	if c.count == perfFrameRingSize {
+		oldFrame = c.fullFrames[c.next]
+		c.frames[c.next] = perfRingSampleFromFrame(frame)
+		c.fullFrames[c.next] = frame
+	} else {
+		c.frames[c.next] = perfRingSampleFromFrame(frame)
+		c.fullFrames[c.next] = frame
+		c.count++
+	}
+	c.next = (c.next + 1) % perfFrameRingSize
+	c.oneSecond.record(perfSampleFromFrame(frame), frame.BudgetMs)
+	c.fiveSecond.record(perfSampleFromFrame(frame), frame.BudgetMs)
+	c.thirtySecond.record(perfSampleFromFrame(frame), frame.BudgetMs)
+	if frame.FrameMs > c.worstFrame.FrameMs {
+		c.worstFrame = frame
+	}
+	if oldFrame.FrameId > 0 && oldFrame.FrameId == c.windowWorstFrame.FrameId {
+		c.windowWorstDirty = true
+	}
+	if frame.FrameMs >= c.windowWorstFrame.FrameMs {
+		c.windowWorstFrame = frame
+		c.windowWorstDirty = false
+	}
+}
+
+func (c *PerfCore) recordSpike(spike PerfSpike) {
+	c.spikes[c.spikeNext] = spike
+	c.spikeNext = (c.spikeNext + 1) % perfSpikeCacheSize
+	if c.spikeCount < perfSpikeCacheSize {
+		c.spikeCount++
+	}
+}
+
+func (c *PerfCore) recordCustomScope(name string, ms float64) {
+	if name == "" {
+		return
+	}
+	c.ensureStorage()
+	index := -1
+	for i := 0; i < len(c.customScopeNames); i++ {
+		if c.customScopeNames[i] == name {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		if len(c.customScopeNames) >= perfCustomScopeCount {
+			index = perfCustomScopeCount - 1
+		} else {
+			c.customScopeNames = append(c.customScopeNames, name)
+			c.customScopeLastMs = append(c.customScopeLastMs, 0)
+			c.customScopeMaxMs = append(c.customScopeMaxMs, 0)
+			c.customScopeCounts = append(c.customScopeCounts, 0)
+			index = len(c.customScopeNames) - 1
+		}
+	}
+	c.customScopeLastMs[index] = ms
+	c.customScopeCounts[index]++
+	if ms > c.customScopeMaxMs[index] {
+		c.customScopeMaxMs[index] = ms
+	}
+	c.customScopeCount = len(c.customScopeNames)
+}
+
+func (c *PerfCore) recentWorstFrame() PerfFrame {
+	if c.count <= 0 || len(c.fullFrames) == 0 {
+		return PerfFrame{}
+	}
+	if !c.windowWorstDirty && c.windowWorstFrame.FrameId > 0 {
+		return c.windowWorstFrame
+	}
+	worst := PerfFrame{}
+	for i := 0; i < c.count; i++ {
+		frame := c.fullFrames[i]
+		if frame.FrameMs > worst.FrameMs {
+			worst = frame
+		}
+	}
+	c.windowWorstFrame = worst
+	c.windowWorstDirty = false
+	return worst
+}
+
+func (c *PerfCore) recentFrameSample(offset int) (perfFrameRingSample, bool) {
+	if offset < 0 || offset >= c.count || len(c.frames) == 0 {
+		return perfFrameRingSample{}, false
+	}
+	index := c.next - 1 - offset
+	for index < 0 {
+		index += perfFrameRingSize
+	}
+	return c.frames[index], true
+}
+
+func perfRingSampleFromFrame(frame PerfFrame) perfFrameRingSample {
+	return perfFrameRingSample{
+		FrameId: frame.FrameId,
+		FrameMs: frame.FrameMs,
+		BudgetMs: frame.BudgetMs,
+		Slow: perfFrameSlow(frame),
+		Cause: frame.Classification.PrimaryCause,
+	}
+}
+
+func perfSampleFromFrame(frame PerfFrame) perfBucketSample {
+	return perfBucketSample{
+		FrameMs: frame.FrameMs,
+		BudgetMs: frame.BudgetMs,
+		GameCpuMs: frame.GameCpu.TotalMs,
+		DrawEncodeMs: frame.GameCpu.DrawEncodeMs,
+		RenderLoopMs: frame.RenderWorker.LoopTotalMs,
+		RenderWorkMs: frame.RenderWorker.WorkMs,
+		RenderSubmitMs: frame.RenderWorker.SubmitCpuMs,
+		GpuWorkDoneMs: frame.GpuQueue.SubmittedWorkDoneMs,
+		ActiveWorkMs: perfFrameActiveWorkMs(frame),
+		HudMs: frame.Hud.CpuMs,
+		Slow: perfFrameSlow(frame),
+		Cause: frame.Classification.PrimaryCause,
+		Mixed: frame.Classification.Mixed,
+	}
+}
+
+func perfFrameActiveWorkMs(frame PerfFrame) float64 {
+	value := frame.GameCpu.TotalMs
+	value = perfMax(value, frame.GameCpu.DrawEncodeMs)
+	value = perfMax(value, frame.RenderWorker.WorkMs)
+	value = perfMax(value, frame.RenderWorker.SubmitCpuMs)
+	value = perfMax(value, frame.GpuQueue.SubmittedWorkDoneMs)
+	return value
+}
+
+func (w *perfWindowBucket) record(sample perfBucketSample, budgetMs float64) {
+	if w.capacity <= 0 {
+		w.capacity = perfFrameRingSize
+	}
+	if len(w.samples) < w.capacity {
+		w.samples = make([]perfBucketSample, w.capacity)
+	}
+	if sample.BudgetMs <= 0 {
+		sample.BudgetMs = budgetMs
+	}
+	if w.count == w.capacity {
+		old := w.samples[w.next]
+		w.remove(old)
+	} else {
+		w.count++
+	}
+	w.samples[w.next] = sample
+	w.add(sample)
+	w.next = (w.next + 1) % w.capacity
+}
+
+func (w *perfWindowBucket) add(sample perfBucketSample) {
+	budgetMs := sample.BudgetMs
+	if budgetMs <= 0 {
+		budgetMs = 8.3334
+	}
+	w.frameHist[perfMsBucket(sample.FrameMs, budgetMs)]++
+	w.gameHist[perfMsBucket(sample.GameCpuMs, budgetMs)]++
+	w.drawHist[perfMsBucket(sample.DrawEncodeMs, budgetMs)]++
+	w.renderLoopHist[perfMsBucket(sample.RenderLoopMs, budgetMs)]++
+	w.renderSubmitHist[perfMsBucket(sample.RenderSubmitMs, budgetMs)]++
+	w.gpuHist[perfMsBucket(sample.GpuWorkDoneMs, budgetMs)]++
+	w.hudHist[perfMsBucket(sample.HudMs, budgetMs)]++
+	w.frameFineHist[perfFineMsBucket(sample.FrameMs)]++
+	w.gameFineHist[perfFineMsBucket(sample.GameCpuMs)]++
+	w.drawFineHist[perfFineMsBucket(sample.DrawEncodeMs)]++
+	w.renderLoopFineHist[perfFineMsBucket(sample.RenderLoopMs)]++
+	w.renderWorkFineHist[perfFineMsBucket(sample.RenderWorkMs)]++
+	w.renderSubmitFineHist[perfFineMsBucket(sample.RenderSubmitMs)]++
+	w.gpuFineHist[perfFineMsBucket(sample.GpuWorkDoneMs)]++
+	w.activeWorkFineHist[perfFineMsBucket(sample.ActiveWorkMs)]++
+	w.hudFineHist[perfFineMsBucket(sample.HudMs)]++
+	if sample.Slow {
+		w.slowFrames++
+	}
+	perfAddAttribution(&w.attribution, sample.Cause, sample.Mixed, 1)
+	if sample.FrameMs > w.maxFrameMs {
+		w.maxFrameMs = sample.FrameMs
+	}
+}
+
+func (w *perfWindowBucket) remove(sample perfBucketSample) {
+	budgetMs := sample.BudgetMs
+	if budgetMs <= 0 {
+		budgetMs = 8.3334
+	}
+	w.frameHist[perfMsBucket(sample.FrameMs, budgetMs)]--
+	w.gameHist[perfMsBucket(sample.GameCpuMs, budgetMs)]--
+	w.drawHist[perfMsBucket(sample.DrawEncodeMs, budgetMs)]--
+	w.renderLoopHist[perfMsBucket(sample.RenderLoopMs, budgetMs)]--
+	w.renderSubmitHist[perfMsBucket(sample.RenderSubmitMs, budgetMs)]--
+	w.gpuHist[perfMsBucket(sample.GpuWorkDoneMs, budgetMs)]--
+	w.hudHist[perfMsBucket(sample.HudMs, budgetMs)]--
+	frameFineBucket := perfFineMsBucket(sample.FrameMs)
+	if w.frameFineHist[frameFineBucket] > 0 {
+		w.frameFineHist[frameFineBucket]--
+	}
+	gameFineBucket := perfFineMsBucket(sample.GameCpuMs)
+	if w.gameFineHist[gameFineBucket] > 0 {
+		w.gameFineHist[gameFineBucket]--
+	}
+	drawFineBucket := perfFineMsBucket(sample.DrawEncodeMs)
+	if w.drawFineHist[drawFineBucket] > 0 {
+		w.drawFineHist[drawFineBucket]--
+	}
+	renderLoopFineBucket := perfFineMsBucket(sample.RenderLoopMs)
+	if w.renderLoopFineHist[renderLoopFineBucket] > 0 {
+		w.renderLoopFineHist[renderLoopFineBucket]--
+	}
+	renderWorkFineBucket := perfFineMsBucket(sample.RenderWorkMs)
+	if w.renderWorkFineHist[renderWorkFineBucket] > 0 {
+		w.renderWorkFineHist[renderWorkFineBucket]--
+	}
+	renderSubmitFineBucket := perfFineMsBucket(sample.RenderSubmitMs)
+	if w.renderSubmitFineHist[renderSubmitFineBucket] > 0 {
+		w.renderSubmitFineHist[renderSubmitFineBucket]--
+	}
+	gpuFineBucket := perfFineMsBucket(sample.GpuWorkDoneMs)
+	if w.gpuFineHist[gpuFineBucket] > 0 {
+		w.gpuFineHist[gpuFineBucket]--
+	}
+	activeWorkFineBucket := perfFineMsBucket(sample.ActiveWorkMs)
+	if w.activeWorkFineHist[activeWorkFineBucket] > 0 {
+		w.activeWorkFineHist[activeWorkFineBucket]--
+	}
+	hudFineBucket := perfFineMsBucket(sample.HudMs)
+	if w.hudFineHist[hudFineBucket] > 0 {
+		w.hudFineHist[hudFineBucket]--
+	}
+	if sample.Slow && w.slowFrames > 0 {
+		w.slowFrames--
+	}
+	perfAddAttribution(&w.attribution, sample.Cause, sample.Mixed, -1)
+	if sample.FrameMs >= w.maxFrameMs {
+		w.maxDirty = true
+	}
+}
+
+func (w *perfWindowBucket) summary() PerfWindowSummary {
+	if w.maxDirty {
+		w.refreshMax()
+	}
+	return PerfWindowSummary{
+		Frames: w.count,
+		SlowFrames: w.slowFrames,
+		FrameP50Ms: w.percentile(perfMetricFrame, 50),
+		FrameP90Ms: w.percentile(perfMetricFrame, 90),
+		FrameP99Ms: w.percentile(perfMetricFrame, 99),
+		FrameMaxMs: w.maxFrameMs,
+		GameCpuP90Ms: w.percentile(perfMetricGame, 90),
+		DrawEncodeP90Ms: w.percentile(perfMetricDraw, 90),
+		RenderLoopP90Ms: w.percentile(perfMetricRenderLoop, 90),
+		RenderWorkP90Ms: w.percentile(perfMetricRenderWork, 90),
+		RenderSubmitP90Ms: w.percentile(perfMetricRenderSubmit, 90),
+		GpuWorkDoneP90Ms: w.percentile(perfMetricGpu, 90),
+		ActiveWorkP90Ms: w.percentile(perfMetricActiveWork, 90),
+		ActiveWorkP99Ms: w.percentile(perfMetricActiveWork, 99),
+		HudP90Ms: w.percentile(perfMetricHud, 90),
+	}
+}
+
+func (w *perfWindowBucket) percentile(metric int, pct int) float64 {
+	if w.count <= 0 {
+		return 0
+	}
+	need := (pct * w.count + 99) / 100
+	if need <= 0 {
+		need = 1
+	}
+	total := 0
+	for i := 0; i < perfFineHistBucketCount; i++ {
+		total += w.fineHistCount(metric, i)
+		if total >= need {
+			return perfFineBucketUpperMs(i)
+		}
+	}
+	if metric == perfMetricFrame && w.maxFrameMs > 0 {
+		return w.maxFrameMs
+	}
+	return perfFineBucketUpperMs(perfFineHistBucketCount - 1)
+}
+
+func (w *perfWindowBucket) fineHistCount(metric int, index int) int {
+	if metric == perfMetricGame {
+		return w.gameFineHist[index]
+	}
+	if metric == perfMetricDraw {
+		return w.drawFineHist[index]
+	}
+	if metric == perfMetricRenderLoop {
+		return w.renderLoopFineHist[index]
+	}
+	if metric == perfMetricRenderWork {
+		return w.renderWorkFineHist[index]
+	}
+	if metric == perfMetricRenderSubmit {
+		return w.renderSubmitFineHist[index]
+	}
+	if metric == perfMetricGpu {
+		return w.gpuFineHist[index]
+	}
+	if metric == perfMetricActiveWork {
+		return w.activeWorkFineHist[index]
+	}
+	if metric == perfMetricHud {
+		return w.hudFineHist[index]
+	}
+	return w.frameFineHist[index]
+}
+
+func (w *perfWindowBucket) budgetMs() float64 {
+	if w.count <= 0 {
+		return 8.3334
+	}
+	offset := 0
+	if w.count == w.capacity {
+		offset = w.count - 1
+	}
+	sample := w.samples[w.logicalIndex(offset)]
+	if sample.BudgetMs <= 0 {
+		return 8.3334
+	}
+	return sample.BudgetMs
+}
+
+func (w *perfWindowBucket) refreshMax() {
+	maxFrameMs := 0.0
+	for i := 0; i < w.count; i++ {
+		sample := w.samples[w.logicalIndex(i)]
+		if sample.FrameMs > maxFrameMs {
+			maxFrameMs = sample.FrameMs
+		}
+	}
+	w.maxFrameMs = maxFrameMs
+	w.maxDirty = false
+}
+
+func (w *perfWindowBucket) logicalIndex(i int) int {
+	if w.count < w.capacity {
+		return i
+	}
+	return (w.next + i) % w.capacity
+}
+
+func (w *perfWindowBucket) slowHistogram() PerfSlowHistogram {
+	return PerfSlowHistogram{
+		LeBudget: w.frameHist[0],
+		Le12Ms: w.frameHist[1],
+		Le16Ms: w.frameHist[2],
+		Le25Ms: w.frameHist[3],
+		Le33Ms: w.frameHist[4],
+		Le50Ms: w.frameHist[5],
+		Le100Ms: w.frameHist[6],
+		Gt100Ms: w.frameHist[7],
+	}
+}
+
+func perfMsBucket(value float64, budgetMs float64) int {
+	if budgetMs <= 0 {
+		budgetMs = 8.3334
+	}
+	if value <= budgetMs {
+		return 0
+	}
+	if value <= 12 {
+		return 1
+	}
+	if value <= 16.667 {
+		return 2
+	}
+	if value <= 25 {
+		return 3
+	}
+	if value <= 33.333 {
+		return 4
+	}
+	if value <= 50 {
+		return 5
+	}
+	if value <= 100 {
+		return 6
+	}
+	return 7
+}
+
+func perfHistogramPercentile(hist [8]int, count int, pct int, budgetMs float64) float64 {
+	if count <= 0 {
+		return 0
+	}
+	need := (pct * count + 99) / 100
+	total := 0
+	for i := 0; i < 8; i++ {
+		total += hist[i]
+		if total >= need {
+			return perfBucketUpperMs(i, budgetMs)
+		}
+	}
+	return perfBucketUpperMs(7, budgetMs)
+}
+
+func perfFineMsBucket(value float64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > perfFineSixtyHzBudgetMs && value < 17 {
+		return 17
+	}
+	index := int(value * perfFineHistScale)
+	if index < 0 {
+		return 0
+	}
+	if index >= perfFineHistBucketCount {
+		return perfFineHistBucketCount - 1
+	}
+	return index
+}
+
+func perfFineBucketUpperMs(index int) float64 {
+	if index >= perfFineHistBucketCount - 1 {
+		return 100
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index == 16 {
+		return perfFineSixtyHzBudgetMs
+	}
+	return float64(index + 1) / perfFineHistScale
+}
+
+func perfBucketUpperMs(index int, budgetMs float64) float64 {
+	if budgetMs <= 0 {
+		budgetMs = 8.3334
+	}
+	if index == 0 {
+		return budgetMs
+	}
+	if index == 1 {
+		return 12
+	}
+	if index == 2 {
+		return 16.667
+	}
+	if index == 3 {
+		return 25
+	}
+	if index == 4 {
+		return 33.333
+	}
+	if index == 5 {
+		return 50
+	}
+	if index == 6 {
+		return 100
+	}
+	return 100
+}
+
+func perfAddAttribution(summary *PerfAttributionSummary, cause string, mixed bool, delta int) {
+	if mixed {
+		summary.Mixed += delta
+	}
+	if cause == PerfCauseMixed {
+		if !mixed {
+			summary.Mixed += delta
+		}
+		return
+	}
+	if cause == PerfCauseLogicCpuBound {
+		summary.LogicCpuBound += delta
+	} else if cause == PerfCauseDrawEncodeBound {
+		summary.DrawEncodeBound += delta
+	} else if cause == PerfCauseFramewireBound {
+		summary.FramewireBound += delta
+	} else if cause == PerfCauseRenderCpuBound {
+		summary.RenderCpuBound += delta
+	} else if cause == PerfCauseGpuQueueBound {
+		summary.GpuQueueBound += delta
+	} else if cause == PerfCausePresentBackpressure {
+		summary.PresentBackpressure += delta
+	} else if cause == PerfCausePacingLimited {
+		summary.PacingLimited += delta
+	} else if cause == PerfCauseResourceChurn {
+		summary.ResourceChurn += delta
+	} else if cause == PerfCauseHudOverhead {
+		summary.HudOverhead += delta
+	} else {
+		summary.None += delta
+	}
+}
+
+func classifyPerfFrame(frame PerfFrame) PerfFrame {
+	budget := frame.BudgetMs
+	if budget <= 0 {
+		budget = perfBudgetMs(frame.TargetHz)
+	}
+	slowThreshold := perfSlowFrameThresholdMs(frame.TargetHz, budget)
+	primary := PerfCauseNone
+	secondary := ""
+	evidence := "within-budget"
+	count := 0
+
+	if frame.GpuQueue.QueueDepthClass == PerfQueueBacklogged || frame.GpuQueue.QueueDepthClass == PerfQueueSaturated || (frame.GpuQueue.SubmittedWorkDoneMs > budget * 4.0 && frame.GpuQueue.InFlightSubmits >= 2) {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseGpuQueueBound)
+		evidence = "gpu queue " + frame.GpuQueue.QueueDepthClass + " workDone " + perfFormatMs(frame.GpuQueue.SubmittedWorkDoneMs) + " inFlight " + strconv.Itoa(frame.GpuQueue.InFlightSubmits)
+	}
+	if frame.Present.SurfaceAcquireMs > budget * 0.85 || frame.Present.PresentCpuMs > budget * 0.85 || frame.Present.BackpressureMs > budget {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCausePresentBackpressure)
+		evidence = "present acquire " + perfFormatMs(frame.Present.SurfaceAcquireMs) + " present " + perfFormatMs(frame.Present.PresentCpuMs)
+	}
+	if frame.Hud.Visible && frame.Hud.CpuMs > perfMax(0.20, budget * 0.15) {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseHudOverhead)
+		evidence = "hud cpu " + perfFormatMs(frame.Hud.CpuMs) + " upload " + strconv.Itoa(frame.Hud.UploadBytes)
+	}
+	if frame.GameCpu.TotalMs > budget * 0.85 || frame.GameCpu.AdvanceMs > budget * 0.65 || frame.GameCpu.InputMs > budget * 0.35 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseLogicCpuBound)
+		evidence = "game cpu " + perfFormatMs(frame.GameCpu.TotalMs) + " advance " + perfFormatMs(frame.GameCpu.AdvanceMs)
+	}
+	if frame.GameCpu.DrawEncodeMs > budget * 0.65 || frame.Framewire.DrawBytes > 256 * 1024 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseDrawEncodeBound)
+		evidence = "draw encode " + perfFormatMs(frame.GameCpu.DrawEncodeMs) + " bytes " + strconv.Itoa(frame.Framewire.DrawBytes)
+	}
+	if frame.Framewire.ReplyWaitMs > budget * 0.85 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseFramewireBound)
+		evidence = "reply wait " + perfFormatMs(frame.Framewire.ReplyWaitMs)
+	}
+	if frame.RenderWorker.SubmitCpuMs > budget * 0.85 || frame.RendererCpu.SubmitFrameMs > budget * 0.85 || frame.RenderWorker.WorkMs > budget * 0.85 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseRenderCpuBound)
+		evidence = "render work " + perfFormatMs(frame.RenderWorker.WorkMs) + " input " + perfFormatMs(frame.RenderWorker.InputPollMs) + " req " + perfFormatMs(frame.RenderWorker.RequestSendMs) + " encode " + perfFormatMs(frame.RenderWorker.RequestEncodeMs) + " port " + perfFormatMs(frame.RenderWorker.RequestPortSendMs) + " perf " + perfFormatMs(frame.RenderWorker.PerfPacketMs) + " submit " + perfFormatMs(frame.RenderWorker.SubmitCpuMs) + perfRendererMainEvidence(frame.RendererCpu)
+	}
+	if frame.RendererWorkload.ResidentChunkRebuilds > 0 || frame.RendererWorkload.TextureUploads > 0 || frame.RendererWorkload.UploadBytes > 2 * 1024 * 1024 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCauseResourceChurn)
+		evidence = "resource upload " + strconv.Itoa(frame.RendererWorkload.UploadBytes) + " rebuilds " + strconv.Itoa(frame.RendererWorkload.ResidentChunkRebuilds)
+	}
+	if frame.RenderWorker.PaceWaitMs > budget * 0.85 && frame.GameCpu.TotalMs < budget * 0.35 && frame.RenderWorker.SubmitCpuMs < budget * 0.35 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCausePacingLimited)
+		evidence = "pace wait " + perfFormatMs(frame.RenderWorker.PaceWaitMs)
+	}
+	if primary == PerfCauseNone && frame.FrameMs > slowThreshold && frame.GameCpu.TotalMs < budget * 0.35 && frame.GameCpu.DrawEncodeMs < budget * 0.35 && frame.Framewire.ReplyWaitMs < budget * 0.35 && frame.RenderWorker.SubmitCpuMs < budget * 0.45 && frame.RenderWorker.WorkMs < budget * 0.45 {
+		primary, secondary, count = perfAddCause(primary, secondary, count, PerfCausePacingLimited)
+		evidence = "host cadence gap " + perfFormatMs(frame.FrameMs) + " display " + perfFormatMs(frame.RenderWorker.DisplayPulseMs) + " pace " + perfFormatMs(frame.RenderWorker.PaceWaitMs)
+	}
+	if primary == PerfCauseNone && frame.FrameMs > budget {
+		primary = PerfCauseMixed
+		if frame.FrameMs > slowThreshold {
+			evidence = "frame " + perfFormatMs(frame.FrameMs) + " over budget without single dominant lane"
+		} else {
+			evidence = "frame over budget"
+		}
+		count = 1
+	}
+	mixed := count > 1
+	if mixed && primary != PerfCauseMixed {
+		secondary = perfJoinSecondary(secondary, primary)
+		primary = PerfCauseMixed
+	}
+	frame.Classification = PerfClassification{PrimaryCause: primary, SecondaryCause: secondary, Mixed: mixed, Evidence: evidence}
+	return frame
+}
+
+func perfRendererMainEvidence(renderer PerfRendererCpuStats) string {
+	if renderer.MainPassMs <= 0 {
+		return ""
+	}
+	return " renderer main " + perfFormatMs(renderer.MainPassMs) + " setup " + perfFormatMs(renderer.MainPassSetupMs) + " sky " + perfFormatMs(renderer.MainSkyboxMs) + " model " + perfFormatMs(renderer.MainModelMs) + " primitive " + perfFormatMs(renderer.MainPrimitiveMs) + " close " + perfFormatMs(renderer.MainPassCloseMs)
+}
+
+func perfAddCause(primary string, secondary string, count int, cause string) (string, string, int) {
+	if primary == PerfCauseNone {
+		return cause, secondary, count + 1
+	}
+	if primary == cause || secondary == cause {
+		return primary, secondary, count
+	}
+	return primary, perfJoinSecondary(secondary, cause), count + 1
+}
+
+func perfJoinSecondary(base string, cause string) string {
+	if cause == "" {
+		return base
+	}
+	if base == "" {
+		return cause
+	}
+	return base + "+" + cause
+}
+
+func perfSpikeFromFrame(frame PerfFrame) PerfSpike {
+	over := frame.FrameMs - frame.BudgetMs
+	if over < 0 {
+		over = 0
+	}
+	return PerfSpike{
+		FrameId: frame.FrameId,
+		DisplayTick: frame.DisplayTick,
+		TimestampMs: frame.TimestampMs,
+		FrameMs: frame.FrameMs,
+		BudgetMs: frame.BudgetMs,
+		OverBudgetMs: over,
+		PrimaryCause: frame.Classification.PrimaryCause,
+		SecondaryCause: frame.Classification.SecondaryCause,
+		Evidence: frame.Classification.Evidence,
+		GameCpuMs: frame.GameCpu.TotalMs,
+		FixedSteps: frame.GameCpu.FixedSteps,
+		DrawEncodeMs: frame.GameCpu.DrawEncodeMs,
+		RenderLoopMs: frame.RenderWorker.LoopTotalMs,
+		RenderDisplayPulseMs: frame.RenderWorker.DisplayPulseMs,
+		RenderPaceWaitMs: frame.RenderWorker.PaceWaitMs,
+		RenderReplyWaitMs: frame.RenderWorker.ReplyWaitMs,
+		RenderSubmitMs: frame.RenderWorker.SubmitCpuMs,
+		RenderWorkMs: frame.RenderWorker.WorkMs,
+		RenderInputPollMs: frame.RenderWorker.InputPollMs,
+		RenderRequestSendMs: frame.RenderWorker.RequestSendMs,
+		RenderRequestEncodeMs: frame.RenderWorker.RequestEncodeMs,
+		RenderRequestPortSendMs: frame.RenderWorker.RequestPortSendMs,
+		RenderPerfPacketMs: frame.RenderWorker.PerfPacketMs,
+		GpuWorkDoneMs: frame.GpuQueue.SubmittedWorkDoneMs,
+		GpuInFlight: frame.GpuQueue.InFlightSubmits,
+		DrawBytes: frame.Framewire.DrawBytes,
+		SubmitBytes: frame.Framewire.SubmitBytes,
+		HudCpuMs: frame.Hud.CpuMs,
+	}
+}
+
+func perfMax(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func perfFormatMs(value float64) string {
+	return strconv.FormatFloat(value, 'f', 2, 64) + "ms"
+}

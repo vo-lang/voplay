@@ -65,7 +65,7 @@ func (s *VehiclePhysicsSession) Step(delta float64, intent VehicleIntent) Vehicl
 	}
 	s.Accumulator += delta
 	steps := 0
-	if s.Accumulator >= s.FixedDt && s.Scene != nil && !s.Scene.physicsSnapshotReady {
+	if s.Accumulator >= s.FixedDt && s.Scene != nil && !s.Scene.physicsWorld.snapshot.ready {
 		s.Scene.syncVehicles()
 	}
 	for s.Accumulator >= s.FixedDt && steps < vehiclePhysicsSessionMaxSteps {
@@ -97,7 +97,7 @@ func (s *VehiclePhysicsSession) StepFleet(delta float64, sessions []*VehiclePhys
 		s.FixedDt = defaultVehiclePhysicsSessionFixedDt
 	}
 	s.Accumulator += delta
-	if s.Accumulator >= s.FixedDt && s.Scene != nil && !s.Scene.physicsSnapshotReady {
+	if s.Accumulator >= s.FixedDt && s.Scene != nil && !s.Scene.physicsWorld.snapshot.ready {
 		s.Scene.syncVehicles()
 	}
 	steps := 0
@@ -162,7 +162,7 @@ func (s *VehiclePhysicsSession) captureTelemetry() {
 	if s == nil || s.Vehicle == nil {
 		return
 	}
-	s.LastTelemetry = ProductVehicleTelemetry(s.Vehicle)
+	s.LastTelemetry = s.Vehicle.Telemetry()
 	s.InvalidSampleCount = s.LastTelemetry.InvalidSampleCount
 	s.ValidationIssues = s.LastTelemetry.ValidationIssues(s.LastIntentFrame.Intent, VehicleTelemetryBudget{})
 	s.LastPacketHash = s.LastTelemetry.BackendApplyHash

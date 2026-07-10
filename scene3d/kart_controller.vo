@@ -45,7 +45,7 @@ type KartControllerState struct {
 type KartController struct {
 	Vehicle *Vehicle
 	Track *Track
-	Config KartControllerConfig
+	config KartControllerConfig
 	Dynamics KartDynamics
 	Recovery *VehicleRecovery
 	BoostTimer float64
@@ -62,9 +62,32 @@ func NewKartController(vehicle *Vehicle, track *Track, config KartControllerConf
 		panic("scene3d.NewKartController: vehicle must not be nil")
 	}
 	config = normalizeKartControllerConfig(config)
-	vehicle.Config = config.Vehicle
+	vehicle.Reconfigure(config.Vehicle)
 	vehicle.BindTrack(track)
-	return &KartController{Vehicle: vehicle, Track: track, Config: config, Dynamics: NewKartDynamics(KartDynamicsConfigFromControllerConfig(config)), Recovery: NewVehicleRecovery(vehicle, track, config.Recovery)}
+	return &KartController{Vehicle: vehicle, Track: track, config: config, Dynamics: NewKartDynamics(kartDynamicsConfigFromNormalizedControllerConfig(config)), Recovery: NewVehicleRecovery(vehicle, track, config.Recovery)}
+}
+
+func (k *KartController) Config() KartControllerConfig {
+	if k == nil {
+		return KartControllerConfig{}
+	}
+	out := k.config
+	out.Vehicle = cloneVehicleConfig(k.config.Vehicle)
+	return out
+}
+
+func (k *KartController) Reconfigure(config KartControllerConfig) {
+	if k == nil {
+		return
+	}
+	k.config = normalizeKartControllerConfig(config)
+	k.Dynamics.Reconfigure(kartDynamicsConfigFromNormalizedControllerConfig(k.config))
+	if k.Vehicle != nil {
+		k.Vehicle.Reconfigure(k.config.Vehicle)
+	}
+	if k.Recovery != nil {
+		k.Recovery.Reconfigure(k.config.Recovery)
+	}
 }
 
 func (k *KartController) BindTrack(track *Track) {
@@ -103,13 +126,12 @@ func (k *KartController) UpdateIntentFromSyncedState(intent VehicleIntent, dt fl
 	intent = intent.Normalized()
 	k.Vehicle.BindTrack(k.Track)
 	surface := k.currentSurface()
-	k.Dynamics.Config = KartDynamicsConfigFromControllerConfig(k.Config)
 	k.Dynamics.BoostTimer = k.BoostTimer
 	k.Dynamics.DriftCharge = k.DriftCharge
 	resolved := k.Dynamics.Step(intent, SurfaceMaterialFromTrackHit(surface), k.Vehicle.Speed, k.Vehicle.Grounded, dt)
 	k.BoostTimer = k.Dynamics.BoostTimer
 	k.DriftCharge = k.Dynamics.DriftCharge
-	k.Vehicle.Config = resolved.VehicleConfig
+	k.Vehicle.applyResolvedConfig(resolved.VehicleConfig)
 	k.Vehicle.applyForceCommand(resolved.ForceCommand, dt)
 	recovery := k.updateRecovery(resolved.RecoveryInput, dt)
 	k.state.SurfaceID = surface.Name
@@ -174,7 +196,6 @@ func (k *KartController) updateRecovery(input VehicleRecoveryInput, dt float64) 
 	if k.Recovery == nil {
 		return VehicleRecoveryState{ShouldRespawn: input.Reset}
 	}
-	k.Recovery.Config = normalizeVehicleRecoveryConfig(k.Config.Recovery)
 	return k.Recovery.Update(input, dt)
 }
 

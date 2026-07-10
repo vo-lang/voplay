@@ -1,0 +1,400 @@
+package scene3d
+
+import (
+	"errors"
+	"github.com/vo-lang/voplay"
+)
+
+func SpawnTrackWithAssets(scene *Scene, assets voplay.AssetSource, track *Track, baseDir string) (*TrackSpawnResult, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnTrack: scene is nil")
+	}
+	if track == nil || track.asset == nil {
+		return nil, errors.New("scene3d.SpawnTrack: track is nil")
+	}
+	result := &TrackSpawnResult{Track: track, Entities: []*Entity{}, Meshes: map[string]*Entity{}, CollisionMeshes: map[string]*Entity{}, Textures: []voplay.TextureID{}}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		result.Destroy(scene)
+		result.ReleaseTextures()
+	}()
+	if track.asset.Terrain != nil {
+		mapResult := &MapSpawnResult{Textures: []voplay.TextureID{}}
+		terrain, err := spawnMapTerrain(scene, assets, *track.asset.Terrain, baseDir, mapResult, nil)
+		if err != nil {
+			return nil, err
+		}
+		result.Terrain = terrain
+		result.Entities = append(result.Entities, terrain.Entity())
+		result.Textures = append(result.Textures, mapResult.Textures...)
+	}
+	for _, terrainAsset := range track.asset.TerrainChunks {
+		mapResult := &MapSpawnResult{Textures: []voplay.TextureID{}}
+		terrain, err := spawnMapTerrain(scene, assets, terrainAsset, baseDir, mapResult, nil)
+		if err != nil {
+			return nil, err
+		}
+		if result.Terrain == nil {
+			result.Terrain = terrain
+		}
+		result.TerrainChunks = append(result.TerrainChunks, terrain)
+		result.Entities = append(result.Entities, terrain.Entity())
+		result.Textures = append(result.Textures, mapResult.Textures...)
+	}
+	for _, mesh := range track.asset.Meshes {
+		visual, collision, err := spawnTrackMesh(scene, assets, mesh, baseDir)
+		if err != nil {
+			return nil, err
+		}
+		if visual != nil {
+			result.Entities = append(result.Entities, visual)
+			result.Meshes[mesh.Name] = visual
+		}
+		if collision != nil {
+			result.Entities = append(result.Entities, collision)
+			result.CollisionMeshes[mesh.Name] = collision
+		}
+	}
+	success = true
+	return result, nil
+}
+
+func (r *TrackSpawnResult) Destroy(scene *Scene) {
+	if r == nil || scene == nil {
+		return
+	}
+	for _, e := range r.Entities {
+		if e != nil && e.scene == scene && e.Active {
+			scene.Destroy(e)
+		}
+	}
+	r.Entities = nil
+	r.Terrain = nil
+	r.TerrainChunks = nil
+	r.Meshes = map[string]*Entity{}
+	r.CollisionMeshes = map[string]*Entity{}
+	r.HeightSampler = nil
+	r.CollisionHeightSampler = nil
+	r.ReleaseTextures()
+}
+
+func (r *TrackSpawnResult) HeightProbe() TrackHeightProbe {
+	return func(pos voplay.Vec3) (float64, bool) {
+		if r == nil {
+			return 0, false
+		}
+		if r.HeightSampler != nil {
+			if h, ok := r.HeightSampler(pos); ok {
+				return h, true
+			}
+		}
+		if h, ok := sampleSpawnedTerrainHeight(r.Terrain, pos); ok {
+			return h, true
+		}
+		for _, terrain := range r.TerrainChunks {
+			if terrain == r.Terrain {
+				continue
+			}
+			if h, ok := sampleSpawnedTerrainHeight(terrain, pos); ok {
+				return h, true
+			}
+		}
+		return 0, false
+	}
+}
+
+func (r *TrackSpawnResult) CollisionHeightProbe() TrackHeightProbe {
+	return func(pos voplay.Vec3) (float64, bool) {
+		if r == nil {
+			return 0, false
+		}
+		if r.CollisionHeightSampler != nil {
+			if h, ok := r.CollisionHeightSampler(pos); ok {
+				return h, true
+			}
+		}
+		if r.HeightSampler != nil {
+			if h, ok := r.HeightSampler(pos); ok {
+				return h, true
+			}
+		}
+		if h, ok := sampleSpawnedTerrainCollisionHeight(r.Terrain, pos); ok {
+			return h, true
+		}
+		for _, terrain := range r.TerrainChunks {
+			if terrain == r.Terrain {
+				continue
+			}
+			if h, ok := sampleSpawnedTerrainCollisionHeight(terrain, pos); ok {
+				return h, true
+			}
+		}
+		return 0, false
+	}
+}
+
+func sampleSpawnedTerrainHeight(terrain *Terrain, pos voplay.Vec3) (float64, bool) {
+	if terrain == nil || terrain.entity == nil || !terrain.entity.Active || !terrain.entity.Visible {
+		return 0, false
+	}
+	return terrain.HeightAt(pos.X, pos.Z)
+}
+
+func sampleSpawnedTerrainCollisionHeight(terrain *Terrain, pos voplay.Vec3) (float64, bool) {
+	if terrain == nil || terrain.entity == nil || !terrain.entity.Active {
+		return 0, false
+	}
+	return terrain.HeightAt(pos.X, pos.Z)
+}
+
+func (r *TrackSpawnResult) ReleaseTextures() {
+	if r == nil {
+		return
+	}
+	for _, texture := range r.Textures {
+		if texture != 0 {
+			texture.Free()
+		}
+	}
+	r.Textures = nil
+}
+
+func SpawnTrackDebugOverlay(scene *Scene, track *Track, opts TrackDebugOptions) (*TrackDebugOverlay, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnTrackDebugOverlay: scene is nil")
+	}
+	if track == nil {
+		return nil, errors.New("scene3d.SpawnTrackDebugOverlay: track is nil")
+	}
+	opts = normalizeTrackDebugOptions(opts)
+	model := opts.Model
+	var modelLease *voplay.ModelLease
+	if model == 0 {
+		model = CubeMesh()
+		modelLease = voplay.NewModelLease(model)
+	}
+	overlay := &TrackDebugOverlay{Entities: []*Entity{}, model: model, modelLease: modelLease}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		overlay.Destroy(scene)
+	}()
+	if opts.Centerline {
+		overlay.spawnTrackPolyline(scene, track, model, opts, 0, opts.CenterColor)
+	}
+	if opts.Boundaries {
+		overlay.spawnTrackPolyline(scene, track, model, opts, -1, opts.BoundaryColor)
+		overlay.spawnTrackPolyline(scene, track, model, opts, 1, opts.BoundaryColor)
+	}
+	if opts.Surfaces {
+		overlay.spawnTrackSurfaceMarkers(scene, track, model, opts)
+	}
+	if opts.Gates {
+		for _, gate := range track.asset.Gates {
+			pose := track.PoseAt(gate.Distance)
+			width := gate.Width
+			if width <= 0 {
+				width = pose.HalfWidth * 2
+			}
+			ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: width, Y: opts.LineThickness, Z: opts.LineThickness}, Model: model, Tint: opts.GateColor, TintSet: true, Tag: "track_debug_gate_" + gate.Name, PickMode: PickDisabled})
+			overlay.Entities = append(overlay.Entities, ent)
+		}
+	}
+	if opts.Respawns {
+		for _, respawn := range track.asset.Respawns {
+			pose := track.PoseAt(respawn.Distance)
+			ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: opts.LineThickness * 3, Y: opts.LineThickness * 3, Z: opts.LineThickness * 3}, Model: model, Tint: opts.RespawnColor, TintSet: true, Tag: "track_debug_respawn_" + respawn.Name, PickMode: PickDisabled})
+			overlay.Entities = append(overlay.Entities, ent)
+		}
+	}
+	success = true
+	return overlay, nil
+}
+
+func (o *TrackDebugOverlay) Destroy(scene *Scene) {
+	if o == nil {
+		return
+	}
+	for _, e := range o.Entities {
+		if e != nil && scene != nil && e.scene == scene && e.Active {
+			scene.Destroy(e)
+		}
+	}
+	o.Entities = nil
+	o.modelLease.Release()
+	o.modelLease = nil
+	o.model = 0
+}
+
+func (o *TrackDebugOverlay) spawnTrackPolyline(scene *Scene, track *Track, model voplay.ModelID, opts TrackDebugOptions, lateralSign float64, color voplay.Color) {
+	for i := 0; i < len(track.segmentLengths); i++ {
+		a := track.PoseAt(track.segmentStarts[i])
+		b := track.PoseAt(track.segmentStarts[i] + track.segmentLengths[i])
+		if lateralSign != 0 {
+			a.Position = a.Position.Add(a.Right.Scale(a.HalfWidth * lateralSign))
+			b.Position = b.Position.Add(b.Right.Scale(b.HalfWidth * lateralSign))
+		}
+		start := a.Position.Add(voplay.Vec3{Y: opts.HeightOffset})
+		end := b.Position.Add(voplay.Vec3{Y: opts.HeightOffset})
+		dir := end.Sub(start)
+		length := dir.Length()
+		if length <= 0 {
+			continue
+		}
+		mid := start.Lerp(end, 0.5)
+		yaw := trackYawFromForward(dir.Normalize())
+		ent := scene.Spawn(EntityDesc{Position: mid, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw), Scale: voplay.Vec3{X: opts.LineThickness, Y: opts.LineThickness, Z: length}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_line", PickMode: PickDisabled})
+		o.Entities = append(o.Entities, ent)
+	}
+}
+
+func (o *TrackDebugOverlay) spawnTrackSurfaceMarkers(scene *Scene, track *Track, model voplay.ModelID, opts TrackDebugOptions) {
+	step := opts.SurfaceStep
+	if step <= 0 {
+		step = 20
+	}
+	size := opts.SurfaceMarkerSize
+	if size <= 0 {
+		size = opts.LineThickness * 2.2
+	}
+	length := track.Length()
+	for distance := 0.0; distance < length; distance += step {
+		pose := track.PoseAt(distance)
+		laterals := []float64{-pose.HalfWidth - size * 2.8, -pose.HalfWidth * 0.55, 0, pose.HalfWidth * 0.55, pose.HalfWidth + size * 2.8}
+		for _, lateral := range laterals {
+			pos := pose.Position.Add(pose.Right.Scale(lateral))
+			hit := track.SurfaceAt(pos)
+			color := opts.OffroadSurfaceColor
+			if hit.Kind == TrackSurfaceBoost {
+				color = opts.BoostSurfaceColor
+			} else if hit.OnRoad || hit.Kind == TrackSurfaceRoad {
+				color = opts.RoadSurfaceColor
+			}
+			ent := scene.Spawn(EntityDesc{Position: pos.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: size, Y: size * 0.35, Z: size}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_surface_" + hit.Kind, PickMode: PickDisabled})
+			o.Entities = append(o.Entities, ent)
+		}
+	}
+}
+
+func spawnTrackMesh(scene *Scene, assets voplay.AssetSource, mesh TrackMesh, baseDir string) (*Entity, *Entity, error) {
+	visualModel, visualOwned, err := loadTrackModel(assets, mapResolvePath(baseDir, mesh.Model))
+	if err != nil {
+		return nil, nil, err
+	}
+	visualSpawned := false
+	errdefer func() {
+		if !visualSpawned && visualOwned && visualModel != 0 {
+			visualModel.Free()
+		}
+	}()
+	visualDesc := EntityDesc{Position: mesh.Position.Vec3(), Rotation: mapRotation(mesh.Rotation), Scale: mapScale(mesh.Scale), Model: visualModel, Tag: mesh.Name, StaticRenderable: true}
+	if mesh.TintSet {
+		visualDesc.Tint = mesh.Tint.Color()
+		visualDesc.TintSet = true
+	}
+	if visualOwned {
+		visualDesc.ModelLease = voplay.NewModelLease(visualModel)
+	}
+	collisionMode := mesh.Collision
+	if collisionMode == "" && mesh.CollisionModel != "" {
+		collisionMode = "trimesh"
+	}
+	if collisionMode == "trimesh" && mesh.CollisionModel == "" {
+		visualDesc.Physics = TrimeshPhysics(visualModel)
+		if mesh.Friction > 0 {
+			visualDesc.Physics.Friction = mesh.Friction
+		}
+	}
+	visual := scene.Spawn(visualDesc)
+	visual.Visible = !mesh.Hidden
+	visualSpawned = true
+	if collisionMode != "trimesh" || mesh.CollisionModel == "" {
+		return visual, nil, nil
+	}
+	collisionModel, collisionOwned, err := loadTrackModel(assets, mapResolvePath(baseDir, mesh.CollisionModel))
+	if err != nil {
+		scene.Destroy(visual)
+		return nil, nil, err
+	}
+	collisionSpawned := false
+	errdefer func() {
+		if !collisionSpawned && collisionOwned && collisionModel != 0 {
+			collisionModel.Free()
+		}
+	}()
+	physics := TrimeshPhysics(collisionModel)
+	if mesh.Friction > 0 {
+		physics.Friction = mesh.Friction
+	}
+	collisionDesc := EntityDesc{Position: mesh.Position.Vec3(), Rotation: mapRotation(mesh.Rotation), Scale: mapScale(mesh.Scale), Model: collisionModel, Tint: voplay.White, TintSet: true, Tag: mesh.Name + "_collision", Physics: physics}
+	if collisionOwned {
+		collisionDesc.ModelLease = voplay.NewModelLease(collisionModel)
+	}
+	collision := scene.Spawn(collisionDesc)
+	collision.Visible = false
+	collisionSpawned = true
+	return visual, collision, nil
+}
+
+func loadTrackModel(assets voplay.AssetSource, path string) (voplay.ModelID, bool, error) {
+	if assets != nil {
+		model, err := assets.Model(path)
+		if err != nil {
+			return 0, false, err
+		}
+		return model, false, nil
+	}
+	model, err := voplay.LoadModel(path)
+	if err != nil {
+		return 0, false, err
+	}
+	return model, true, nil
+}
+
+func normalizeTrackDebugOptions(opts TrackDebugOptions) TrackDebugOptions {
+	if !opts.Centerline && !opts.Boundaries && !opts.Surfaces && !opts.Gates && !opts.Respawns {
+		opts.Centerline = true
+		opts.Boundaries = true
+		opts.Gates = true
+		opts.Respawns = true
+	}
+	if opts.LineThickness <= 0 {
+		opts.LineThickness = 0.18
+	}
+	if opts.SurfaceStep <= 0 {
+		opts.SurfaceStep = 20
+	}
+	if opts.SurfaceMarkerSize <= 0 {
+		opts.SurfaceMarkerSize = opts.LineThickness * 2.2
+	}
+	if opts.HeightOffset == 0 {
+		opts.HeightOffset = 0.35
+	}
+	if opts.CenterColor == (voplay.Color{}) {
+		opts.CenterColor = voplay.Color{R: 1, G: 0.9, B: 0.1, A: 1}
+	}
+	if opts.BoundaryColor == (voplay.Color{}) {
+		opts.BoundaryColor = voplay.Color{R: 0.95, G: 0.15, B: 0.1, A: 1}
+	}
+	if opts.RoadSurfaceColor == (voplay.Color{}) {
+		opts.RoadSurfaceColor = voplay.Color{R: 0.15, G: 0.95, B: 0.35, A: 1}
+	}
+	if opts.OffroadSurfaceColor == (voplay.Color{}) {
+		opts.OffroadSurfaceColor = voplay.Color{R: 0.95, G: 0.48, B: 0.12, A: 1}
+	}
+	if opts.BoostSurfaceColor == (voplay.Color{}) {
+		opts.BoostSurfaceColor = voplay.Color{R: 0.1, G: 0.8, B: 1, A: 1}
+	}
+	if opts.GateColor == (voplay.Color{}) {
+		opts.GateColor = voplay.Color{R: 0.1, G: 0.8, B: 1, A: 1}
+	}
+	if opts.RespawnColor == (voplay.Color{}) {
+		opts.RespawnColor = voplay.Color{R: 0.2, G: 1, B: 0.35, A: 1}
+	}
+	return opts
+}

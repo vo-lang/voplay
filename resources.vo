@@ -233,6 +233,37 @@ func MeasureTextFont(font FontID, text string, size float64) (float64, float64) 
 // ModelID is an opaque handle to a loaded 3D model.
 type ModelID int
 
+// ModelLease owns one model handle and releases it at most once. It can be
+// handed to scene3d.EntityDesc to transfer lifetime without boolean flags.
+type ModelLease struct {
+	model ModelID
+	released bool
+}
+
+func NewModelLease(model ModelID) *ModelLease {
+	if model == 0 {
+		panic("NewModelLease: model must not be 0")
+	}
+	return &ModelLease{model: model}
+}
+
+func (lease *ModelLease) Model() ModelID {
+	if lease == nil || lease.released {
+		return 0
+	}
+	return lease.model
+}
+
+func (lease *ModelLease) Release() {
+	if lease == nil || lease.released {
+		return
+	}
+	lease.released = true
+	model := lease.model
+	lease.model = 0
+	model.Free()
+}
+
 // ModelBackend abstracts model resource operations so they can be
 // replaced in tests without per-function hook boilerplate.
 type ModelBackend interface {

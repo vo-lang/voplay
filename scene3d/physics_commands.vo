@@ -1,0 +1,278 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2, v3 float64) {
+	s.physicsWorld.commands.WriteByte(cmd)
+	s.physicsWorld.commands.WriteU32(bodyID)
+	s.physicsWorld.commands.WriteF64(v1)
+	s.physicsWorld.commands.WriteF64(v2)
+	s.physicsWorld.commands.WriteF64(v3)
+}
+
+func (s *Scene) writePhysCmdQuat(cmd byte, bodyID int, q voplay.Quat) {
+	s.physicsWorld.commands.WriteByte(cmd)
+	s.physicsWorld.commands.WriteU32(bodyID)
+	s.physicsWorld.commands.WriteF64(q.X)
+	s.physicsWorld.commands.WriteF64(q.Y)
+	s.physicsWorld.commands.WriteF64(q.Z)
+	s.physicsWorld.commands.WriteF64(q.W)
+}
+
+func (e *Entity) ApplyForce(force voplay.Vec3) {
+	if e == nil || e.scene == nil || e.Physics == nil || e.Physics.bodyID == 0 {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, force.X, force.Y, force.Z)
+	e.scene.recordPhysicsBackendCommandEvent(PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandRawForce, Outcome: PhysicsBackendCommandOutcomeQueued, Reason: "entity_apply_force", BodyID: e.Physics.bodyID, Vector: force})
+}
+
+func (e *Entity) ApplyImpulse(impulse voplay.Vec3) {
+	if e == nil || e.scene == nil || e.Physics == nil || e.Physics.bodyID == 0 {
+		return
+	}
+	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, impulse.X, impulse.Y, impulse.Z)
+	e.scene.recordPhysicsBackendCommandEvent(PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandRawImpulse, Outcome: PhysicsBackendCommandOutcomeQueued, Reason: "entity_apply_impulse", BodyID: e.Physics.bodyID, Vector: impulse})
+}
+
+func (e *Entity) SetVelocity(vel voplay.Vec3) {
+	e.ApplyPhysicsTarget(PhysicsBackendTargetCommand{LinearVelocity: vel, ApplyLinearVelocity: true, Reason: "entity_set_velocity"})
+}
+
+func (e *Entity) SetAngularVelocity(vel voplay.Vec3) {
+	e.ApplyPhysicsTarget(PhysicsBackendTargetCommand{AngularVelocity: vel, ApplyAngularVelocity: true, Reason: "entity_set_angular_velocity"})
+}
+
+func (e *Entity) SetPosition(pos voplay.Vec3) {
+	e.ApplyPhysicsTarget(PhysicsBackendTargetCommand{Position: pos, ApplyPosition: true, Reason: "entity_set_position"})
+}
+
+func MoveEntityPhysicsTarget(entity *Entity, position voplay.Vec3, reason string) {
+	if entity == nil {
+		return
+	}
+	if reason == "" {
+		reason = "entity_move_target"
+	}
+	entity.ApplyPhysicsTarget(PhysicsBackendTargetCommand{Position: position, ApplyPosition: true, Reason: reason})
+}
+
+func (e *Entity) SetRotation(rot voplay.Quat) {
+	e.ApplyPhysicsTarget(PhysicsBackendTargetCommand{Rotation: rot, ApplyRotation: true, Reason: "entity_set_rotation"})
+}
+
+func (e *Entity) SetScale(s voplay.Vec3) {
+	if e.Physics != nil {
+		panic("Entity.SetScale: physics collider resize is not supported")
+	}
+	e.scale = s
+}
+
+func (e *Entity) Velocity() voplay.Vec3 {
+	return e.Physics.velocity
+}
+
+func (e *Entity) AngularVelocity() voplay.Vec3 {
+	return e.Physics.angularVelocity
+}
+
+func (e *Entity) ApplyPhysicsTarget(command PhysicsBackendTargetCommand) {
+	if e == nil {
+		return
+	}
+	if e.scene == nil {
+		applyEntityTargetLocal(e, command)
+		return
+	}
+	e.scene.applyEntityPhysicsTarget(e, command)
+}
+
+func (s *Scene) applyVehiclePoseReset(body *Entity, command VehiclePoseResetCommand) {
+	event := PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandPoseReset, Reason: "vehicle_pose_reset", Pose: command}
+	if s == nil || body == nil || body.Physics == nil {
+		if s != nil {
+			event.Outcome = PhysicsBackendCommandOutcomeRejected
+			event.Rejection = "missing_body"
+			s.recordPhysicsBackendCommandEvent(event)
+		}
+		return
+	}
+	event.BodyID = body.Physics.bodyID
+	rotation := voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Yaw)
+	body.position = command.Position
+	body.rotation = rotation
+	body.Physics.velocity = command.LinearVelocity
+	body.Physics.angularVelocity = command.AngularVelocity
+	if body.Physics.bodyID == 0 {
+		event.Outcome = PhysicsBackendCommandOutcomeLocalOnly
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.ApplyPoseReset(s.physicsWorld.id, body.Physics.bodyID, command)
+		event.Outcome = PhysicsBackendCommandOutcomeApplied
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	s.writePhysCmd(physicsCmdSetPos, body.Physics.bodyID, command.Position.X, command.Position.Y, command.Position.Z)
+	s.writePhysCmdQuat(physicsCmdSetRot, body.Physics.bodyID, rotation)
+	s.writePhysCmd(physicsCmdSetVel, body.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+	s.writePhysCmd(physicsCmdSetAngVel, body.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+	event.Outcome = PhysicsBackendCommandOutcomeQueued
+	s.recordPhysicsBackendCommandEvent(event)
+}
+
+func (s *Scene) applyVehicleMotionReset(body *Entity, command VehicleMotionResetCommand) {
+	event := PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandMotionReset, Reason: "vehicle_motion_reset", Motion: command}
+	if s == nil || body == nil || body.Physics == nil {
+		if s != nil {
+			event.Outcome = PhysicsBackendCommandOutcomeRejected
+			event.Rejection = "missing_body"
+			s.recordPhysicsBackendCommandEvent(event)
+		}
+		return
+	}
+	event.BodyID = body.Physics.bodyID
+	body.Physics.velocity = command.LinearVelocity
+	body.Physics.angularVelocity = command.AngularVelocity
+	if body.Physics.bodyID == 0 {
+		event.Outcome = PhysicsBackendCommandOutcomeLocalOnly
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.ApplyMotionReset(s.physicsWorld.id, body.Physics.bodyID, command)
+		event.Outcome = PhysicsBackendCommandOutcomeApplied
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	s.writePhysCmd(physicsCmdSetVel, body.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+	s.writePhysCmd(physicsCmdSetAngVel, body.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+	event.Outcome = PhysicsBackendCommandOutcomeQueued
+	s.recordPhysicsBackendCommandEvent(event)
+}
+
+func (s *Scene) applyVehicleSleepState(body *Entity, command VehicleSleepCommand) {
+	event := PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandSleepState, Reason: "vehicle_sleep_state", Sleep: command}
+	if s == nil || body == nil || body.Physics == nil || body.Physics.bodyID == 0 {
+		if s != nil {
+			event.Outcome = PhysicsBackendCommandOutcomeRejected
+			event.Rejection = "missing_body"
+			s.recordPhysicsBackendCommandEvent(event)
+		}
+		return
+	}
+	event.BodyID = body.Physics.bodyID
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.ApplySleepState(s.physicsWorld.id, body.Physics.bodyID, command)
+		event.Outcome = PhysicsBackendCommandOutcomeApplied
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	event.Outcome = PhysicsBackendCommandOutcomeRejected
+	event.Rejection = "world_not_initialized"
+	s.recordPhysicsBackendCommandEvent(event)
+}
+
+func (s *Scene) applyVehicleRecovery(body *Entity, command VehicleRecoveryCommand) {
+	event := PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandRecovery, Reason: command.Reason, Recovery: command}
+	if s == nil || body == nil || body.Physics == nil {
+		if s != nil {
+			event.Outcome = PhysicsBackendCommandOutcomeRejected
+			event.Rejection = "missing_body"
+			s.recordPhysicsBackendCommandEvent(event)
+		}
+		return
+	}
+	event.BodyID = body.Physics.bodyID
+	rotation := voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, command.Pose.Yaw)
+	body.position = command.Pose.Position
+	body.rotation = rotation
+	body.Physics.velocity = command.Motion.LinearVelocity
+	body.Physics.angularVelocity = command.Motion.AngularVelocity
+	if body.Physics.bodyID == 0 {
+		event.Outcome = PhysicsBackendCommandOutcomeLocalOnly
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.ApplyRecovery(s.physicsWorld.id, body.Physics.bodyID, command)
+		event.Outcome = PhysicsBackendCommandOutcomeApplied
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	s.writePhysCmd(physicsCmdSetPos, body.Physics.bodyID, command.Pose.Position.X, command.Pose.Position.Y, command.Pose.Position.Z)
+	s.writePhysCmdQuat(physicsCmdSetRot, body.Physics.bodyID, rotation)
+	s.writePhysCmd(physicsCmdSetVel, body.Physics.bodyID, command.Motion.LinearVelocity.X, command.Motion.LinearVelocity.Y, command.Motion.LinearVelocity.Z)
+	s.writePhysCmd(physicsCmdSetAngVel, body.Physics.bodyID, command.Motion.AngularVelocity.X, command.Motion.AngularVelocity.Y, command.Motion.AngularVelocity.Z)
+	event.Outcome = PhysicsBackendCommandOutcomeQueued
+	s.recordPhysicsBackendCommandEvent(event)
+}
+
+func (s *Scene) applyEntityPhysicsTarget(entity *Entity, command PhysicsBackendTargetCommand) {
+	event := PhysicsBackendCommandEvent{Kind: PhysicsBackendCommandTarget, Reason: command.Reason, Target: command}
+	if s == nil || entity == nil {
+		if s != nil {
+			event.Outcome = PhysicsBackendCommandOutcomeRejected
+			event.Rejection = "missing_entity"
+			s.recordPhysicsBackendCommandEvent(event)
+		}
+		return
+	}
+	applyEntityTargetLocal(entity, command)
+	if entity.Physics == nil {
+		event.Outcome = PhysicsBackendCommandOutcomeLocalOnly
+		s.recordPhysicsBackendCommandEvent(event)
+		return
+	}
+	event.BodyID = entity.Physics.bodyID
+	if command.ApplyPosition {
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetPos, entity.Physics.bodyID, command.Position.X, command.Position.Y, command.Position.Z)
+		}
+	}
+	if command.ApplyRotation {
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmdQuat(physicsCmdSetRot, entity.Physics.bodyID, command.Rotation)
+		}
+	}
+	if command.ApplyLinearVelocity {
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetVel, entity.Physics.bodyID, command.LinearVelocity.X, command.LinearVelocity.Y, command.LinearVelocity.Z)
+		}
+	}
+	if command.ApplyAngularVelocity {
+		if entity.Physics.bodyID != 0 {
+			s.writePhysCmd(physicsCmdSetAngVel, entity.Physics.bodyID, command.AngularVelocity.X, command.AngularVelocity.Y, command.AngularVelocity.Z)
+		}
+	}
+	if entity.Physics.bodyID == 0 {
+		event.Outcome = PhysicsBackendCommandOutcomeLocalOnly
+	} else {
+		event.Outcome = PhysicsBackendCommandOutcomeQueued
+	}
+	s.recordPhysicsBackendCommandEvent(event)
+}
+
+func applyEntityTargetLocal(entity *Entity, command PhysicsBackendTargetCommand) {
+	if entity == nil {
+		return
+	}
+	if command.ApplyPosition {
+		entity.position = command.Position
+	}
+	if command.ApplyRotation {
+		entity.rotation = command.Rotation
+	}
+	if entity.Physics == nil {
+		return
+	}
+	if command.ApplyLinearVelocity {
+		entity.Physics.velocity = command.LinearVelocity
+	}
+	if command.ApplyAngularVelocity {
+		entity.Physics.angularVelocity = command.AngularVelocity
+	}
+}

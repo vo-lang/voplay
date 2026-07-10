@@ -1,0 +1,205 @@
+package voplay
+
+import (
+	"strconv"
+	"github.com/vo-lang/voplay/codec"
+)
+
+func decodeRendererPerfPayload(payload []byte) perfRendererPacketStats {
+	if len(payload) < 4 {
+		return perfRendererPacketStats{}
+	}
+	r := codec.NewByteReader(payload)
+	version := r.ReadU32()
+	if version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 {
+		return perfRendererPacketStats{}
+	}
+	minRemaining := 11 * 8 + 20 * 4
+	if version >= 3 {
+		minRemaining += 5 * 8
+	}
+	if version >= 4 {
+		minRemaining += 4 * 4
+	}
+	if version >= 5 {
+		minRemaining += 9 * 4
+	}
+	if version >= 6 {
+		minRemaining += 1 * 8 + 3 * 4
+	}
+	if version >= 7 {
+		minRemaining += 6 * 4
+	}
+	if version >= 8 {
+		minRemaining += 8 * 4
+	}
+	if r.Remaining() < minRemaining {
+		return perfRendererPacketStats{}
+	}
+	stats := perfRendererPacketStats{Valid: true}
+	stats.SubmitFrameMs = r.ReadF64()
+	stats.SurfaceAcquireMs = r.ReadF64()
+	stats.DecodeMs = r.ReadF64()
+	stats.SceneUpdateMs = r.ReadF64()
+	stats.DepthPassMs = r.ReadF64()
+	stats.ShadowPassMs = r.ReadF64()
+	stats.MainPassMs = r.ReadF64()
+	if version >= 3 {
+		stats.MainPassSetupMs = r.ReadF64()
+		stats.MainSkyboxMs = r.ReadF64()
+		stats.MainModelMs = r.ReadF64()
+		stats.MainPrimitiveMs = r.ReadF64()
+		stats.MainPassCloseMs = r.ReadF64()
+	}
+	if version >= 6 {
+		stats.WaterPassMs = r.ReadF64()
+	}
+	stats.PostPassMs = r.ReadF64()
+	stats.OverlayPassMs = r.ReadF64()
+	stats.QueueSubmitCpuMs = r.ReadF64()
+	stats.PresentCpuMs = r.ReadF64()
+	stats.DrawCalls = r.ReadU32()
+	stats.ModelDraws = r.ReadU32()
+	stats.SkinnedDraws = r.ReadU32()
+	stats.PrimitiveDraws = r.ReadU32()
+	if version >= 6 {
+		stats.WaterDraws = r.ReadU32()
+		stats.WaterInstances = r.ReadU32()
+		stats.WaterTriangles = r.ReadU32()
+	}
+	stats.SpriteDraws = r.ReadU32()
+	stats.TextDraws = r.ReadU32()
+	stats.Instances = r.ReadU32()
+	stats.Triangles = r.ReadU32()
+	stats.UploadBytes = r.ReadU32()
+	stats.BindGroupCreates = r.ReadU32()
+	stats.BufferCreates = r.ReadU32()
+	stats.TextureUploads = r.ReadU32()
+	stats.ResidentChunkRebuilds = r.ReadU32()
+	stats.ShadowCascades = r.ReadU32()
+	stats.PrimitiveChunks = r.ReadU32()
+	stats.PostEffects = r.ReadU32()
+	stats.RetainedSceneUpserts = r.ReadU32()
+	stats.RetainedSceneRemovals = r.ReadU32()
+	stats.VisibleObjects = r.ReadU32()
+	stats.CulledObjects = r.ReadU32()
+	if version >= 2 && r.Remaining() >= 4 {
+		stats.DiagnosticFlags = r.ReadU32()
+	}
+	if version >= 4 && r.Remaining() >= 16 {
+		stats.FrameGraphPasses = r.ReadU32()
+		stats.FrameGraphResources = r.ReadU32()
+		stats.FrameGraphTargets = r.ReadU32()
+		stats.FrameGraphReadyTargets = r.ReadU32()
+	}
+	if version >= 5 && r.Remaining() >= 36 {
+		stats.FrameGraphTransientTargets = r.ReadU32()
+		stats.FrameGraphPersistentTargets = r.ReadU32()
+		stats.FrameGraphExternalTargets = r.ReadU32()
+		stats.FrameGraphMissingReads = r.ReadU32()
+		stats.FrameGraphResizeGeneration = r.ReadU32()
+		stats.FrameGraphTargetCreates = r.ReadU32()
+		stats.FrameGraphTargetReuses = r.ReadU32()
+		stats.FrameGraphTargetRecreates = r.ReadU32()
+		stats.FrameGraphAliasReuses = r.ReadU32()
+	}
+	if version >= 7 && r.Remaining() >= 24 {
+		stats.FrameGraphSkippedPasses = r.ReadU32()
+		stats.FrameGraphFailures = r.ReadU32()
+		stats.FilteredDraws = r.ReadU32()
+		stats.MissingResources = r.ReadU32()
+		stats.InvalidBatches = r.ReadU32()
+		stats.FallbackPaths = r.ReadU32()
+	}
+	if version >= 8 && r.Remaining() >= 32 {
+		stats.MissingModels = r.ReadU32()
+		stats.MissingMeshes = r.ReadU32()
+		stats.MissingTextures = r.ReadU32()
+		stats.MissingBindGroups = r.ReadU32()
+		stats.MissingChunks = r.ReadU32()
+		stats.MissingTargets = r.ReadU32()
+		stats.InvalidBatchIndices = r.ReadU32()
+		stats.IncompatibleDraws = r.ReadU32()
+	}
+	return stats
+}
+
+func decodeWebGpuPerfPayload(payload []byte) perfGpuPacketStats {
+	if len(payload) < 4 {
+		return perfGpuPacketStats{}
+	}
+	r := codec.NewByteReader(payload)
+	version := r.ReadU32()
+	if version != 1 {
+		return perfGpuPacketStats{}
+	}
+	if r.Remaining() < 4 * 4 + 6 * 8 {
+		return perfGpuPacketStats{}
+	}
+	queueClass := perfQueueClassFromCode(r.ReadU32())
+	submitCount := r.ReadU32()
+	_ = r.ReadU32()
+	_ = r.ReadU32()
+	stats := perfGpuPacketStats{Valid: true}
+	stats.QueueDepthClass = queueClass
+	stats.SubmitCount = submitCount
+	stats.SurfaceAcquireMs = r.ReadF64()
+	stats.SubmitCpuMs = r.ReadF64()
+	stats.SubmittedWorkDoneMs = r.ReadF64()
+	stats.SampleRate = r.ReadF64()
+	probeCpuP99 := r.ReadF64()
+	reportOverheadMs := r.ReadF64()
+	stats.ProbeOverheadMs = probeCpuP99
+	stats.ReportOverheadMs = reportOverheadMs
+	return stats
+}
+
+func perfQueueClassFromCode(code int) string {
+	if code == 0 {
+		return PerfQueueEmpty
+	}
+	if code == 2 {
+		return PerfQueueBacklogged
+	}
+	if code == 3 {
+		return PerfQueueSaturated
+	}
+	return PerfQueueNormal
+}
+
+func perfBoolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func PerfRendererDiagnosticLabel(flags int) string {
+	if flags == 0 {
+		return "none"
+	}
+	label := ""
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableShadows, "shadow-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisablePostEffects, "post-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableBloom, "bloom-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableSharpen, "sharpen-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableFxaa, "fxaa-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableContactAO, "contact-ao-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisablePrimitives, "primitives-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisablePrimitiveShadows, "primitive-shadows-off")
+	label = perfAppendRendererDiagnosticLabel(label, flags, PerfRendererDiagDisableDecals, "decals-off")
+	if label == "" {
+		return "unknown:" + strconv.Itoa(flags)
+	}
+	return label
+}
+
+func perfAppendRendererDiagnosticLabel(label string, flags int, bit int, name string) string {
+	if flags & bit == 0 {
+		return label
+	}
+	if label == "" {
+		return name
+	}
+	return label + "," + name
+}

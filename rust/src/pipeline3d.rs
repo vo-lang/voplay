@@ -18,20 +18,16 @@ use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 
 mod decal_submitter;
-mod material_binder;
 mod mesh_submitter;
 pub(crate) use mesh_submitter::MeshDrawStats;
 mod pipeline_cache;
 mod pipeline_factory;
-mod primitive_submitter;
-mod shader_library;
-mod skinned_submitter;
-mod terrain_submitter;
-mod water_submitter;
 
 pub(crate) use decal_submitter::{DecalSubmitPlan, DecalSubmitter};
-pub(crate) use primitive_submitter::PrimitiveSubmitter;
-pub(crate) use water_submitter::WaterSubmitter;
+
+const STATIC_MESH_SHADER: &str = include_str!("shaders/mesh.wgsl");
+const TERRAIN_MESH_SHADER: &str = include_str!("shaders/mesh_terrain.wgsl");
+const SKINNED_MESH_SHADER: &str = include_str!("shaders/mesh_skinned.wgsl");
 
 /// Maximum number of lights per frame.
 const MAX_LIGHTS: usize = 8;

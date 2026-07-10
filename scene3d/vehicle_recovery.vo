@@ -27,7 +27,7 @@ type VehicleRecoveryState struct {
 type VehicleRecovery struct {
 	Vehicle *Vehicle
 	Track *Track
-	Config VehicleRecoveryConfig
+	config VehicleRecoveryConfig
 	stuckTimer float64
 	upsideDownTimer float64
 	state VehicleRecoveryState
@@ -41,7 +41,21 @@ func NewVehicleRecovery(vehicle *Vehicle, track *Track, config VehicleRecoveryCo
 	if vehicle == nil {
 		panic("scene3d.NewVehicleRecovery: vehicle must not be nil")
 	}
-	return &VehicleRecovery{Vehicle: vehicle, Track: track, Config: normalizeVehicleRecoveryConfig(config)}
+	return &VehicleRecovery{Vehicle: vehicle, Track: track, config: normalizeVehicleRecoveryConfig(config)}
+}
+
+func (r *VehicleRecovery) Config() VehicleRecoveryConfig {
+	if r == nil {
+		return VehicleRecoveryConfig{}
+	}
+	return r.config
+}
+
+func (r *VehicleRecovery) Reconfigure(config VehicleRecoveryConfig) {
+	if r == nil {
+		return
+	}
+	r.config = normalizeVehicleRecoveryConfig(config)
 }
 
 func (r *VehicleRecovery) BindTrack(track *Track) {
@@ -55,12 +69,11 @@ func (r *VehicleRecovery) Update(input VehicleRecoveryInput, dt float64) Vehicle
 	if r == nil || r.Vehicle == nil || r.Vehicle.Body == nil || dt <= 0 {
 		return VehicleRecoveryState{}
 	}
-	r.Config = normalizeVehicleRecoveryConfig(r.Config)
 	r.state.ShouldRespawn = input.Reset
 	r.state.UpsideDown = false
 	r.state.Stuck = false
 	pos := r.Vehicle.Body.Position()
-	if pos.Y < r.Config.FallY {
+	if pos.Y < r.config.FallY {
 		r.state.ShouldRespawn = true
 	}
 	up := r.Vehicle.Rotation().RotateVec3(voplay.Vec3{Y: 1})
@@ -70,15 +83,15 @@ func (r *VehicleRecovery) Update(input VehicleRecoveryInput, dt float64) Vehicle
 	} else {
 		r.upsideDownTimer = 0
 	}
-	if r.upsideDownTimer >= r.Config.UpsideDownSeconds {
+	if r.upsideDownTimer >= r.config.UpsideDownSeconds {
 		r.state.ShouldRespawn = true
 	}
-	if math.Abs(r.Vehicle.Speed) <= r.Config.StuckSpeed && input.Throttle >= r.Config.StuckThrottle {
+	if math.Abs(r.Vehicle.Speed) <= r.config.StuckSpeed && input.Throttle >= r.config.StuckThrottle {
 		r.stuckTimer += dt
 	} else {
 		r.stuckTimer = 0
 	}
-	if r.stuckTimer >= r.Config.StuckSeconds {
+	if r.stuckTimer >= r.config.StuckSeconds {
 		r.state.Stuck = true
 		r.state.ShouldRespawn = true
 	}

@@ -239,6 +239,7 @@ impl RenderWorld {
             .collect_depth_draws(scene_id, camera, draws, chunks);
     }
 
+    #[cfg(test)]
     pub fn build_batch_plan(
         &self,
         scene_id: u32,

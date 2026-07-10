@@ -1,0 +1,630 @@
+package voplay
+
+import (
+	"strconv"
+	"time"
+)
+
+type PerfScopeHandle struct {
+	Name string
+	start time.Time
+	active bool
+}
+
+func (o *DebugOverlay) setPerfMode(mode string) {
+	o.perf.setMode(mode)
+	o.enabled = o.perf.enabled
+	o.hudVisible = o.perf.hudVisible
+}
+
+func (o *DebugOverlay) recordPerfFrame() {
+	if !o.enabled {
+		return
+	}
+	displayTick := o.renderFrame
+	if displayTick <= 0 {
+		displayTick = o.frameSeq
+	}
+	uploadBytes := o.submitBytes - o.drawBytes
+	if uploadBytes < 0 {
+		uploadBytes = 0
+	}
+	renderer := o.rendererPerf
+	if renderer.Valid && renderer.UploadBytes > uploadBytes {
+		uploadBytes = renderer.UploadBytes
+	}
+	queueDepthClass := PerfQueueNormal
+	gpu := o.gpuPerf
+	if gpu.Valid {
+		queueDepthClass = gpu.QueueDepthClass
+	}
+	frameGraphPasses := renderer.FrameGraphPasses
+	frameGraphResources := renderer.FrameGraphResources
+	frameGraphTargets := renderer.FrameGraphTargets
+	frameGraphReadyTargets := renderer.FrameGraphReadyTargets
+	if renderer.Valid && frameGraphPasses <= 0 && perfRendererHasPassTiming(renderer) {
+		frameGraphPasses = perfRendererFallbackFrameGraphPasses(renderer)
+		frameGraphResources = 8
+		frameGraphTargets = 8
+		frameGraphReadyTargets = 8
+	}
+	frame := PerfFrame{
+		FrameId: o.frameSeq,
+		DisplayTick: displayTick,
+		TimestampMs: float64(time.Now().UnixNano()) / 1e6,
+		TargetHz: o.targetFrameRate,
+		BudgetMs: o.frameBudgetMs,
+		FrameMs: o.frameMs,
+		GameCpu: PerfGameCpuStats{
+			InputMs: o.inputMs,
+			AdvanceMs: o.advanceMs,
+			DrawEncodeMs: o.drawMs,
+			OverlayDrawMs: o.overlayMs,
+			TotalMs: o.logicMs,
+			FixedSteps: o.fixedSteps,
+		},
+		Framewire: PerfFramewireStats{
+			ReplyWaitMs: o.renderReplyWaitMs,
+			DrawBytes: o.drawBytes,
+			SubmitBytes: o.submitBytes,
+			AsyncWindow: o.renderFrame != o.frameSeq,
+		},
+		RenderWorker: PerfRenderWorkerStats{
+			DisplayPulseMs: o.renderDisplayPulseMs,
+			PaceWaitMs: o.renderPaceWaitMs,
+			ReplyWaitMs: o.renderReplyWaitMs,
+			SubmitCpuMs: o.renderSubmitMs,
+			WorkMs: o.renderWorkMs,
+			InputPollMs: o.renderInputPollMs,
+			RequestSendMs: o.renderRequestSendMs,
+			RequestEncodeMs: o.renderRequestEncodeMs,
+			RequestPortSendMs: o.renderRequestPortSendMs,
+			PerfPacketMs: o.renderPerfPacketMs,
+			LoopTotalMs: o.renderLoopMs,
+			DrawBytes: o.renderDrawBytes,
+			FrameDivisor: o.renderFrameDivisor,
+			AsyncWindow: o.renderFrame != o.frameSeq,
+		},
+		RendererCpu: PerfRendererCpuStats{
+			SubmitFrameMs: perfFirstPositive(renderer.SubmitFrameMs, o.renderSubmitMs),
+			DecodeMs: renderer.DecodeMs,
+			SceneUpdateMs: renderer.SceneUpdateMs,
+			DepthPassMs: renderer.DepthPassMs,
+			ShadowPassMs: renderer.ShadowPassMs,
+			MainPassMs: renderer.MainPassMs,
+			MainPassSetupMs: renderer.MainPassSetupMs,
+			MainSkyboxMs: renderer.MainSkyboxMs,
+			MainModelMs: renderer.MainModelMs,
+			MainPrimitiveMs: renderer.MainPrimitiveMs,
+			MainPassCloseMs: renderer.MainPassCloseMs,
+			WaterPassMs: renderer.WaterPassMs,
+			PostPassMs: renderer.PostPassMs,
+			OverlayPassMs: renderer.OverlayPassMs,
+			QueueSubmitCpuMs: renderer.QueueSubmitCpuMs,
+			PresentCpuMs: renderer.PresentCpuMs,
+			AsyncWindow: true,
+		},
+		RendererWorkload: PerfRendererWorkloadStats{
+			DrawCalls: perfFirstPositiveInt(renderer.DrawCalls, o.drawStats.DrawCalls),
+			ModelDraws: perfFirstPositiveInt(renderer.ModelDraws, o.drawStats.ModelDraws),
+			SkinnedDraws: perfFirstPositiveInt(renderer.SkinnedDraws, o.drawStats.SkinnedDraws),
+			PrimitiveDraws: perfFirstPositiveInt(renderer.PrimitiveDraws, o.drawStats.PrimitiveDraws),
+			WaterDraws: renderer.WaterDraws,
+			WaterInstances: renderer.WaterInstances,
+			WaterTriangles: renderer.WaterTriangles,
+			SpriteDraws: perfFirstPositiveInt(renderer.SpriteDraws, o.drawStats.SpriteDraws + o.drawStats.BillboardDraws),
+			TextDraws: perfFirstPositiveInt(renderer.TextDraws, o.drawStats.TextDraws),
+			Instances: renderer.Instances,
+			Triangles: renderer.Triangles,
+			BindGroupCreates: renderer.BindGroupCreates,
+			BufferCreates: renderer.BufferCreates,
+			TextureUploads: renderer.TextureUploads,
+			ResidentChunkRebuilds: perfFirstPositiveInt(renderer.ResidentChunkRebuilds, o.drawStats.PrimitiveChunkRebuilds),
+			PrimitiveChunks: perfFirstPositiveInt(renderer.PrimitiveChunks, o.drawStats.PrimitiveChunks),
+			ShadowCascades: renderer.ShadowCascades,
+			PostEffects: renderer.PostEffects,
+			RetainedSceneUpserts: perfFirstPositiveInt(renderer.RetainedSceneUpserts, o.drawStats.SceneUpserts),
+			RetainedSceneRemovals: perfFirstPositiveInt(renderer.RetainedSceneRemovals, o.drawStats.SceneRemovals),
+			VisibleObjects: renderer.VisibleObjects,
+			CulledObjects: renderer.CulledObjects,
+			DiagnosticFlags: renderer.DiagnosticFlags,
+			FrameGraphPasses: frameGraphPasses,
+			FrameGraphResources: frameGraphResources,
+			FrameGraphTargets: frameGraphTargets,
+			FrameGraphReadyTargets: frameGraphReadyTargets,
+			FrameGraphTransientTargets: renderer.FrameGraphTransientTargets,
+			FrameGraphPersistentTargets: renderer.FrameGraphPersistentTargets,
+			FrameGraphExternalTargets: renderer.FrameGraphExternalTargets,
+			FrameGraphMissingReads: renderer.FrameGraphMissingReads,
+			FrameGraphResizeGeneration: renderer.FrameGraphResizeGeneration,
+			FrameGraphTargetCreates: renderer.FrameGraphTargetCreates,
+			FrameGraphTargetReuses: renderer.FrameGraphTargetReuses,
+			FrameGraphTargetRecreates: renderer.FrameGraphTargetRecreates,
+			FrameGraphAliasReuses: renderer.FrameGraphAliasReuses,
+			FrameGraphSkippedPasses: renderer.FrameGraphSkippedPasses,
+			FrameGraphFailures: renderer.FrameGraphFailures,
+			FilteredDraws: renderer.FilteredDraws,
+			MissingResources: renderer.MissingResources,
+			InvalidBatches: renderer.InvalidBatches,
+			FallbackPaths: renderer.FallbackPaths,
+			MissingModels: renderer.MissingModels,
+			MissingMeshes: renderer.MissingMeshes,
+			MissingTextures: renderer.MissingTextures,
+			MissingBindGroups: renderer.MissingBindGroups,
+			MissingChunks: renderer.MissingChunks,
+			MissingTargets: renderer.MissingTargets,
+			InvalidBatchIndices: renderer.InvalidBatchIndices,
+			IncompatibleDraws: renderer.IncompatibleDraws,
+			UploadBytes: uploadBytes,
+			AsyncWindow: true,
+		},
+		GpuQueue: PerfGpuQueueStats{SubmitCpuMs: perfFirstPositive(gpu.SubmitCpuMs, renderer.QueueSubmitCpuMs), SubmittedWorkDoneMs: gpu.SubmittedWorkDoneMs, InFlightSubmits: gpu.InFlightSubmits, SubmitCount: gpu.SubmitCount, SurfaceAcquireMs: perfFirstPositive(gpu.SurfaceAcquireMs, renderer.SurfaceAcquireMs), PresentCpuMs: perfFirstPositive(gpu.PresentCpuMs, renderer.PresentCpuMs), QueueDepthClass: queueDepthClass, SampleRate: gpu.SampleRate, ProbeOverheadMs: gpu.ProbeOverheadMs, ReportOverheadMs: gpu.ReportOverheadMs, AsyncWindow: true},
+		Present: PerfPresentStats{SurfaceAcquireMs: perfFirstPositive(gpu.SurfaceAcquireMs, renderer.SurfaceAcquireMs), PresentCpuMs: perfFirstPositive(gpu.PresentCpuMs, renderer.PresentCpuMs), AsyncWindow: true},
+		Hud: PerfHudStats{
+			Visible: o.hudVisible,
+			Page: o.perf.hudPage,
+			CpuMs: o.overlayMs,
+			DrawCalls: o.overlayStats.DrawCalls,
+			UploadBytes: uploadBytes,
+			TextDraws: o.overlayStats.TextDraws,
+		},
+	}
+	o.perf.recordFrame(frame)
+}
+
+func perfFirstPositive(a, b float64) float64 {
+	if a > 0 {
+		return a
+	}
+	return b
+}
+
+func perfRendererHasPassTiming(renderer perfRendererPacketStats) bool {
+	return renderer.DepthPassMs > 0 || renderer.ShadowPassMs > 0 || renderer.MainPassMs > 0 || renderer.PostPassMs > 0 || renderer.OverlayPassMs > 0 || renderer.QueueSubmitCpuMs > 0 || renderer.PresentCpuMs > 0
+}
+
+func perfRendererFallbackFrameGraphPasses(renderer perfRendererPacketStats) int {
+	passes := 1
+	if renderer.DepthPassMs > 0 {
+		passes++
+	}
+	if renderer.ShadowPassMs > 0 {
+		passes++
+	}
+	if renderer.MainPassMs > 0 {
+		passes++
+	}
+	if renderer.PostPassMs > 0 {
+		passes++
+	}
+	if renderer.OverlayPassMs > 0 {
+		passes++
+	}
+	return passes
+}
+
+func perfFirstPositiveInt(a, b int) int {
+	if a > 0 {
+		return a
+	}
+	return b
+}
+
+func (o *DebugOverlay) perfSnapshot() PerfSnapshot {
+	spikes := make([]PerfSpike, 0, o.perf.spikeCount)
+	for i := 0; i < o.perf.spikeCount; i++ {
+		index := o.perf.spikeNext - 1 - i
+		for index < 0 {
+			index += perfSpikeCacheSize
+		}
+		spikes = append(spikes, o.perf.spikes[index])
+	}
+	snapshot := PerfSnapshot{
+		Enabled: o.perf.enabled,
+		Mode: o.perf.mode,
+		HudVisible: o.perf.hudVisible,
+		HudPage: o.perf.hudPage,
+		TargetHz: o.perf.targetHz,
+		BudgetMs: o.perf.budgetMs,
+		WindowCapacity: perfFrameRingSize,
+		FrameCount: o.perf.count,
+		RecentSpikeCount: o.perf.spikeCount,
+		RecentSpikes: spikes,
+		CustomScopeCount: len(o.perf.customScopeNames),
+	}
+	for i := 0; i < snapshot.CustomScopeCount; i++ {
+		perfSnapshotSetCustomScope(&snapshot, i, o.perf.customScopeNames[i], o.perf.customScopeLastMs[i], o.perf.customScopeMaxMs[i], o.perf.customScopeCounts[i])
+	}
+	if o.perf.count > 0 {
+		snapshot.Current = o.perf.currentFrame
+		snapshot.WorstFrame = o.perf.worstFrame
+		snapshot.WindowWorstFrame = o.perf.recentWorstFrame()
+		snapshot.OneSecond = o.perf.oneSecond.summary()
+		snapshot.FiveSecond = o.perf.fiveSecond.summary()
+		snapshot.ThirtySecond = o.perf.thirtySecond.summary()
+		snapshot.SlowHistogram = o.perf.thirtySecond.slowHistogram()
+		snapshot.Attribution = o.perf.thirtySecond.attribution
+	}
+	snapshot.Overhead = PerfDiagnosticsOverhead{
+		StatsEnabled: o.perf.enabled,
+		HudVisible: o.perf.hudVisible,
+		HudCpuMs: snapshot.Current.Hud.CpuMs,
+		HudDrawCalls: snapshot.Current.Hud.DrawCalls,
+		HudUploadBytes: snapshot.Current.Hud.UploadBytes,
+		ProbeOverheadMs: snapshot.Current.GpuQueue.ProbeOverheadMs,
+		ReportOverheadMs: snapshot.Current.GpuQueue.ReportOverheadMs,
+	}
+	return snapshot
+}
+
+func (o *DebugOverlay) perfTrace(maxFrames int) PerfTrace {
+	snapshot := o.perfSnapshot()
+	frameCount := o.perf.count
+	if maxFrames <= 0 || maxFrames > perfFrameRingSize {
+		maxFrames = perfFrameRingSize
+	}
+	if maxFrames > frameCount {
+		maxFrames = frameCount
+	}
+	frames := make([]PerfTraceFrame, 0, maxFrames)
+	for i := maxFrames - 1; i >= 0; i-- {
+		sample, ok := o.perf.recentFrameSample(i)
+		if !ok {
+			continue
+		}
+		over := sample.FrameMs - sample.BudgetMs
+		if over < 0 {
+			over = 0
+		}
+		frames = append(frames, PerfTraceFrame{
+			FrameId: sample.FrameId,
+			FrameMs: sample.FrameMs,
+			BudgetMs: sample.BudgetMs,
+			OverBudgetMs: over,
+			PrimaryCause: sample.Cause,
+			Slow: sample.Slow,
+		})
+	}
+	return PerfTrace{
+		SchemaVersion: 1,
+		Enabled: snapshot.Enabled,
+		Mode: snapshot.Mode,
+		TargetHz: snapshot.TargetHz,
+		BudgetMs: snapshot.BudgetMs,
+		FrameCount: snapshot.FrameCount,
+		CapturedFrames: len(frames),
+		Frames: frames,
+		Current: snapshot.Current,
+		WorstFrame: snapshot.WorstFrame,
+		OneSecond: snapshot.OneSecond,
+		FiveSecond: snapshot.FiveSecond,
+		ThirtySecond: snapshot.ThirtySecond,
+		SlowHistogram: snapshot.SlowHistogram,
+		Attribution: snapshot.Attribution,
+		RecentSpikes: snapshot.RecentSpikes,
+		RecentSpikeCount: snapshot.RecentSpikeCount,
+		Overhead: snapshot.Overhead,
+	}
+}
+
+func EvaluatePerfGate(snapshot PerfSnapshot, config PerfGateConfig) PerfGateResult {
+	summary := perfGateWindow(snapshot)
+	result := PerfGateResult{
+		Passed: true,
+		CheckedFrames: summary.Frames,
+		SlowFrames: summary.SlowFrames,
+		FrameP99Ms: summary.FrameP99Ms,
+		FrameMaxMs: summary.FrameMaxMs,
+		ActiveWorkP90Ms: summary.ActiveWorkP90Ms,
+		ActiveWorkP99Ms: summary.ActiveWorkP99Ms,
+		GpuQueueBoundFrames: snapshot.Attribution.GpuQueueBound,
+		GpuWorkDoneP90Ms: summary.GpuWorkDoneP90Ms,
+		HudOverheadFrames: snapshot.Attribution.HudOverhead,
+		HudP90Ms: summary.HudP90Ms,
+		ProbeOverheadMs: snapshot.Overhead.ProbeOverheadMs,
+	}
+	if !snapshot.Enabled {
+		return perfGateFail(result, PerfGateFailureDisabled, "perf stats are disabled")
+	}
+	if summary.Frames <= 0 {
+		return perfGateFail(result, PerfGateFailureNoFrames, "perf gate has no frames")
+	}
+	if config.MinFrames > 0 && summary.Frames < config.MinFrames {
+		return perfGateFail(result, PerfGateFailureMinFrames, "perf gate frames " + strconv.Itoa(summary.Frames) + " below min " + strconv.Itoa(config.MinFrames))
+	}
+	if config.MaxSlowFrames >= 0 && summary.SlowFrames > config.MaxSlowFrames {
+		return perfGateFail(result, PerfGateFailureSlowFrames, "slow frames " + strconv.Itoa(summary.SlowFrames) + " exceed " + strconv.Itoa(config.MaxSlowFrames))
+	}
+	if config.MaxFrameP99Ms > 0 && summary.FrameP99Ms > config.MaxFrameP99Ms {
+		return perfGateFail(result, PerfGateFailureFrameP99, "frame p99 " + perfFormatMs(summary.FrameP99Ms) + " exceeds " + perfFormatMs(config.MaxFrameP99Ms))
+	}
+	if config.MaxFrameMaxMs > 0 && summary.FrameMaxMs > config.MaxFrameMaxMs {
+		return perfGateFail(result, PerfGateFailureFrameMax, "frame max " + perfFormatMs(summary.FrameMaxMs) + " exceeds " + perfFormatMs(config.MaxFrameMaxMs))
+	}
+	if config.MaxActiveWorkP99Ms > 0 && summary.ActiveWorkP99Ms > config.MaxActiveWorkP99Ms {
+		return perfGateFail(result, PerfGateFailureActiveWork, "active work p99 " + perfFormatMs(summary.ActiveWorkP99Ms) + " exceeds " + perfFormatMs(config.MaxActiveWorkP99Ms))
+	}
+	if config.MaxGpuQueueBoundFrames >= 0 && snapshot.Attribution.GpuQueueBound > config.MaxGpuQueueBoundFrames {
+		return perfGateFail(result, PerfGateFailureGpuQueue, "gpu queue bound frames " + strconv.Itoa(snapshot.Attribution.GpuQueueBound) + " exceed " + strconv.Itoa(config.MaxGpuQueueBoundFrames))
+	}
+	if config.MaxGpuWorkDoneP90Ms > 0 && summary.GpuWorkDoneP90Ms > config.MaxGpuWorkDoneP90Ms {
+		return perfGateFail(result, PerfGateFailureGpuWorkDone, "gpu work-done p90 " + perfFormatMs(summary.GpuWorkDoneP90Ms) + " exceeds " + perfFormatMs(config.MaxGpuWorkDoneP90Ms))
+	}
+	if config.MaxHudOverheadFrames >= 0 && snapshot.Attribution.HudOverhead > config.MaxHudOverheadFrames {
+		return perfGateFail(result, PerfGateFailureHudOverhead, "hud overhead frames " + strconv.Itoa(snapshot.Attribution.HudOverhead) + " exceed " + strconv.Itoa(config.MaxHudOverheadFrames))
+	}
+	if config.MaxHudP90Ms > 0 && summary.HudP90Ms > config.MaxHudP90Ms {
+		return perfGateFail(result, PerfGateFailureHudP90, "hud p90 " + perfFormatMs(summary.HudP90Ms) + " exceeds " + perfFormatMs(config.MaxHudP90Ms))
+	}
+	if config.MaxProbeOverheadMs > 0 && snapshot.Overhead.ProbeOverheadMs > config.MaxProbeOverheadMs {
+		return perfGateFail(result, PerfGateFailureProbeOverhead, "probe overhead " + perfFormatMs(snapshot.Overhead.ProbeOverheadMs) + " exceeds " + perfFormatMs(config.MaxProbeOverheadMs))
+	}
+	result.Message = "perf gate passed frames=" + strconv.Itoa(summary.Frames) + " p99=" + perfFormatMs(summary.FrameP99Ms) + " slow=" + strconv.Itoa(summary.SlowFrames)
+	return result
+}
+
+func perfGateFail(result PerfGateResult, failure string, message string) PerfGateResult {
+	result.Passed = false
+	result.PrimaryFailure = failure
+	result.Message = message
+	return result
+}
+
+func perfGateWindow(snapshot PerfSnapshot) PerfWindowSummary {
+	if snapshot.ThirtySecond.Frames > 0 {
+		return snapshot.ThirtySecond
+	}
+	if snapshot.FiveSecond.Frames > 0 {
+		return snapshot.FiveSecond
+	}
+	if snapshot.OneSecond.Frames > 0 {
+		return snapshot.OneSecond
+	}
+	if snapshot.Current.FrameId > 0 || snapshot.Current.FrameMs > 0 {
+		activeWorkMs := perfFrameActiveWorkMs(snapshot.Current)
+		return PerfWindowSummary{Frames: 1, SlowFrames: boolInt(perfFrameSlow(snapshot.Current)), FrameP50Ms: snapshot.Current.FrameMs, FrameP90Ms: snapshot.Current.FrameMs, FrameP99Ms: snapshot.Current.FrameMs, FrameMaxMs: snapshot.Current.FrameMs, GameCpuP90Ms: snapshot.Current.GameCpu.TotalMs, DrawEncodeP90Ms: snapshot.Current.GameCpu.DrawEncodeMs, RenderLoopP90Ms: snapshot.Current.RenderWorker.LoopTotalMs, RenderWorkP90Ms: snapshot.Current.RenderWorker.WorkMs, RenderSubmitP90Ms: snapshot.Current.RenderWorker.SubmitCpuMs, GpuWorkDoneP90Ms: snapshot.Current.GpuQueue.SubmittedWorkDoneMs, ActiveWorkP90Ms: activeWorkMs, ActiveWorkP99Ms: activeWorkMs, HudP90Ms: snapshot.Current.Hud.CpuMs}
+	}
+	return PerfWindowSummary{}
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func perfSnapshotSetCustomScope(snapshot *PerfSnapshot, index int, name string, lastMs float64, maxMs float64, count int) {
+	if index == 0 {
+		snapshot.CustomScope0Name = name
+		snapshot.CustomScope0LastMs = lastMs
+		snapshot.CustomScope0MaxMs = maxMs
+		snapshot.CustomScope0Count = count
+	} else if index == 1 {
+		snapshot.CustomScope1Name = name
+		snapshot.CustomScope1LastMs = lastMs
+		snapshot.CustomScope1MaxMs = maxMs
+		snapshot.CustomScope1Count = count
+	} else if index == 2 {
+		snapshot.CustomScope2Name = name
+		snapshot.CustomScope2LastMs = lastMs
+		snapshot.CustomScope2MaxMs = maxMs
+		snapshot.CustomScope2Count = count
+	} else if index == 3 {
+		snapshot.CustomScope3Name = name
+		snapshot.CustomScope3LastMs = lastMs
+		snapshot.CustomScope3MaxMs = maxMs
+		snapshot.CustomScope3Count = count
+	} else if index == 4 {
+		snapshot.CustomScope4Name = name
+		snapshot.CustomScope4LastMs = lastMs
+		snapshot.CustomScope4MaxMs = maxMs
+		snapshot.CustomScope4Count = count
+	} else if index == 5 {
+		snapshot.CustomScope5Name = name
+		snapshot.CustomScope5LastMs = lastMs
+		snapshot.CustomScope5MaxMs = maxMs
+		snapshot.CustomScope5Count = count
+	} else if index == 6 {
+		snapshot.CustomScope6Name = name
+		snapshot.CustomScope6LastMs = lastMs
+		snapshot.CustomScope6MaxMs = maxMs
+		snapshot.CustomScope6Count = count
+	} else if index == 7 {
+		snapshot.CustomScope7Name = name
+		snapshot.CustomScope7LastMs = lastMs
+		snapshot.CustomScope7MaxMs = maxMs
+		snapshot.CustomScope7Count = count
+	}
+}
+
+func perfSnapshotCustomScopeName(snapshot *PerfSnapshot, index int) string {
+	if index == 0 {
+		return snapshot.CustomScope0Name
+	}
+	if index == 1 {
+		return snapshot.CustomScope1Name
+	}
+	if index == 2 {
+		return snapshot.CustomScope2Name
+	}
+	if index == 3 {
+		return snapshot.CustomScope3Name
+	}
+	if index == 4 {
+		return snapshot.CustomScope4Name
+	}
+	if index == 5 {
+		return snapshot.CustomScope5Name
+	}
+	if index == 6 {
+		return snapshot.CustomScope6Name
+	}
+	if index == 7 {
+		return snapshot.CustomScope7Name
+	}
+	return ""
+}
+
+func perfSnapshotCustomScopeLastMs(snapshot *PerfSnapshot, index int) float64 {
+	if index == 0 {
+		return snapshot.CustomScope0LastMs
+	}
+	if index == 1 {
+		return snapshot.CustomScope1LastMs
+	}
+	if index == 2 {
+		return snapshot.CustomScope2LastMs
+	}
+	if index == 3 {
+		return snapshot.CustomScope3LastMs
+	}
+	if index == 4 {
+		return snapshot.CustomScope4LastMs
+	}
+	if index == 5 {
+		return snapshot.CustomScope5LastMs
+	}
+	if index == 6 {
+		return snapshot.CustomScope6LastMs
+	}
+	if index == 7 {
+		return snapshot.CustomScope7LastMs
+	}
+	return 0
+}
+
+func perfSnapshotCustomScopeMaxMs(snapshot *PerfSnapshot, index int) float64 {
+	if index == 0 {
+		return snapshot.CustomScope0MaxMs
+	}
+	if index == 1 {
+		return snapshot.CustomScope1MaxMs
+	}
+	if index == 2 {
+		return snapshot.CustomScope2MaxMs
+	}
+	if index == 3 {
+		return snapshot.CustomScope3MaxMs
+	}
+	if index == 4 {
+		return snapshot.CustomScope4MaxMs
+	}
+	if index == 5 {
+		return snapshot.CustomScope5MaxMs
+	}
+	if index == 6 {
+		return snapshot.CustomScope6MaxMs
+	}
+	if index == 7 {
+		return snapshot.CustomScope7MaxMs
+	}
+	return 0
+}
+
+func perfSnapshotCustomScopeCount(snapshot *PerfSnapshot, index int) int {
+	if index == 0 {
+		return snapshot.CustomScope0Count
+	}
+	if index == 1 {
+		return snapshot.CustomScope1Count
+	}
+	if index == 2 {
+		return snapshot.CustomScope2Count
+	}
+	if index == 3 {
+		return snapshot.CustomScope3Count
+	}
+	if index == 4 {
+		return snapshot.CustomScope4Count
+	}
+	if index == 5 {
+		return snapshot.CustomScope5Count
+	}
+	if index == 6 {
+		return snapshot.CustomScope6Count
+	}
+	if index == 7 {
+		return snapshot.CustomScope7Count
+	}
+	return 0
+}
+
+func (g *GameCtx) EnablePerfStats(mode string) {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	g.overlay.setPerfMode(mode)
+}
+
+func (g *GameCtx) DisablePerfStats() {
+	if g.overlay == nil {
+		return
+	}
+	g.overlay.setPerfMode(PerfModeOff)
+}
+
+func (g *GameCtx) ResetPerfStats(mode string) {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	targetFrameRate := g.overlay.targetFrameRate
+	g.overlay.perf = newPerfCore(targetFrameRate)
+	g.overlay.setPerfMode(mode)
+}
+
+func (g *GameCtx) TogglePerfHud() {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	if !g.overlay.perf.enabled || !g.overlay.perf.hudVisible {
+		g.overlay.setPerfMode(PerfModeHud)
+		return
+	}
+	g.overlay.setPerfMode(PerfModeStats)
+}
+
+func (g *GameCtx) NextPerfHudPage() {
+	if g.overlay == nil {
+		g.overlay = newDebugOverlay(0)
+	}
+	g.overlay.perf.nextHudPage()
+}
+
+func (g *GameCtx) GetPerfSnapshot() PerfSnapshot {
+	if g.overlay == nil {
+		return PerfSnapshot{Mode: PerfModeOff, BudgetMs: perfBudgetMs(0), WindowCapacity: perfFrameRingSize}
+	}
+	return g.overlay.perfSnapshot()
+}
+
+func (g *GameCtx) GetPerfTrace(maxFrames int) PerfTrace {
+	if g.overlay == nil {
+		snapshot := g.GetPerfSnapshot()
+		return PerfTrace{SchemaVersion: 1, Enabled: false, Mode: snapshot.Mode, BudgetMs: snapshot.BudgetMs}
+	}
+	return g.overlay.perfTrace(maxFrames)
+}
+
+func (g *GameCtx) EvaluatePerfGate(config PerfGateConfig) PerfGateResult {
+	return EvaluatePerfGate(g.GetPerfSnapshot(), config)
+}
+
+func (g *GameCtx) MarkPerfScope(name string) {
+	if g.overlay == nil {
+		return
+	}
+	g.overlay.perf.recordCustomScope(name, 0)
+}
+
+func (g *GameCtx) BeginPerfScope(name string) PerfScopeHandle {
+	return PerfScopeHandle{Name: name, start: time.Now(), active: true}
+}
+
+func (g *GameCtx) EndPerfScope(handle PerfScopeHandle) {
+	if g.overlay == nil || !handle.active {
+		return
+	}
+	elapsedMs := float64(time.Now().Sub(handle.start).Nanoseconds()) / 1e6
+	g.overlay.perf.recordCustomScope(handle.Name, elapsedMs)
+}

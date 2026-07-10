@@ -118,6 +118,16 @@ struct ProjectedDecalAtlasBinding {
     mask_id: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Camera3DState {
+    eye: Vec3,
+    target: Vec3,
+    up: Vec3,
+    fov_degrees: f32,
+    near: f32,
+    far: f32,
+}
+
 fn raw_mesh_read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
     if data.len().saturating_sub(*pos) < 4 {
         return Err("raw mesh payload ended before u32".to_string());

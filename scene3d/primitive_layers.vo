@@ -99,7 +99,7 @@ func (s *Scene) RemovePrimitiveLayer(handle primitive3d.LayerHandle) {
 		if attachment.handle != handle {
 			continue
 		}
-		if s.renderSceneCreated {
+		if s.renderSync.created {
 			s.primitiveDestroyedLayerHandles = append(s.primitiveDestroyedLayerHandles, handle)
 		}
 		last := len(s.primitiveLayers) - 1
@@ -134,7 +134,7 @@ func (s *Scene) invalidatePrimitiveLayers() {
 func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats) {
 	total := primitive3d.Stats{}
 	for _, handle := range s.primitiveDestroyedLayerHandles {
-		d.DestroyPrimitive3DLayer(s.renderSceneID, int(handle))
+		d.DestroyPrimitive3DLayer(s.renderSync.sceneID, int(handle))
 	}
 	s.primitiveDestroyedLayerHandles = nil
 	for _, attachment := range s.primitiveLayers {
@@ -154,21 +154,21 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats)
 		changes := primitiveDrainLayerChanges(layer)
 		staticContentChanged := layer.Kind() == primitive3d.StaticLayer && primitiveStaticLayerContentChanged(attachment, changes)
 		if staticContentChanged && len(attachment.uploadedChunks) > 0 {
-			d.ClearPrimitive3DLayer(s.renderSceneID, int(attachment.handle))
+			d.ClearPrimitive3DLayer(s.renderSync.sceneID, int(attachment.handle))
 			attachment.shapeRevision = -1
 			attachment.materialRevision = -1
 		}
 		if attachment.shapeRevision != layer.ShapeRevision() {
 			shapes := primitiveLayerShapeDraws(layer)
 			if len(shapes) > 0 {
-				d.UpsertPrimitive3DShapes(s.renderSceneID, int(attachment.handle), shapes)
+				d.UpsertPrimitive3DShapes(s.renderSync.sceneID, int(attachment.handle), shapes)
 			}
 			attachment.shapeRevision = layer.ShapeRevision()
 		}
 		if attachment.materialRevision != layer.MaterialRevision() {
 			materials := primitiveLayerMaterialDraws(layer)
 			if len(materials) > 0 {
-				d.UpsertPrimitive3DMaterials(s.renderSceneID, int(attachment.handle), materials)
+				d.UpsertPrimitive3DMaterials(s.renderSync.sceneID, int(attachment.handle), materials)
 			}
 			attachment.materialRevision = layer.MaterialRevision()
 		}
@@ -187,7 +187,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats)
 			stats.BatchEligibleObjects++
 		}
 		for _, objectID := range changes.Removes {
-			d.DestroyPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(objectID))
+			d.DestroyPrimitive3DInstance(s.renderSync.sceneID, int(attachment.handle), int(objectID))
 			delete(attachment.visible, int(objectID))
 			stats.DestroyedObjects++
 		}
@@ -213,7 +213,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats)
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, visibleNow, primitiveRenderParams(instance))
+			d.UpsertPrimitive3DInstance(s.renderSync.sceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, visibleNow, primitiveRenderParams(instance))
 			attachment.visible[int(instance.Object)] = visibleNow
 			stats.UpsertedObjects++
 		}
@@ -223,7 +223,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats)
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, true, primitiveRenderParams(instance))
+			d.UpsertPrimitive3DInstance(s.renderSync.sceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, true, primitiveRenderParams(instance))
 			attachment.visible[objectKey] = true
 			stats.UpsertedObjects++
 		}
@@ -241,7 +241,7 @@ func (s *Scene) flushPrimitiveLayers(d *voplay.DrawCtx, stats *SceneRenderStats)
 			}
 			model := layer.Model(instance.Shape)
 			material := materialForPrimitiveInstance(layer, instance)
-			d.UpsertPrimitive3DInstance(s.renderSceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, false, primitiveRenderParams(instance))
+			d.UpsertPrimitive3DInstance(s.renderSync.sceneID, int(attachment.handle), int(instance.Object), model, instance.Position, normalizePrimitiveRotation(instance.Rotation), normalizePrimitiveScale(instance.Scale), material, false, primitiveRenderParams(instance))
 			attachment.visible[objectKey] = false
 			stats.UpsertedObjects++
 		}
@@ -299,7 +299,7 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 			if len(chunk.objects) == 0 {
 				continue
 			}
-			primitiveWriteChunkKeys(d, s.renderSceneID, int(attachment.handle), chunk.id, layer, chunk.objects, true)
+			primitiveWriteChunkKeys(d, s.renderSync.sceneID, int(attachment.handle), chunk.id, layer, chunk.objects, true)
 			attachment.uploadedChunks[chunk.id] = true
 			attachment.chunkVisible[chunk.id] = true
 			delete(attachment.chunkHideDeadline, chunk.id)
@@ -307,7 +307,7 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 			continue
 		}
 		if !attachment.chunkVisible[chunk.id] {
-			d.SetPrimitive3DChunkVisible(s.renderSceneID, int(attachment.handle), chunk.id, true)
+			d.SetPrimitive3DChunkVisible(s.renderSync.sceneID, int(attachment.handle), chunk.id, true)
 			attachment.chunkVisible[chunk.id] = true
 		}
 		delete(attachment.chunkHideDeadline, chunk.id)
@@ -330,12 +330,12 @@ func (s *Scene) flushStaticPrimitiveLayer(d *voplay.DrawCtx, stats *SceneRenderS
 				continue
 			}
 		}
-		d.SetPrimitive3DChunkVisible(s.renderSceneID, int(attachment.handle), chunkID, false)
+		d.SetPrimitive3DChunkVisible(s.renderSync.sceneID, int(attachment.handle), chunkID, false)
 		attachment.chunkVisible[chunkID] = false
 		delete(attachment.chunkHideDeadline, chunkID)
 	}
 	if layer.PreloadChunks() {
-		s.preloadStaticPrimitiveChunks(d, stats, s.renderSceneID, attachment, layer)
+		s.preloadStaticPrimitiveChunks(d, stats, s.renderSync.sceneID, attachment, layer)
 	}
 	return frame
 }

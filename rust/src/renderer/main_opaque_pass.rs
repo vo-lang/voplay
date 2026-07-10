@@ -1,5 +1,4 @@
 use super::*;
-use crate::pipeline3d::PrimitiveSubmitter;
 
 pub(super) struct MainOpaquePassExecutor;
 
@@ -16,7 +15,7 @@ pub(super) struct MainOpaquePassContext<'a> {
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) clear_color: wgpu::Color,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) camera3d_state: Option<Camera3DState>,
     pub(super) skybox_cubemap_id: Option<u32>,
     pub(super) light_uniform: &'a LightUniform,
     pub(super) model_draws: &'a [ModelDraw],
@@ -171,17 +170,20 @@ impl MainOpaquePassExecutor {
         ctx.perf.main_pass_setup_ms = elapsed_ms_opt(main_setup_start);
 
         let mut mesh_stats = MeshDrawStats::default();
-        if let (Some(cubemap_id), Some((eye, target, up, fov, near, far))) =
-            (ctx.skybox_cubemap_id, ctx.camera3d_state)
-        {
+        if let (Some(cubemap_id), Some(camera)) = (ctx.skybox_cubemap_id, ctx.camera3d_state) {
             if let Some(cubemap) = ctx.textures.get_cubemap(cubemap_id) {
                 let skybox_start = if ctx.perf_enabled {
                     Some(perf_now())
                 } else {
                     None
                 };
-                let view_rot = math3d::view_rotation_only(eye, target, up);
-                let proj = math3d::perspective_rh_zo(fov.to_radians(), ctx.aspect, near, far);
+                let view_rot = math3d::view_rotation_only(camera.eye, camera.target, camera.up);
+                let proj = math3d::perspective_rh_zo(
+                    camera.fov_degrees.to_radians(),
+                    ctx.aspect,
+                    camera.near,
+                    camera.far,
+                );
                 let vp = math3d::mat4_mul(&proj, &view_rot);
                 let inv_vp = math3d::mat4_inverse(&vp).unwrap_or(math3d::MAT4_IDENTITY);
                 ctx.skybox_pipeline.set_camera(ctx.queue, &inv_vp);
@@ -229,8 +231,7 @@ impl MainOpaquePassExecutor {
                 ctx.primitive_pipeline
                     .set_camera_and_lights(ctx.queue, cam3d, ctx.light_uniform);
                 let shadow_view = ctx.shadow_pipeline.shadow_texture_view();
-                let primitive_submit_report = PrimitiveSubmitter::submit(
-                    ctx.primitive_pipeline,
+                primitive_stats = ctx.primitive_pipeline.draw(
                     ctx.device,
                     ctx.queue,
                     &mut render_pass,
@@ -241,12 +242,6 @@ impl MainOpaquePassExecutor {
                     shadow_view,
                     ctx.main_aux_targets_enabled,
                     crate::primitive_pipeline::PrimitiveRenderFilter::Main,
-                );
-                primitive_stats = primitive_submit_report.stats;
-                let _submit_identity = (
-                    primitive_submit_report.owner,
-                    PrimitiveSubmitter::filter_name(primitive_submit_report.filter),
-                    primitive_submit_report.outcome,
                 );
                 ctx.perf.main_primitive_ms += elapsed_ms_opt(primitive_start);
             }

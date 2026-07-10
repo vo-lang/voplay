@@ -1,0 +1,156 @@
+package scene3d
+
+import (
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/codec"
+)
+
+// PhysicsWorldState owns every mutable value that belongs to one backend world.
+// Scene coordinates gameplay objects; this state owns backend identity, command
+// buffering, body/vehicle registries, diagnostics, and frame snapshots.
+type PhysicsWorldState struct {
+	id int
+	backend PhysicsBackend
+	nextBodyID int
+	nextVehicleID int
+	commands codec.ByteWriter
+	bodies map[int]*Entity
+	vehicles []*Vehicle
+	packetErrors []PhysicsBackendPacketError
+	commandLog PhysicsBackendCommandLog
+	snapshot PhysicsSnapshotState
+}
+
+type PhysicsBackendCommandLog struct {
+	enabled bool
+	nextSequence int
+	events []PhysicsBackendCommandEvent
+}
+
+type PhysicsSnapshotState struct {
+	ready bool
+	contactsReady bool
+	contacts []Contact
+	contactEventsReady bool
+	contactEvents []ContactEvent
+}
+
+type PhysicsBodyState struct {
+	BodyID int
+	Position voplay.Vec3
+	Rotation voplay.Quat
+	LinearVelocity voplay.Vec3
+	AngularVelocity voplay.Vec3
+}
+
+type PhysicsFrameSnapshot struct {
+	Bodies []PhysicsBodyState
+}
+
+func newPhysicsWorldState(backend PhysicsBackend) PhysicsWorldState {
+	if backend == nil {
+		panic("scene3d.newPhysicsWorldState: backend must not be nil")
+	}
+	return PhysicsWorldState{
+		backend: backend,
+		nextBodyID: 1,
+		nextVehicleID: 1,
+		commands: codec.NewByteWriter(256),
+		bodies: make(map[int]*Entity),
+	}
+}
+
+func (w *PhysicsWorldState) step(dt float64) (PhysicsFrameSnapshot, PhysicsBackendPacketError, bool) {
+	if w == nil || w.id == 0 {
+		return PhysicsFrameSnapshot{}, PhysicsBackendPacketError{}, false
+	}
+	state := w.backend.Step(w.id, dt, w.commands.Bytes())
+	w.commands.Reset()
+	r := codec.NewByteReader(state)
+	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendBodyPacketKind)
+	if headerError != "" {
+		return PhysicsFrameSnapshot{}, PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(state)}, true
+	}
+	if r.Remaining() < 4 {
+		return PhysicsFrameSnapshot{}, PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()}, true
+	}
+	count := r.ReadU32()
+	if r.Remaining() != count * physics3DBodyStateBytes {
+		return PhysicsFrameSnapshot{}, PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "body_payload_length_mismatch", ExpectedBytes: count * physics3DBodyStateBytes, ActualBytes: r.Remaining()}, true
+	}
+	snapshot := PhysicsFrameSnapshot{Bodies: make([]PhysicsBodyState, 0, count)}
+	for i := 0; i < count; i++ {
+		snapshot.Bodies = append(snapshot.Bodies, PhysicsBodyState{
+			BodyID: r.ReadU32(),
+			Position: voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+			Rotation: voplay.Quat{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64(), W: r.ReadF64()},
+			LinearVelocity: voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+			AngularVelocity: voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()},
+		})
+	}
+	return snapshot, PhysicsBackendPacketError{}, false
+}
+
+func (w *PhysicsWorldState) beginStep() {
+	if w == nil {
+		return
+	}
+	w.snapshot = PhysicsSnapshotState{}
+}
+
+func (w *PhysicsWorldState) resetSceneState() {
+	if w == nil {
+		return
+	}
+	for id := range w.bodies {
+		delete(w.bodies, id)
+	}
+	w.nextVehicleID = 1
+	w.vehicles = nil
+	w.packetErrors = nil
+	w.commandLog = PhysicsBackendCommandLog{}
+	w.snapshot = PhysicsSnapshotState{}
+	w.commands.Reset()
+}
+
+func (w *PhysicsWorldState) recordPacketError(err PhysicsBackendPacketError) {
+	if w == nil {
+		return
+	}
+	w.packetErrors = append(w.packetErrors, err)
+}
+
+func (w *PhysicsWorldState) setCommandCapture(enabled bool) {
+	if w == nil || w.commandLog.enabled == enabled {
+		return
+	}
+	w.commandLog = PhysicsBackendCommandLog{enabled: enabled}
+}
+
+func (w *PhysicsWorldState) recordCommand(event PhysicsBackendCommandEvent) {
+	if w == nil || !w.commandLog.enabled {
+		return
+	}
+	w.commandLog.nextSequence++
+	event.Sequence = w.commandLog.nextSequence
+	event.WorldID = w.id
+	w.commandLog.events = append(w.commandLog.events, event)
+}
+
+func (w *PhysicsWorldState) commandEventsAfter(sequence int) []PhysicsBackendCommandEvent {
+	out := []PhysicsBackendCommandEvent{}
+	if w == nil {
+		return out
+	}
+	start := sequence
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(w.commandLog.events) {
+		return out
+	}
+	for _, event := range w.commandLog.events[start:] {
+		out = append(out, clonePhysicsBackendCommandEvent(event))
+	}
+	return out
+}

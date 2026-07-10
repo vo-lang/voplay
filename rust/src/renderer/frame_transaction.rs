@@ -13,6 +13,7 @@ pub(super) struct FrameTransaction {
 
 pub(super) struct FrameTransactionApplyContext<'a> {
     pub(super) draw_list: &'a mut DrawList2D,
+    pub(super) font_manager: &'a mut FontManager,
     pub(super) render_world: &'a mut RenderWorld,
     pub(super) primitive_pipeline: &'a mut PrimitivePipeline,
     pub(super) primitive_shapes: &'a mut HashMap<(u32, u32, u32), u32>,
@@ -35,6 +36,7 @@ impl Renderer {
     ) -> FrameTransactionApplyReport {
         transaction.apply(FrameTransactionApplyContext {
             draw_list: &mut self.draw_list,
+            font_manager: &mut self.font_manager,
             render_world: &mut self.render_world,
             primitive_pipeline: &mut self.primitive_pipeline,
             primitive_shapes: &mut self.primitive_shapes,
@@ -82,6 +84,14 @@ enum FrameOverlayOp {
     PushSprite {
         texture_id: TextureId,
         instance: SpriteInstance,
+    },
+    DrawText {
+        font_id: u32,
+        text: String,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: [f32; 4],
     },
 }
 
@@ -208,6 +218,25 @@ impl FrameTransaction {
         self.overlay_ops.push(FrameOverlayOp::PushSprite {
             texture_id,
             instance,
+        });
+    }
+
+    pub(super) fn draw_text(
+        &mut self,
+        font_id: u32,
+        text: String,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: [f32; 4],
+    ) {
+        self.overlay_ops.push(FrameOverlayOp::DrawText {
+            font_id,
+            text,
+            x,
+            y,
+            size,
+            color,
         });
     }
 
@@ -376,7 +405,13 @@ impl FrameTransaction {
         ctx.draw_list.clear();
         ctx.draw_list.set_screen_space(self.screen_w, self.screen_h);
         for op in self.overlay_ops {
-            apply_overlay_op(ctx.draw_list, self.screen_w, self.screen_h, op);
+            apply_overlay_op(
+                ctx.draw_list,
+                ctx.font_manager,
+                self.screen_w,
+                self.screen_h,
+                op,
+            );
         }
 
         let mut resident_chunk_rebuild_count = 0u32;
@@ -397,7 +432,13 @@ impl FrameTransaction {
     }
 }
 
-fn apply_overlay_op(draw_list: &mut DrawList2D, screen_w: f32, screen_h: f32, op: FrameOverlayOp) {
+fn apply_overlay_op(
+    draw_list: &mut DrawList2D,
+    font_manager: &mut FontManager,
+    screen_w: f32,
+    screen_h: f32,
+    op: FrameOverlayOp,
+) {
     match op {
         FrameOverlayOp::SetCamera2D {
             x,
@@ -426,6 +467,21 @@ fn apply_overlay_op(draw_list: &mut DrawList2D, screen_w: f32, screen_h: f32, op
             texture_id,
             instance,
         } => draw_list.push_sprite(texture_id, instance),
+        FrameOverlayOp::DrawText {
+            font_id,
+            text,
+            x,
+            y,
+            size,
+            color,
+        } => {
+            font_manager.set_current(font_id);
+            for draw in
+                font_manager.layout_text(&text, x, y, size, color[0], color[1], color[2], color[3])
+            {
+                draw_list.push_sprite(draw.texture_id, draw.instance);
+            }
+        }
     }
 }
 

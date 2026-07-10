@@ -19,7 +19,7 @@ type VehicleDebugOverlay struct {
 	Vehicle *Vehicle
 	Entities []*Entity
 	model voplay.ModelID
-	ownedModel bool
+	modelLease *voplay.ModelLease
 	opts VehicleDebugOptions
 }
 
@@ -60,7 +60,7 @@ type RacingDebugOverlay struct {
 	VehicleOverlay *VehicleDebugOverlay
 	SurfaceEntity *Entity
 	model voplay.ModelID
-	ownedModel bool
+	modelLease *voplay.ModelLease
 	opts RacingDebugOptions
 }
 
@@ -124,7 +124,7 @@ func SpawnRacingDebugOverlay(scene *Scene, track *Track, vehicle *Vehicle, opts 
 		model := opts.Model
 		if model == 0 {
 			model = CubeMesh()
-			overlay.ownedModel = true
+			overlay.modelLease = voplay.NewModelLease(model)
 		}
 		overlay.model = model
 		overlay.SurfaceEntity = scene.Spawn(EntityDesc{Model: model, Scale: voplay.Vec3{X: opts.SurfaceMarkerSize, Y: opts.SurfaceMarkerSize, Z: opts.SurfaceMarkerSize}, Tint: opts.SurfaceColor, TintSet: true, Tag: "racing_debug_surface", PickMode: PickDisabled})
@@ -170,11 +170,9 @@ func (o *RacingDebugOverlay) Destroy(scene *Scene) {
 		scene.Destroy(o.SurfaceEntity)
 	}
 	o.SurfaceEntity = nil
-	if o.ownedModel && o.model != 0 {
-		o.model.Free()
-		o.model = 0
-		o.ownedModel = false
-	}
+	o.modelLease.Release()
+	o.modelLease = nil
+	o.model = 0
 }
 
 func SpawnVehicleDebugOverlay(scene *Scene, vehicle *Vehicle, opts VehicleDebugOptions) (*VehicleDebugOverlay, error) {
@@ -186,12 +184,12 @@ func SpawnVehicleDebugOverlay(scene *Scene, vehicle *Vehicle, opts VehicleDebugO
 	}
 	opts = normalizeVehicleDebugOptions(opts)
 	model := opts.Model
-	owned := false
+	var modelLease *voplay.ModelLease
 	if model == 0 {
 		model = CubeMesh()
-		owned = true
+		modelLease = voplay.NewModelLease(model)
 	}
-	overlay := &VehicleDebugOverlay{Vehicle: vehicle, Entities: []*Entity{}, model: model, ownedModel: owned, opts: opts}
+	overlay := &VehicleDebugOverlay{Vehicle: vehicle, Entities: []*Entity{}, model: model, modelLease: modelLease, opts: opts}
 	success := false
 	errdefer func() {
 		if success {
@@ -254,11 +252,9 @@ func (o *VehicleDebugOverlay) Destroy(scene *Scene) {
 		}
 	}
 	o.Entities = nil
-	if o.ownedModel && o.model != 0 {
-		o.model.Free()
-		o.model = 0
-		o.ownedModel = false
-	}
+	o.modelLease.Release()
+	o.modelLease = nil
+	o.model = 0
 }
 
 func (o *VehicleDebugOverlay) entityAt(index int) *Entity {

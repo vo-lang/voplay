@@ -102,7 +102,7 @@ func BuildTrackSurfaceAuthoringPlan(track *Track, desc TrackSurfaceAuthoringDesc
 	return plan, nil
 }
 
-func SpawnAuthoredTrackSurfaceDetails(scene *Scene, assets *voplay.Assets, track *Track, desc TrackSurfaceAuthoringDesc) (*AuthoredTrackSurfaceDetails, error) {
+func SpawnAuthoredTrackSurfaceDetails(scene *Scene, assets voplay.AssetSource, track *Track, desc TrackSurfaceAuthoringDesc) (*AuthoredTrackSurfaceDetails, error) {
 	plan, err := BuildTrackSurfaceAuthoringPlan(track, desc)
 	if err != nil {
 		return nil, err

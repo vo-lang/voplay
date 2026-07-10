@@ -11,7 +11,7 @@ import (
 const meshTerrainGridMagic = 826758221
 
 type MeshTerrainAssetDesc struct {
-	Assets *voplay.Assets
+	Assets voplay.AssetSource
 	Model voplay.ModelID
 	ModelPath string
 	LodLevels []MeshTerrainLodLevelDesc
@@ -103,7 +103,11 @@ func SpawnMeshTerrainAsset(scene *Scene, desc MeshTerrainAssetDesc) (*MeshTerrai
 	if gridErr != nil {
 		return nil, gridErr
 	}
-	entity := scene.Spawn(EntityDesc{Model: model, OwnedModel: ownedModel, OwnedLodModels: ownedLodModels, LodLevels: lodLevels, Material: normalized.Material, Tag: normalized.Tag, PickMode: normalized.PickMode, StaticRenderable: true, CullDistance: normalized.CullDistance, CullRadius: normalized.CullRadius, FrustumCull: normalized.FrustumCull})
+	var modelLease *voplay.ModelLease
+	if ownedModel != 0 {
+		modelLease = voplay.NewModelLease(ownedModel)
+	}
+	entity := scene.Spawn(EntityDesc{Model: model, ModelLease: modelLease, LodModelLeases: modelLeases(ownedLodModels), LodLevels: lodLevels, Material: normalized.Material, Tag: normalized.Tag, PickMode: normalized.PickMode, StaticRenderable: true, CullDistance: normalized.CullDistance, CullRadius: normalized.CullRadius, FrustumCull: normalized.FrustumCull})
 	terrain := &MeshTerrainAsset{entity: entity, grid: grid, heightProbe: meshTerrainGridProbe(grid)}
 	success = true
 	return terrain, nil

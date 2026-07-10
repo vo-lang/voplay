@@ -1,7 +1,11 @@
-use super::frame_decode::FrameDecodeOutput;
+use super::frame_decode::{
+    FrameCommandCounts, FrameDecodeOutput, FramePostSettings, FrameScenePayload,
+    FrameShadowSettings, FrameViewState,
+};
 use super::frame_transaction::FrameTransaction;
 use super::*;
 use crate::renderer_frame::RenderFrameDecode;
+use crate::stream::DrawStreamError;
 
 pub(super) struct FrameTransactionBuilder<'a> {
     data: &'a [u8],
@@ -11,7 +15,6 @@ pub(super) struct FrameTransactionBuilder<'a> {
     debug_frame_count: u64,
     perf_enabled: bool,
     texture_manager: &'a TextureManager,
-    font_manager: &'a mut FontManager,
 }
 
 impl<'a> FrameTransactionBuilder<'a> {
@@ -23,7 +26,6 @@ impl<'a> FrameTransactionBuilder<'a> {
         debug_frame_count: u64,
         perf_enabled: bool,
         texture_manager: &'a TextureManager,
-        font_manager: &'a mut FontManager,
     ) -> Self {
         Self {
             data,
@@ -33,11 +35,10 @@ impl<'a> FrameTransactionBuilder<'a> {
             debug_frame_count,
             perf_enabled,
             texture_manager,
-            font_manager,
         }
     }
 
-    pub(super) fn decode(self) -> FrameDecodeOutput {
+    pub(super) fn decode(self) -> Result<FrameDecodeOutput, DrawStreamError> {
         let screen_w = self.screen_w;
         let screen_h = self.screen_h;
         let aspect = self.aspect;
@@ -50,7 +51,7 @@ impl<'a> FrameTransactionBuilder<'a> {
             a: 1.0,
         };
         let mut camera3d_uniform: Option<Camera3DUniform> = None;
-        let mut camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)> = None;
+        let mut camera3d_state: Option<Camera3DState> = None;
         let mut skybox_cubemap_id: Option<u32> = None;
         let mut shadow_enabled = false;
         let mut shadow_resolution = 2048u32;
@@ -106,8 +107,8 @@ impl<'a> FrameTransactionBuilder<'a> {
         let mut line_count = 0u32;
         let mut text_count = 0u32;
         let mut sprite_count = 0u32;
+        let mut current_font_id = 0u32;
         let mut model_command_count = 0u32;
-        let mut projected_decal_count = 0u32;
         let mut scene_upsert_count = 0u32;
         let mut scene_removal_count = 0u32;
         let mut scene_draw_count = 0u32;
@@ -117,8 +118,8 @@ impl<'a> FrameTransactionBuilder<'a> {
         } else {
             None
         };
-        let mut reader = StreamReader::new(self.data);
-        while let Some(cmd) = reader.next_command() {
+        let mut reader = StreamReader::new(self.data)?;
+        while let Some(cmd) = reader.next_command()? {
             command_count += 1;
             match cmd {
                 DrawCommand::Clear { r, g, b, a } => {
@@ -177,7 +178,7 @@ impl<'a> FrameTransactionBuilder<'a> {
                     transaction.push_line(x1, y1, x2, y2, thickness, [r, g, b, a]);
                 }
                 DrawCommand::SetFont { font_id } => {
-                    self.font_manager.set_current(font_id);
+                    current_font_id = font_id;
                 }
                 DrawCommand::DrawText {
                     x,
@@ -190,10 +191,7 @@ impl<'a> FrameTransactionBuilder<'a> {
                     text,
                 } => {
                     text_count += 1;
-                    let draws = self.font_manager.layout_text(&text, x, y, size, r, g, b, a);
-                    for draw in draws {
-                        transaction.push_sprite(draw.texture_id, draw.instance);
-                    }
+                    transaction.draw_text(current_font_id, text, x, y, size, [r, g, b, a]);
                 }
                 DrawCommand::DrawSprite {
                     tex_id,
@@ -253,7 +251,14 @@ impl<'a> FrameTransactionBuilder<'a> {
                     near,
                     far,
                 } => {
-                    camera3d_state = Some((eye, target, up, fov, near, far));
+                    camera3d_state = Some(Camera3DState {
+                        eye,
+                        target,
+                        up,
+                        fov_degrees: fov,
+                        near,
+                        far,
+                    });
                     let v = math3d::look_at_rh(eye, target, up);
                     let proj = math3d::perspective_rh_zo(fov.to_radians(), aspect, near, far);
                     let view_proj = math3d::mat4_mul(&proj, &v);
@@ -373,7 +378,6 @@ impl<'a> FrameTransactionBuilder<'a> {
                     depth,
                     color,
                 } => {
-                    projected_decal_count += 1;
                     projected_decals.push(
                         PostDecalGpu::new(position.to_array(), yaw, width, length, depth, color)
                             .with_distance_fade(
@@ -491,7 +495,6 @@ impl<'a> FrameTransactionBuilder<'a> {
                     let normal_atlas_enabled = atlas_slot.is_some() && normal_id != 0;
                     let roughness_atlas_enabled = atlas_slot.is_some() && roughness_id != 0;
                     let mask_atlas_enabled = atlas_slot.is_some() && mask_id != 0;
-                    projected_decal_count += 1;
                     projected_decals.push(
                         PostDecalGpu::new_with_uv(
                             position.to_array(),
@@ -749,7 +752,7 @@ impl<'a> FrameTransactionBuilder<'a> {
         }
         let elapsed_ms = elapsed_ms_opt(decode_start);
 
-        FrameDecodeOutput {
+        Ok(FrameDecodeOutput {
             stage: RenderFrameDecode {
                 frame_id: debug_frame_count.min(u32::MAX as u64) as u32,
                 command_count,
@@ -762,44 +765,53 @@ impl<'a> FrameTransactionBuilder<'a> {
                 elapsed_ms,
             },
             transaction,
-            clear_color,
-            camera3d_uniform,
-            camera3d_state,
-            skybox_cubemap_id,
-            shadow_enabled,
-            shadow_resolution,
-            shadow_strength,
-            shadow_softness,
-            shadow_distance,
-            shadow_fade,
-            shadow_quality,
-            post_bloom_threshold,
-            post_bloom_strength,
-            post_sharpen_strength,
-            post_fxaa_strength,
-            post_contact_ao_strength,
-            post_contact_ao_radius,
-            post_contact_ao_depth_scale,
-            post_contact_ao_detail_strength,
-            post_contact_ao_detail_radius,
-            post_contact_ao_normal_bias,
-            post_contact_ao_quality,
-            light_uniform,
-            model_draws,
-            projected_decals,
-            projected_decal_atlas_bindings,
-            retained_scene_draws,
-            rect_count,
-            circle_count,
-            line_count,
-            text_count,
-            sprite_count,
-            model_command_count,
-            projected_decal_count,
-            scene_upsert_count,
-            scene_removal_count,
-            scene_draw_count,
-            skybox_count,
-        }
+            view: FrameViewState {
+                clear_color,
+                camera3d_uniform,
+                camera3d_state,
+                skybox_cubemap_id,
+            },
+            shadow: FrameShadowSettings {
+                shadow_enabled,
+                shadow_resolution,
+                shadow_strength,
+                shadow_softness,
+                shadow_distance,
+                shadow_fade,
+                shadow_quality,
+            },
+            post: FramePostSettings {
+                post_bloom_threshold,
+                post_bloom_strength,
+                post_sharpen_strength,
+                post_fxaa_strength,
+                post_contact_ao_strength,
+                post_contact_ao_radius,
+                post_contact_ao_depth_scale,
+                post_contact_ao_detail_strength,
+                post_contact_ao_detail_radius,
+                post_contact_ao_normal_bias,
+                post_contact_ao_quality,
+            },
+            scene: FrameScenePayload {
+                light_uniform,
+                model_draws,
+                projected_decals,
+                projected_decal_atlas_bindings,
+                retained_scene_draws,
+            },
+            counts: FrameCommandCounts {
+                rect_count,
+                circle_count,
+                line_count,
+                text_count,
+                sprite_count,
+                model_command_count,
+                scene_upsert_count,
+                scene_removal_count,
+                scene_draw_count,
+                skybox_count,
+            },
+        })
     }
 }

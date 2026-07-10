@@ -1,3 +1,6 @@
+use super::frame_decode::{
+    FramePostSettings, FrameScenePayload, FrameShadowSettings, FrameViewState,
+};
 use super::*;
 use crate::render_world::RenderBatchPlan;
 
@@ -5,19 +8,10 @@ pub(super) struct FrameWorkloadPlanContext<'a> {
     pub(super) perf_enabled: bool,
     pub(super) perf: &'a mut RendererPerfStats,
     pub(super) perf_overrides: RendererPerfOverrides,
-    pub(super) shadow_enabled: &'a mut bool,
-    pub(super) shadow_strength: &'a mut f32,
-    pub(super) shadow_quality: &'a mut u32,
-    pub(super) post_bloom_strength: &'a mut f32,
-    pub(super) post_sharpen_strength: &'a mut f32,
-    pub(super) post_fxaa_strength: &'a mut f32,
-    pub(super) post_contact_ao_strength: &'a mut f32,
-    pub(super) post_contact_ao_quality: &'a mut u32,
-    pub(super) model_draws: &'a mut Vec<ModelDraw>,
-    pub(super) projected_decals: &'a mut Vec<PostDecalGpu>,
-    pub(super) projected_decal_atlas_bindings: &'a mut Vec<ProjectedDecalAtlasBinding>,
-    pub(super) retained_scene_draws: &'a [u32],
-    pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
+    pub(super) view: &'a FrameViewState,
+    pub(super) shadow: &'a mut FrameShadowSettings,
+    pub(super) post: &'a mut FramePostSettings,
+    pub(super) scene: &'a mut FrameScenePayload,
     pub(super) frame_id: u32,
 }
 
@@ -48,11 +42,11 @@ impl Renderer {
         mut context: FrameWorkloadPlanContext<'_>,
     ) -> FrameWorkloadPlan {
         apply_frame_perf_overrides(&mut context);
-        let contact_ao_active =
-            *context.post_contact_ao_strength > 0.001 && *context.post_contact_ao_quality > 0;
+        let contact_ao_active = context.post.post_contact_ao_strength > 0.001
+            && context.post.post_contact_ao_quality > 0;
         let primitives_enabled = !context.perf_overrides.has(RENDERER_DIAG_DISABLE_PRIMITIVES);
         let primitive_shadows_enabled = primitives_enabled
-            && *context.shadow_enabled
+            && context.shadow.shadow_enabled
             && !context
                 .perf_overrides
                 .has(RENDERER_DIAG_DISABLE_PRIMITIVE_SHADOWS);
@@ -68,44 +62,45 @@ impl Renderer {
         );
         let mut render_batch_plan = build_frame_batch_plan(
             context.frame_id,
-            context.model_draws,
-            context.projected_decals,
+            &context.scene.model_draws,
+            &context.scene.projected_decals,
             &primitive_draws,
             &primitive_chunks,
             &primitive_chunk_info,
-            context.camera3d_uniform,
+            context.view.camera3d_uniform.as_ref(),
             &self.model_manager,
         );
-        let planned_model_draws = render_batch_plan.model_batches(context.model_draws);
+        let planned_model_draws = render_batch_plan.model_batches(&context.scene.model_draws);
         let planned_primitive_draws = render_batch_plan.primitive_draw_batches(&primitive_draws);
         let planned_primitive_chunks = render_batch_plan.primitive_chunk_batches(&primitive_chunks);
         let planned_water_draws = render_batch_plan.water_draw_batches(&primitive_draws);
         let planned_water_chunks = render_batch_plan.water_chunk_batches(&primitive_chunks);
-        let planned_projected_decals = render_batch_plan.decal_batches(context.projected_decals);
+        let planned_projected_decals =
+            render_batch_plan.decal_batches(&context.scene.projected_decals);
         let projected_decals_active = !planned_projected_decals.is_empty();
         let post_depth_active = contact_ao_active || projected_decals_active;
         let depth_prepass_active = MAIN_SAMPLE_COUNT > 1 && post_depth_active;
         let (primitive_depth_draws, primitive_depth_chunks) = self.collect_frame_depth_workloads(
             depth_prepass_active,
-            context.retained_scene_draws,
-            context.camera3d_uniform,
+            &context.scene.retained_scene_draws,
+            context.view.camera3d_uniform.as_ref(),
             &planned_primitive_chunks,
         );
         let (primitive_shadow_draws, primitive_shadow_chunks) = self
             .collect_frame_shadow_workloads(
                 primitive_shadows_enabled,
-                context.retained_scene_draws,
-                context.camera3d_uniform,
+                &context.scene.retained_scene_draws,
+                context.view.camera3d_uniform.as_ref(),
                 &planned_primitive_chunks,
             );
         let material_group_count = material_group_count(&render_batch_plan);
         let water_pass_active = primitives_enabled
-            && context.camera3d_uniform.is_some()
+            && context.view.camera3d_uniform.is_some()
             && self
                 .primitive_pipeline
                 .has_water_surface(&planned_water_draws, &planned_water_chunks);
         let transparent_pass_active = primitives_enabled
-            && context.camera3d_uniform.is_some()
+            && context.view.camera3d_uniform.is_some()
             && self.primitive_pipeline.has_translucent_surface(
                 &planned_primitive_draws,
                 &planned_primitive_chunks,
@@ -147,9 +142,9 @@ impl Renderer {
         } else {
             None
         };
-        for scene_id in context.retained_scene_draws {
+        for scene_id in &context.scene.retained_scene_draws {
             self.render_world
-                .collect_scene_draws(*scene_id, context.model_draws);
+                .collect_scene_draws(*scene_id, &mut context.scene.model_draws);
             if primitives_enabled {
                 self.render_world
                     .collect_scene_primitive_draws_with_chunk_info(
@@ -215,39 +210,39 @@ impl Renderer {
 
 fn apply_frame_perf_overrides(context: &mut FrameWorkloadPlanContext<'_>) {
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_SHADOWS) {
-        *context.shadow_enabled = false;
-        *context.shadow_strength = 0.0;
-        *context.shadow_quality = 0;
+        context.shadow.shadow_enabled = false;
+        context.shadow.shadow_strength = 0.0;
+        context.shadow.shadow_quality = 0;
     }
     if context
         .perf_overrides
         .has(RENDERER_DIAG_DISABLE_POST_EFFECTS)
     {
-        *context.post_bloom_strength = 0.0;
-        *context.post_sharpen_strength = 0.0;
-        *context.post_fxaa_strength = 0.0;
-        *context.post_contact_ao_strength = 0.0;
-        *context.post_contact_ao_quality = 0;
-        context.projected_decals.clear();
-        context.projected_decal_atlas_bindings.clear();
+        context.post.post_bloom_strength = 0.0;
+        context.post.post_sharpen_strength = 0.0;
+        context.post.post_fxaa_strength = 0.0;
+        context.post.post_contact_ao_strength = 0.0;
+        context.post.post_contact_ao_quality = 0;
+        context.scene.projected_decals.clear();
+        context.scene.projected_decal_atlas_bindings.clear();
         return;
     }
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_BLOOM) {
-        *context.post_bloom_strength = 0.0;
+        context.post.post_bloom_strength = 0.0;
     }
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_SHARPEN) {
-        *context.post_sharpen_strength = 0.0;
+        context.post.post_sharpen_strength = 0.0;
     }
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_FXAA) {
-        *context.post_fxaa_strength = 0.0;
+        context.post.post_fxaa_strength = 0.0;
     }
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_CONTACT_AO) {
-        *context.post_contact_ao_strength = 0.0;
-        *context.post_contact_ao_quality = 0;
+        context.post.post_contact_ao_strength = 0.0;
+        context.post.post_contact_ao_quality = 0;
     }
     if context.perf_overrides.has(RENDERER_DIAG_DISABLE_DECALS) {
-        context.projected_decals.clear();
-        context.projected_decal_atlas_bindings.clear();
+        context.scene.projected_decals.clear();
+        context.scene.projected_decal_atlas_bindings.clear();
     }
 }
 

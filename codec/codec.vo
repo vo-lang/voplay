@@ -32,6 +32,16 @@ func (w *ByteWriter) WriteU32(v int) {
 	w.buf = append(w.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
 }
 
+func (w *ByteWriter) PatchU32(offset, v int) {
+	if offset < 0 || offset+4 > len(w.buf) {
+		panic("codec.ByteWriter.PatchU32: offset out of bounds")
+	}
+	w.buf[offset] = byte(v)
+	w.buf[offset+1] = byte(v >> 8)
+	w.buf[offset+2] = byte(v >> 16)
+	w.buf[offset+3] = byte(v >> 24)
+}
+
 func (w *ByteWriter) WriteF64(v float64) {
 	b := math.Float64bits(v)
 	w.buf = append(w.buf,

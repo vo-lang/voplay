@@ -51,9 +51,9 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 			}
 		}
 	}
-	diag.Vehicles = len(s.vehicles)
+	diag.Vehicles = len(s.physicsWorld.vehicles)
 	diag.ContactEvents = len(s.ContactEvents())
-	for _, vehicle := range s.vehicles {
+	for _, vehicle := range s.physicsWorld.vehicles {
 		if vehicle == nil {
 			continue
 		}
@@ -62,16 +62,9 @@ func (s *Scene) Diagnostics() SceneDiagnostics {
 	return diag
 }
 
-func ProductSceneDiagnostics(scene *Scene) SceneDiagnostics {
-	if scene == nil {
-		return SceneDiagnostics{}
-	}
-	return scene.Diagnostics()
-}
-
-func ProductSetRenderDebugMode(scene *Scene, mode int) {
-	if scene == nil {
+func (s *Scene) SetRenderDebugMode(mode int) {
+	if s == nil {
 		return
 	}
-	scene.RenderDebugMode = normalizeRenderDebugMode(mode)
+	s.RenderDebugMode = normalizeRenderDebugMode(mode)
 }

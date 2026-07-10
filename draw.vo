@@ -8,56 +8,6 @@ package voplay
 import "math"
 import "github.com/vo-lang/voplay/codec"
 
-// Draw command opcodes (must match Rust decoder in stream.rs).
-// Unexported: sub-packages use DrawCtx methods, not raw opcodes.
-const (
-	opClear         = 0x01
-	opSetCamera2D   = 0x02
-	opSetCamera3D   = 0x03
-	opResetCamera   = 0x04
-	opSetLayer      = 0x05
-	opSetFont       = 0x06
-	opDrawSprite    = 0x10
-	opDrawRect      = 0x11
-	opDrawCircle    = 0x12
-	opDrawLine      = 0x13
-	opDrawText      = 0x14
-	opDrawModel     = 0x20
-	opDrawBillboard = 0x21
-	opDrawProjectedDecal3D = 0x22
-	opSetLights3D   = 0x23
-	opSetFog3D      = 0x24
-	opDrawSkybox    = 0x25
-	opSetColorGrading3D = 0x26
-	opSetShadow3D   = 0x27
-	opSetRenderDebug3D = 0x28
-	opSetPostProcess3D = 0x29
-	opSetContactAO3D = 0x2A
-	opSetProjectedDecalAtlas3D = 0x2B
-	opDrawProjectedDecal3DUV = 0x2C
-	opSetProjectedDecalDistanceFade3D = 0x2D
-	opSetProjectedDecalReceiverMask3D = 0x2E
-	opSetProjectedDecalSurfaceResponse3D = 0x2F
-	opScene3DUpsertObject  = 0x30
-	opScene3DDestroyObject = 0x31
-	opScene3DClear         = 0x32
-	opScene3DDraw          = 0x33
-	opPrimitive3DUpsertInstance = 0x34
-	opPrimitive3DDestroyInstance = 0x35
-	opPrimitive3DClearLayer = 0x36
-	opPrimitive3DDestroyLayer = 0x37
-	opPrimitive3DReplaceChunk = 0x38
-	opPrimitive3DReplaceChunkRefs = 0x39
-	opPrimitive3DUpsertMaterials = 0x3A
-	opPrimitive3DUpsertShapes = 0x3B
-	opPrimitive3DReplaceChunkKeys = 0x3C
-	opPrimitive3DSetChunkVisible = 0x3D
-	opSetProjectedDecalNormalAtlas3D = 0x40
-	opSetProjectedDecalRoughnessAtlas3D = 0x41
-	opSetProjectedDecalMaskAtlas3D = 0x42
-	opSetProjectedDecalAngleFade3D = 0x43
-)
-
 type ProjectedDecalReceiverMask int
 
 const (
@@ -166,19 +116,31 @@ const (
 
 // NewDrawCtx creates a new draw command context.
 func NewDrawCtx() *DrawCtx {
-	return &DrawCtx{
-		w: codec.NewByteWriter(4096),
-	}
+	d := &DrawCtx{w: codec.NewByteWriter(4096)}
+	d.reset()
+	return d
 }
 
 func (d *DrawCtx) reset() {
 	d.w.Reset()
 	d.stats = DrawStats{}
+	d.writeStreamHeader()
 }
 
 // Bytes returns the encoded command buffer.
 func (d *DrawCtx) Bytes() []byte {
+	d.w.PatchU32(drawStreamPayloadLengthOffset, d.w.Len()-DrawStreamHeaderSize)
 	return d.w.Bytes()
+}
+
+func (d *DrawCtx) writeStreamHeader() {
+	d.w.WriteByte(drawStreamMagic0)
+	d.w.WriteByte(drawStreamMagic1)
+	d.w.WriteByte(drawStreamMagic2)
+	d.w.WriteByte(drawStreamMagic3)
+	d.w.WriteU16(drawStreamVersion)
+	d.w.WriteU16(drawStreamFlags)
+	d.w.WriteU32(0)
 }
 
 // Stats returns command-level workload counters for the current frame.

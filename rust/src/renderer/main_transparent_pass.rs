@@ -1,5 +1,4 @@
 use super::*;
-use crate::pipeline3d::PrimitiveSubmitter;
 use std::cmp::Ordering;
 
 pub(super) struct MainTransparentPassExecutor;
@@ -171,8 +170,7 @@ impl MainTransparentPassExecutor {
             .collect::<Vec<_>>();
         let mut primitive_stats = PrimitiveDrawStats::default();
         if !sorted_primitive_draws.is_empty() {
-            let primitive_submit_report = PrimitiveSubmitter::submit(
-                ctx.primitive_pipeline,
+            let stats = ctx.primitive_pipeline.draw(
                 ctx.device,
                 ctx.queue,
                 &mut render_pass,
@@ -184,12 +182,7 @@ impl MainTransparentPassExecutor {
                 false,
                 crate::primitive_pipeline::PrimitiveRenderFilter::Translucent,
             );
-            let _submit_identity = (
-                primitive_submit_report.owner,
-                PrimitiveSubmitter::filter_name(primitive_submit_report.filter),
-                primitive_submit_report.outcome,
-            );
-            accumulate_stats(&mut primitive_stats, primitive_submit_report.stats);
+            accumulate_stats(&mut primitive_stats, stats);
         }
         primitive_stats.skips.missing_chunks = primitive_stats
             .skips

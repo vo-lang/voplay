@@ -5,10 +5,21 @@ use crate::renderer_frame::RenderFrameDecode;
 pub(super) struct FrameDecodeOutput {
     pub(super) stage: RenderFrameDecode,
     pub(super) transaction: FrameTransaction,
+    pub(super) view: FrameViewState,
+    pub(super) shadow: FrameShadowSettings,
+    pub(super) post: FramePostSettings,
+    pub(super) scene: FrameScenePayload,
+    pub(super) counts: FrameCommandCounts,
+}
+
+pub(super) struct FrameViewState {
     pub(super) clear_color: wgpu::Color,
     pub(super) camera3d_uniform: Option<Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) camera3d_state: Option<Camera3DState>,
     pub(super) skybox_cubemap_id: Option<u32>,
+}
+
+pub(super) struct FrameShadowSettings {
     pub(super) shadow_enabled: bool,
     pub(super) shadow_resolution: u32,
     pub(super) shadow_strength: f32,
@@ -16,6 +27,9 @@ pub(super) struct FrameDecodeOutput {
     pub(super) shadow_distance: f32,
     pub(super) shadow_fade: f32,
     pub(super) shadow_quality: u32,
+}
+
+pub(super) struct FramePostSettings {
     pub(super) post_bloom_threshold: f32,
     pub(super) post_bloom_strength: f32,
     pub(super) post_sharpen_strength: f32,
@@ -27,18 +41,23 @@ pub(super) struct FrameDecodeOutput {
     pub(super) post_contact_ao_detail_radius: f32,
     pub(super) post_contact_ao_normal_bias: f32,
     pub(super) post_contact_ao_quality: u32,
+}
+
+pub(super) struct FrameScenePayload {
     pub(super) light_uniform: LightUniform,
     pub(super) model_draws: Vec<ModelDraw>,
     pub(super) projected_decals: Vec<PostDecalGpu>,
     pub(super) projected_decal_atlas_bindings: Vec<ProjectedDecalAtlasBinding>,
     pub(super) retained_scene_draws: Vec<u32>,
+}
+
+pub(super) struct FrameCommandCounts {
     pub(super) rect_count: u32,
     pub(super) circle_count: u32,
     pub(super) line_count: u32,
     pub(super) text_count: u32,
     pub(super) sprite_count: u32,
     pub(super) model_command_count: u32,
-    pub(super) projected_decal_count: u32,
     pub(super) scene_upsert_count: u32,
     pub(super) scene_removal_count: u32,
     pub(super) scene_draw_count: u32,

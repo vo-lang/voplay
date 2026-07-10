@@ -21,7 +21,7 @@ type BakedPrimitiveLayerSlot struct {
 }
 
 type BakedPrimitiveLayerAssetDesc struct {
-	Assets *voplay.Assets
+	Assets voplay.AssetSource
 	Path string
 	Data []byte
 	Layer *primitive3d.Layer

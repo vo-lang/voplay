@@ -1,5 +1,9 @@
 use super::backend_submit_pass::{BackendSubmitPassContext, BackendSubmitPassExecutor};
 use super::depth_pass::{DepthPassContext, DepthPassExecutor};
+use super::frame_decode::{
+    FramePostSettings, FrameScenePayload, FrameShadowSettings, FrameViewState,
+};
+use super::frame_workload_plan::FrameWorkloadPlan;
 use super::main_opaque_pass::{MainOpaquePassContext, MainOpaquePassExecutor};
 use super::main_transparent_pass::{MainTransparentPassContext, MainTransparentPassExecutor};
 use super::overlay_pass::{OverlayPassContext, OverlayPassExecutor};
@@ -39,7 +43,7 @@ pub(super) struct RenderAssetScope<'a> {
     pub(super) world: &'a RenderWorld,
 }
 
-pub(super) struct FramePassResources<'a> {
+pub(super) struct FrameExecutorResources<'a> {
     pub(super) gpu: RenderGpuScope<'a>,
     pub(super) target_registry: &'a RenderResourceRegistry,
     pub(super) post_bindings: RenderPostBindings<'a>,
@@ -48,82 +52,65 @@ pub(super) struct FramePassResources<'a> {
     pub(super) assets: RenderAssetScope<'a>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct FramePassStats {
+    pub(super) primitive_depth_draw_calls: u32,
+    pub(super) primitive_shadow_draw_calls: u32,
+    pub(super) mesh_main: MeshDrawStats,
+    pub(super) primitive_main: PrimitiveDrawStats,
+    pub(super) primitive_transparent: PrimitiveDrawStats,
+    pub(super) primitive_water: PrimitiveDrawStats,
+    pub(super) primitive_main_submitted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct FramePassRuntimeState {
+    post_fallback_path_count: u32,
+    post_rejected_decal_count: u32,
+    post_upload_bytes: u32,
+    overlay_missing_texture_count: u32,
+    pub(super) shadow_active: bool,
+    post_uniforms_uploaded: bool,
+}
+
 pub(super) struct FramePassDispatcher<'a> {
-    pub(super) resources: FramePassResources<'a>,
+    pub(super) resources: FrameExecutorResources<'a>,
     pub(super) encoder: Option<wgpu::CommandEncoder>,
     pub(super) output: Option<wgpu::SurfaceTexture>,
     pub(super) surface_view: &'a wgpu::TextureView,
     pub(super) frame: &'a Frame2D,
     pub(super) camera_alignment: u32,
-    pub(super) clear_color: wgpu::Color,
-    pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
-    pub(super) skybox_cubemap_id: Option<u32>,
-    pub(super) light_uniform: &'a mut LightUniform,
-    pub(super) planned_model_draws: &'a [ModelDraw],
-    pub(super) primitive_depth_draws: &'a mut Vec<PrimitiveDraw>,
-    pub(super) primitive_depth_chunks: &'a [PrimitiveChunkRef],
-    pub(super) primitive_shadow_draws: &'a mut Vec<PrimitiveDraw>,
-    pub(super) primitive_shadow_chunks: &'a [PrimitiveChunkRef],
-    pub(super) retained_scene_draws: &'a [u32],
-    pub(super) planned_primitive_draws: &'a [PrimitiveDraw],
-    pub(super) planned_primitive_chunks: &'a [PrimitiveChunkRef],
-    pub(super) planned_water_draws: &'a [PrimitiveDraw],
-    pub(super) planned_water_chunks: &'a [PrimitiveChunkRef],
-    pub(super) projected_decal_atlas_bindings: &'a [ProjectedDecalAtlasBinding],
-    pub(super) projected_decals: &'a [PostDecalGpu],
-    pub(super) projected_decal_atlas_binding_count: u32,
-    pub(super) shadow_resolution: u32,
-    pub(super) shadow_quality: u32,
-    pub(super) shadow_distance: f32,
-    pub(super) shadow_fade: f32,
-    pub(super) shadow_softness: f32,
-    pub(super) shadow_strength: f32,
-    pub(super) main_aux_targets_enabled: bool,
     pub(super) aspect: f32,
     pub(super) perf_enabled: bool,
     pub(super) perf: &'a mut RendererPerfStats,
-    pub(super) primitive_depth_draw_calls: &'a mut u32,
-    pub(super) primitive_shadow_draw_calls: &'a mut u32,
-    pub(super) mesh_main_stats: &'a mut MeshDrawStats,
-    pub(super) primitive_main_stats: &'a mut PrimitiveDrawStats,
-    pub(super) primitive_transparent_stats: &'a mut PrimitiveDrawStats,
-    pub(super) primitive_main_submitted: &'a mut bool,
-    pub(super) primitive_water_stats: &'a mut PrimitiveDrawStats,
-    pub(super) post_fallback_path_count: u32,
-    pub(super) post_rejected_decal_count: u32,
-    pub(super) post_upload_bytes: u32,
-    pub(super) overlay_missing_texture_count: u32,
-    pub(super) shadow_active: &'a mut bool,
-    pub(super) post_uniforms_uploaded: bool,
-    pub(super) bloom_threshold: f32,
-    pub(super) bloom_strength: f32,
-    pub(super) sharpen_strength: f32,
-    pub(super) fxaa_strength: f32,
-    pub(super) contact_ao_strength: f32,
-    pub(super) contact_ao_radius: f32,
-    pub(super) contact_ao_depth_scale: f32,
-    pub(super) contact_ao_detail_strength: f32,
-    pub(super) contact_ao_detail_radius: f32,
-    pub(super) contact_ao_normal_bias: f32,
-    pub(super) contact_ao_quality: u32,
+    pub(super) view: &'a FrameViewState,
+    pub(super) shadow: &'a FrameShadowSettings,
+    pub(super) post: &'a FramePostSettings,
+    pub(super) scene: &'a mut FrameScenePayload,
+    pub(super) workload: &'a mut FrameWorkloadPlan,
+    pub(super) stats: FramePassStats,
+    pub(super) runtime: FramePassRuntimeState,
 }
 
 impl FramePassDispatcher<'_> {
     fn ensure_post_uniforms_uploaded(&mut self) {
-        if self.post_uniforms_uploaded {
+        if self.runtime.post_uniforms_uploaded {
             return;
         }
-        if !*self.shadow_active {
-            self.light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
-            self.light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
-            self.light_uniform.shadow_cascade_splits = [0.0; 4];
-            self.light_uniform.shadow_params =
-                [0.0, 0.002, self.shadow_softness, self.shadow_strength];
-            self.light_uniform.shadow_params2 = [
-                self.shadow_distance,
-                self.shadow_fade,
-                self.shadow_quality as f32,
+        if !self.runtime.shadow_active {
+            self.scene.light_uniform.shadow_vp = math3d::MAT4_IDENTITY;
+            self.scene.light_uniform.shadow_cascade_vp = [math3d::MAT4_IDENTITY; 4];
+            self.scene.light_uniform.shadow_cascade_splits = [0.0; 4];
+            self.scene.light_uniform.shadow_params = [
+                0.0,
+                0.002,
+                self.shadow.shadow_softness,
+                self.shadow.shadow_strength,
+            ];
+            self.scene.light_uniform.shadow_params2 = [
+                self.shadow.shadow_distance,
+                self.shadow.shadow_fade,
+                self.shadow.shadow_quality as f32,
                 0.0,
             ];
         }
@@ -133,29 +120,31 @@ impl FramePassDispatcher<'_> {
             surface_height: self.resources.gpu.surface.height,
             uniform_buffer: self.resources.post_bindings.uniform_buffer,
             decal_uniform_buffer: self.resources.post_bindings.decal_uniform_buffer,
-            camera3d_uniform: self.camera3d_uniform,
-            camera3d_state: self.camera3d_state,
-            light_uniform: &mut *self.light_uniform,
-            projected_decals: self.projected_decals,
-            projected_decal_atlas_binding_count: self.projected_decal_atlas_binding_count,
-            bloom_threshold: self.bloom_threshold,
-            bloom_strength: self.bloom_strength,
-            sharpen_strength: self.sharpen_strength,
-            fxaa_strength: self.fxaa_strength,
-            contact_ao_strength: self.contact_ao_strength,
-            contact_ao_radius: self.contact_ao_radius,
-            contact_ao_depth_scale: self.contact_ao_depth_scale,
-            contact_ao_detail_strength: self.contact_ao_detail_strength,
-            contact_ao_detail_radius: self.contact_ao_detail_radius,
-            contact_ao_normal_bias: self.contact_ao_normal_bias,
-            contact_ao_quality: self.contact_ao_quality,
+            camera3d_uniform: self.view.camera3d_uniform.as_ref(),
+            camera3d_state: self.view.camera3d_state,
+            light_uniform: &mut self.scene.light_uniform,
+            projected_decals: &self.workload.planned_projected_decals,
+            projected_decal_atlas_binding_count: self.scene.projected_decal_atlas_bindings.len()
+                as u32,
+            bloom_threshold: self.post.post_bloom_threshold,
+            bloom_strength: self.post.post_bloom_strength,
+            sharpen_strength: self.post.post_sharpen_strength,
+            fxaa_strength: self.post.post_fxaa_strength,
+            contact_ao_strength: self.post.post_contact_ao_strength,
+            contact_ao_radius: self.post.post_contact_ao_radius,
+            contact_ao_depth_scale: self.post.post_contact_ao_depth_scale,
+            contact_ao_detail_strength: self.post.post_contact_ao_detail_strength,
+            contact_ao_detail_radius: self.post.post_contact_ao_detail_radius,
+            contact_ao_normal_bias: self.post.post_contact_ao_normal_bias,
+            contact_ao_quality: self.post.post_contact_ao_quality,
         };
         let decal_report = PostPassSetup::upload_uniforms(&mut post_setup);
-        self.post_rejected_decal_count = decal_report.rejected_count.min(u32::MAX as usize) as u32;
-        self.post_upload_bytes = decal_report
+        self.runtime.post_rejected_decal_count =
+            decal_report.rejected_count.min(u32::MAX as usize) as u32;
+        self.runtime.post_upload_bytes = decal_report
             .upload_bytes
             .saturating_add(std::mem::size_of::<PostUniform>().min(u32::MAX as usize) as u32);
-        self.post_uniforms_uploaded = true;
+        self.runtime.post_uniforms_uploaded = true;
     }
 }
 
@@ -171,9 +160,9 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
         match kind {
             RenderPassKind::DepthPrepass => {
                 let perf_enabled = self.perf_enabled;
-                let camera3d_uniform = self.camera3d_uniform;
-                let model_draws = self.planned_model_draws;
-                let primitive_depth_chunks = self.primitive_depth_chunks;
+                let camera3d_uniform = self.view.camera3d_uniform.as_ref();
+                let model_draws = &self.workload.planned_model_draws;
+                let primitive_depth_chunks = &self.workload.primitive_depth_chunks;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
@@ -186,27 +175,27 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     encoder,
                     camera3d_uniform,
                     model_draws,
-                    primitive_depth_draws: &mut *self.primitive_depth_draws,
+                    primitive_depth_draws: &mut self.workload.primitive_depth_draws,
                     primitive_depth_chunks,
                     perf_enabled,
                 };
                 let result = DepthPassExecutor::execute(&mut context)?;
-                *self.primitive_depth_draw_calls = result.primitive_draw_calls;
+                self.stats.primitive_depth_draw_calls = result.primitive_draw_calls;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::Shadow => {
                 let perf_enabled = self.perf_enabled;
-                let camera3d_uniform = self.camera3d_uniform;
-                let camera3d_state = self.camera3d_state;
-                let model_draws = self.planned_model_draws;
-                let primitive_shadow_chunks = self.primitive_shadow_chunks;
-                let retained_scene_draws = self.retained_scene_draws;
-                let shadow_resolution = self.shadow_resolution;
-                let shadow_quality = self.shadow_quality;
-                let shadow_distance = self.shadow_distance;
-                let shadow_fade = self.shadow_fade;
-                let shadow_softness = self.shadow_softness;
-                let shadow_strength = self.shadow_strength;
+                let camera3d_uniform = self.view.camera3d_uniform.as_ref();
+                let camera3d_state = self.view.camera3d_state;
+                let model_draws = &self.workload.planned_model_draws;
+                let primitive_shadow_chunks = &self.workload.primitive_shadow_chunks;
+                let retained_scene_draws = &self.scene.retained_scene_draws;
+                let shadow_resolution = self.shadow.shadow_resolution;
+                let shadow_quality = self.shadow.shadow_quality;
+                let shadow_distance = self.shadow.shadow_distance;
+                let shadow_fade = self.shadow.shadow_fade;
+                let shadow_softness = self.shadow.shadow_softness;
+                let shadow_strength = self.shadow.shadow_strength;
                 let aspect = self.aspect;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
@@ -222,9 +211,9 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     encoder,
                     camera3d_uniform,
                     camera3d_state,
-                    light_uniform: &mut *self.light_uniform,
+                    light_uniform: &mut self.scene.light_uniform,
                     model_draws,
-                    primitive_shadow_draws: &mut *self.primitive_shadow_draws,
+                    primitive_shadow_draws: &mut self.workload.primitive_shadow_draws,
                     primitive_shadow_chunks,
                     retained_scene_draws,
                     shadow_resolution,
@@ -237,21 +226,21 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf_enabled,
                 };
                 let result = ShadowPassExecutor::execute(&mut context)?;
-                *self.primitive_shadow_draw_calls = result.primitive_draw_calls;
-                *self.shadow_active = result.active;
+                self.stats.primitive_shadow_draw_calls = result.primitive_draw_calls;
+                self.runtime.shadow_active = result.active;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::MainOpaque => {
                 let perf_enabled = self.perf_enabled;
-                let camera3d_uniform = self.camera3d_uniform;
-                let camera3d_state = self.camera3d_state;
-                let skybox_cubemap_id = self.skybox_cubemap_id;
-                let clear_color = self.clear_color;
-                let light_uniform = &*self.light_uniform;
-                let planned_model_draws = self.planned_model_draws;
-                let planned_primitive_draws = self.planned_primitive_draws;
-                let planned_primitive_chunks = self.planned_primitive_chunks;
-                let main_aux_targets_enabled = self.main_aux_targets_enabled;
+                let camera3d_uniform = self.view.camera3d_uniform.as_ref();
+                let camera3d_state = self.view.camera3d_state;
+                let skybox_cubemap_id = self.view.skybox_cubemap_id;
+                let clear_color = self.view.clear_color;
+                let light_uniform = &self.scene.light_uniform;
+                let planned_model_draws = &self.workload.planned_model_draws;
+                let planned_primitive_draws = &self.workload.planned_primitive_draws;
+                let planned_primitive_chunks = &self.workload.planned_primitive_chunks;
+                let main_aux_targets_enabled = self.workload.post_depth_active;
                 let aspect = self.aspect;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
@@ -281,16 +270,16 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf: &mut *self.perf,
                 };
                 let result = MainOpaquePassExecutor::execute(&mut context)?;
-                *self.mesh_main_stats = result.mesh_stats;
-                *self.primitive_main_stats = result.primitive_stats;
-                *self.primitive_main_submitted = self.primitive_main_stats.batch_count > 0;
+                self.stats.mesh_main = result.mesh_stats;
+                self.stats.primitive_main = result.primitive_stats;
+                self.stats.primitive_main_submitted = self.stats.primitive_main.batch_count > 0;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::MainTransparent => {
-                let camera3d_uniform = self.camera3d_uniform;
-                let light_uniform = &*self.light_uniform;
-                let planned_primitive_draws = self.planned_primitive_draws;
-                let planned_primitive_chunks = self.planned_primitive_chunks;
+                let camera3d_uniform = self.view.camera3d_uniform.as_ref();
+                let light_uniform = &self.scene.light_uniform;
+                let planned_primitive_draws = &self.workload.planned_primitive_draws;
+                let planned_primitive_chunks = &self.workload.planned_primitive_chunks;
                 let perf_enabled = self.perf_enabled;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
@@ -311,16 +300,16 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf_enabled,
                 };
                 let result = MainTransparentPassExecutor::execute(&mut context)?;
-                *self.primitive_transparent_stats = result.primitive_stats;
+                self.stats.primitive_transparent = result.primitive_stats;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::Water => {
                 let perf_enabled = self.perf_enabled;
-                let camera3d_uniform = self.camera3d_uniform;
-                let light_uniform = &*self.light_uniform;
-                let planned_water_draws = self.planned_water_draws;
-                let planned_water_chunks = self.planned_water_chunks;
-                let main_aux_targets_enabled = self.main_aux_targets_enabled;
+                let camera3d_uniform = self.view.camera3d_uniform.as_ref();
+                let light_uniform = &self.scene.light_uniform;
+                let planned_water_draws = &self.workload.planned_water_draws;
+                let planned_water_chunks = &self.workload.planned_water_chunks;
+                let main_aux_targets_enabled = self.workload.post_depth_active;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
@@ -341,13 +330,13 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf_enabled,
                 };
                 let result = WaterPassExecutor::execute(&mut context)?;
-                *self.primitive_water_stats = result.stats;
+                self.stats.primitive_water = result.stats;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::Post => {
                 let perf_enabled = self.perf_enabled;
                 let surface_view = self.surface_view;
-                let projected_decal_atlas_bindings = self.projected_decal_atlas_bindings;
+                let projected_decal_atlas_bindings = &self.scene.projected_decal_atlas_bindings;
                 let encoder = self.encoder.as_mut().ok_or_else(|| {
                     "voplay: frame pass dispatcher missing command encoder".to_string()
                 })?;
@@ -366,7 +355,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf_enabled,
                 };
                 let result = PostPassExecutor::execute(&mut context)?;
-                self.post_fallback_path_count = result.fallback_path_count;
+                self.runtime.post_fallback_path_count = result.fallback_path_count;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::Overlay => {
@@ -389,7 +378,7 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
                     perf_enabled,
                 };
                 let result = OverlayPassExecutor::execute(&mut context)?;
-                self.overlay_missing_texture_count = result.missing_texture_count;
+                self.runtime.overlay_missing_texture_count = result.missing_texture_count;
                 Ok(result.elapsed_ms)
             }
             RenderPassKind::BackendSubmit => {
@@ -410,20 +399,21 @@ impl RenderPassNodeDispatcher for FramePassDispatcher<'_> {
             RenderPassKind::DepthPrepass => DepthPassExecutor::workload(),
             RenderPassKind::Shadow => ShadowPassExecutor::workload(),
             RenderPassKind::MainOpaque => {
-                MainOpaquePassExecutor::workload(*self.mesh_main_stats, *self.primitive_main_stats)
+                MainOpaquePassExecutor::workload(self.stats.mesh_main, self.stats.primitive_main)
             }
             RenderPassKind::MainTransparent => {
-                MainTransparentPassExecutor::workload(*self.primitive_transparent_stats)
+                MainTransparentPassExecutor::workload(self.stats.primitive_transparent)
             }
-            RenderPassKind::Water => WaterPassExecutor::workload(*self.primitive_water_stats),
+            RenderPassKind::Water => WaterPassExecutor::workload(self.stats.primitive_water),
             RenderPassKind::Post => PostPassExecutor::workload(
-                self.post_fallback_path_count,
-                self.post_rejected_decal_count,
-                self.post_upload_bytes,
+                self.runtime.post_fallback_path_count,
+                self.runtime.post_rejected_decal_count,
+                self.runtime.post_upload_bytes,
             ),
-            RenderPassKind::Overlay => {
-                OverlayPassExecutor::workload(self.frame, self.overlay_missing_texture_count)
-            }
+            RenderPassKind::Overlay => OverlayPassExecutor::workload(
+                self.frame,
+                self.runtime.overlay_missing_texture_count,
+            ),
             RenderPassKind::BackendSubmit => BackendSubmitPassExecutor::workload(),
         }
     }

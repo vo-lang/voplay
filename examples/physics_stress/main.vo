@@ -435,7 +435,7 @@ func newScenarioRuntime(def ScenarioDefinition) *ScenarioRuntime {
 	if err != nil {
 		panic(err)
 	}
-	_, colliderErr := scene3d.ProductSpawnTrackColliderStrip(scene, track, scene3d.ProductTrackColliderSpec{Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, SegmentLength: 6, MinSegments: 12, RoadTag: "stress-road-physics", RoadYOffset: -0.12, RoadHalfHeight: 0.22, RoadOuterOffset: 0.4, RoadSegmentOverlap: 0.62, RoadFriction: 1.0})
+	_, colliderErr := scene3d.SpawnTrackColliderStrip(scene, track, scene3d.ColliderAuthoring{Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, SegmentLength: 6, MinSegments: 12, RoadTag: "stress-road-physics", RoadYOffset: -0.12, RoadHalfHeight: 0.22, RoadOuterOffset: 0.4, RoadSegmentOverlap: 0.62, RoadFriction: 1.0})
 	if colliderErr != nil {
 		panic(colliderErr)
 	}

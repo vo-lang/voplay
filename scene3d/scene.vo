@@ -134,31 +134,12 @@ type Scene struct {
 	visibleBuf []*Entity
 	nextEntityID int
 	entityByID map[int]*Entity
-	worldID int
 	animationWorldID int
-	nextBodyID int
-	nextVehicleID int
 	nextAnimationTargetID int
-	physCmds codec.ByteWriter
-	bodyMap map[int]*Entity
-	vehicles []*Vehicle
-	physicsPacketErrors []PhysicsBackendPacketError
-	physicsCommandEventCaptureEnabled bool
-	physicsCommandEvents []PhysicsBackendCommandEvent
-	physicsContacts []Contact
-	physicsContactsReady bool
-	physicsContactEvents []ContactEvent
-	physicsContactEventsReady bool
-	physicsSnapshotReady bool
-	nextPhysicsCommandSequence int
+	physicsWorld PhysicsWorldState
 	animationInfoCache map[int]AnimationModelInfo
-	renderSceneID int
-	renderSceneCreated bool
-	renderSceneCleared bool
-	renderDestroyedIDs []int
-	renderStats SceneRenderStats
+	renderSync RenderSyncState
 	cullFrame sceneCullFrame
-	renderBatchGroupScratch map[sceneRenderBatchGroup]bool
 	primitiveLayers []*primitiveLayerAttachment
 	primitiveDestroyedLayerHandles []primitive3d.LayerHandle
 	nextPrimitiveLayerHandle int
@@ -166,7 +147,16 @@ type Scene struct {
 }
 
 func New() *Scene {
-	return &Scene{Camera: Camera{Position: voplay.Vec3{0, 5, 10}, Target: voplay.Vec3{0, 0, 0}, Up: voplay.Vec3{0, 1, 0}, Fov: 60, Near: 0.1, Far: 1000}, Ambient: voplay.Color{0.1, 0.1, 0.1, 1}, AmbientGround: voplay.Color{0.1, 0.1, 0.1, 1}, ShadowsEnabled: false, ShadowResolution: 2048, ShadowStrength: 1.0, ShadowSoftness: 1.0, ShadowDistance: 240, ShadowFade: 70, ShadowQuality: ShadowQualityHigh, RenderingQuality: SceneQualityHigh, PostProcess: DefaultPostProcessConfig(), Gravity: voplay.Vec3{0, -9.8, 0}, nextEntityID: 1, entityByID: make(map[int]*Entity), nextBodyID: 1, nextVehicleID: 1, nextAnimationTargetID: 1, physCmds: codec.NewByteWriter(256), bodyMap: make(map[int]*Entity), animationInfoCache: make(map[int]AnimationModelInfo), renderSceneID: allocateRenderSceneID(), nextPrimitiveLayerHandle: 1}
+	return &Scene{Camera: Camera{Position: voplay.Vec3{0, 5, 10}, Target: voplay.Vec3{0, 0, 0}, Up: voplay.Vec3{0, 1, 0}, Fov: 60, Near: 0.1, Far: 1000}, Ambient: voplay.Color{0.1, 0.1, 0.1, 1}, AmbientGround: voplay.Color{0.1, 0.1, 0.1, 1}, ShadowsEnabled: false, ShadowResolution: 2048, ShadowStrength: 1.0, ShadowSoftness: 1.0, ShadowDistance: 240, ShadowFade: 70, ShadowQuality: ShadowQualityHigh, RenderingQuality: SceneQualityHigh, PostProcess: DefaultPostProcessConfig(), Gravity: voplay.Vec3{0, -9.8, 0}, nextEntityID: 1, entityByID: make(map[int]*Entity), nextAnimationTargetID: 1, physicsWorld: newPhysicsWorldState(defaultPhysicsBackendInstance), animationInfoCache: make(map[int]AnimationModelInfo), renderSync: newRenderSyncState(), nextPrimitiveLayerHandle: 1}
+}
+
+func NewWithPhysicsBackend(backend PhysicsBackend) *Scene {
+	if backend == nil {
+		panic("scene3d.NewWithPhysicsBackend: backend must not be nil")
+	}
+	scene := New()
+	scene.physicsWorld.backend = backend
+	return scene
 }
 
 type EntityDesc struct {
@@ -174,8 +164,8 @@ type EntityDesc struct {
 	Rotation voplay.Quat
 	Scale voplay.Vec3
 	Model voplay.ModelID
-	OwnedModel voplay.ModelID
-	OwnedLodModels []voplay.ModelID
+	ModelLease *voplay.ModelLease
+	LodModelLeases []*voplay.ModelLease
 	LodLevels []EntityLodLevel
 	Material voplay.MaterialDesc
 	PickMode int
@@ -215,7 +205,7 @@ type Entity struct {
 	rotation voplay.Quat
 	scale voplay.Vec3
 	Model voplay.ModelID
-	ownedModel voplay.ModelID
+	modelLease *voplay.ModelLease
 	Material voplay.MaterialDesc
 	Pickable bool
 	Tint voplay.Color
@@ -229,22 +219,8 @@ type Entity struct {
 	hasSkeleton bool
 	hasSkeletonInit bool
 	scene *Scene
-	renderObjectCreated bool
-	renderLastModel voplay.ModelID
-	renderLastMaterial voplay.MaterialDesc
-	renderLastPosition voplay.Vec3
-	renderLastRotation voplay.Quat
-	renderLastScale voplay.Vec3
-	renderLastTint voplay.Color
-	renderLastVisible bool
-	renderLastAnimationWorldID int
-	renderLastAnimationTargetID int
-	renderBatchKey sceneRenderBatchGroup
-	renderBatchKeyModel voplay.ModelID
-	renderBatchKeyMaterial voplay.MaterialDesc
-	renderBatchKeyValid bool
 	StaticRenderable bool
-	ownedLodModels []voplay.ModelID
+	lodModelLeases []*voplay.ModelLease
 	LodLevels []EntityLodLevel
 	CullDistance float64
 	CullRadius float64
@@ -332,16 +308,19 @@ func (e *Entity) RemoveAudioSource(source voplay.AudioSourceID) {
 	panic("scene3d.Entity.RemoveAudioSource: source is not attached to entity")
 }
 
-func normalizeEntityModels(desc EntityDesc) (voplay.ModelID, voplay.ModelID) {
+func normalizeEntityModels(desc EntityDesc) (voplay.ModelID, *voplay.ModelLease) {
 	model := desc.Model
-	ownedModel := desc.OwnedModel
-	if ownedModel == 0 {
-		return model, 0
+	if desc.ModelLease != nil {
+		leasedModel := desc.ModelLease.Model()
+		if leasedModel == 0 {
+			panic("Scene.Spawn: ModelLease must be active")
+		}
+		if model != 0 && model != leasedModel {
+			panic("Scene.Spawn: Model and ModelLease must match when both are set")
+		}
+		return leasedModel, desc.ModelLease
 	}
-	if model != 0 && model != ownedModel {
-		panic("Scene.Spawn: Model and OwnedModel must match when both are set")
-	}
-	return ownedModel, ownedModel
+	return model, nil
 }
 
 func normalizeEntityLodLevels(levels []EntityLodLevel) []EntityLodLevel {
@@ -361,16 +340,29 @@ func normalizeEntityLodLevels(levels []EntityLodLevel) []EntityLodLevel {
 	return out
 }
 
-func normalizeOwnedLodModels(models []voplay.ModelID) []voplay.ModelID {
+func normalizeEntityLodModelLeases(desc EntityDesc) []*voplay.ModelLease {
+	if len(desc.LodModelLeases) > 0 {
+		out := make([]*voplay.ModelLease, 0, len(desc.LodModelLeases))
+		for _, lease := range desc.LodModelLeases {
+			if lease == nil || lease.Model() == 0 {
+				panic("Scene.Spawn: LodModelLeases must be active")
+			}
+			out = append(out, lease)
+		}
+		return out
+	}
+	return nil
+}
+
+func modelLeases(models []voplay.ModelID) []*voplay.ModelLease {
 	if len(models) == 0 {
 		return nil
 	}
-	out := make([]voplay.ModelID, 0, len(models))
+	out := make([]*voplay.ModelLease, 0, len(models))
 	for _, model := range models {
-		if model == 0 {
-			continue
+		if model != 0 {
+			out = append(out, voplay.NewModelLease(model))
 		}
-		out = append(out, model)
 	}
 	return out
 }
@@ -430,9 +422,9 @@ func normalizeEntityRotation(rotation voplay.Quat) voplay.Quat {
 }
 
 func (s *Scene) newEntity(desc EntityDesc) *Entity {
-	model, ownedModel := normalizeEntityModels(desc)
+	model, modelLease := normalizeEntityModels(desc)
 	scale := normalizeEntityScale(desc.Scale)
-	ent := &Entity{id: s.nextEntityID, position: desc.Position, rotation: normalizeEntityRotation(desc.Rotation), scale: scale, Model: model, ownedModel: ownedModel, Material: resolveEntityMaterial(desc), Pickable: resolveEntityPickable(desc, model), Tint: resolveEntityTint(desc), Tag: desc.Tag, Active: true, Visible: true, Data: desc.Data, Physics: desc.Physics, StaticRenderable: desc.StaticRenderable, ownedLodModels: normalizeOwnedLodModels(desc.OwnedLodModels), LodLevels: normalizeEntityLodLevels(desc.LodLevels), CullDistance: desc.CullDistance, CullRadius: desc.CullRadius, FrustumCull: desc.FrustumCull, scene: s}
+	ent := &Entity{id: s.nextEntityID, position: desc.Position, rotation: normalizeEntityRotation(desc.Rotation), scale: scale, Model: model, modelLease: modelLease, Material: resolveEntityMaterial(desc), Pickable: resolveEntityPickable(desc, model), Tint: resolveEntityTint(desc), Tag: desc.Tag, Active: true, Visible: true, Data: desc.Data, Physics: desc.Physics, StaticRenderable: desc.StaticRenderable, lodModelLeases: normalizeEntityLodModelLeases(desc), LodLevels: normalizeEntityLodLevels(desc.LodLevels), CullDistance: desc.CullDistance, CullRadius: desc.CullRadius, FrustumCull: desc.FrustumCull, scene: s}
 	if ent.Physics != nil && ent.Physics.Type == Static {
 		ent.StaticRenderable = true
 	}
@@ -475,17 +467,17 @@ func (s *Scene) spawnEntityPhysics(ent *Entity) bool {
 	}
 	validateEntityPhysicsSpawn(ent)
 	s.ensurePhysics()
-	p.bodyID = s.nextBodyID
-	s.nextBodyID++
+	p.bodyID = s.physicsWorld.nextBodyID
+	s.physicsWorld.nextBodyID++
 	if p.Trimesh != nil {
-		physBackend.SpawnTrimeshBody(s.worldID, p.bodyID, int(p.Trimesh.Model), serializeTrimeshDesc(ent))
+		s.physicsWorld.backend.SpawnTrimeshBody(s.physicsWorld.id, p.bodyID, int(p.Trimesh.Model), serializeTrimeshDesc(ent))
 		return true
 	}
 	if p.Heightfield != nil {
-		physBackend.SpawnHeightfield(s.worldID, p.bodyID, HeightfieldSpawnDesc{HeightData: p.Heightfield.heightData, Rows: p.Heightfield.rows, Cols: p.Heightfield.cols, Scale: p.Heightfield.scale, Position: ent.position, Layer: p.Layer, Mask: p.Mask, Friction: p.Friction, Restitution: p.Restitution})
+		s.physicsWorld.backend.SpawnHeightfield(s.physicsWorld.id, p.bodyID, HeightfieldSpawnDesc{HeightData: p.Heightfield.heightData, Rows: p.Heightfield.rows, Cols: p.Heightfield.cols, Scale: p.Heightfield.scale, Position: ent.position, Layer: p.Layer, Mask: p.Mask, Friction: p.Friction, Restitution: p.Restitution})
 		return true
 	}
-	physBackend.SpawnBody(s.worldID, p.bodyID, serializeBodyDesc(ent))
+	s.physicsWorld.backend.SpawnBody(s.physicsWorld.id, p.bodyID, serializeBodyDesc(ent))
 	return true
 }
 
@@ -493,25 +485,25 @@ func (s *Scene) registerEntity(ent *Entity) {
 	s.entities = append(s.entities, ent)
 	s.entityByID[ent.id] = ent
 	if ent.Physics != nil {
-		s.bodyMap[ent.Physics.bodyID] = ent
+		s.physicsWorld.bodies[ent.Physics.bodyID] = ent
 	}
 }
 
 func (s *Scene) cleanupSpawnFailure(ent *Entity, nextEntityID, nextBodyID int, hadWorld bool) {
 	if ent != nil {
 		if ent.Physics != nil && ent.Physics.bodyID != 0 {
-			physBackend.DestroyBody(s.worldID, ent.Physics.bodyID)
+			s.physicsWorld.backend.DestroyBody(s.physicsWorld.id, ent.Physics.bodyID)
 			ent.Physics.bodyID = 0
 		}
-		s.releaseOwnedModel(ent)
+		s.releaseModelLeases(ent)
 		ent.scene = nil
 	}
-	if !hadWorld && s.worldID != 0 {
-		physBackend.Destroy(s.worldID)
-		s.worldID = 0
+	if !hadWorld && s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.Destroy(s.physicsWorld.id)
+		s.physicsWorld.id = 0
 	}
 	s.nextEntityID = nextEntityID
-	s.nextBodyID = nextBodyID
+	s.physicsWorld.nextBodyID = nextBodyID
 }
 
 func (s *Scene) releaseEntityState(e *Entity, removeEmitters bool, removeAnimationTarget bool) {
@@ -522,20 +514,17 @@ func (s *Scene) releaseEntityState(e *Entity, removeEmitters bool, removeAnimati
 	e.Active = false
 	if e.Physics != nil && e.Physics.bodyID != 0 {
 		s.destroyVehiclesForBody(e)
-		delete(s.bodyMap, e.Physics.bodyID)
-		physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
+		delete(s.physicsWorld.bodies, e.Physics.bodyID)
+		s.physicsWorld.backend.DestroyBody(s.physicsWorld.id, e.Physics.bodyID)
 		e.Physics.bodyID = 0
 		e.Physics.velocity = voplay.Vec3{}
 	}
 	if removeAnimationTarget && e.animationTargetID != 0 && s.animationWorldID != 0 {
 		animBackend.RemoveTarget(s.animationWorldID, e.animationTargetID)
 	}
-	if e.renderObjectCreated {
-		s.renderDestroyedIDs = append(s.renderDestroyedIDs, e.id)
-		e.renderObjectCreated = false
-	}
+	s.renderSync.queueObjectDestroy(e.id)
 	e.animationTargetID = 0
-	s.releaseOwnedModel(e)
+	s.releaseModelLeases(e)
 	e.scene = nil
 }
 
@@ -554,8 +543,8 @@ func (s *Scene) removeEntityFromList(target *Entity) {
 
 func (s *Scene) Spawn(desc EntityDesc) *Entity {
 	nextEntityID := s.nextEntityID
-	nextBodyID := s.nextBodyID
-	hadWorld := s.worldID != 0
+	nextBodyID := s.physicsWorld.nextBodyID
+	hadWorld := s.physicsWorld.id != 0
 	ent := s.newEntity(desc)
 	defer func() {
 		if r := recover(); r != nil {
@@ -568,27 +557,28 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 	return ent
 }
 
-func (s *Scene) releaseOwnedModel(e *Entity) {
+func (s *Scene) releaseModelLeases(e *Entity) {
 	released := map[int]bool{}
-	if e.ownedModel != 0 {
-		ownedModel := e.ownedModel
-		delete(s.animationInfoCache, int(e.ownedModel))
-		e.ownedModel.Free()
-		released[int(ownedModel)] = true
-		e.ownedModel = 0
-		if e.Model == ownedModel {
+	if e.modelLease != nil {
+		model := e.modelLease.Model()
+		delete(s.animationInfoCache, int(model))
+		e.modelLease.Release()
+		released[int(model)] = true
+		e.modelLease = nil
+		if e.Model == model {
 			e.Model = 0
 		}
 	}
-	for _, model := range e.ownedLodModels {
+	for _, lease := range e.lodModelLeases {
+		model := lease.Model()
 		if model == 0 || released[int(model)] {
 			continue
 		}
 		delete(s.animationInfoCache, int(model))
-		model.Free()
+		lease.Release()
 		released[int(model)] = true
 	}
-	e.ownedLodModels = nil
+	e.lodModelLeases = nil
 	e.LodLevels = nil
 }
 
@@ -639,9 +629,6 @@ func (s *Scene) Clear() {
 	for id := range s.entityByID {
 		delete(s.entityByID, id)
 	}
-	for k := range s.bodyMap {
-		delete(s.bodyMap, k)
-	}
 	if s.animationWorldID != 0 {
 		animBackend.Destroy(s.animationWorldID)
 		s.animationWorldID = 0
@@ -654,21 +641,10 @@ func (s *Scene) Clear() {
 	}
 	s.Emitters = nil
 	s.nextAnimationTargetID = 1
-	s.nextVehicleID = 1
-	s.vehicles = nil
-	s.physicsPacketErrors = nil
-	s.physicsCommandEventCaptureEnabled = false
-	s.physicsCommandEvents = nil
-	s.physicsContacts = nil
-	s.physicsContactsReady = false
-	s.physicsContactEvents = nil
-	s.physicsContactEventsReady = false
-	s.physicsSnapshotReady = false
-	s.nextPhysicsCommandSequence = 0
-	s.physCmds.Reset()
-	if s.renderSceneCreated {
-		s.renderSceneCleared = true
-		s.renderDestroyedIDs = nil
+	s.physicsWorld.resetSceneState()
+	if s.renderSync.created {
+		s.renderSync.clearPending = true
+		s.renderSync.clearObjects()
 		s.primitiveDestroyedLayerHandles = nil
 	}
 	s.invalidatePrimitiveLayers()
@@ -682,7 +658,7 @@ func (s *Scene) recordPhysicsBackendPacketError(err PhysicsBackendPacketError) {
 	if s == nil {
 		return
 	}
-	s.physicsPacketErrors = append(s.physicsPacketErrors, err)
+	s.physicsWorld.recordPacketError(err)
 }
 
 func (s *Scene) PhysicsBackendPacketErrors() []PhysicsBackendPacketError {
@@ -690,7 +666,7 @@ func (s *Scene) PhysicsBackendPacketErrors() []PhysicsBackendPacketError {
 	if s == nil {
 		return out
 	}
-	for _, err := range s.physicsPacketErrors {
+	for _, err := range s.physicsWorld.packetErrors {
 		out = append(out, err)
 	}
 	return out
@@ -700,32 +676,25 @@ func (s *Scene) PhysicsPacketErrorCount() int {
 	if s == nil {
 		return 0
 	}
-	return len(s.physicsPacketErrors)
+	return len(s.physicsWorld.packetErrors)
 }
 
 func (s *Scene) recordPhysicsBackendCommandEvent(event PhysicsBackendCommandEvent) {
-	if s == nil || !s.physicsCommandEventCaptureEnabled {
+	if s == nil {
 		return
 	}
-	// Command sequences are one-based and contiguous with the retained slice.
-	// This invariant makes a consumed sequence the next unread slice index.
-	s.nextPhysicsCommandSequence++
-	event.Sequence = s.nextPhysicsCommandSequence
-	event.WorldID = s.worldID
-	s.physicsCommandEvents = append(s.physicsCommandEvents, event)
+	s.physicsWorld.recordCommand(event)
 }
 
 func (s *Scene) SetPhysicsBackendCommandEventCapture(enabled bool) {
-	if s == nil || s.physicsCommandEventCaptureEnabled == enabled {
+	if s == nil {
 		return
 	}
-	s.physicsCommandEventCaptureEnabled = enabled
-	s.physicsCommandEvents = nil
-	s.nextPhysicsCommandSequence = 0
+	s.physicsWorld.setCommandCapture(enabled)
 }
 
 func (s *Scene) PhysicsBackendCommandEventCaptureEnabled() bool {
-	return s != nil && s.physicsCommandEventCaptureEnabled
+	return s != nil && s.physicsWorld.commandLog.enabled
 }
 
 func (s *Scene) PhysicsBackendCommandEvents() []PhysicsBackendCommandEvent {
@@ -733,32 +702,17 @@ func (s *Scene) PhysicsBackendCommandEvents() []PhysicsBackendCommandEvent {
 }
 
 func (s *Scene) PhysicsBackendCommandEventsAfter(sequence int) []PhysicsBackendCommandEvent {
-	out := []PhysicsBackendCommandEvent{}
 	if s == nil {
-		return out
+		return []PhysicsBackendCommandEvent{}
 	}
-	// recordPhysicsBackendCommandEvent assigns one sequence for every append,
-	// so the cursor maps directly to the first unread element.
-	start := sequence
-	if start < 0 {
-		start = 0
-	}
-	if start >= len(s.physicsCommandEvents) {
-		return out
-	}
-	for _, event := range s.physicsCommandEvents[start:] {
-		copy := event
-		copy.Force.Wheels = append([]PhysicsBackendWheelCommand{}, event.Force.Wheels...)
-		out = append(out, copy)
-	}
-	return out
+	return s.physicsWorld.commandEventsAfter(sequence)
 }
 
 func (s *Scene) PhysicsBackendCommandEventCount() int {
 	if s == nil {
 		return 0
 	}
-	return len(s.physicsCommandEvents)
+	return len(s.physicsWorld.commandLog.events)
 }
 
 func (s *Scene) PhysicsRejectedCommandCount() int {
@@ -766,7 +720,7 @@ func (s *Scene) PhysicsRejectedCommandCount() int {
 		return 0
 	}
 	count := 0
-	for _, event := range s.physicsCommandEvents {
+	for _, event := range s.physicsWorld.commandLog.events {
 		if event.Outcome == PhysicsBackendCommandOutcomeRejected {
 			count++
 		}
@@ -822,7 +776,7 @@ func (s *Scene) VisibleEntities() []*Entity {
 }
 
 func (s *Scene) RenderStats() SceneRenderStats {
-	return s.renderStats
+	return s.renderSync.stats
 }
 
 func estimateEntityCullRadius(scale voplay.Vec3) float64 {
@@ -899,30 +853,30 @@ func (s *Scene) UpdateEmitters(dt float64) {
 }
 
 func (s *Scene) HasPhysics() bool {
-	return s.worldID != 0
+	return s.physicsWorld.id != 0
 }
 
 func (s *Scene) Close() {
 	s.Clear()
 	s.primitiveLayers = nil
 	s.primitiveStats = primitive3d.Stats{}
-	if s.worldID != 0 {
-		physBackend.Destroy(s.worldID)
-		s.worldID = 0
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.Destroy(s.physicsWorld.id)
+		s.physicsWorld.id = 0
 	}
 }
 
 func (s *Scene) ensurePhysics() {
-	if s.worldID != 0 {
+	if s.physicsWorld.id != 0 {
 		return
 	}
-	s.worldID = physBackend.Init(s.Gravity)
+	s.physicsWorld.id = s.physicsWorld.backend.Init(s.Gravity)
 }
 
 func (s *Scene) SetGravity(g voplay.Vec3) {
 	s.Gravity = g
-	if s.worldID != 0 {
-		physBackend.SetGravity(s.worldID, g)
+	if s.physicsWorld.id != 0 {
+		s.physicsWorld.backend.SetGravity(s.physicsWorld.id, g)
 	}
 }
 
@@ -940,63 +894,40 @@ func (s *Scene) UpdateAudio() {
 }
 
 func (s *Scene) StepAndSyncPhysics(dt float64) {
-	if s.worldID == 0 {
+	if s.physicsWorld.id == 0 {
 		return
 	}
-	s.physicsContacts = nil
-	s.physicsContactsReady = false
-	s.physicsContactEvents = nil
-	s.physicsContactEventsReady = false
-	s.physicsSnapshotReady = false
-	cmdBytes := s.physCmds.Bytes()
-	state := physBackend.Step(s.worldID, dt, cmdBytes)
-	s.physCmds.Reset()
-	r := codec.NewByteReader(state)
-	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendBodyPacketKind)
-	if headerError != "" {
-		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: headerError, ExpectedBytes: PhysicsBackendPacketHeaderBytes, ActualBytes: len(state)})
+	s.physicsWorld.beginStep()
+	snapshot, packetError, failed := s.physicsWorld.step(dt)
+	if failed {
+		s.recordPhysicsBackendPacketError(packetError)
 		return
 	}
-	if r.Remaining() < 4 {
-		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
-		return
-	}
-	count := r.ReadU32()
-	if r.Remaining() != count * physics3DBodyStateBytes {
-		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: header.Kind, Reason: "body_payload_length_mismatch", ExpectedBytes: count * physics3DBodyStateBytes, ActualBytes: r.Remaining()})
-		return
-	}
-	for i := 0; i < count; i++ {
-		bodyID := r.ReadU32()
-		x := r.ReadF64()
-		y := r.ReadF64()
-		z := r.ReadF64()
-		qx := r.ReadF64()
-		qy := r.ReadF64()
-		qz := r.ReadF64()
-		qw := r.ReadF64()
-		vx := r.ReadF64()
-		vy := r.ReadF64()
-		vz := r.ReadF64()
-		avx := r.ReadF64()
-		avy := r.ReadF64()
-		avz := r.ReadF64()
-		if ent, ok := s.bodyMap[bodyID]; ok {
-			ent.position = voplay.Vec3{x, y, z}
-			ent.rotation = voplay.Quat{qx, qy, qz, qw}
-			ent.Physics.velocity = voplay.Vec3{vx, vy, vz}
-			ent.Physics.angularVelocity = voplay.Vec3{avx, avy, avz}
+	seen := make(map[int]bool)
+	for _, bodyState := range snapshot.Bodies {
+		if seen[bodyState.BodyID] {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: "duplicate_body", ExpectedBytes: len(s.physicsWorld.bodies), ActualBytes: bodyState.BodyID})
+			continue
+		}
+		seen[bodyState.BodyID] = true
+		if ent, ok := s.physicsWorld.bodies[bodyState.BodyID]; ok {
+			ent.position = bodyState.Position
+			ent.rotation = bodyState.Rotation
+			ent.Physics.velocity = bodyState.LinearVelocity
+			ent.Physics.angularVelocity = bodyState.AngularVelocity
+		} else {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Kind: PhysicsBackendBodyPacketKind, Reason: "unknown_body", ExpectedBytes: len(s.physicsWorld.bodies), ActualBytes: bodyState.BodyID})
 		}
 	}
 	s.syncVehicles()
-	s.physicsSnapshotReady = true
+	s.physicsWorld.snapshot.ready = true
 }
 
 func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
-	if s.worldID == 0 {
+	if s.physicsWorld.id == 0 {
 		return nil
 	}
-	data := physBackend.RayCast(s.worldID, origin, dir, maxDist)
+	data := s.physicsWorld.backend.RayCast(s.physicsWorld.id, origin, dir, maxDist)
 	if len(data) < 1 || data[0] == 0 {
 		return nil
 	}
@@ -1009,7 +940,7 @@ func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
 	ny := r.ReadF64()
 	nz := r.ReadF64()
 	dist := r.ReadF64()
-	ent, ok := s.bodyMap[bodyID]
+	ent, ok := s.physicsWorld.bodies[bodyID]
 	if !ok {
 		return nil
 	}
@@ -1017,10 +948,10 @@ func (s *Scene) RayCast(origin, dir voplay.Vec3, maxDist float64) *RayCastHit {
 }
 
 func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
-	if s.worldID == 0 {
+	if s.physicsWorld.id == 0 {
 		return nil
 	}
-	data := physBackend.QueryAABB(s.worldID, min, max)
+	data := s.physicsWorld.backend.QueryAABB(s.physicsWorld.id, min, max)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
 		return nil
@@ -1032,7 +963,7 @@ func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
 			break
 		}
 		bodyID := r.ReadU32()
-		if ent, ok := s.bodyMap[bodyID]; ok && ent.Active {
+		if ent, ok := s.physicsWorld.bodies[bodyID]; ok && ent.Active {
 			result = append(result, ent)
 		}
 	}
@@ -1040,14 +971,14 @@ func (s *Scene) QueryAABB(min, max voplay.Vec3) []*Entity {
 }
 
 func (s *Scene) Contacts() []Contact {
-	if s.worldID == 0 {
+	if s.physicsWorld.id == 0 {
 		return []Contact{}
 	}
-	if s.physicsSnapshotReady && s.physicsContactsReady {
-		return append([]Contact{}, s.physicsContacts...)
+	if s.physicsWorld.snapshot.ready && s.physicsWorld.snapshot.contactsReady {
+		return append([]Contact{}, s.physicsWorld.snapshot.contacts...)
 	}
-	s.physicsContactsReady = s.physicsSnapshotReady
-	data := physBackend.Contacts(s.worldID)
+	s.physicsWorld.snapshot.contactsReady = s.physicsWorld.snapshot.ready
+	data := s.physicsWorld.backend.Contacts(s.physicsWorld.id)
 	r := codec.NewByteReader(data)
 	header, headerError := ReadPhysicsBackendPacketHeaderDetailed(&r, PhysicsBackendContactPacketKind)
 	if headerError != "" {
@@ -1067,8 +998,8 @@ func (s *Scene) Contacts() []Contact {
 	for i := 0; i < count; i++ {
 		idA := r.ReadU32()
 		idB := r.ReadU32()
-		a, okA := s.bodyMap[idA]
-		b, okB := s.bodyMap[idB]
+		a, okA := s.physicsWorld.bodies[idA]
+		b, okB := s.physicsWorld.bodies[idB]
 		contact := Contact{A: a, B: b, Fallback: false}
 		contact.Position = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
 		contact.Normal = voplay.Vec3{X: r.ReadF64(), Y: r.ReadF64(), Z: r.ReadF64()}
@@ -1081,6 +1012,6 @@ func (s *Scene) Contacts() []Contact {
 			contacts = append(contacts, contact)
 		}
 	}
-	s.physicsContacts = contacts
+	s.physicsWorld.snapshot.contacts = contacts
 	return append([]Contact{}, contacts...)
 }

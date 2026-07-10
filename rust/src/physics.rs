@@ -8,6 +8,7 @@ use rapier2d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::physics_command::{PhysicsCommandError, PhysicsCommandReader};
 use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 /// Global registry of 2D physics worlds, keyed by world handle.
@@ -199,52 +200,25 @@ impl PhysicsWorld2D {
     ///   CMD_APPLY_IMPULSE: body_id, ix, iy (2x f64)
     ///   CMD_SET_VELOCITY:  body_id, vx, vy (2x f64)
     ///   CMD_SET_POSITION:  body_id, x, y (2x f64)
-    pub fn apply_commands(&mut self, data: &[u8]) {
-        let mut pos = 0;
-        while pos < data.len() {
-            let cmd = data[pos];
-            pos += 1;
-
-            if pos + 4 > data.len() {
-                break;
+    pub fn apply_commands(&mut self, data: &[u8]) -> Result<(), PhysicsCommandError> {
+        let mut reader = PhysicsCommandReader::new(data);
+        while let Some((cmd, body_id)) = reader.next_header()? {
+            if !matches!(
+                cmd,
+                CMD_APPLY_FORCE
+                    | CMD_APPLY_IMPULSE
+                    | CMD_SET_VELOCITY
+                    | CMD_SET_POSITION
+                    | CMD_SET_ROTATION
+            ) {
+                return Err(reader.unknown_opcode(cmd));
             }
-            let body_id =
-                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-            pos += 4;
+            let v1 = reader.read_f64(cmd, "truncated_first_value")? as f32;
+            let v2 = reader.read_f64(cmd, "truncated_second_value")? as f32;
 
-            let handle = match self.handle_map.get(&body_id) {
-                Some(h) => *h,
-                None => {
-                    pos += 16; // skip 2x f64
-                    continue;
-                }
+            let Some(&handle) = self.handle_map.get(&body_id) else {
+                continue;
             };
-
-            if pos + 16 > data.len() {
-                break;
-            }
-            let v1 = f64::from_le_bytes([
-                data[pos],
-                data[pos + 1],
-                data[pos + 2],
-                data[pos + 3],
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]) as f32;
-            pos += 8;
-            let v2 = f64::from_le_bytes([
-                data[pos],
-                data[pos + 1],
-                data[pos + 2],
-                data[pos + 3],
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]) as f32;
-            pos += 8;
 
             if let Some(rb) = self.rigid_body_set.get_mut(handle) {
                 match cmd {
@@ -263,10 +237,11 @@ impl PhysicsWorld2D {
                     CMD_SET_ROTATION => {
                         rb.set_rotation(Rotation::new(v1), true);
                     }
-                    _ => {}
+                    _ => unreachable!(),
                 }
             }
         }
+        Ok(())
     }
 
     /// Step the physics world by dt seconds.

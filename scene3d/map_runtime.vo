@@ -1,0 +1,780 @@
+package scene3d
+
+import (
+	"errors"
+	"path/filepath"
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/primitive3d"
+)
+
+func (p *MapPreparedAsset) Model(name string) (voplay.ModelID, error) {
+	if p == nil {
+		return 0, errors.New("scene3d.MapPreparedAsset.Model: prepared map is nil")
+	}
+	model := p.Models[name]
+	if model == 0 {
+		return 0, errors.New("scene3d.MapPreparedAsset.Model: mesh not prepared: " + name)
+	}
+	return model, nil
+}
+
+func (p *MapPreparedAsset) MeshTerrain(name string) (MapPreparedMeshTerrain, error) {
+	if p == nil {
+		return MapPreparedMeshTerrain{}, errors.New("scene3d.MapPreparedAsset.MeshTerrain: prepared map is nil")
+	}
+	terrain, ok := p.MeshTerrains[name]
+	if !ok || terrain.Model == 0 || len(terrain.HeightGridData) == 0 {
+		return MapPreparedMeshTerrain{}, errors.New("scene3d.MapPreparedAsset.MeshTerrain: mesh terrain not prepared: " + name)
+	}
+	return terrain, nil
+}
+
+func (p *MapPreparedAsset) MeshTerrainAssetDesc(name string) (MeshTerrainAssetDesc, error) {
+	return preparedMapMeshTerrainAssetDesc(p, name)
+}
+
+func (p *MapPreparedAsset) MeshEntityDesc(name string) (EntityDesc, error) {
+	if p == nil {
+		return EntityDesc{}, errors.New("scene3d.MapPreparedAsset.MeshEntityDesc: prepared map is nil")
+	}
+	mesh, err := preparedMapMesh(p.Asset, name)
+	if err != nil {
+		return EntityDesc{}, err
+	}
+	model, err := p.Model(name)
+	if err != nil {
+		return EntityDesc{}, err
+	}
+	lodModels := p.MeshLodModels[name]
+	return mapMeshEntityDesc(mesh, model, lodModels), nil
+}
+
+func prepareMapTerrainWithAssets(assets voplay.AssetSource, prepared *MapPreparedAsset, terrain MapTerrain, baseDir string) error {
+	heightmapPath := mapResolvePath(baseDir, terrain.Heightmap)
+	heightmap, err := assets.Bytes(heightmapPath)
+	if err != nil {
+		return errors.New("scene3d.PrepareMapAssetWithAssets: load terrain heightmap from " + heightmapPath + ": " + err.Error())
+	}
+	prepared.TerrainHeightmap = heightmap
+	if terrain.Splat != nil {
+		return prepareMapSplatTexturesWithAssets(assets, prepared, terrain.Splat, baseDir)
+	}
+	err = prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, terrain.Texture), false, "terrain texture")
+	if err != nil {
+		return err
+	}
+	err = prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, terrain.Normal), true, "terrain normal")
+	if err != nil {
+		return err
+	}
+	return prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, terrain.MetallicRoughness), true, "terrain metallic roughness")
+}
+
+func prepareMapSplatTexturesWithAssets(assets voplay.AssetSource, prepared *MapPreparedAsset, splat *MapTerrainSplat, baseDir string) error {
+	if splat == nil {
+		return nil
+	}
+	err := prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, splat.Control), true, "terrain splat control")
+	if err != nil {
+		return err
+	}
+	for _, layer := range splat.Layers {
+		err = prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, layer.Texture), false, "terrain splat texture")
+		if err != nil {
+			return err
+		}
+		err = prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, layer.Normal), true, "terrain splat normal")
+		if err != nil {
+			return err
+		}
+		err = prepareMapTextureWithAssets(assets, prepared, mapResolvePath(baseDir, layer.MetallicRoughness), true, "terrain splat metallic roughness")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareMapTextureWithAssets(assets voplay.AssetSource, prepared *MapPreparedAsset, path string, linear bool, label string) error {
+	if path == "" {
+		return nil
+	}
+	if linear {
+		texture, err := assets.TextureLinear(path)
+		if err != nil {
+			return errors.New("scene3d.PrepareMapAssetWithAssets: load " + label + " from " + path + ": " + err.Error())
+		}
+		prepared.LinearTextures[path] = texture
+		return nil
+	}
+	texture, err := assets.Texture(path)
+	if err != nil {
+		return errors.New("scene3d.PrepareMapAssetWithAssets: load " + label + " from " + path + ": " + err.Error())
+	}
+	prepared.Textures[path] = texture
+	return nil
+}
+
+func LoadMapPrimitiveLayersWithAssets(scene *Scene, assets voplay.AssetSource, path string, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
+	if path == "" {
+		return nil, errors.New("scene3d.LoadMapPrimitiveLayersWithAssets: path must not be empty")
+	}
+	prepared, err := PrepareMapWithAssets(assets, path)
+	if err != nil {
+		return nil, err
+	}
+	return SpawnPreparedMapPrimitiveLayersWithAssets(scene, assets, prepared, targets)
+}
+
+func SpawnMapPrimitiveLayersWithAssets(scene *Scene, assets voplay.AssetSource, asset *MapAsset, baseDir string, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
+	return spawnMapPrimitiveLayersWithAssets(scene, assets, asset, baseDir, targets, nil)
+}
+
+func SpawnBakedMapPrimitiveContentWithAssets(scene *Scene, assets voplay.AssetSource, prepared *MapPreparedAsset, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
+	return SpawnPreparedMapPrimitiveLayersWithAssets(scene, assets, prepared, targets)
+}
+
+func SpawnPreparedMapPrimitiveLayersWithAssets(scene *Scene, assets voplay.AssetSource, prepared *MapPreparedAsset, targets []MapPrimitiveLayerTarget) (*MapPrimitiveLayerSpawnResult, error) {
+	if prepared == nil {
+		return nil, errors.New("scene3d.SpawnPreparedMapPrimitiveLayersWithAssets: prepared map is nil")
+	}
+	return spawnMapPrimitiveLayersWithAssets(scene, assets, prepared.Asset, prepared.BaseDir, targets, prepared)
+}
+
+func spawnMapPrimitiveLayersWithAssets(scene *Scene, assets voplay.AssetSource, asset *MapAsset, baseDir string, targets []MapPrimitiveLayerTarget, prepared *MapPreparedAsset) (*MapPrimitiveLayerSpawnResult, error) {
+	if scene == nil {
+		return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: scene is nil")
+	}
+	if asset == nil {
+		return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: asset is nil")
+	}
+	validateMapAsset(asset)?
+	targetByName := map[string]MapPrimitiveLayerTarget{}
+	for _, target := range targets {
+		if target.Name == "" {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: target name must not be empty")
+		}
+		if len(target.Slots) == 0 {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: target slots are required: " + target.Name)
+		}
+		if _, exists := targetByName[target.Name]; exists {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: duplicate target: " + target.Name)
+		}
+		targetByName[target.Name] = target
+	}
+	result := &MapPrimitiveLayerSpawnResult{Layers: map[string]*primitive3d.Layer{}, Instances: map[string]int{}}
+	ownedHandles := []primitive3d.LayerHandle{}
+	success := false
+	errdefer func() {
+		if success {
+			return
+		}
+		for _, handle := range ownedHandles {
+			scene.RemovePrimitiveLayer(handle)
+		}
+	}()
+	for _, layerInfo := range asset.PrimitiveLayers {
+		target, exists := targetByName[layerInfo.Name]
+		if !exists {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: missing target for primitive layer: " + layerInfo.Name)
+		}
+		if len(target.Slots) != len(layerInfo.Slots) {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: target slot count mismatch: " + layerInfo.Name)
+		}
+		if len(target.SlotNames) > 0 {
+			if len(target.SlotNames) != len(layerInfo.Slots) {
+				return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: target slot name count mismatch: " + layerInfo.Name)
+			}
+			for i := 0; i < len(layerInfo.Slots); i++ {
+				if target.SlotNames[i] != layerInfo.Slots[i] {
+					return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: target slot name mismatch: " + layerInfo.Name + "/" + layerInfo.Slots[i])
+				}
+			}
+		}
+		kind, kindErr := mapPrimitiveLayerKind(layerInfo.Kind)
+		if kindErr != nil {
+			return nil, kindErr
+		}
+		layer := target.Layer
+		if layer == nil {
+			layer = primitive3d.NewLayer(primitive3d.LayerDesc{Kind: kind, Shapes: target.Shapes, Materials: target.Materials, Chunking: primitive3d.ChunkingDesc{CellSize: layerInfo.ChunkCellSize}, PreloadChunks: layerInfo.PreloadChunks, Name: layerInfo.Name})
+			ownedHandles = append(ownedHandles, scene.AddPrimitiveLayer(layer))
+		} else {
+			layer.SetPreloadChunks(layer.PreloadChunks() || layerInfo.PreloadChunks)
+		}
+		resolvedPath := mapResolvePath(baseDir, layerInfo.Source)
+		desc := BakedPrimitiveLayerAssetDesc{Assets: assets, Path: resolvedPath, Layer: layer, Slots: target.Slots, Name: layerInfo.Name, Kind: kind, ChunkCellSize: layerInfo.ChunkCellSize}
+		if prepared != nil {
+			data, ok := prepared.PrimitiveLayers[layerInfo.Name]
+			if !ok {
+				return nil, errors.New("scene3d.SpawnPreparedMapPrimitiveLayersWithAssets: primitive layer not prepared: " + layerInfo.Name)
+			}
+			desc.Assets = nil
+			desc.Path = ""
+			desc.Data = data
+		}
+		loaded, loadErr := LoadBakedPrimitiveLayerAsset(desc)
+		if loadErr != nil {
+			return nil, errors.New("scene3d.SpawnMapPrimitiveLayersWithAssets: load primitive layer " + layerInfo.Name + " from " + resolvedPath + ": " + loadErr.Error())
+		}
+		result.Layers[layerInfo.Name] = layer
+		result.Instances[layerInfo.Name] = loaded.Instances
+		result.TotalInstances += loaded.Instances
+	}
+	success = true
+	return result, nil
+}
+
+func mapPrimitiveLayerKind(kind string) (primitive3d.LayerKind, error) {
+	if kind == "" || kind == "static" {
+		return primitive3d.StaticLayer, nil
+	}
+	if kind == "dynamic" {
+		return primitive3d.DynamicLayer, nil
+	}
+	if kind == "transparent" {
+		return primitive3d.TransparentLayer, nil
+	}
+	return 0, errors.New("scene3d.LoadMapAsset: unsupported primitive layer kind: " + kind)
+}
+
+func spawnMapTerrain(scene *Scene, assets voplay.AssetSource, terrain MapTerrain, baseDir string, result *MapSpawnResult, prepared *MapPreparedAsset) (*Terrain, error) {
+	desc := TerrainDesc{Position: terrain.Position.Vec3(), Width: terrain.Width, Height: terrain.Height, Depth: terrain.Depth, UVScale: terrain.UVScale, NormalScale: terrain.NormalScale, Roughness: terrain.Roughness, Metallic: terrain.Metallic, Tag: terrain.Tag, Tint: terrain.Tint.Color(), TintSet: terrain.TintSet, Physics: mapTerrainPhysics(terrain), CullDistance: terrain.CullDistance, CullRadius: terrain.CullRadius, FrustumCull: terrain.FrustumCull}
+	heightmapPath := mapResolvePath(baseDir, terrain.Heightmap)
+	if prepared != nil {
+		if len(prepared.TerrainHeightmap) == 0 {
+			return nil, errors.New("scene3d.SpawnPreparedMapWithAssets: terrain heightmap not prepared")
+		}
+		desc.HeightmapData = prepared.TerrainHeightmap
+	} else if assets != nil {
+		data, err := assets.Bytes(heightmapPath)
+		if err != nil {
+			return nil, err
+		}
+		desc.HeightmapData = data
+	} else {
+		desc.HeightmapPath = heightmapPath
+	}
+	if terrain.Splat != nil {
+		splat, err := loadPreparedOrMapTerrainSplat(assets, prepared, baseDir, terrain.Splat, result)
+		if err != nil {
+			return nil, err
+		}
+		desc.Splat = splat
+		return NewTerrain(scene, desc)
+	}
+	if terrain.Texture != "" {
+		texture, err := loadPreparedOrMapTexture(assets, prepared, mapResolvePath(baseDir, terrain.Texture), result)
+		if err != nil {
+			return nil, err
+		}
+		desc.Texture = texture
+	}
+	if terrain.Normal != "" {
+		normal, err := loadPreparedOrMapTextureLinear(assets, prepared, mapResolvePath(baseDir, terrain.Normal), result)
+		if err != nil {
+			return nil, err
+		}
+		desc.Normal = normal
+	}
+	if terrain.MetallicRoughness != "" {
+		mr, err := loadPreparedOrMapTextureLinear(assets, prepared, mapResolvePath(baseDir, terrain.MetallicRoughness), result)
+		if err != nil {
+			return nil, err
+		}
+		desc.MetallicRoughness = mr
+	}
+	return NewTerrain(scene, desc)
+}
+
+func spawnMapMeshTerrain(scene *Scene, assets voplay.AssetSource, terrain MapMeshTerrain, baseDir string, prepared *MapPreparedAsset, result *MapSpawnResult) (*MeshTerrainAsset, error) {
+	desc := mapMeshTerrainAssetDesc(terrain)
+	if prepared != nil {
+		preparedTerrain, err := prepared.MeshTerrain(terrain.Name)
+		if err != nil {
+			return nil, err
+		}
+		desc.Model = preparedTerrain.Model
+		lods, lodErr := mapPreparedMeshTerrainLodLevelDescs(terrain.Name, terrain.LodLevels, preparedTerrain.LodModels)
+		if lodErr != nil {
+			return nil, lodErr
+		}
+		desc.LodLevels = lods
+		desc.HeightGridData = preparedTerrain.HeightGridData
+		desc.Splat = preparedTerrain.Splat
+		return SpawnMeshTerrainAsset(scene, desc)
+	}
+	desc.Assets = assets
+	desc.ModelPath = mapResolvePath(baseDir, terrain.Model)
+	desc.LodLevels = mapMeshTerrainLodPathDescs(terrain.LodLevels, baseDir)
+	desc.HeightGridPath = mapResolvePath(baseDir, terrain.HeightGrid)
+	if terrain.Splat != nil {
+		splat, err := loadMapTerrainSplat(assets, baseDir, terrain.Splat, result)
+		if err != nil {
+			return nil, err
+		}
+		desc.Splat = splat
+	}
+	return SpawnMeshTerrainAsset(scene, desc)
+}
+
+func preparedMapMeshTerrainAssetDesc(prepared *MapPreparedAsset, name string) (MeshTerrainAssetDesc, error) {
+	if prepared == nil {
+		return MeshTerrainAssetDesc{}, errors.New("scene3d.SpawnPreparedMapMeshTerrain: prepared map is nil")
+	}
+	if name == "" {
+		return MeshTerrainAssetDesc{}, errors.New("scene3d.SpawnPreparedMapMeshTerrain: mesh terrain name must not be empty")
+	}
+	terrain, err := preparedMapMeshTerrain(prepared.Asset, name)
+	if err != nil {
+		return MeshTerrainAssetDesc{}, err
+	}
+	preparedTerrain, err := prepared.MeshTerrain(name)
+	if err != nil {
+		return MeshTerrainAssetDesc{}, err
+	}
+	desc := mapMeshTerrainAssetDesc(terrain)
+	desc.Model = preparedTerrain.Model
+	lods, lodErr := mapPreparedMeshTerrainLodLevelDescs(name, terrain.LodLevels, preparedTerrain.LodModels)
+	if lodErr != nil {
+		return MeshTerrainAssetDesc{}, lodErr
+	}
+	desc.LodLevels = lods
+	desc.HeightGridData = preparedTerrain.HeightGridData
+	desc.Splat = preparedTerrain.Splat
+	return desc, nil
+}
+
+func preparedMapMeshTerrain(asset *MapAsset, name string) (MapMeshTerrain, error) {
+	if asset == nil {
+		return MapMeshTerrain{}, errors.New("scene3d.SpawnPreparedMapMeshTerrain: map asset is nil")
+	}
+	for _, terrain := range asset.MeshTerrains {
+		if terrain.Name == name {
+			return terrain, nil
+		}
+	}
+	return MapMeshTerrain{}, errors.New("scene3d.SpawnPreparedMapMeshTerrain: mesh terrain not found: " + name)
+}
+
+func preparedMapMesh(asset *MapAsset, name string) (MapMesh, error) {
+	if asset == nil {
+		return MapMesh{}, errors.New("scene3d.SpawnPreparedMapMesh: map asset is nil")
+	}
+	for _, mesh := range asset.Meshes {
+		if mesh.Name == name {
+			return mesh, nil
+		}
+	}
+	return MapMesh{}, errors.New("scene3d.SpawnPreparedMapMesh: mesh not found: " + name)
+}
+
+func mapMeshTerrainAssetDesc(terrain MapMeshTerrain) MeshTerrainAssetDesc {
+	return MeshTerrainAssetDesc{Material: mapMaterialDesc(terrain.Material), Tag: terrain.Tag, PickMode: mapPickMode(terrain.PickMode), CullDistance: terrain.CullDistance, CullRadius: terrain.CullRadius, FrustumCull: terrain.FrustumCull}
+}
+
+func mapPreparedMeshTerrainLodLevelDescs(name string, levels []MapMeshLodLevel, models []voplay.ModelID) ([]MeshTerrainLodLevelDesc, error) {
+	if len(levels) == 0 {
+		return nil, nil
+	}
+	if len(models) != len(levels) {
+		return nil, errors.New("scene3d.SpawnPreparedMapMeshTerrain: mesh terrain lods not prepared: " + name)
+	}
+	out := make([]MeshTerrainLodLevelDesc, 0, len(levels))
+	for i, level := range levels {
+		out = append(out, MeshTerrainLodLevelDesc{Model: models[i], Distance: level.Distance})
+	}
+	return out, nil
+}
+
+func mapMeshTerrainLodPathDescs(levels []MapMeshLodLevel, baseDir string) []MeshTerrainLodLevelDesc {
+	if len(levels) == 0 {
+		return nil
+	}
+	out := make([]MeshTerrainLodLevelDesc, 0, len(levels))
+	for _, level := range levels {
+		out = append(out, MeshTerrainLodLevelDesc{ModelPath: mapResolvePath(baseDir, level.Model), Distance: level.Distance})
+	}
+	return out
+}
+
+func mapTerrainMaterialTuning(tuning MapTerrainMaterialTuning) TerrainMaterialTuning {
+	return TerrainMaterialTuning{MacroScale: tuning.MacroScale, MacroStrength: tuning.MacroStrength, DetailNear: tuning.DetailNear, DetailFar: tuning.DetailFar, SlopeStart: tuning.SlopeStart, SlopeEnd: tuning.SlopeEnd, SlopeDirtStrength: tuning.SlopeDirtStrength, SlopeRockStrength: tuning.SlopeRockStrength, AntiTileStrength: tuning.AntiTileStrength, DetailStrength: tuning.DetailStrength, NormalNear: tuning.NormalNear, NormalFar: tuning.NormalFar, HeightBlendStrength: tuning.HeightBlendStrength, HeightLow: tuning.HeightLow, HeightHigh: tuning.HeightHigh, CurvatureStrength: tuning.CurvatureStrength}
+}
+
+func validateMapMaterial(material MapMaterial, owner string) error {
+	if material.Roughness < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material roughness must be >= 0")
+	}
+	if material.Metallic < 0 || material.Metallic > 1 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material metallic must be in range 0..1")
+	}
+	if material.NormalScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material normalScale must be >= 0")
+	}
+	if material.UVScale < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material uvScale must be >= 0")
+	}
+	if material.DetailStrength < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material detailStrength must be >= 0")
+	}
+	if material.MacroBlend < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material macroBlend must be >= 0")
+	}
+	if material.RoughnessResponse < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material roughnessResponse must be >= 0")
+	}
+	if material.ToonRampResponse < 0 {
+		return errors.New("scene3d.LoadMapAsset: " + owner + " material toonRampResponse must be >= 0")
+	}
+	return nil
+}
+
+func validateMapPickMode(mode string, owner string) error {
+	if mode == "" || mode == "default" || mode == "enabled" || mode == "disabled" {
+		return nil
+	}
+	return errors.New("scene3d.LoadMapAsset: " + owner + " pickMode must be default, enabled, or disabled")
+}
+
+func mapMaterialDesc(material MapMaterial) voplay.MaterialDesc {
+	if material == (MapMaterial{}) {
+		return voplay.MaterialDesc{}
+	}
+	desc := voplay.DefaultMaterial()
+	if material.BaseColorSet {
+		desc.BaseColor = material.BaseColor.Color()
+	}
+	if material.Roughness > 0 {
+		desc.Roughness = material.Roughness
+	}
+	if material.Metallic > 0 {
+		desc.Metallic = material.Metallic
+	}
+	if material.NormalScale > 0 {
+		desc.NormalScale = material.NormalScale
+	}
+	if material.UVScale > 0 {
+		desc.UVScale = material.UVScale
+	}
+	if material.DetailStrength > 0 {
+		desc.DetailStrength = material.DetailStrength
+	}
+	if material.MacroBlend > 0 {
+		desc.MacroBlend = material.MacroBlend
+	}
+	if material.RoughnessResponse > 0 {
+		desc.RoughnessResponse = material.RoughnessResponse
+	}
+	if material.ToonRampResponse > 0 {
+		desc.ToonRampResponse = material.ToonRampResponse
+	}
+	if material.ShadingMode != 0 {
+		desc.ShadingMode = material.ShadingMode
+	}
+	if material.WrapMode != 0 {
+		desc.WrapMode = material.WrapMode
+	}
+	if material.FilterMode != 0 {
+		desc.FilterMode = material.FilterMode
+	}
+	return voplay.NormalizeMaterial(desc)
+}
+
+func mapPickMode(mode string) int {
+	if mode == "enabled" {
+		return PickEnabled
+	}
+	if mode == "disabled" {
+		return PickDisabled
+	}
+	return PickDefault
+}
+
+func loadPreparedOrMapTerrainSplat(assets voplay.AssetSource, prepared *MapPreparedAsset, baseDir string, source *MapTerrainSplat, result *MapSpawnResult) (*TerrainSplatMaterial, error) {
+	if prepared == nil {
+		return loadMapTerrainSplat(assets, baseDir, source, result)
+	}
+	if source == nil {
+		return nil, nil
+	}
+	splat := &TerrainSplatMaterial{Layers: make([]TerrainLayer, 4), Tuning: mapTerrainMaterialTuning(source.Tuning)}
+	control, err := preparedMapTextureLinear(prepared, mapResolvePath(baseDir, source.Control), "terrain splat control")
+	if err != nil {
+		return nil, err
+	}
+	splat.Control = control
+	for i := 0; i < 4; i++ {
+		layer := source.Layers[i]
+		texture, textureErr := preparedMapTexture(prepared, mapResolvePath(baseDir, layer.Texture), "terrain splat texture")
+		if textureErr != nil {
+			return nil, textureErr
+		}
+		splat.Layers[i].Texture = texture
+		if layer.Normal != "" {
+			normal, normalErr := preparedMapTextureLinear(prepared, mapResolvePath(baseDir, layer.Normal), "terrain splat normal")
+			if normalErr != nil {
+				return nil, normalErr
+			}
+			splat.Layers[i].Normal = normal
+		}
+		if layer.MetallicRoughness != "" {
+			mr, mrErr := preparedMapTextureLinear(prepared, mapResolvePath(baseDir, layer.MetallicRoughness), "terrain splat metallic roughness")
+			if mrErr != nil {
+				return nil, mrErr
+			}
+			splat.Layers[i].MetallicRoughness = mr
+		}
+		splat.Layers[i].UVScale = layer.UVScale
+		splat.Layers[i].NormalScale = layer.NormalScale
+	}
+	return splat, nil
+}
+
+func loadPreparedOrMapTexture(assets voplay.AssetSource, prepared *MapPreparedAsset, path string, result *MapSpawnResult) (voplay.TextureID, error) {
+	if prepared != nil {
+		return preparedMapTexture(prepared, path, "terrain texture")
+	}
+	return loadMapTexture(assets, path, result)
+}
+
+func loadPreparedOrMapTextureLinear(assets voplay.AssetSource, prepared *MapPreparedAsset, path string, result *MapSpawnResult) (voplay.TextureID, error) {
+	if prepared != nil {
+		return preparedMapTextureLinear(prepared, path, "terrain texture")
+	}
+	return loadMapTextureLinear(assets, path, result)
+}
+
+func preparedMapTexture(prepared *MapPreparedAsset, path string, label string) (voplay.TextureID, error) {
+	if path == "" {
+		return 0, nil
+	}
+	texture := prepared.Textures[path]
+	if texture == 0 {
+		return 0, errors.New("scene3d.SpawnPreparedMapWithAssets: " + label + " not prepared: " + path)
+	}
+	return texture, nil
+}
+
+func preparedMapTextureLinear(prepared *MapPreparedAsset, path string, label string) (voplay.TextureID, error) {
+	if path == "" {
+		return 0, nil
+	}
+	texture := prepared.LinearTextures[path]
+	if texture == 0 {
+		return 0, errors.New("scene3d.SpawnPreparedMapWithAssets: " + label + " not prepared: " + path)
+	}
+	return texture, nil
+}
+
+func loadMapTerrainSplat(assets voplay.AssetSource, baseDir string, source *MapTerrainSplat, result *MapSpawnResult) (*TerrainSplatMaterial, error) {
+	if source == nil {
+		return nil, nil
+	}
+	splat := &TerrainSplatMaterial{Layers: make([]TerrainLayer, 4), Tuning: mapTerrainMaterialTuning(source.Tuning)}
+	control, err := loadMapTextureLinear(assets, mapResolvePath(baseDir, source.Control), result)
+	if err != nil {
+		return nil, err
+	}
+	splat.Control = control
+	for i := 0; i < 4; i++ {
+		layer := source.Layers[i]
+		texture, textureErr := loadMapTexture(assets, mapResolvePath(baseDir, layer.Texture), result)
+		if textureErr != nil {
+			return nil, textureErr
+		}
+		splat.Layers[i].Texture = texture
+		if layer.Normal != "" {
+			normal, normalErr := loadMapTextureLinear(assets, mapResolvePath(baseDir, layer.Normal), result)
+			if normalErr != nil {
+				return nil, normalErr
+			}
+			splat.Layers[i].Normal = normal
+		}
+		if layer.MetallicRoughness != "" {
+			mr, mrErr := loadMapTextureLinear(assets, mapResolvePath(baseDir, layer.MetallicRoughness), result)
+			if mrErr != nil {
+				return nil, mrErr
+			}
+			splat.Layers[i].MetallicRoughness = mr
+		}
+		splat.Layers[i].UVScale = layer.UVScale
+		splat.Layers[i].NormalScale = layer.NormalScale
+	}
+	return splat, nil
+}
+
+func loadMapTexture(assets voplay.AssetSource, path string, result *MapSpawnResult) (voplay.TextureID, error) {
+	if assets != nil {
+		return assets.Texture(path)
+	}
+	texture, err := voplay.LoadTexture(path)
+	if err != nil {
+		return 0, err
+	}
+	if result != nil {
+		result.Textures = append(result.Textures, texture)
+	}
+	return texture, nil
+}
+
+func loadMapTextureLinear(assets voplay.AssetSource, path string, result *MapSpawnResult) (voplay.TextureID, error) {
+	if assets != nil {
+		return assets.TextureLinear(path)
+	}
+	texture, err := voplay.LoadTextureLinear(path)
+	if err != nil {
+		return 0, err
+	}
+	if result != nil {
+		result.Textures = append(result.Textures, texture)
+	}
+	return texture, nil
+}
+
+func spawnMapMesh(scene *Scene, assets voplay.AssetSource, mesh MapMesh, baseDir string, prepared *MapPreparedAsset) (*Entity, error) {
+	modelPath := mapResolvePath(baseDir, mesh.Model)
+	var model voplay.ModelID
+	var err error
+	if prepared != nil {
+		model, err = prepared.Model(mesh.Name)
+	} else if assets != nil {
+		model, err = assets.Model(modelPath)
+	} else {
+		model, err = voplay.LoadModel(modelPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	lodModels, lodErr := loadMapMeshLodModels(assets, mesh, baseDir, prepared)
+	if lodErr != nil {
+		if prepared == nil && assets == nil && model != 0 {
+			model.Free()
+		}
+		return nil, lodErr
+	}
+	spawned := false
+	defer func() {
+		if !spawned && prepared == nil && assets == nil && model != 0 {
+			model.Free()
+		}
+		if !spawned && prepared == nil && assets == nil {
+			for _, lodModel := range lodModels {
+				if lodModel != 0 {
+					lodModel.Free()
+				}
+			}
+		}
+	}()
+	desc := mapMeshEntityDesc(mesh, model, lodModels)
+	if mesh.TintSet {
+		desc.Tint = mesh.Tint.Color()
+		desc.TintSet = true
+	}
+	if assets == nil && prepared == nil {
+		desc.ModelLease = voplay.NewModelLease(model)
+		desc.LodModelLeases = modelLeases(lodModels)
+	}
+	if mesh.Collision == "trimesh" {
+		desc.Physics = TrimeshPhysics(model)
+		if mesh.Friction > 0 {
+			desc.Physics.Friction = mesh.Friction
+		}
+	}
+	ent := scene.Spawn(desc)
+	spawned = true
+	ent.Visible = !mesh.Hidden
+	return ent, nil
+}
+
+func mapMeshEntityDesc(mesh MapMesh, model voplay.ModelID, lodModels []voplay.ModelID) EntityDesc {
+	return EntityDesc{Position: mesh.Position.Vec3(), Rotation: mapRotation(mesh.Rotation), Scale: mapScale(mesh.Scale), Model: model, Material: mapMaterialDesc(mesh.Material), PickMode: mapPickMode(mesh.PickMode), Tag: mesh.Name, StaticRenderable: true, LodLevels: mapMeshEntityLodLevels(mesh.LodLevels, lodModels), CullDistance: mesh.CullDistance, CullRadius: mesh.CullRadius, FrustumCull: mesh.FrustumCull}
+}
+
+func loadMapMeshLodModels(assets voplay.AssetSource, mesh MapMesh, baseDir string, prepared *MapPreparedAsset) ([]voplay.ModelID, error) {
+	if len(mesh.LodLevels) == 0 {
+		return nil, nil
+	}
+	if prepared != nil {
+		models := prepared.MeshLodModels[mesh.Name]
+		if len(models) != len(mesh.LodLevels) {
+			return nil, errors.New("scene3d.SpawnPreparedMapWithAssets: mesh lods not prepared: " + mesh.Name)
+		}
+		return models, nil
+	}
+	models := []voplay.ModelID{}
+	for _, lod := range mesh.LodLevels {
+		path := mapResolvePath(baseDir, lod.Model)
+		var model voplay.ModelID
+		var err error
+		if assets != nil {
+			model, err = assets.Model(path)
+		} else {
+			model, err = voplay.LoadModel(path)
+		}
+		if err != nil {
+			if assets == nil {
+				for _, loaded := range models {
+					if loaded != 0 {
+						loaded.Free()
+					}
+				}
+			}
+			return nil, err
+		}
+		models = append(models, model)
+	}
+	return models, nil
+}
+
+func mapMeshEntityLodLevels(levels []MapMeshLodLevel, models []voplay.ModelID) []EntityLodLevel {
+	if len(levels) == 0 {
+		return nil
+	}
+	out := make([]EntityLodLevel, 0, len(levels))
+	for i, level := range levels {
+		out = append(out, EntityLodLevel{Model: models[i], Distance: level.Distance})
+	}
+	return out
+}
+
+func mapTerrainPhysics(terrain MapTerrain) *Physics {
+	physics := &Physics{Type: Static, Layer: voplay.CollisionLayerDefault, Mask: voplay.CollisionMaskAll, Friction: 0.8, Restitution: 0}
+	if terrain.Friction > 0 {
+		physics.Friction = terrain.Friction
+	}
+	return physics
+}
+
+func mapResolvePath(baseDir, child string) string {
+	if child == "" || filepath.IsAbs(child) {
+		return child
+	}
+	if baseDir == "" || baseDir == "." {
+		return child
+	}
+	return filepath.Join([]string{baseDir, child})
+}
+
+func mapRotation(r MapVec3) voplay.Quat {
+	return voplay.QuatFromEuler(r.X, r.Y, r.Z)
+}
+
+func mapScale(s MapVec3) voplay.Vec3 {
+	if s.X == 0 && s.Y == 0 && s.Z == 0 {
+		return voplay.Vec3{X: 1, Y: 1, Z: 1}
+	}
+	return s.Vec3()
+}
+
+func (v MapVec3) Vec3() voplay.Vec3 {
+	return voplay.Vec3{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+func (c MapColor) Color() voplay.Color {
+	a := c.A
+	if a <= 0 {
+		a = 1
+	}
+	return voplay.Color{R: c.R, G: c.G, B: c.B, A: a}
+}

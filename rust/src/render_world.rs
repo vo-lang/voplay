@@ -126,6 +126,7 @@ pub struct RenderBatchPlan {
 }
 
 impl RenderBatchPlan {
+    #[cfg(test)]
     pub fn total_batches(&self) -> u32 {
         self.mesh_batches
             + self.primitive_batches
@@ -162,6 +163,7 @@ impl RenderBatchPlan {
         batches
     }
 
+    #[cfg(test)]
     pub fn terrain_batches(&mut self, draws: &[ModelDraw]) -> Vec<ModelDraw> {
         let (batches, invalid) = collect_indexed_batches(&self.terrain_batch_indices, draws);
         self.record_invalid_batch_indices(invalid, "invalid-terrain-batch-index");

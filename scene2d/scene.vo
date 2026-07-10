@@ -15,9 +15,11 @@ type Scene struct {
 	nextEntityID     int
 	entityByID       map[int]*Entity
 	worldID          int
+	physicsBackend   PhysicsBackend
 	nextBodyID       int
 	physCmds         codec.ByteWriter
 	bodyMap          map[int]*Entity
+	physicsPacketErrors []PhysicsBackendPacketError
 	spatialCellSize  float64
 	spatialBuckets   map[int64][]*Entity
 	spatialQueryTick int
@@ -33,9 +35,19 @@ func New() *Scene {
 		nextBodyID:      1,
 		physCmds:        codec.NewByteWriter(256),
 		bodyMap:         make(map[int]*Entity),
+		physicsBackend:  defaultPhysicsBackendInstance,
 		spatialCellSize: defaultSpatialCellSize,
 		spatialBuckets:  map[int64][]*Entity{},
 	}
+}
+
+func NewWithPhysicsBackend(backend PhysicsBackend) *Scene {
+	if backend == nil {
+		panic("scene2d.NewWithPhysicsBackend: backend must not be nil")
+	}
+	scene := New()
+	scene.physicsBackend = backend
+	return scene
 }
 
 // --- Entity lifecycle ---
@@ -78,7 +90,7 @@ func (s *Scene) Spawn(desc EntityDesc) *Entity {
 	s.spatialInsert(ent)
 	if ent.Physics != nil {
 		s.bodyMap[ent.Physics.bodyID] = ent
-		physBackend.SpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
+		s.physicsBackend.SpawnBody(s.worldID, ent.Physics.bodyID, serializeBodyDesc(ent))
 	}
 	return ent
 }
@@ -96,7 +108,7 @@ func (s *Scene) destroyEntityRecursive(e *Entity) {
 	}
 	if e.Physics != nil {
 		delete(s.bodyMap, e.Physics.bodyID)
-		physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
+		s.physicsBackend.DestroyBody(s.worldID, e.Physics.bodyID)
 		e.Physics.bodyID = 0
 	}
 	e.childIDs = nil
@@ -123,7 +135,7 @@ func (s *Scene) Destroy(e *Entity) {
 func (s *Scene) Clear() {
 	for _, e := range s.entities {
 		if e.Physics != nil {
-			physBackend.DestroyBody(s.worldID, e.Physics.bodyID)
+			s.physicsBackend.DestroyBody(s.worldID, e.Physics.bodyID)
 		}
 		e.parentID = 0
 		e.childIDs = nil
@@ -142,12 +154,13 @@ func (s *Scene) Clear() {
 		delete(s.spatialBuckets, cell)
 	}
 	s.physCmds.Reset()
+	s.physicsPacketErrors = nil
 }
 
 func (s *Scene) Close() {
 	s.Clear()
 	if s.worldID != 0 {
-		physBackend.Destroy(s.worldID)
+		s.physicsBackend.Destroy(s.worldID)
 		s.worldID = 0
 	}
 }
@@ -267,13 +280,13 @@ func (s *Scene) ensurePhysics() {
 	if s.worldID != 0 {
 		return
 	}
-	s.worldID = physBackend.Init(s.Gravity.X, s.Gravity.Y)
+	s.worldID = s.physicsBackend.Init(s.Gravity.X, s.Gravity.Y)
 }
 
 func (s *Scene) SetGravity(g voplay.Vec2) {
 	s.Gravity = g
 	if s.worldID != 0 {
-		physBackend.SetGravity(s.worldID, g.X, g.Y)
+		s.physicsBackend.SetGravity(s.worldID, g.X, g.Y)
 	}
 }
 
@@ -281,19 +294,21 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 	if s.worldID == 0 {
 		return
 	}
-	state := physBackend.Step(s.worldID, dt, s.physCmds.Bytes())
+	state := s.physicsBackend.Step(s.worldID, dt, s.physCmds.Bytes())
 	s.physCmds.Reset()
 	r := codec.NewByteReader(state)
 	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
 		return
 	}
 
 	count := r.ReadU32()
+	if r.Remaining() != count * 44 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Reason: "payload_length_mismatch", ExpectedBytes: count * 44, ActualBytes: r.Remaining()})
+		return
+	}
 
 	for i := 0; i < count; i++ {
-		if r.Remaining() < 44 {
-			break
-		}
 		bodyID := r.ReadU32()
 		x := r.ReadF64()
 		y := r.ReadF64()
@@ -306,6 +321,8 @@ func (s *Scene) StepAndSyncPhysics(dt float64) {
 			e.rotation = rotation
 			e.Physics.velocity = voplay.Vec2{vx, vy}
 			s.spatialUpdate(e)
+		} else {
+			s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "body", Reason: "unknown_body", ExpectedBytes: len(s.bodyMap), ActualBytes: bodyID})
 		}
 	}
 }
@@ -314,17 +331,19 @@ func (s *Scene) Contacts() []Contact {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physBackend.Contacts(s.worldID)
+	data := s.physicsBackend.Contacts(s.worldID)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
 		return nil
 	}
 	count := r.ReadU32()
+	if r.Remaining() != count * 8 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "contact", Reason: "payload_length_mismatch", ExpectedBytes: count * 8, ActualBytes: r.Remaining()})
+		return nil
+	}
 	var contacts []Contact
 	for i := 0; i < count; i++ {
-		if r.Remaining() < 8 {
-			break
-		}
 		idA := r.ReadU32()
 		idB := r.ReadU32()
 		a, okA := s.bodyMap[idA]
@@ -340,8 +359,16 @@ func (s *Scene) RayCast(origin, dir voplay.Vec2, maxDist float64) *RayCastHit {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physBackend.RayCast(s.worldID, origin.X, origin.Y, dir.X, dir.Y, maxDist)
-	if len(data) < 1 || data[0] == 0 {
+	data := s.physicsBackend.RayCast(s.worldID, origin.X, origin.Y, dir.X, dir.Y, maxDist)
+	if len(data) < 1 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "raycast", Reason: "missing_hit_flag", ExpectedBytes: 1, ActualBytes: len(data)})
+		return nil
+	}
+	if data[0] == 0 {
+		return nil
+	}
+	if len(data) != 45 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "raycast", Reason: "payload_length_mismatch", ExpectedBytes: 45, ActualBytes: len(data)})
 		return nil
 	}
 	r := codec.NewByteReader(data[1:])
@@ -367,21 +394,44 @@ func (s *Scene) QueryRect(rect voplay.Rect) []*Entity {
 	if s.worldID == 0 {
 		return nil
 	}
-	data := physBackend.QueryRect(s.worldID, rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
+	data := s.physicsBackend.QueryRect(s.worldID, rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	r := codec.NewByteReader(data)
 	if r.Remaining() < 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "query_rect", Reason: "missing_count", ExpectedBytes: 4, ActualBytes: r.Remaining()})
 		return nil
 	}
 	count := r.ReadU32()
+	if r.Remaining() != count * 4 {
+		s.recordPhysicsBackendPacketError(PhysicsBackendPacketError{Source: "query_rect", Reason: "payload_length_mismatch", ExpectedBytes: count * 4, ActualBytes: r.Remaining()})
+		return nil
+	}
 	var result []*Entity
 	for i := 0; i < count; i++ {
-		if r.Remaining() < 4 {
-			break
-		}
 		bodyID := r.ReadU32()
 		if ent, ok := s.bodyMap[bodyID]; ok && ent.Active {
 			result = append(result, ent)
 		}
 	}
 	return result
+}
+
+func (s *Scene) recordPhysicsBackendPacketError(err PhysicsBackendPacketError) {
+	if s == nil {
+		return
+	}
+	s.physicsPacketErrors = append(s.physicsPacketErrors, err)
+}
+
+func (s *Scene) PhysicsBackendPacketErrors() []PhysicsBackendPacketError {
+	if s == nil {
+		return []PhysicsBackendPacketError{}
+	}
+	return append([]PhysicsBackendPacketError{}, s.physicsPacketErrors...)
+}
+
+func (s *Scene) PhysicsPacketErrorCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.physicsPacketErrors)
 }

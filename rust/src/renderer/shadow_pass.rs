@@ -12,7 +12,7 @@ pub(super) struct ShadowPassContext<'a> {
     pub(super) models: &'a ModelManager,
     pub(super) encoder: &'a mut wgpu::CommandEncoder,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) camera3d_state: Option<Camera3DState>,
     pub(super) light_uniform: &'a mut LightUniform,
     pub(super) model_draws: &'a [ModelDraw],
     pub(super) primitive_shadow_draws: &'a mut Vec<PrimitiveDraw>,
@@ -72,26 +72,27 @@ impl ShadowPassExecutor {
                     }
                     let mut shadow_cascade_vps = [math3d::MAT4_IDENTITY; 4];
                     let mut shadow_cascade_splits = [0.0; 4];
-                    let shadow_vp = if let Some((eye, target, up, fov, near, camera_far)) =
-                        ctx.camera3d_state
-                    {
+                    let shadow_vp = if let Some(camera) = ctx.camera3d_state {
                         let shadow_far = if ctx.shadow_distance > 0.0 {
-                            ctx.shadow_distance.min(camera_far).max(near + 0.1)
+                            ctx.shadow_distance.min(camera.far).max(camera.near + 0.1)
                         } else {
-                            camera_far
+                            camera.far
                         };
                         if cascade_count > 1 {
-                            shadow_cascade_splits =
-                                compute_shadow_cascade_splits(near, shadow_far, cascade_count);
-                            let mut cascade_near = near;
+                            shadow_cascade_splits = compute_shadow_cascade_splits(
+                                camera.near,
+                                shadow_far,
+                                cascade_count,
+                            );
+                            let mut cascade_near = camera.near;
                             for cascade_index in 0..cascade_count {
                                 let cascade_far = shadow_cascade_splits[cascade_index];
                                 shadow_cascade_vps[cascade_index] =
                                     math3d::compute_shadow_vp_for_camera_stabilized(
-                                        eye,
-                                        target,
-                                        up,
-                                        fov.to_radians(),
+                                        camera.eye,
+                                        camera.target,
+                                        camera.up,
+                                        camera.fov_degrees.to_radians(),
                                         ctx.aspect,
                                         cascade_near,
                                         cascade_far,
@@ -103,12 +104,12 @@ impl ShadowPassExecutor {
                             shadow_cascade_vps[0]
                         } else {
                             let shadow_vp = math3d::compute_shadow_vp_for_camera_stabilized(
-                                eye,
-                                target,
-                                up,
-                                fov.to_radians(),
+                                camera.eye,
+                                camera.target,
+                                camera.up,
+                                camera.fov_degrees.to_radians(),
                                 ctx.aspect,
-                                near,
+                                camera.near,
                                 shadow_far,
                                 shadow_dir,
                                 tile_resolution,

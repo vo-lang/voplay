@@ -15,7 +15,6 @@ type TrackSurfaceDetailsDesc struct {
 type TrackSurfaceDetail struct {
 	Entity *Entity
 	Model voplay.ModelID
-	OwnedModel bool
 	Name string
 	Kind string
 	Material voplay.MaterialDesc
@@ -30,7 +29,7 @@ type TrackSurfaceDetails struct {
 	Details []*TrackSurfaceDetail
 }
 
-func SpawnTrackSurfaceDetails(scene *Scene, assets *voplay.Assets, track *Track, desc TrackSurfaceDetailsDesc) (*TrackSurfaceDetails, error) {
+func SpawnTrackSurfaceDetails(scene *Scene, assets voplay.AssetSource, track *Track, desc TrackSurfaceDetailsDesc) (*TrackSurfaceDetails, error) {
 	if scene == nil {
 		return nil, errors.New("scene3d.SpawnTrackSurfaceDetails: scene is nil")
 	}
@@ -78,7 +77,7 @@ func SpawnTrackSurfaceDetails(scene *Scene, assets *voplay.Assets, track *Track,
 	return result, nil
 }
 
-func SpawnTrackEdgeTransition(scene *Scene, assets *voplay.Assets, track *Track, desc TrackEdgeTransitionDesc) (*TrackSurfaceDetail, error) {
+func SpawnTrackEdgeTransition(scene *Scene, assets voplay.AssetSource, track *Track, desc TrackEdgeTransitionDesc) (*TrackSurfaceDetail, error) {
 	if scene == nil {
 		return nil, errors.New("scene3d.SpawnTrackEdgeTransition: scene is nil")
 	}
@@ -93,7 +92,7 @@ func SpawnTrackEdgeTransition(scene *Scene, assets *voplay.Assets, track *Track,
 	return spawnTrackGeneratedSurface(scene, name, "edge_transition", desc.Material, mesh.Vertices, mesh.Indices, mesh.Color, mesh.VertexCount, mesh.IndexCount, 0, mesh.Min, mesh.Max)
 }
 
-func SpawnTrackProjectedDecals(scene *Scene, assets *voplay.Assets, track *Track, desc TrackProjectedDecalDesc) (*TrackSurfaceDetail, error) {
+func SpawnTrackProjectedDecals(scene *Scene, assets voplay.AssetSource, track *Track, desc TrackProjectedDecalDesc) (*TrackSurfaceDetail, error) {
 	if scene == nil {
 		return nil, errors.New("scene3d.SpawnTrackProjectedDecals: scene is nil")
 	}
@@ -117,9 +116,8 @@ func spawnTrackGeneratedSurface(scene *Scene, name, kind string, material voplay
 		return nil, err
 	}
 	material = voplay.NormalizeMaterial(material)
-	detail := &TrackSurfaceDetail{Model: model, OwnedModel: true, Name: name, Kind: kind, Material: material, VertexCount: vertexCount, IndexCount: indexCount, DecalCount: decalCount, Min: min, Max: max}
-	detail.Entity = scene.Spawn(EntityDesc{Model: model, OwnedModel: model, Material: material, Tag: name, StaticRenderable: true, PickMode: PickDisabled})
-	detail.OwnedModel = false
+	detail := &TrackSurfaceDetail{Model: model, Name: name, Kind: kind, Material: material, VertexCount: vertexCount, IndexCount: indexCount, DecalCount: decalCount, Min: min, Max: max}
+	detail.Entity = scene.Spawn(EntityDesc{Model: model, ModelLease: voplay.NewModelLease(model), Material: material, Tag: name, StaticRenderable: true, PickMode: PickDisabled})
 	return detail, nil
 }
 
@@ -131,11 +129,7 @@ func (d *TrackSurfaceDetail) Destroy(scene *Scene) {
 		scene.Destroy(d.Entity)
 	}
 	d.Entity = nil
-	if d.OwnedModel && d.Model != 0 {
-		d.Model.Free()
-	}
 	d.Model = 0
-	d.OwnedModel = false
 }
 
 func (d *TrackSurfaceDetails) Destroy(scene *Scene) {

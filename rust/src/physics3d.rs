@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::math3d::{Quat, Vec3};
+use crate::physics_command::{PhysicsCommandError, PhysicsCommandReader};
 use crate::physics_registry::{with_world_in, PhysBodyType, WorldRegistry};
 
 const BODY_STATE_BYTES_3D: usize = 4 + 13 * 8;
@@ -720,38 +721,15 @@ impl PhysicsWorld3D {
     ///
     /// Vec3 commands (opcodes 1–4): opcode(u8), body_id(u32 LE), x(f64), y(f64), z(f64) = 29 bytes
     /// Quat commands (opcode 5):    opcode(u8), body_id(u32 LE), qx(f64), qy(f64), qz(f64), qw(f64) = 37 bytes
-    pub fn apply_commands(&mut self, data: &[u8]) {
-        let mut pos = 0;
-        while pos < data.len() {
-            // Every command starts with opcode(1) + body_id(4) = 5 bytes header
-            assert!(
-                pos + 5 <= data.len(),
-                "voplay: physics command stream truncated at header (pos={}, len={})",
-                pos,
-                data.len()
-            );
-            let op = data[pos];
-            pos += 1;
-            let body_id =
-                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-            pos += 4;
-
+    pub fn apply_commands(&mut self, data: &[u8]) -> Result<(), PhysicsCommandError> {
+        let mut reader = PhysicsCommandReader::new(data);
+        while let Some((op, body_id)) = reader.next_header()? {
             match op {
                 // Vec3 commands: 3 × f64 = 24 bytes payload
                 1..=4 | 6 => {
-                    assert!(
-                        pos + 24 <= data.len(),
-                        "voplay: physics Vec3 command truncated (op={}, pos={}, len={})",
-                        op,
-                        pos,
-                        data.len()
-                    );
-                    let vx = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
-                    let vy = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
-                    let vz = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
+                    let vx = reader.read_f64(op, "truncated_vec3_x")? as f32;
+                    let vy = reader.read_f64(op, "truncated_vec3_y")? as f32;
+                    let vz = reader.read_f64(op, "truncated_vec3_z")? as f32;
 
                     let handle = match self.handle_map.get(&body_id) {
                         Some(h) => *h,
@@ -773,20 +751,10 @@ impl PhysicsWorld3D {
                 }
                 // Quat command (SetRotation): 4 × f64 = 32 bytes payload
                 5 => {
-                    assert!(
-                        pos + 32 <= data.len(),
-                        "voplay: physics Quat command truncated (pos={}, len={})",
-                        pos,
-                        data.len()
-                    );
-                    let qx = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
-                    let qy = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
-                    let qz = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
-                    let qw = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as f32;
-                    pos += 8;
+                    let qx = reader.read_f64(op, "truncated_quat_x")? as f32;
+                    let qy = reader.read_f64(op, "truncated_quat_y")? as f32;
+                    let qz = reader.read_f64(op, "truncated_quat_z")? as f32;
+                    let qw = reader.read_f64(op, "truncated_quat_w")? as f32;
 
                     let handle = match self.handle_map.get(&body_id) {
                         Some(h) => *h,
@@ -799,13 +767,10 @@ impl PhysicsWorld3D {
                     let rotation = UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
                     rb.set_rotation(rotation, true);
                 }
-                _ => panic!(
-                    "voplay: unknown physics command opcode {} at pos {}",
-                    op,
-                    pos - 5
-                ),
+                _ => return Err(reader.unknown_opcode(op)),
             }
         }
+        Ok(())
     }
 
     /// Step the physics world forward by dt seconds.
@@ -1267,7 +1232,7 @@ mod tests {
         // Total: 29 + 37 + 29 = 95 bytes
         assert_eq!(cmds.len(), 95);
 
-        world.apply_commands(&cmds);
+        world.apply_commands(&cmds).expect("valid command stream");
         world.step(1.0 / 60.0);
 
         // After commands, position should be (10, 0, 0) — the last SetPosition wins.
@@ -1376,7 +1341,9 @@ mod tests {
             lock_rotation_z: false,
         };
         world.spawn_body(&desc);
-        world.apply_commands(&build_vec3_cmd(6, 7, 1.0, 2.0, 3.0));
+        world
+            .apply_commands(&build_vec3_cmd(6, 7, 1.0, 2.0, 3.0))
+            .expect("valid angular velocity command");
 
         let handle = *world.handle_map.get(&7).unwrap();
         let rb = world.rigid_body_set.get(handle).unwrap();
@@ -1387,11 +1354,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unknown physics command opcode")]
-    fn apply_commands_panics_on_unknown_opcode() {
+    fn apply_commands_reports_unknown_opcode() {
         let mut world = PhysicsWorld3D::new(0.0, 0.0, 0.0);
         // opcode 99 is invalid
         let cmds = build_vec3_cmd(99, 1, 0.0, 0.0, 0.0);
-        world.apply_commands(&cmds);
+        let error = world
+            .apply_commands(&cmds)
+            .expect_err("unknown opcode must be rejected");
+        assert_eq!(error.code, "unknown_opcode");
+        assert_eq!(error.offset, 0);
+        assert_eq!(error.opcode, Some(99));
     }
 }

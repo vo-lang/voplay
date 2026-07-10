@@ -11,7 +11,7 @@ pub(super) struct PostPassSetupContext<'a> {
     pub(super) uniform_buffer: &'a wgpu::Buffer,
     pub(super) decal_uniform_buffer: &'a wgpu::Buffer,
     pub(super) camera3d_uniform: Option<&'a Camera3DUniform>,
-    pub(super) camera3d_state: Option<(Vec3, Vec3, Vec3, f32, f32, f32)>,
+    pub(super) camera3d_state: Option<Camera3DState>,
     pub(super) light_uniform: &'a LightUniform,
     pub(super) projected_decals: &'a [PostDecalGpu],
     pub(super) projected_decal_atlas_binding_count: u32,
@@ -107,7 +107,7 @@ impl PostPassSetup {
             .unwrap_or(math3d::MAT4_IDENTITY);
         let post_camera_pos = ctx
             .camera3d_state
-            .map(|(eye, _, _, _, _, _)| eye.to_array())
+            .map(|camera| camera.eye.to_array())
             .unwrap_or([0.0, 0.0, 0.0]);
         let projected_decal_atlas_binding_count = ctx
             .projected_decal_atlas_binding_count

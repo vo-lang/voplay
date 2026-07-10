@@ -188,7 +188,7 @@ func classifyLevelNode(node LevelNodeInfo) levelNodePlanKind {
 func newLevelNodePlan(node LevelNodeInfo) LevelNodePlan {
 	plan := LevelNodePlan{Desc: EntityDesc{Position: node.Position, Rotation: node.Rotation, Scale: node.Scale, Model: node.ModelID, Tag: node.Name}}
 	if plan.Desc.Model != 0 {
-		plan.Desc.OwnedModel = plan.Desc.Model
+		plan.Desc.ModelLease = voplay.NewModelLease(plan.Desc.Model)
 	}
 	return plan
 }
@@ -221,7 +221,7 @@ func spawnLevelNode(scene *Scene, node LevelNodeInfo) (levelNodeSpawnResult, err
 	}
 	ent := scene.Spawn(plan.Desc)
 	ent.Visible = plan.Visible
-	return levelNodeSpawnResult{Entity: ent, ModelOwnershipTransferred: plan.Desc.OwnedModel != 0}, nil
+	return levelNodeSpawnResult{Entity: ent, ModelOwnershipTransferred: plan.Desc.ModelLease != nil}, nil
 }
 
 func PlanLevelNode(node LevelNodeInfo) (LevelNodePlan, error) {
@@ -229,7 +229,7 @@ func PlanLevelNode(node LevelNodeInfo) (LevelNodePlan, error) {
 	switch classifyLevelNode(node) {
 		case levelNodePlanSpawnMarker:
 			plan.Desc.Model = 0
-			plan.Desc.OwnedModel = 0
+			plan.Desc.ModelLease = nil
 			plan.Visible = false
 			return plan, nil
 		case levelNodePlanBoxCollider:

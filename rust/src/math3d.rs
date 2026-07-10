@@ -407,6 +407,7 @@ pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far
     ]
 }
 
+#[cfg(test)]
 pub fn compute_shadow_vp(camera_inv_vp: &Mat4, light_dir: Vec3) -> Mat4 {
     compute_shadow_vp_with_snap(camera_inv_vp, light_dir, 0)
 }
@@ -539,6 +540,7 @@ fn compute_shadow_vp_with_snap(
     ]
 }
 
+#[cfg(test)]
 pub fn compute_shadow_vp_for_camera(
     eye: Vec3,
     target: Vec3,

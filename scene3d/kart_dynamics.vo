@@ -6,7 +6,7 @@ import (
 )
 
 type KartDynamics struct {
-	Config KartDynamicsConfig
+	config KartDynamicsConfig
 	BoostTimer float64
 	BoostState BoostState
 	DriftCharge float64
@@ -143,15 +143,18 @@ func DefaultKartDynamicsConfig() KartDynamicsConfig {
 }
 
 func NewKartDynamics(config KartDynamicsConfig) KartDynamics {
-	return KartDynamics{Config: NormalizeKartDynamicsConfig(config)}
+	return KartDynamics{config: NormalizeKartDynamicsConfig(config)}
 }
 
 func (d KartDynamics) Resolve(intent VehicleIntent, surface SurfaceMaterial) KartDynamicsResult {
-	cfg := NormalizeKartDynamicsConfig(d.Config)
+	cfg := d.config
+	if len(cfg.Vehicle.Wheels) == 0 {
+		cfg = NormalizeKartDynamicsConfig(KartDynamicsConfig{})
+	}
 	surface = NormalizeSurfaceMaterial(surface)
-	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
+	vehicleConfig := applySurfaceMaterialToNormalizedVehicleConfig(cfg.Vehicle, surface, cfg)
 	intent = intent.Normalized()
-	force := BuildVehicleForceCommand(intent, vehicleConfig, cfg.Model, surface, 0, true, false, false)
+	force := buildVehicleForceCommandWithNormalizedConfig(intent, vehicleConfig, cfg.Model, surface, 0, true, false, false)
 	return KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent}
 }
 
@@ -160,8 +163,10 @@ func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed
 		dynamics := NewKartDynamics(KartDynamicsConfig{})
 		return dynamics.Step(intent, surface, speed, grounded, dt)
 	}
-	cfg := NormalizeKartDynamicsConfig(d.Config)
-	d.Config = cfg
+	if len(d.config.Vehicle.Wheels) == 0 {
+		d.Reconfigure(KartDynamicsConfig{})
+	}
+	cfg := d.config
 	intent = intent.Normalized()
 	surface = NormalizeSurfaceMaterial(surface)
 	if dt < 0 {
@@ -199,8 +204,8 @@ func (d *KartDynamics) Step(intent VehicleIntent, surface SurfaceMaterial, speed
 	d.BoostState = BoostState{Active: boosting, Timer: d.BoostTimer, Source: "kart_dynamics"}
 	controlIntent := intent
 	controlIntent.BoostRequest = boosting
-	vehicleConfig := ApplySurfaceMaterialToVehicleConfig(cfg.Vehicle, surface, cfg)
-	force := BuildVehicleForceCommand(controlIntent, vehicleConfig, cfg.Model, surface, speed, grounded, boosting, drifting)
+	vehicleConfig := applySurfaceMaterialToNormalizedVehicleConfig(cfg.Vehicle, surface, cfg)
+	force := buildVehicleForceCommandWithNormalizedConfig(controlIntent, vehicleConfig, cfg.Model, surface, speed, grounded, boosting, drifting)
 	result := KartDynamicsResult{VehicleConfig: vehicleConfig, VehicleInput: force.VehicleInput, ForceCommand: force, RecoveryInput: VehicleRecoveryInput{Throttle: intent.Throttle, Reset: intent.ResetRequest}, Surface: surface, Intent: intent, Boosting: boosting, BoostTimer: d.BoostTimer, BoostState: d.BoostState, Drifting: drifting, DriftCharge: d.DriftCharge, MiniTurboReleased: miniReleased, SuperTurboReleased: superReleased}
 	d.BoostTimer = vehicleMoveTowards(d.BoostTimer, 0, dt)
 	d.BoostState = BoostState{Active: d.BoostTimer > 0, Timer: d.BoostTimer, Source: "kart_dynamics"}
@@ -228,6 +233,11 @@ func BuildVehicleForceCommand(intent VehicleIntent, vehicle VehicleConfig, model
 	vehicle = normalizeVehicleConfig(vehicle)
 	model = NormalizeKartVehicleModel(model, vehicle)
 	surface = NormalizeSurfaceMaterial(surface)
+	return buildVehicleForceCommandWithNormalizedConfig(intent, vehicle, model, surface, speed, grounded, boosting, drifting)
+}
+
+func buildVehicleForceCommandWithNormalizedConfig(intent VehicleIntent, vehicle VehicleConfig, model KartVehicleModel, surface SurfaceMaterial, speed float64, grounded bool, boosting bool, drifting bool) VehicleForceCommand {
+	intent = intent.Normalized()
 	input := intent.VehicleInput()
 	input.Boost = boosting
 	engineForce := 0.0
@@ -273,6 +283,10 @@ func BuildVehicleForceCommand(intent VehicleIntent, vehicle VehicleConfig, model
 
 func NormalizeVehicleForceCommand(command VehicleForceCommand, vehicle VehicleConfig) VehicleForceCommand {
 	vehicle = normalizeVehicleConfig(vehicle)
+	return normalizeVehicleForceCommandWithNormalizedConfig(command, vehicle)
+}
+
+func normalizeVehicleForceCommandWithNormalizedConfig(command VehicleForceCommand, vehicle VehicleConfig) VehicleForceCommand {
 	command.VehicleInput = command.VehicleInput
 	command.VehicleInput.Throttle = vehicleClamp(command.VehicleInput.Throttle, -1, 1)
 	command.VehicleInput.Steer = vehicleClamp(command.VehicleInput.Steer, -1, 1)
@@ -299,7 +313,11 @@ func NormalizeVehicleForceCommand(command VehicleForceCommand, vehicle VehicleCo
 
 func BuildPhysicsBackendApplyCommand(command VehicleForceCommand, vehicle VehicleConfig, currentSteer float64, dt float64) PhysicsBackendApplyCommand {
 	vehicle = normalizeVehicleConfig(vehicle)
-	command = NormalizeVehicleForceCommand(command, vehicle)
+	return buildPhysicsBackendApplyCommandWithNormalizedConfig(command, vehicle, currentSteer, dt)
+}
+
+func buildPhysicsBackendApplyCommandWithNormalizedConfig(command VehicleForceCommand, vehicle VehicleConfig, currentSteer float64, dt float64) PhysicsBackendApplyCommand {
+	command = normalizeVehicleForceCommandWithNormalizedConfig(command, vehicle)
 	if dt < 0 {
 		dt = 0
 	}
@@ -392,6 +410,17 @@ func (d *KartDynamics) ActivateBoost(duration float64) {
 	}
 }
 
+func (d *KartDynamics) Reconfigure(config KartDynamicsConfig) {
+	if d == nil {
+		return
+	}
+	d.config = NormalizeKartDynamicsConfig(config)
+}
+
+func (d KartDynamics) Config() KartDynamicsConfig {
+	return cloneKartDynamicsConfig(d.config)
+}
+
 func (d *KartDynamics) Reset() {
 	if d == nil {
 		return
@@ -442,6 +471,10 @@ func NormalizeKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
 
 func KartDynamicsConfigFromControllerConfig(config KartControllerConfig) KartDynamicsConfig {
 	config = normalizeKartControllerConfig(config)
+	return kartDynamicsConfigFromNormalizedControllerConfig(config)
+}
+
+func kartDynamicsConfigFromNormalizedControllerConfig(config KartControllerConfig) KartDynamicsConfig {
 	return KartDynamicsConfig{Vehicle: config.Vehicle, Model: DefaultKartVehicleModel(), OffroadSpeedScale: config.OffroadSpeedScale, OffroadEngineScale: config.OffroadEngineScale, MinTurboCharge: config.MinTurboCharge, SuperTurboCharge: config.SuperTurboCharge, MaxDriftCharge: config.MaxDriftCharge, DriftChargeRate: config.DriftChargeRate, MiniTurboDuration: config.MiniTurboDuration, SuperTurboDuration: config.SuperTurboDuration, BoostDuration: config.BoostDuration}
 }
 
@@ -449,6 +482,10 @@ func ApplySurfaceMaterialToVehicleConfig(base VehicleConfig, surface SurfaceMate
 	cfg := normalizeVehicleConfig(base)
 	surface = NormalizeSurfaceMaterial(surface)
 	dynamics = NormalizeKartDynamicsConfig(dynamics)
+	return applySurfaceMaterialToNormalizedVehicleConfig(cfg, surface, dynamics)
+}
+
+func applySurfaceMaterialToNormalizedVehicleConfig(cfg VehicleConfig, surface SurfaceMaterial, dynamics KartDynamicsConfig) VehicleConfig {
 	if len(cfg.Wheels) > 0 {
 		wheels := make([]VehicleWheelConfig, len(cfg.Wheels))
 		for i := range cfg.Wheels {
@@ -471,4 +508,13 @@ func ApplySurfaceMaterialToVehicleConfig(base VehicleConfig, surface SurfaceMate
 		cfg.Wheels[i].SideFrictionStiffness *= surface.GripScale
 	}
 	return cfg
+}
+
+func cloneKartDynamicsConfig(config KartDynamicsConfig) KartDynamicsConfig {
+	out := config
+	out.Vehicle = cloneVehicleConfig(config.Vehicle)
+	if len(config.Model.Wheels) > 0 {
+		out.Model.Wheels = append([]KartWheelModel{}, config.Model.Wheels...)
+	}
+	return out
 }

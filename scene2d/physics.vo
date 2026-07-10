@@ -86,6 +86,13 @@ type RayCastHit struct {
 	Distance float64
 }
 
+type PhysicsBackendPacketError struct {
+	Source string
+	Reason string
+	ExpectedBytes int
+	ActualBytes int
+}
+
 // Physics command opcodes (must match Rust physics.rs).
 const (
 	physicsCmdForce   byte = 1
@@ -103,24 +110,35 @@ func (s *Scene) writePhysCmd(cmd byte, bodyID int, v1, v2 float64) {
 	s.physCmds.WriteF64(v2)
 }
 
+func (e *Entity) requirePhysicsBody(operation string) (*Scene, int) {
+	if e == nil || e.scene == nil || !e.Active || e.Physics == nil || e.Physics.bodyID == 0 {
+		panic("scene2d.Entity." + operation + ": entity must be an active physics body")
+	}
+	return e.scene, e.Physics.bodyID
+}
+
 // ApplyForce applies a force to a physics entity (buffered until next step).
 func (e *Entity) ApplyForce(fx, fy float64) {
-	e.scene.writePhysCmd(physicsCmdForce, e.Physics.bodyID, fx, fy)
+	scene, bodyID := e.requirePhysicsBody("ApplyForce")
+	scene.writePhysCmd(physicsCmdForce, bodyID, fx, fy)
 }
 
 // ApplyImpulse applies an impulse to a physics entity (buffered until next step).
 func (e *Entity) ApplyImpulse(ix, iy float64) {
-	e.scene.writePhysCmd(physicsCmdImpulse, e.Physics.bodyID, ix, iy)
+	scene, bodyID := e.requirePhysicsBody("ApplyImpulse")
+	scene.writePhysCmd(physicsCmdImpulse, bodyID, ix, iy)
 }
 
 // SetVelocity sets the linear velocity of a physics entity (buffered until next step).
 func (e *Entity) SetVelocity(vx, vy float64) {
-	e.scene.writePhysCmd(physicsCmdSetVel, e.Physics.bodyID, vx, vy)
+	scene, bodyID := e.requirePhysicsBody("SetVelocity")
+	scene.writePhysCmd(physicsCmdSetVel, bodyID, vx, vy)
 }
 
 // Velocity returns the current linear velocity (updated after each physics step).
 // Panics if the entity has no Physics component.
 func (e *Entity) Velocity() voplay.Vec2 {
+	e.requirePhysicsBody("Velocity")
 	return e.Physics.velocity
 }
 
@@ -199,14 +217,7 @@ func (defaultPhysicsBackend) QueryRect(worldID int, minX, minY, maxX, maxY float
 	return physicsQueryRect(worldID, minX, minY, maxX, maxY)
 }
 
-var physBackend PhysicsBackend = defaultPhysicsBackend{}
-
-// SetPhysicsBackend replaces the active physics backend and returns the previous one.
-func SetPhysicsBackend(b PhysicsBackend) PhysicsBackend {
-	prev := physBackend
-	physBackend = b
-	return prev
-}
+var defaultPhysicsBackendInstance PhysicsBackend = defaultPhysicsBackend{}
 
 // --- Physics extern declarations (implemented in Rust) ---
 

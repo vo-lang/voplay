@@ -1,4 +1,3 @@
-use super::material_binder::MaterialBinder;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -142,9 +141,6 @@ impl Pipeline3D {
             skips: mesh_submit_profile.skips,
             ..MeshDrawStats::default()
         };
-        let skinned_slot_hint = super::skinned_submitter::SkinnedSubmitter::prepare(draws, models);
-        let terrain_slot_hint = super::terrain_submitter::TerrainSubmitter::prepare(draws, models);
-
         let aligned_model_stride = Self::align_up(
             std::mem::size_of::<ModelUniform>() as u32,
             self.model_buffer_alignment,
@@ -219,8 +215,8 @@ impl Pipeline3D {
             }
         }
 
-        self.ensure_model_capacity(device, static_slot.max(terrain_slot_hint));
-        self.ensure_skinned_capacity(device, skinned_slot.max(skinned_slot_hint));
+        self.ensure_model_capacity(device, static_slot);
+        self.ensure_skinned_capacity(device, skinned_slot);
 
         let mut instance_data = Vec::with_capacity(mesh_submit_profile.instance_count as usize);
         let mut instance_batch_draws = Vec::with_capacity(instance_batches.len());
@@ -407,11 +403,7 @@ impl Pipeline3D {
                         continue;
                     }
                     let dyn_offset = skinned_slot * aligned_skinned_stride;
-                    MaterialBinder::bind_model_group(
-                        pass,
-                        &self.skinned_model_bind_group,
-                        dyn_offset,
-                    );
+                    pass.set_bind_group(1, &self.skinned_model_bind_group, &[dyn_offset]);
                     skinned_slot += 1;
 
                     let texture_key =
@@ -436,7 +428,7 @@ impl Pipeline3D {
                         continue;
                     }
                     let dyn_offset = static_slot * aligned_model_stride;
-                    MaterialBinder::bind_model_group(pass, &self.model_bind_group, dyn_offset);
+                    pass.set_bind_group(1, &self.model_bind_group, &[dyn_offset]);
                     static_slot += 1;
 
                     if let Some(control_id) = mesh.material.control_texture_id {
@@ -491,7 +483,7 @@ impl Pipeline3D {
             return stats;
         }
 
-        MaterialBinder::bind_model_group(pass, &self.model_bind_group, 0);
+        pass.set_bind_group(1, &self.model_bind_group, &[0]);
         let instance_stride = std::mem::size_of::<InstanceData>() as u64;
 
         for batch in &instance_batch_draws {

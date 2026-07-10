@@ -1,4 +1,3 @@
-use super::shader_library::ShaderLibrary;
 use super::*;
 
 impl Pipeline3D {
@@ -12,15 +11,15 @@ impl Pipeline3D {
     ) -> Self {
         let static_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh"),
-            source: wgpu::ShaderSource::Wgsl(ShaderLibrary::load_static_mesh_source().into()),
+            source: wgpu::ShaderSource::Wgsl(STATIC_MESH_SHADER.into()),
         });
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh_terrain"),
-            source: wgpu::ShaderSource::Wgsl(ShaderLibrary::load_terrain_mesh_source().into()),
+            source: wgpu::ShaderSource::Wgsl(TERRAIN_MESH_SHADER.into()),
         });
         let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh_skinned"),
-            source: wgpu::ShaderSource::Wgsl(ShaderLibrary::load_skinned_mesh_source().into()),
+            source: wgpu::ShaderSource::Wgsl(SKINNED_MESH_SHADER.into()),
         });
 
         // Group 0: Camera

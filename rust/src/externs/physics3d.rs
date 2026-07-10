@@ -513,10 +513,16 @@ pub fn physics3d_step(call: &mut ExternCallContext) -> ExternResult {
     let cmds_owned = cmds.to_vec();
 
     let state = crate::physics3d::with_world(world_id, |world| {
-        world.apply_commands(&cmds_owned);
+        if let Err(error) = world.apply_commands(&cmds_owned) {
+            return Err(error);
+        }
         world.step(dt);
-        world.serialize_state()
+        Ok(world.serialize_state())
     });
+    let state = match state {
+        Ok(state) => state,
+        Err(error) => return ExternResult::Panic(error.to_string()),
+    };
 
     ret_bytes(call, 0, &state);
     ExternResult::Ok

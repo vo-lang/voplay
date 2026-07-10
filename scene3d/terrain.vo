@@ -201,10 +201,10 @@ func (t *Terrain) HeightAt(x, z float64) (float64, bool) {
 	if t == nil || t.entity == nil || t.entity.scene == nil || t.entity.Physics == nil {
 		return 0, false
 	}
-	if t.entity.scene.worldID == 0 || t.entity.Physics.bodyID == 0 {
+	if t.entity.scene.physicsWorld.id == 0 || t.entity.Physics.bodyID == 0 {
 		return 0, false
 	}
-	return terrBackend.HeightAt(t.entity.scene.worldID, t.entity.Physics.bodyID, x, z)
+	return terrBackend.HeightAt(t.entity.scene.physicsWorld.id, t.entity.Physics.bodyID, x, z)
 }
 
 func spawnTerrain(scene *Scene, desc TerrainDesc, physics *Physics, modelID, rows, cols int, heightData []byte) (*Terrain, error) {
@@ -214,7 +214,8 @@ func spawnTerrain(scene *Scene, desc TerrainDesc, physics *Physics, modelID, row
 	}
 	heightData = append([]byte{}, heightData...)
 	physics.Heightfield = &Heightfield{heightData: heightData, rows: rows, cols: cols, scale: voplay.Vec3{desc.Width, desc.Height, desc.Depth}}
-	ent := scene.Spawn(EntityDesc{Position: desc.Position, Model: voplay.ModelID(modelID), OwnedModel: voplay.ModelID(modelID), Tint: desc.Tint, TintSet: desc.TintSet, Tag: desc.Tag, Data: desc.Data, Physics: physics, CullDistance: desc.CullDistance, CullRadius: terrainCullRadius(desc), FrustumCull: desc.FrustumCull})
+	model := voplay.ModelID(modelID)
+	ent := scene.Spawn(EntityDesc{Position: desc.Position, Model: model, ModelLease: voplay.NewModelLease(model), Tint: desc.Tint, TintSet: desc.TintSet, Tag: desc.Tag, Data: desc.Data, Physics: physics, CullDistance: desc.CullDistance, CullRadius: terrainCullRadius(desc), FrustumCull: desc.FrustumCull})
 	return &Terrain{entity: ent, rows: rows, cols: cols, heightData: heightData, source: source}, nil
 }
 

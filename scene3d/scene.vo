@@ -705,6 +705,8 @@ func (s *Scene) recordPhysicsBackendCommandEvent(event PhysicsBackendCommandEven
 	if s == nil {
 		return
 	}
+	// Command sequences are one-based and contiguous with the retained slice.
+	// This invariant makes a consumed sequence the next unread slice index.
 	s.nextPhysicsCommandSequence++
 	event.Sequence = s.nextPhysicsCommandSequence
 	event.WorldID = s.worldID
@@ -720,10 +722,16 @@ func (s *Scene) PhysicsBackendCommandEventsAfter(sequence int) []PhysicsBackendC
 	if s == nil {
 		return out
 	}
-	for _, event := range s.physicsCommandEvents {
-		if event.Sequence <= sequence {
-			continue
-		}
+	// recordPhysicsBackendCommandEvent assigns one sequence for every append,
+	// so the cursor maps directly to the first unread element.
+	start := sequence
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(s.physicsCommandEvents) {
+		return out
+	}
+	for _, event := range s.physicsCommandEvents[start:] {
 		copy := event
 		copy.Force.Wheels = append([]PhysicsBackendWheelCommand{}, event.Force.Wheels...)
 		out = append(out, copy)

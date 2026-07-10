@@ -3032,6 +3032,8 @@ func testScene3DVehicleTelemetryAndKartController() {
 	incrementalCommands := s.PhysicsBackendCommandEventsAfter(lastCommandSequence - 1)
 	assert(len(incrementalCommands) == 1 && incrementalCommands[0].Sequence == lastCommandSequence, "scene3d backend command event cursor returns only the incremental suffix")
 	assert(len(s.PhysicsBackendCommandEventsAfter(lastCommandSequence)) == 0, "scene3d backend command event cursor returns empty at the current sequence")
+	assert(len(s.PhysicsBackendCommandEventsAfter(lastCommandSequence + 1000)) == 0, "scene3d backend command event cursor rejects a future sequence without scanning history")
+	assert(len(s.PhysicsBackendCommandEventsAfter(-1)) == len(commandEvents), "scene3d backend command event cursor clamps a negative sequence to the full retained history")
 	assert(len(pb.vehicleControls) > 0, "scene3d vehicle sends wheel controls")
 	assert(pb.vehicleControls[0].steering < 0, "scene3d right steer uses backend sign convention")
 	state, ok := vehicle.WheelState(0)

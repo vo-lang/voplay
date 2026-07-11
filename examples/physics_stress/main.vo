@@ -745,7 +745,7 @@ func RunPhysicsReplayVerifierProcess(suite ReplaySuite) bool {
 	if root == "" || entry == "" {
 		return false
 	}
-	cmd := exec.Command("./d.py", []string{"run", entry})
+	cmd := exec.Command("./d.py", []string{"run", entry, "--mode=jit", "--release"})
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "VOPLAY_PHYSICS_REPLAY_VERIFY=1", "VOPLAY_PHYSICS_REPLAY_TRACE=" + path)
 	out, err := cmd.CombinedOutput()

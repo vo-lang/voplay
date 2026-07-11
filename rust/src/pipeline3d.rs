@@ -19,9 +19,10 @@ use std::collections::HashMap;
 
 mod decal_submitter;
 mod mesh_submitter;
-pub(crate) use mesh_submitter::MeshDrawStats;
+pub(crate) use mesh_submitter::{MeshDrawStats, MeshSubmitter};
 mod pipeline_cache;
 mod pipeline_factory;
+use pipeline_factory::PipelineFactory;
 
 pub(crate) use decal_submitter::{DecalSubmitPlan, DecalSubmitter};
 
@@ -374,4 +375,24 @@ pub struct Pipeline3D {
     white_texture_view: wgpu::TextureView,
     main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup>,
     terrain_texture_bind_groups: HashMap<TerrainTextureKey, TerrainBindGroupEntry>,
+}
+
+impl Pipeline3D {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        receiver_mask_format: wgpu::TextureFormat,
+        surface_props_format: wgpu::TextureFormat,
+        sample_count: u32,
+    ) -> Self {
+        PipelineFactory::create(
+            device,
+            queue,
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            sample_count,
+        )
+    }
 }

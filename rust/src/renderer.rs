@@ -12,7 +12,8 @@ use crate::model_loader::{
 };
 use crate::pipeline2d::{CameraUniform, Pipeline2D};
 use crate::pipeline3d::{
-    Camera3DUniform, LightData, LightUniform, MeshDrawStats, ModelDraw, ModelUniform, Pipeline3D,
+    Camera3DUniform, LightData, LightUniform, MeshDrawStats, MeshSubmitter, ModelDraw,
+    ModelUniform, Pipeline3D,
 };
 use crate::pipeline_depth::PipelineDepth;
 use crate::pipeline_post::{

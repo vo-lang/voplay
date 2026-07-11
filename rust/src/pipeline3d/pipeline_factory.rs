@@ -1,14 +1,16 @@
 use super::*;
 
-impl Pipeline3D {
-    pub fn new(
+pub(crate) struct PipelineFactory;
+
+impl PipelineFactory {
+    pub(crate) fn create(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         receiver_mask_format: wgpu::TextureFormat,
         surface_props_format: wgpu::TextureFormat,
         sample_count: u32,
-    ) -> Self {
+    ) -> Pipeline3D {
         let static_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("voplay_mesh"),
             source: wgpu::ShaderSource::Wgsl(STATIC_MESH_SHADER.into()),
@@ -583,7 +585,7 @@ impl Pipeline3D {
         });
 
         let model_buffer_slot_count: u32 = 256;
-        let aligned_model_size = Self::align_up(
+        let aligned_model_size = Pipeline3D::align_up(
             std::mem::size_of::<ModelUniform>() as u32,
             model_buffer_alignment,
         );
@@ -593,7 +595,7 @@ impl Pipeline3D {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let model_bind_group = Self::create_model_bind_group(
+        let model_bind_group = Pipeline3D::create_model_bind_group(
             device,
             &model_bgl,
             &model_buffer,
@@ -602,7 +604,7 @@ impl Pipeline3D {
         );
 
         let skinned_model_buffer_slot_count: u32 = 32;
-        let aligned_skinned_size = Self::align_up(
+        let aligned_skinned_size = Pipeline3D::align_up(
             std::mem::size_of::<SkinnedModelUniform>() as u32,
             model_buffer_alignment,
         );
@@ -612,7 +614,7 @@ impl Pipeline3D {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let skinned_model_bind_group = Self::create_model_bind_group(
+        let skinned_model_bind_group = Pipeline3D::create_model_bind_group(
             device,
             &model_bgl,
             &skinned_model_buffer,
@@ -645,7 +647,7 @@ impl Pipeline3D {
 
         let material_samplers = MATERIAL_SAMPLER_KEYS
             .iter()
-            .map(|key| Self::create_material_sampler(device, *key))
+            .map(|key| Pipeline3D::create_material_sampler(device, *key))
             .collect();
         let material_clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("voplay_material_sampler_clamp"),
@@ -695,7 +697,7 @@ impl Pipeline3D {
             },
         );
         let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        Self {
+        Pipeline3D {
             pipeline_textured,
             pipeline_untextured,
             pipeline_instanced_textured,

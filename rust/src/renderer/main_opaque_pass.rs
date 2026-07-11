@@ -206,7 +206,8 @@ impl MainOpaquePassExecutor {
                 ctx.mesh_pipeline
                     .set_camera_and_lights(ctx.queue, cam3d, ctx.light_uniform);
                 let shadow_view = ctx.shadow_pipeline.shadow_texture_view();
-                mesh_stats = ctx.mesh_pipeline.draw_models(
+                mesh_stats = MeshSubmitter::submit(
+                    ctx.mesh_pipeline,
                     ctx.device,
                     ctx.queue,
                     &mut render_pass,

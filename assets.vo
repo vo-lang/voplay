@@ -65,6 +65,7 @@ type cubemapStore struct {
 // can share one asset; the asset is freed after its last scope closes.
 type Assets struct {
 	mounts     *vopack.MountSet
+	mountIdentities []assetMountIdentity
 	scopeNames map[string]bool
 	textures   *assetStore
 	linearTextures *assetStore
@@ -72,6 +73,11 @@ type Assets struct {
 	fonts      *assetStore
 	models     *assetStore
 	audio      *assetStore
+}
+
+type assetMountIdentity struct {
+	path string
+	priority int
 }
 
 // AssetScope is an explicit resource lease for one loading phase. Close releases
@@ -232,10 +238,17 @@ func validateAssetLoaders(loaders AssetLoaders) {
 // Mount opens a .vpak archive and registers it at the given priority.
 // Higher priority archives are searched first when loading assets by path.
 func (a *Assets) Mount(path string, priority int) error {
+	for _, identity := range a.mountIdentities {
+		if identity.path == path && identity.priority == priority {
+			return nil
+		}
+	}
 	if a.mounts == nil {
 		a.mounts = vopack.NewMountSet()
 	}
-	return a.mounts.Mount(path, priority)
+	a.mounts.Mount(path, priority)?
+	a.mountIdentities = append(a.mountIdentities, assetMountIdentity{path: path, priority: priority})
+	return nil
 }
 
 // Unmount removes and closes the archive at the given path.
@@ -243,7 +256,17 @@ func (a *Assets) Unmount(path string) error {
 	if a.mounts == nil {
 		return os.ErrNotExist
 	}
-	return a.mounts.Unmount(path)
+	a.mounts.Unmount(path)?
+	removeIndex := -1
+	for i, identity := range a.mountIdentities {
+		if identity.path == path && (removeIndex < 0 || identity.priority > a.mountIdentities[removeIndex].priority) {
+			removeIndex = i
+		}
+	}
+	if removeIndex >= 0 {
+		a.mountIdentities = append(a.mountIdentities[:removeIndex], a.mountIdentities[removeIndex+1:]...)
+	}
+	return nil
 }
 
 // OpenScope creates an explicit asset lifetime passed to every load operation.
@@ -372,12 +395,8 @@ func (a *Assets) Report() AssetReport {
 	if a == nil {
 		return AssetReport{}
 	}
-	mountCount := 0
-	if a.mounts != nil {
-		mountCount = a.mounts.Count()
-	}
 	return AssetReport{
-		MountCount: mountCount,
+		MountCount: len(a.mountIdentities),
 		ScopeCount: len(a.scopeNames),
 		TextureCount: assetStoreEntryCount(a.textures),
 		LinearTextureCount: assetStoreEntryCount(a.linearTextures),
@@ -436,6 +455,7 @@ func (a *Assets) Close() error {
 	}
 	err := a.mounts.Close()
 	a.mounts = nil
+	a.mountIdentities = nil
 	return err
 }
 

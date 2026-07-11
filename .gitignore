@@ -7,4 +7,5 @@
 !web-artifacts/*.wasm
 js/node_modules/
 **/.vo-cache/
+**/.volang/
 .codex-release-stage/

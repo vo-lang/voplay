@@ -997,6 +997,19 @@ func testAssets() {
 	assert(err == nil, "assets model bytes load")
 	transient.Close()
 	assert(stats.modelFrees == 1, "release all frees remaining model")
+	packDir, err := os.MkdirTemp("", "voplay-assets-pack-")
+	assert(err == nil, "assets mount temp dir")
+	defer os.RemoveAll(packDir)
+	packPath := filepath.Join([]string{packDir, "assets.vpak"})
+	writeTestMapPack(packPath)
+	err = assets.Mount(packPath, 0)
+	assert(err == nil, "assets mount succeeds")
+	err = assets.Mount(packPath, 0)
+	assert(err == nil, "assets duplicate mount is idempotent")
+	assert(assets.Report().MountCount == 1, "assets report owns one mount identity")
+	err = assets.Unmount(packPath)
+	assert(err == nil, "assets unmount succeeds")
+	assert(assets.Report().MountCount == 0, "assets report clears unmounted identity")
 }
 
 func testScene2DCamera() {

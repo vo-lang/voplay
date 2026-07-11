@@ -21,13 +21,13 @@ permissions:
   contents: write
 
 env:
-  VOLANG_REF: 493852359ec920eadb2d0fdb56950319f0da78d2
+  VOLANG_REF: ffb280bb6d32188495cdc73aab7a04367d589576
+  VOGUI_REF: 0be8cd1b8abab4aabd510b6e2b9f74510f27f837
+  VOPACK_REF: d2063001e66405ad800bdabe0c7e7ff6343149de
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-    env:
-      VOWORK: off
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -46,8 +46,25 @@ jobs:
           ref: ${{ env.VOLANG_REF }}
           path: volang
 
+      - name: Checkout vogui source dependency
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: vo-lang/vogui
+          ref: ${{ env.VOGUI_REF }}
+          path: dependency-vogui
+
+      - name: Checkout vopack release source
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: vo-lang/vopack
+          ref: ${{ env.VOPACK_REF }}
+          path: dependency-vopack
+
       - name: Mirror local volang layout
-        run: ln -sfn "$GITHUB_WORKSPACE/volang" "$GITHUB_WORKSPACE/../volang"
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/volang" "$GITHUB_WORKSPACE/../volang"
+          ln -sfn "$GITHUB_WORKSPACE/dependency-vogui" "$GITHUB_WORKSPACE/../vogui"
+          ln -sfn "$GITHUB_WORKSPACE/dependency-vopack" "$GITHUB_WORKSPACE/../vopack"
 
       - name: Build vo
         run: cargo build --manifest-path volang/cmd/vo/Cargo.toml --release
@@ -56,6 +73,8 @@ jobs:
         run: echo "$GITHUB_WORKSPACE/volang/target/release" >> "$GITHUB_PATH"
 
       - name: Verify release state
+        env:
+          VOWORK: off
         run: vo release verify .
 
       - name: Check module

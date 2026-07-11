@@ -1001,15 +1001,15 @@ export class RenderIsland {
   private shouldScheduleDisplayPulseTimer(visible: boolean): boolean {
     if (!visible) return true;
     if (this.displayPulseMode === "timer") return true;
-    // Visible hybrid cadence treats rAF as the sole display clock. Hidden pages
-    // and explicit timer mode keep timer fallback; visible timer cadence remains
-    // opt-in through pulse-mode=timer.
-    return false;
+    return this.displayPulseMode === "hybrid";
   }
 
   private displayPulseFallbackDelayMs(nowMs: number): number {
     if (document.visibilityState !== "visible") return DISPLAY_PULSE_LOST_RAF_FALLBACK_MS;
     if (this.displayPulseMode === "timer") {
+      return this.displayPulseCadenceDelayMs(nowMs);
+    }
+    if (this.displayPulseMode === "hybrid" && this.displayPulseTimerCadence) {
       return this.displayPulseCadenceDelayMs(nowMs);
     }
     return DISPLAY_PULSE_VISIBLE_BACKUP_MS;

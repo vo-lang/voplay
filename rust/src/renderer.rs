@@ -58,6 +58,7 @@ mod frame_submit;
 mod frame_surface;
 mod frame_transaction;
 mod frame_transaction_builder;
+mod frame_transaction_overlay;
 mod frame_workload_plan;
 mod main_opaque_pass;
 mod main_transparent_pass;

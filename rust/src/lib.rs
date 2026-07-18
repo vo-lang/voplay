@@ -93,22 +93,42 @@ pub use host_api::{
 
 #[cfg(feature = "wasm-island")]
 mod island_bindgen;
+#[cfg(test)]
+mod island_bindgen_contract;
 
-#[cfg(any(feature = "native", feature = "wasm"))]
+// The browser island is a complete extension artifact, so it owns the single
+// protocol identity consumed from WebAssembly.Instance.exports by Studio.
+// Keep this at the artifact root: dependency extension crates must not emit a
+// second protocol symbol into the same module.
+#[cfg(all(feature = "wasm-island", target_arch = "wasm32"))]
+vo_ext::export_wasm_extension_protocol!();
+
+#[cfg(all(test, feature = "wasm-island", target_arch = "wasm32"))]
+mod wasm_protocol_contract {
+    #[test]
+    fn browser_artifact_exports_protocol_v3() {
+        assert_eq!(
+            super::vo_ext_protocol_version(),
+            vo_ext::WASM_EXTENSION_PROTOCOL_VERSION,
+        );
+        assert_eq!(super::vo_ext_protocol_version(), 3);
+    }
+}
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use vo_runtime::bytecode::ExternDef;
-#[cfg(any(feature = "native", feature = "wasm"))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use vo_runtime::ffi::ExternRegistry;
 
-#[cfg(any(feature = "native", feature = "wasm"))]
+/// Register this extension's statically linked browser providers.
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub fn register_externs(registry: &mut ExternRegistry, externs: &[ExternDef]) {
     externs::vo_ext_register(registry, externs);
 }
 
-#[cfg(any(feature = "native", feature = "wasm"))]
-/// Force link this crate's FFI functions (including vogui's).
-#[cfg(not(target_arch = "wasm32"))]
+/// Force link the process-local native catalogs for voplay and vogui.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub fn ensure_linked() {
-    let _ = std::hint::black_box(register_externs as fn(&mut ExternRegistry, &[ExternDef]));
-    #[cfg(feature = "native")]
+    let _ = std::hint::black_box(externs::vo_ext_get_entries());
     vo_vogui::ensure_linked();
 }

@@ -8,6 +8,7 @@ use vo_runtime::builtins::error_helper::{write_error_to, write_nil_error};
 use crate::file_io;
 use crate::font_manager::FontManager;
 use crate::model_loader::{LevelNode, LevelNodeKind, ModelGeometryData, TerrainMaterialTuning};
+use crate::renderer::{TerrainCreateOptions, TerrainSplatMaterialOptions, TerrainSplatOptions};
 
 use super::util::{
     ret_bytes, with_renderer_or_panic, with_renderer_result, write_bytes_result,
@@ -17,7 +18,7 @@ use super::with_renderer;
 
 static HEADLESS_FONT_MANAGER: OnceLock<Result<Mutex<FontManager>, String>> = OnceLock::new();
 
-#[allow(dead_code)] // owner: voplay/wasm-ffi; expiry: 2026-07-12; used by island bindings outside scoped Rust suites.
+#[cfg(feature = "wasm-island")]
 pub(crate) fn with_headless_font_manager_pub<R>(
     f: impl FnOnce(&mut FontManager) -> R,
 ) -> Result<R, String> {
@@ -335,7 +336,7 @@ fn terrain_heights_to_bytes(heights: &[f32]) -> Vec<u8> {
     bytes
 }
 
-#[allow(dead_code)] // owner: voplay/wasm-ffi; expiry: 2026-07-12; used by island bindings outside scoped Rust suites.
+#[cfg(any(feature = "wasm-island", test))]
 pub(crate) fn encode_terrain_result_bytes(
     result: Result<crate::terrain::TerrainData, String>,
 ) -> Vec<u8> {
@@ -369,10 +370,13 @@ pub(crate) fn encode_terrain_result_bytes(
             out.push(TAG_BYTES);
             out.extend_from_slice(&0u32.to_le_bytes());
             let bytes = msg.as_bytes();
-            let len = bytes.len().min(65535) as u16;
+            let mut len = bytes.len().min(u16::MAX as usize);
+            while !msg.is_char_boundary(len) {
+                len -= 1;
+            }
             out.push(TAG_ERROR_STR);
-            out.extend_from_slice(&len.to_le_bytes());
-            out.extend_from_slice(&bytes[..len as usize]);
+            out.extend_from_slice(&(len as u16).to_le_bytes());
+            out.extend_from_slice(&bytes[..len]);
         }
     }
     out
@@ -563,16 +567,16 @@ pub fn create_terrain(call: &mut ExternCallContext) -> ExternResult {
             with_renderer_result(|r| {
                 r.create_terrain(
                     &data,
-                    scale_x,
-                    scale_y,
-                    scale_z,
-                    uv_scale,
-                    texture_id,
-                    normal_texture_id,
-                    metallic_roughness_texture_id,
-                    normal_scale,
-                    roughness,
-                    metallic,
+                    TerrainCreateOptions {
+                        scale: [scale_x, scale_y, scale_z],
+                        uv_scale,
+                        texture_id,
+                        normal_texture_id,
+                        metallic_roughness_texture_id,
+                        normal_scale,
+                        roughness,
+                        metallic,
+                    },
                 )
             })
         });
@@ -603,16 +607,18 @@ pub fn create_terrain_splat(call: &mut ExternCallContext) -> ExternResult {
                     with_renderer_result(|r| {
                         r.create_terrain_splat(
                             &data,
-                            scale_x,
-                            scale_y,
-                            scale_z,
-                            control_texture_id,
-                            layer_texture_ids,
-                            layer_normal_texture_ids,
-                            layer_metallic_roughness_texture_ids,
-                            uv_scales,
-                            normal_scales,
-                            terrain_tuning,
+                            TerrainSplatOptions {
+                                scale: [scale_x, scale_y, scale_z],
+                                material: TerrainSplatMaterialOptions {
+                                    control_texture_id,
+                                    layer_texture_ids,
+                                    layer_normal_texture_ids,
+                                    layer_metallic_roughness_texture_ids,
+                                    uv_scales,
+                                    layer_normal_scales: normal_scales,
+                                    terrain_tuning,
+                                },
+                            },
                         )
                     })
                 })
@@ -639,13 +645,15 @@ pub fn create_terrain_splat_model(call: &mut ExternCallContext) -> ExternResult 
             with_renderer_result(|r| {
                 r.create_terrain_splat_model(
                     model_id,
-                    control_texture_id,
-                    layer_texture_ids,
-                    layer_normal_texture_ids,
-                    layer_metallic_roughness_texture_ids,
-                    uv_scales,
-                    normal_scales,
-                    terrain_tuning,
+                    TerrainSplatMaterialOptions {
+                        control_texture_id,
+                        layer_texture_ids,
+                        layer_normal_texture_ids,
+                        layer_metallic_roughness_texture_ids,
+                        uv_scales,
+                        layer_normal_scales: normal_scales,
+                        terrain_tuning,
+                    },
                 )
             })
         },
@@ -679,16 +687,16 @@ pub fn create_terrain_bytes(call: &mut ExternCallContext) -> ExternResult {
     let result = with_renderer_result(|r| {
         r.create_terrain(
             &data,
-            scale_x,
-            scale_y,
-            scale_z,
-            uv_scale,
-            texture_id,
-            normal_texture_id,
-            metallic_roughness_texture_id,
-            normal_scale,
-            roughness,
-            metallic,
+            TerrainCreateOptions {
+                scale: [scale_x, scale_y, scale_z],
+                uv_scale,
+                texture_id,
+                normal_texture_id,
+                metallic_roughness_texture_id,
+                normal_scale,
+                roughness,
+                metallic,
+            },
         )
     });
     write_terrain_result(call, result);
@@ -715,16 +723,18 @@ pub fn create_terrain_bytes_splat(call: &mut ExternCallContext) -> ExternResult 
             with_renderer_result(|r| {
                 r.create_terrain_splat(
                     &data,
-                    scale_x,
-                    scale_y,
-                    scale_z,
-                    control_texture_id,
-                    layer_texture_ids,
-                    layer_normal_texture_ids,
-                    layer_metallic_roughness_texture_ids,
-                    uv_scales,
-                    normal_scales,
-                    terrain_tuning,
+                    TerrainSplatOptions {
+                        scale: [scale_x, scale_y, scale_z],
+                        material: TerrainSplatMaterialOptions {
+                            control_texture_id,
+                            layer_texture_ids,
+                            layer_normal_texture_ids,
+                            layer_metallic_roughness_texture_ids,
+                            uv_scales,
+                            layer_normal_scales: normal_scales,
+                            terrain_tuning,
+                        },
+                    },
                 )
             })
         },
@@ -840,7 +850,9 @@ pub fn create_raw_mesh(call: &mut ExternCallContext) -> ExternResult {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_terrain_splat_layer_data;
+    use super::{decode_terrain_splat_layer_data, encode_terrain_result_bytes};
+
+    const ISLAND_RESOURCE_SOURCE: &str = include_str!("../island_bindgen/resource.rs");
 
     fn push_u32(out: &mut Vec<u8>, value: u32) {
         out.extend_from_slice(&value.to_le_bytes());
@@ -886,5 +898,61 @@ mod tests {
         assert!((decoded.4[3] - 4.0).abs() < 0.0001);
         assert!((decoded.6.height_blend_strength - 0.35).abs() < 0.0001);
         assert!((decoded.6.curvature_strength - 0.45).abs() < 0.0001);
+    }
+
+    #[test]
+    fn terrain_error_truncation_preserves_utf8_boundaries() {
+        let message = format!("{}界", "a".repeat(u16::MAX as usize - 1));
+        let encoded = encode_terrain_result_bytes(Err(message));
+
+        const ERROR_TAG_OFFSET: usize = 3 * (1 + 8) + 1 + 4;
+        assert_eq!(encoded[ERROR_TAG_OFFSET], 0xE1);
+        let encoded_len =
+            u16::from_le_bytes([encoded[ERROR_TAG_OFFSET + 1], encoded[ERROR_TAG_OFFSET + 2]])
+                as usize;
+        let payload = &encoded[ERROR_TAG_OFFSET + 3..];
+
+        assert_eq!(encoded_len, u16::MAX as usize - 1);
+        assert_eq!(payload.len(), encoded_len);
+        assert!(std::str::from_utf8(payload).is_ok());
+        assert!(payload.iter().all(|byte| *byte == b'a'));
+    }
+
+    #[test]
+    fn all_four_island_terrain_result_wrappers_share_the_encoder() {
+        let wrappers = [
+            "scene3d_create_terrain",
+            "scene3d_create_terrain_splat",
+            "scene3d_create_terrain_bytes",
+            "scene3d_create_terrain_bytes_splat",
+        ];
+
+        for (index, wrapper) in wrappers.iter().enumerate() {
+            let start_marker = format!("pub fn {wrapper}(");
+            let start = ISLAND_RESOURCE_SOURCE
+                .find(&start_marker)
+                .unwrap_or_else(|| panic!("missing island terrain wrapper {wrapper}"));
+            let end = wrappers
+                .get(index + 1)
+                .and_then(|next| {
+                    ISLAND_RESOURCE_SOURCE[start..]
+                        .find(&format!("pub fn {next}("))
+                        .map(|offset| start + offset)
+                })
+                .unwrap_or(ISLAND_RESOURCE_SOURCE.len());
+            let body = &ISLAND_RESOURCE_SOURCE[start..end];
+            assert_eq!(
+                body.matches("encode_terrain_result_bytes(result)").count(),
+                1,
+                "island terrain wrapper {wrapper} must use the shared encoder exactly once",
+            );
+        }
+
+        assert_eq!(
+            ISLAND_RESOURCE_SOURCE
+                .matches("encode_terrain_result_bytes(result)")
+                .count(),
+            wrappers.len(),
+        );
     }
 }

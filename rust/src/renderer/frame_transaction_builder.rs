@@ -503,8 +503,10 @@ impl<'a> FrameTransactionBuilder<'a> {
                             length,
                             depth,
                             color,
-                            uv_rect,
-                            atlas_slot,
+                            PostDecalAtlasRegion {
+                                uv_rect,
+                                atlas_slot,
+                            },
                         )
                         .with_distance_fade(
                             current_projected_decal_fade[0],

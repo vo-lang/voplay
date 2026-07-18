@@ -23,50 +23,72 @@ pub struct PostUniform {
     params10: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PostUniformSettings {
+    pub bloom_threshold: f32,
+    pub bloom_strength: f32,
+    pub sharpen_strength: f32,
+    pub fxaa_strength: f32,
+    pub contact_ao_strength: f32,
+    pub contact_ao_radius: f32,
+    pub contact_ao_depth_scale: f32,
+    pub contact_ao_detail_strength: f32,
+    pub contact_ao_detail_radius: f32,
+    pub contact_ao_normal_bias: f32,
+    pub contact_ao_quality: u32,
+}
+
+impl Default for PostUniformSettings {
+    fn default() -> Self {
+        Self {
+            bloom_threshold: 0.74,
+            bloom_strength: 0.105,
+            sharpen_strength: 0.055,
+            fxaa_strength: 0.82,
+            contact_ao_strength: 0.0,
+            contact_ao_radius: 2.5,
+            contact_ao_depth_scale: 70.0,
+            contact_ao_detail_strength: 0.18,
+            contact_ao_detail_radius: 0.95,
+            contact_ao_normal_bias: 0.015,
+            contact_ao_quality: 2,
+        }
+    }
+}
+
 impl PostUniform {
     pub fn for_size(width: u32, height: u32) -> Self {
-        Self::from_settings(
-            width, height, 0.74, 0.105, 0.055, 0.82, 0.0, 2.5, 70.0, 0.18, 0.95, 0.015, 2,
-        )
+        Self::from_settings(width, height, PostUniformSettings::default())
     }
 
-    pub fn from_settings(
-        width: u32,
-        height: u32,
-        bloom_threshold: f32,
-        bloom_strength: f32,
-        sharpen_strength: f32,
-        fxaa_strength: f32,
-        contact_ao_strength: f32,
-        contact_ao_radius: f32,
-        contact_ao_depth_scale: f32,
-        contact_ao_detail_strength: f32,
-        contact_ao_detail_radius: f32,
-        contact_ao_normal_bias: f32,
-        contact_ao_quality: u32,
-    ) -> Self {
+    pub fn from_settings(width: u32, height: u32, settings: PostUniformSettings) -> Self {
         let width = width.max(1) as f32;
         let height = height.max(1) as f32;
         Self {
             // texel_size.xy, bloom threshold, bloom strength
-            params0: [1.0 / width, 1.0 / height, bloom_threshold, bloom_strength],
+            params0: [
+                1.0 / width,
+                1.0 / height,
+                settings.bloom_threshold,
+                settings.bloom_strength,
+            ],
             // sharpen strength, FXAA strength, reserved, reserved
-            params1: [sharpen_strength, fxaa_strength, 0.0, 0.0],
+            params1: [settings.sharpen_strength, settings.fxaa_strength, 0.0, 0.0],
             // contact AO strength, radius in pixels, depth response scale, reserved
             params2: [
-                contact_ao_strength.clamp(0.0, 1.5),
-                contact_ao_radius.clamp(0.5, 8.0),
-                contact_ao_depth_scale.clamp(1.0, 400.0),
+                settings.contact_ao_strength.clamp(0.0, 1.5),
+                settings.contact_ao_radius.clamp(0.5, 8.0),
+                settings.contact_ao_depth_scale.clamp(1.0, 400.0),
                 0.0,
             ],
             // primary presentation light direction for post decal material response.
             params3: [-0.42, 0.82, 0.32, 1.0],
             // contact AO detail strength, detail radius, normal bias, reserved.
             params4: [
-                contact_ao_detail_strength.clamp(0.0, 1.0),
-                contact_ao_detail_radius.clamp(0.35, 3.0),
-                contact_ao_normal_bias.clamp(0.0, 0.08),
-                contact_ao_quality.min(4) as f32,
+                settings.contact_ao_detail_strength.clamp(0.0, 1.0),
+                settings.contact_ao_detail_radius.clamp(0.35, 3.0),
+                settings.contact_ao_normal_bias.clamp(0.0, 0.08),
+                settings.contact_ao_quality.min(4) as f32,
             ],
             // secondary and tertiary decal light directions.
             params5: [0.0, 0.0, 0.0, 0.0],
@@ -149,6 +171,12 @@ pub struct PostDecalGpu {
     angle_params: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PostDecalAtlasRegion {
+    pub uv_rect: [f32; 4],
+    pub atlas_slot: Option<u32>,
+}
+
 impl PostDecalGpu {
     pub fn new(
         position: [f32; 3],
@@ -195,17 +223,16 @@ impl PostDecalGpu {
         length: f32,
         depth: f32,
         color: [f32; 4],
-        uv_rect: [f32; 4],
-        atlas_slot: Option<u32>,
+        atlas: PostDecalAtlasRegion,
     ) -> Self {
         let mut decal = Self::new(position, yaw, width, length, depth, color);
         decal.uv_rect = [
-            uv_rect[0].clamp(0.0, 1.0),
-            uv_rect[1].clamp(0.0, 1.0),
-            uv_rect[2].clamp(0.0, 1.0),
-            uv_rect[3].clamp(0.0, 1.0),
+            atlas.uv_rect[0].clamp(0.0, 1.0),
+            atlas.uv_rect[1].clamp(0.0, 1.0),
+            atlas.uv_rect[2].clamp(0.0, 1.0),
+            atlas.uv_rect[3].clamp(0.0, 1.0),
         ];
-        decal.atlas_params[0] = atlas_slot.map(|slot| slot as f32).unwrap_or(-1.0);
+        decal.atlas_params[0] = atlas.atlas_slot.map(|slot| slot as f32).unwrap_or(-1.0);
         decal
     }
 
@@ -639,6 +666,10 @@ impl PipelinePost {
         })
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order mirrors bindings 0..=14 in
+    // the post shader layout; expiry: remove when bind-group entries are generated from a typed
+    // post-process layout descriptor.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -730,8 +761,12 @@ impl PipelinePost {
 
 #[cfg(test)]
 mod tests {
-    use super::{PipelinePost, PostDecalUniform, PostUniform, MAX_POST_DECAL_ATLASES};
+    use super::PostUniform;
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    use super::{PipelinePost, PostDecalUniform, MAX_POST_DECAL_ATLASES};
 
+    // Adapter/device creation uses pollster plus an OS-native wgpu backend.
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
     #[test]
     fn pipeline_post_creates_with_current_shader_layout() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());

@@ -533,9 +533,6 @@ impl PrimitivePipeline {
             last_resident_chunk_rebuilds: 0,
             last_resident_rebuild_policy: ResidentRebuildPolicy::default(),
             texture_bind_groups: HashMap::new(),
-            last_main_batch_count: 0,
-            last_main_instance_count: 0,
-            last_main_triangle_count: 0,
         }
     }
 
@@ -551,21 +548,6 @@ impl PrimitivePipeline {
     ) {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
         queue.write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(lights));
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
-    pub fn last_main_batch_count(&self) -> u32 {
-        self.last_main_batch_count
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
-    pub fn last_main_instance_count(&self) -> u32 {
-        self.last_main_instance_count
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor for external perf probes.
-    pub fn last_main_triangle_count(&self) -> u32 {
-        self.last_main_triangle_count
     }
 
     pub fn append_resident_depth_draws(
@@ -618,6 +600,10 @@ impl PrimitivePipeline {
         }
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order follows the stable resident
+    // scene-stream contract from GPU upload context through chunk identity and resource stores;
+    // expiry: remove when the stream decoder emits a typed resident-chunk update context.
+    #[allow(clippy::too_many_arguments)]
     pub fn replace_chunk(
         &mut self,
         device: &wgpu::Device,
@@ -738,6 +724,10 @@ impl PrimitivePipeline {
         self.queue_resident_rebuild(chunk_ref, dirty_index as u32, 1, requires_full_rebuild);
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order matches the resident scene
+    // lifecycle contract used by replace_chunk; expiry: remove when lifecycle commands carry a
+    // typed resident-object context.
+    #[allow(clippy::too_many_arguments)]
     pub fn destroy_instance(
         &mut self,
         device: &wgpu::Device,
@@ -780,6 +770,10 @@ impl PrimitivePipeline {
             .retain(|range| range.chunk_ref.scene_id != scene_id);
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order follows the stable primitive
+    // pass contract across frame resources, scene data, target bindings, and filter; expiry:
+    // remove when the render graph owns a typed primitive-pass descriptor shared by every backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw<'a>(
         &'a mut self,
         device: &wgpu::Device,
@@ -794,9 +788,6 @@ impl PrimitivePipeline {
         filter: PrimitiveRenderFilter,
     ) -> PrimitiveDrawStats {
         let mut stats = PrimitiveDrawStats::default();
-        self.last_main_batch_count = 0;
-        self.last_main_instance_count = 0;
-        self.last_main_triangle_count = 0;
         if draws.is_empty() && chunk_refs.is_empty() {
             return stats;
         }
@@ -926,148 +917,7 @@ impl PrimitivePipeline {
                 .triangle_count
                 .saturating_add((mesh.index_count / 3).saturating_mul(batch.count));
         }
-        self.last_main_batch_count = stats.batch_count;
-        self.last_main_instance_count = stats.instance_count;
-        self.last_main_triangle_count = stats.triangle_count;
         stats
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; retained while water pass and transparent pass split settle.
-    pub fn draw_main_and_water<'a>(
-        &'a mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        pass: &mut wgpu::RenderPass<'a>,
-        draws: &[PrimitiveDraw],
-        chunk_refs: &[PrimitiveChunkRef],
-        models: &'a ModelManager,
-        textures: &'a TextureManager,
-        shadow_view: &'a wgpu::TextureView,
-        aux_targets_enabled: bool,
-    ) -> PrimitiveLayeredDrawStats {
-        self.last_main_batch_count = 0;
-        self.last_main_instance_count = 0;
-        self.last_main_triangle_count = 0;
-        if draws.is_empty() && chunk_refs.is_empty() {
-            return PrimitiveLayeredDrawStats::default();
-        }
-
-        let mut main_batches: Vec<PrimitiveBatch> = Vec::new();
-        let mut main_batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
-        let mut water_batches: Vec<PrimitiveBatch> = Vec::new();
-        let mut water_batch_index: HashMap<PrimitiveBatchKey, usize> = HashMap::new();
-        let mut main_instance_count = 0u32;
-        let mut water_instance_count = 0u32;
-        let mut main_skips = RenderSkipStats::default();
-        let mut water_skips = RenderSkipStats::default();
-
-        for draw in draws {
-            let (main_pushed, main_texture_skips) = self.push_draw_batches(
-                draw,
-                models,
-                textures,
-                &mut main_batches,
-                &mut main_batch_index,
-                PrimitiveRenderFilter::Main,
-            );
-            main_instance_count = main_instance_count.saturating_add(main_pushed);
-            main_skips.merge(main_texture_skips);
-            let (water_pushed, water_texture_skips) = self.push_draw_batches(
-                draw,
-                models,
-                textures,
-                &mut water_batches,
-                &mut water_batch_index,
-                PrimitiveRenderFilter::Water,
-            );
-            water_instance_count = water_instance_count.saturating_add(water_pushed);
-            water_skips.merge(water_texture_skips);
-        }
-        for chunk_ref in chunk_refs {
-            let Some(chunk) = self.resident_chunks.get(chunk_ref) else {
-                main_skips.missing_chunks = main_skips.missing_chunks.saturating_add(1);
-                water_skips.missing_chunks = water_skips.missing_chunks.saturating_add(1);
-                continue;
-            };
-            for instance in &chunk.instances {
-                let (main_pushed, main_texture_skips) = self.push_draw_batches(
-                    &instance.draw,
-                    models,
-                    textures,
-                    &mut main_batches,
-                    &mut main_batch_index,
-                    PrimitiveRenderFilter::Main,
-                );
-                main_instance_count = main_instance_count.saturating_add(main_pushed);
-                main_skips.merge(main_texture_skips);
-                let (water_pushed, water_texture_skips) = self.push_draw_batches(
-                    &instance.draw,
-                    models,
-                    textures,
-                    &mut water_batches,
-                    &mut water_batch_index,
-                    PrimitiveRenderFilter::Water,
-                );
-                water_instance_count = water_instance_count.saturating_add(water_pushed);
-                water_skips.merge(water_texture_skips);
-            }
-        }
-
-        let total_instance_count = main_instance_count.saturating_add(water_instance_count);
-        if total_instance_count == 0 {
-            return PrimitiveLayeredDrawStats::default();
-        }
-
-        self.ensure_instance_capacity(device, total_instance_count);
-        let mut instance_data = Vec::with_capacity(total_instance_count as usize);
-        let main_batch_draws = append_primitive_batch_draws(&mut main_batches, &mut instance_data);
-        let water_batch_draws =
-            append_primitive_batch_draws(&mut water_batches, &mut instance_data);
-        let main = PrimitiveDrawStats {
-            batch_count: main_batch_draws.len() as u32,
-            prepared_batch_count: main_batch_draws.len() as u32,
-            instance_count: main_instance_count,
-            triangle_count: primitive_batch_triangle_count(&main_batch_draws, models),
-            skips: main_skips,
-            ..PrimitiveDrawStats::default()
-        };
-        let water = PrimitiveDrawStats {
-            batch_count: water_batch_draws.len() as u32,
-            prepared_batch_count: water_batch_draws.len() as u32,
-            instance_count: water_instance_count,
-            triangle_count: primitive_batch_triangle_count(&water_batch_draws, models),
-            skips: water_skips,
-            ..PrimitiveDrawStats::default()
-        };
-        self.last_main_batch_count = main.batch_count;
-        self.last_main_instance_count = main.instance_count;
-        self.last_main_triangle_count = main.triangle_count;
-        queue.write_buffer(
-            &self.instance_buffer,
-            0,
-            bytemuck::cast_slice(&instance_data),
-        );
-
-        for batch in main_batch_draws.iter().chain(water_batch_draws.iter()) {
-            self.ensure_texture_bind_group(device, textures, batch.key.textures, shadow_view);
-        }
-
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.model_bind_group, &[0]);
-        pass.set_bind_group(2, &self.light_bind_group, &[]);
-
-        let main_start = perf_now();
-        self.draw_batch_draws(pass, &main_batch_draws, models, aux_targets_enabled);
-        let main_cpu_ms = elapsed_ms(main_start);
-        let water_start = perf_now();
-        self.draw_batch_draws(pass, &water_batch_draws, models, aux_targets_enabled);
-        let water_cpu_ms = elapsed_ms(water_start);
-        PrimitiveLayeredDrawStats {
-            main,
-            water,
-            main_cpu_ms,
-            water_cpu_ms,
-        }
     }
 
     pub fn has_water_surface(
@@ -1143,37 +993,6 @@ impl PrimitivePipeline {
             (false, PrimitiveRenderMode::Translucent, false) => {
                 &self.pipeline_untextured_translucent_color
             }
-        }
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; helper for retained combined submitter path.
-    fn draw_batch_draws<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        batch_draws: &[PrimitiveBatchDraw],
-        models: &'a ModelManager,
-        aux_targets_enabled: bool,
-    ) {
-        let instance_stride = std::mem::size_of::<PrimitiveInstanceGpu>() as u64;
-        for batch in batch_draws {
-            let Some(gpu_model) = models.get(batch.key.model_id) else {
-                continue;
-            };
-            let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
-                continue;
-            };
-            let texture_key = batch.key.textures;
-            let Some(texture_bind_group) = self.texture_bind_groups.get(&texture_key) else {
-                continue;
-            };
-            pass.set_pipeline(self.pipeline_for_batch(batch.key, aux_targets_enabled));
-            pass.set_bind_group(3, texture_bind_group, &[]);
-            let start = batch.start as u64 * instance_stride;
-            let end = start + batch.count as u64 * instance_stride;
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_vertex_buffer(1, self.instance_buffer.slice(start..end));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..batch.count);
         }
     }
 

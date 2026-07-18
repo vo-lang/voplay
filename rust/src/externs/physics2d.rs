@@ -104,11 +104,9 @@ pub fn physics_step(call: &mut ExternCallContext) -> ExternResult {
     let cmds_owned = cmds.to_vec();
 
     let state = crate::physics::with_world(world_id, |world| {
-        if let Err(error) = world.apply_commands(&cmds_owned) {
-            return Err(error);
-        }
+        world.apply_commands(&cmds_owned)?;
         world.step(dt);
-        Ok(world.serialize_state())
+        Ok::<_, crate::physics_command::PhysicsCommandError>(world.serialize_state())
     });
     let state = match state {
         Ok(state) => state,

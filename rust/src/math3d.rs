@@ -22,7 +22,8 @@ impl Vec3 {
         y: 0.0,
         z: 0.0,
     };
-    pub const ONE: Self = Self {
+    #[cfg(test)]
+    pub(crate) const ONE: Self = Self {
         x: 1.0,
         y: 1.0,
         z: 1.0,
@@ -221,8 +222,8 @@ pub fn mat4_inverse(m: &Mat4) -> Option<Mat4> {
     for pivot in 0..4 {
         let mut best_row = pivot;
         let mut best_abs = aug[pivot][pivot].abs();
-        for row in (pivot + 1)..4 {
-            let value = aug[row][pivot].abs();
+        for (row, values) in aug.iter().enumerate().skip(pivot + 1) {
+            let value = values[pivot].abs();
             if value > best_abs {
                 best_abs = value;
                 best_row = row;
@@ -236,20 +237,21 @@ pub fn mat4_inverse(m: &Mat4) -> Option<Mat4> {
         }
 
         let pivot_value = aug[pivot][pivot];
-        for col in 0..8 {
-            aug[pivot][col] /= pivot_value;
+        for value in &mut aug[pivot] {
+            *value /= pivot_value;
         }
 
-        for row in 0..4 {
-            if row == pivot {
+        let pivot_row = aug[pivot];
+        for (row_index, row) in aug.iter_mut().enumerate() {
+            if row_index == pivot {
                 continue;
             }
-            let factor = aug[row][pivot];
+            let factor = row[pivot];
             if factor == 0.0 {
                 continue;
             }
-            for col in 0..8 {
-                aug[row][col] -= factor * aug[pivot][col];
+            for (value, pivot_value) in row.iter_mut().zip(pivot_row) {
+                *value -= factor * pivot_value;
             }
         }
     }
@@ -540,36 +542,30 @@ fn compute_shadow_vp_with_snap(
     ]
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowCameraProjection {
+    pub eye: Vec3,
+    pub target: Vec3,
+    pub up: Vec3,
+    pub fov_y_rad: f32,
+    pub aspect: f32,
+    pub near: f32,
+    pub far: f32,
+}
+
 #[cfg(test)]
-pub fn compute_shadow_vp_for_camera(
-    eye: Vec3,
-    target: Vec3,
-    up: Vec3,
-    fov_y_rad: f32,
-    aspect: f32,
-    near: f32,
-    far: f32,
-    light_dir: Vec3,
-) -> Mat4 {
-    compute_shadow_vp_for_camera_stabilized(
-        eye, target, up, fov_y_rad, aspect, near, far, light_dir, 0,
-    )
+pub fn compute_shadow_vp_for_camera(camera: ShadowCameraProjection, light_dir: Vec3) -> Mat4 {
+    compute_shadow_vp_for_camera_stabilized(camera, light_dir, 0)
 }
 
 pub fn compute_shadow_vp_for_camera_stabilized(
-    eye: Vec3,
-    target: Vec3,
-    up: Vec3,
-    fov_y_rad: f32,
-    aspect: f32,
-    near: f32,
-    far: f32,
+    camera: ShadowCameraProjection,
     light_dir: Vec3,
     shadow_resolution: u32,
 ) -> Mat4 {
-    let shadow_far = far.max(near + 0.1);
-    let view = look_at_rh(eye, target, up);
-    let proj = perspective_rh_zo(fov_y_rad, aspect, near, shadow_far);
+    let shadow_far = camera.far.max(camera.near + 0.1);
+    let view = look_at_rh(camera.eye, camera.target, camera.up);
+    let proj = perspective_rh_zo(camera.fov_y_rad, camera.aspect, camera.near, shadow_far);
     let view_proj = mat4_mul(&proj, &view);
     mat4_inverse(&view_proj)
         .map(|inv| compute_shadow_vp_with_snap(&inv, light_dir, shadow_resolution))
@@ -712,13 +708,15 @@ mod tests {
         let near = 0.1;
         let limited_far = 60.0;
         let shadow_vp = compute_shadow_vp_for_camera(
-            eye,
-            target,
-            up,
-            fov,
-            aspect,
-            near,
-            limited_far,
+            ShadowCameraProjection {
+                eye,
+                target,
+                up,
+                fov_y_rad: fov,
+                aspect,
+                near,
+                far: limited_far,
+            },
             Vec3::new(0.3, -1.0, 0.2).normalize(),
         );
         let view = look_at_rh(eye, target, up);

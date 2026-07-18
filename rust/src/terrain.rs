@@ -25,6 +25,15 @@ struct TerrainKey {
 static TERRAINS: LazyLock<Mutex<HashMap<TerrainKey, TerrainData>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub(crate) struct TerrainBuildInput<'a> {
+    pub(crate) device: &'a wgpu::Device,
+    pub(crate) queue: &'a wgpu::Queue,
+    pub(crate) model_manager: &'a mut ModelManager,
+    pub(crate) image_data: &'a [u8],
+    pub(crate) scale: [f32; 3],
+    pub(crate) material: MeshMaterial,
+}
+
 fn height_index(cols: u32, row: u32, col: u32) -> usize {
     (row * cols + col) as usize
 }
@@ -79,16 +88,15 @@ fn height_gradient_z(
     }
 }
 
-pub fn generate_terrain(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    model_manager: &mut ModelManager,
-    image_data: &[u8],
-    scale_x: f32,
-    scale_y: f32,
-    scale_z: f32,
-    material: MeshMaterial,
-) -> Result<TerrainData, String> {
+pub(crate) fn generate_terrain(input: TerrainBuildInput<'_>) -> Result<TerrainData, String> {
+    let TerrainBuildInput {
+        device,
+        queue,
+        model_manager,
+        image_data,
+        scale: [scale_x, scale_y, scale_z],
+        material,
+    } = input;
     if scale_x <= 0.0 || scale_y <= 0.0 || scale_z <= 0.0 {
         return Err("terrain scale must be > 0".to_string());
     }

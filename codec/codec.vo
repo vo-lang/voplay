@@ -5,9 +5,11 @@
 // voplay API surface. Game code should not import this package directly.
 package codec
 
-import "math"
+import (
+	"math"
+)
 
-// ByteWriter appends binary data to a byte slice.
+	// ByteWriter appends binary data to a byte slice.
 type ByteWriter struct {
 	buf []byte
 }
@@ -16,43 +18,49 @@ func NewByteWriter(cap int) ByteWriter {
 	return ByteWriter{buf: make([]byte, 0, cap)}
 }
 
-func (w *ByteWriter) Bytes() []byte { return w.buf }
-func (w *ByteWriter) Len() int      { return len(w.buf) }
-func (w *ByteWriter) Reset()        { w.buf = w.buf[:0] }
+func (w *ByteWriter) Bytes() []byte {
+	return w.buf
+}
+
+func (w *ByteWriter) Len() int {
+	return len(w.buf)
+}
+
+func (w *ByteWriter) Reset() {
+	w.buf = w.buf[:0]
+}
 
 func (w *ByteWriter) WriteByte(v byte) {
 	w.buf = append(w.buf, v)
 }
 
 func (w *ByteWriter) WriteU16(v int) {
-	w.buf = append(w.buf, byte(v), byte(v>>8))
+	w.buf = append(w.buf, byte(v), byte(v >> 8))
 }
 
 func (w *ByteWriter) WriteU32(v int) {
-	w.buf = append(w.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	w.buf = append(w.buf, byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24))
 }
 
 func (w *ByteWriter) PatchU32(offset, v int) {
-	if offset < 0 || offset+4 > len(w.buf) {
+	if offset < 0 || offset + 4 > len(w.buf) {
 		panic("codec.ByteWriter.PatchU32: offset out of bounds")
 	}
 	w.buf[offset] = byte(v)
-	w.buf[offset+1] = byte(v >> 8)
-	w.buf[offset+2] = byte(v >> 16)
-	w.buf[offset+3] = byte(v >> 24)
+	w.buf[offset + 1] = byte(v >> 8)
+	w.buf[offset + 2] = byte(v >> 16)
+	w.buf[offset + 3] = byte(v >> 24)
 }
 
 func (w *ByteWriter) WriteF64(v float64) {
 	b := math.Float64bits(v)
-	w.buf = append(w.buf,
-		byte(b), byte(b>>8), byte(b>>16), byte(b>>24),
-		byte(b>>32), byte(b>>40), byte(b>>48), byte(b>>56),
-	)
+	w.buf = append(w.buf, byte(b), byte(b >> 8), byte(b >> 16), byte(b >> 24), byte(b >> 32), byte(b >>
+		40), byte(b >> 48), byte(b >> 56))
 }
 
 func (w *ByteWriter) WriteF32(v float64) {
 	b := math.Float32bits(float32(v))
-	w.buf = append(w.buf, byte(b), byte(b>>8), byte(b>>16), byte(b>>24))
+	w.buf = append(w.buf, byte(b), byte(b >> 8), byte(b >> 16), byte(b >> 24))
 }
 
 func (w *ByteWriter) WriteBool(v bool) {
@@ -89,34 +97,22 @@ func (w *ByteWriter) WritePrimitive3DKey(objectID, shapeID int, px, py, pz, rx, 
 	if visible {
 		visibleByte = 1
 	}
-	w.buf = append(w.buf,
-		byte(objectID), byte(objectID>>8), byte(objectID>>16), byte(objectID>>24),
-		byte(shapeID), byte(shapeID>>8), byte(shapeID>>16), byte(shapeID>>24),
-		byte(pXB), byte(pXB>>8), byte(pXB>>16), byte(pXB>>24),
-		byte(pYB), byte(pYB>>8), byte(pYB>>16), byte(pYB>>24),
-		byte(pZB), byte(pZB>>8), byte(pZB>>16), byte(pZB>>24),
-		byte(rXB), byte(rXB>>8), byte(rXB>>16), byte(rXB>>24),
-		byte(rYB), byte(rYB>>8), byte(rYB>>16), byte(rYB>>24),
-		byte(rZB), byte(rZB>>8), byte(rZB>>16), byte(rZB>>24),
-		byte(rWB), byte(rWB>>8), byte(rWB>>16), byte(rWB>>24),
-		byte(sXB), byte(sXB>>8), byte(sXB>>16), byte(sXB>>24),
-		byte(sYB), byte(sYB>>8), byte(sYB>>16), byte(sYB>>24),
-		byte(sZB), byte(sZB>>8), byte(sZB>>16), byte(sZB>>24),
-		byte(materialID), byte(materialID>>8), byte(materialID>>16), byte(materialID>>24),
-		byte(tRB), byte(tRB>>8), byte(tRB>>16), byte(tRB>>24),
-		byte(tGB), byte(tGB>>8), byte(tGB>>16), byte(tGB>>24),
-		byte(tBB), byte(tBB>>8), byte(tBB>>16), byte(tBB>>24),
-		byte(tAB), byte(tAB>>8), byte(tAB>>16), byte(tAB>>24),
-		visibleByte,
-		byte(flags), byte(flags>>8), byte(flags>>16), byte(flags>>24),
-		byte(lodNearB), byte(lodNearB>>8), byte(lodNearB>>16), byte(lodNearB>>24),
-		byte(lodFarB), byte(lodFarB>>8), byte(lodFarB>>16), byte(lodFarB>>24),
-		byte(windStrengthB), byte(windStrengthB>>8), byte(windStrengthB>>16), byte(windStrengthB>>24),
-		byte(atlasXB), byte(atlasXB>>8), byte(atlasXB>>16), byte(atlasXB>>24),
-		byte(atlasYB), byte(atlasYB>>8), byte(atlasYB>>16), byte(atlasYB>>24),
-		byte(atlasWB), byte(atlasWB>>8), byte(atlasWB>>16), byte(atlasWB>>24),
-		byte(atlasHB), byte(atlasHB>>8), byte(atlasHB>>16), byte(atlasHB>>24),
-	)
+	w.buf = append(w.buf, byte(objectID), byte(objectID >> 8), byte(objectID >> 16), byte(objectID >>
+		24), byte(shapeID), byte(shapeID >> 8), byte(shapeID >> 16), byte(shapeID >> 24), byte(pXB), byte(pXB >>
+		8), byte(pXB >> 16), byte(pXB >> 24), byte(pYB), byte(pYB >> 8), byte(pYB >> 16), byte(pYB >> 24), byte(pZB), byte(pZB >>
+		8), byte(pZB >> 16), byte(pZB >> 24), byte(rXB), byte(rXB >> 8), byte(rXB >> 16), byte(rXB >> 24), byte(rYB), byte(rYB >>
+		8), byte(rYB >> 16), byte(rYB >> 24), byte(rZB), byte(rZB >> 8), byte(rZB >> 16), byte(rZB >> 24), byte(rWB), byte(rWB >>
+		8), byte(rWB >> 16), byte(rWB >> 24), byte(sXB), byte(sXB >> 8), byte(sXB >> 16), byte(sXB >> 24), byte(sYB), byte(sYB >>
+		8), byte(sYB >> 16), byte(sYB >> 24), byte(sZB), byte(sZB >> 8), byte(sZB >> 16), byte(sZB >> 24), byte(materialID), byte(materialID >>
+		8), byte(materialID >> 16), byte(materialID >> 24), byte(tRB), byte(tRB >> 8), byte(tRB >> 16), byte(tRB >>
+		24), byte(tGB), byte(tGB >> 8), byte(tGB >> 16), byte(tGB >> 24), byte(tBB), byte(tBB >> 8), byte(tBB >>
+		16), byte(tBB >> 24), byte(tAB), byte(tAB >> 8), byte(tAB >> 16), byte(tAB >> 24), visibleByte, byte(flags), byte(flags >>
+		8), byte(flags >> 16), byte(flags >> 24), byte(lodNearB), byte(lodNearB >> 8), byte(lodNearB >> 16), byte(lodNearB >>
+		24), byte(lodFarB), byte(lodFarB >> 8), byte(lodFarB >> 16), byte(lodFarB >> 24), byte(windStrengthB), byte(windStrengthB >>
+		8), byte(windStrengthB >> 16), byte(windStrengthB >> 24), byte(atlasXB), byte(atlasXB >> 8), byte(atlasXB >>
+		16), byte(atlasXB >> 24), byte(atlasYB), byte(atlasYB >> 8), byte(atlasYB >> 16), byte(atlasYB >>
+		24), byte(atlasWB), byte(atlasWB >> 8), byte(atlasWB >> 16), byte(atlasWB >> 24), byte(atlasHB), byte(atlasHB >>
+		8), byte(atlasHB >> 16), byte(atlasHB >> 24))
 }
 
 func (w *ByteWriter) WriteRawBytes(data []byte) {
@@ -131,14 +127,16 @@ func (w *ByteWriter) WriteString(s string) {
 // ByteReader reads binary data from a byte slice.
 type ByteReader struct {
 	data []byte
-	pos  int
+	pos int
 }
 
 func NewByteReader(data []byte) ByteReader {
 	return ByteReader{data: data}
 }
 
-func (r *ByteReader) Remaining() int { return len(r.data) - r.pos }
+func (r *ByteReader) Remaining() int {
+	return len(r.data) - r.pos
+}
 
 func (r *ByteReader) ReadByte() byte {
 	v := r.data[r.pos]
@@ -152,36 +150,39 @@ func (r *ByteReader) ReadBool() bool {
 
 func (r *ByteReader) ReadU16() int {
 	d := r.data[r.pos:]
-	v := int(d[0]) | int(d[1])<<8
+	v := int(d[0]) | int(d[1]) << 8
 	r.pos += 2
 	return v
 }
 
 func (r *ByteReader) ReadU32() int {
 	d := r.data[r.pos:]
-	v := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
+	v := int(d[0]) | int(d[1]) << 8 | int(d[2]) << 16 | int(d[3]) << 24
 	r.pos += 4
 	return v
 }
 
 func (r *ByteReader) ReadBytes(n int) []byte {
 	b := make([]byte, n)
-	copy(b, r.data[r.pos:r.pos+n])
+	copy(b, r.data[r.pos:r.pos + n])
 	r.pos += n
 	return b
 }
 
 func (r *ByteReader) ReadF64() float64 {
 	d := r.data[r.pos:]
-	bits := uint64(d[0]) | uint64(d[1])<<8 | uint64(d[2])<<16 | uint64(d[3])<<24 |
-		uint64(d[4])<<32 | uint64(d[5])<<40 | uint64(d[6])<<48 | uint64(d[7])<<56
+	bits := uint64(d[0]) | uint64(d[1]) << 8 | uint64(d[2]) << 16 | uint64(d[3]) << 24 |
+		uint64(d[4]) << 32 |
+		uint64(d[5]) << 40 |
+		uint64(d[6]) << 48 |
+		uint64(d[7]) << 56
 	r.pos += 8
 	return math.Float64frombits(bits)
 }
 
 func (r *ByteReader) ReadF32() float64 {
 	d := r.data[r.pos:]
-	bits := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
+	bits := uint32(d[0]) | uint32(d[1]) << 8 | uint32(d[2]) << 16 | uint32(d[3]) << 24
 	r.pos += 4
 	return float64(math.Float32frombits(bits))
 }

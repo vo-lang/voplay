@@ -14,7 +14,8 @@ func ValidateTrackAsset(asset *TrackAsset) []TrackIssue {
 		return appendTrackIssue(issues, "track.nil", TrackIssueError, "$", "track asset is nil")
 	}
 	if asset.Version != 1 {
-		issues = appendTrackIssue(issues, "track.version", TrackIssueError, "version", "unsupported track version: " + strconv.Itoa(asset.Version))
+		issues = appendTrackIssue(issues, "track.version", TrackIssueError, "version", "unsupported track version: " +
+			strconv.Itoa(asset.Version))
 	}
 	if asset.Name == "" {
 		issues = appendTrackIssue(issues, "track.name", TrackIssueError, "name", "track name must not be empty")
@@ -86,7 +87,9 @@ func CheckTrackTraversability(track *Track, opts TrackTraversabilityOptions) []T
 	}
 	for i, length := range track.segmentLengths {
 		if length > maxSegmentLength {
-			issues = appendTrackIssue(issues, "track.traversability.segment_length", TrackIssueWarning, "centerline[" + strconv.Itoa(i) + "]", "centerline segment is longer than recommended")
+			issues = appendTrackIssue(issues, "track.traversability.segment_length", TrackIssueWarning, "centerline[" +
+				strconv.Itoa(i) +
+				"]", "centerline segment is longer than recommended")
 		}
 	}
 	if track.length <= 0 {
@@ -95,22 +98,29 @@ func CheckTrackTraversability(track *Track, opts TrackTraversabilityOptions) []T
 	lastPose := track.PoseAt(0)
 	lastLeft, lastRight := trackBoundaryPoints(lastPose)
 	if !track.IsOnRoad(lastPose.Position) {
-		issues = appendTrackIssue(issues, "track.traversability.centerline_offroad", TrackIssueError, "distance:0.00", "centerline sample is not on road at " + trackFormatVec3(lastPose.Position))
+		issues = appendTrackIssue(issues, "track.traversability.centerline_offroad", TrackIssueError, "distance:0.00", "centerline sample is not on road at " +
+			trackFormatVec3(lastPose.Position))
 	}
 	issues = validateTrackHeightProbeSample(issues, opts.HeightProbe, lastPose, maxHeightProbeDelta)
 	for d := sampleStep; d <= track.length; d += sampleStep {
 		pose := track.PoseAt(d)
 		heightDelta := math.Abs(pose.Position.Y - lastPose.Position.Y)
 		if heightDelta > maxHeightDelta {
-			issues = appendTrackIssue(issues, "track.traversability.height_delta", TrackIssueError, "distance:" + strconv.FormatFloat(d, 'f', 2, 64), "height delta exceeds configured threshold at " + trackFormatVec3(pose.Position))
+			issues = appendTrackIssue(issues, "track.traversability.height_delta", TrackIssueError, "distance:" +
+				strconv.FormatFloat(d, 'f', 2, 64), "height delta exceeds configured threshold at " +
+				trackFormatVec3(pose.Position))
 		}
 		if !track.IsOnRoad(pose.Position) {
-			issues = appendTrackIssue(issues, "track.traversability.centerline_offroad", TrackIssueError, "distance:" + strconv.FormatFloat(d, 'f', 2, 64), "centerline sample is not on road at " + trackFormatVec3(pose.Position))
+			issues = appendTrackIssue(issues, "track.traversability.centerline_offroad", TrackIssueError, "distance:" +
+				strconv.FormatFloat(d, 'f', 2, 64), "centerline sample is not on road at " +
+				trackFormatVec3(pose.Position))
 		}
 		issues = validateTrackHeightProbeSample(issues, opts.HeightProbe, pose, maxHeightProbeDelta)
 		left, right := trackBoundaryPoints(pose)
 		if left.Distance(lastLeft) > maxBoundaryDelta || right.Distance(lastRight) > maxBoundaryDelta {
-			issues = appendTrackIssue(issues, "track.traversability.boundary_gap", TrackIssueError, "distance:" + strconv.FormatFloat(d, 'f', 2, 64), "road boundary discontinuity near " + trackFormatVec3(pose.Position))
+			issues = appendTrackIssue(issues, "track.traversability.boundary_gap", TrackIssueError, "distance:" +
+				strconv.FormatFloat(d, 'f', 2, 64), "road boundary discontinuity near " +
+				trackFormatVec3(pose.Position))
 		}
 		lastPose = pose
 		lastLeft = left
@@ -127,7 +137,9 @@ func CheckTrackTraversability(track *Track, opts TrackTraversabilityOptions) []T
 		for i, gate := range track.asset.Gates {
 			pose := track.PoseAt(gate.Distance)
 			if !track.IsOnRoad(pose.Position) {
-				issues = appendTrackIssue(issues, "track.traversability.gate_offroad", TrackIssueError, "gates[" + strconv.Itoa(i) + "].distance", "gate is not reachable on road at " + trackFormatVec3(pose.Position))
+				issues = appendTrackIssue(issues, "track.traversability.gate_offroad", TrackIssueError, "gates[" +
+					strconv.Itoa(i) +
+					"].distance", "gate is not reachable on road at " + trackFormatVec3(pose.Position))
 			}
 		}
 	}
@@ -142,18 +154,21 @@ func validateTrackMeshes(meshes []TrackMesh, issues []TrackIssue) []TrackIssue {
 			issues = appendTrackIssue(issues, "track.mesh.name", TrackIssueError, path + ".name", "mesh name must not be empty")
 		}
 		if seen[mesh.Name] {
-			issues = appendTrackIssue(issues, "track.mesh.duplicate", TrackIssueError, path + ".name", "duplicate mesh name: " + mesh.Name)
+			issues = appendTrackIssue(issues, "track.mesh.duplicate", TrackIssueError, path + ".name", "duplicate mesh name: " +
+				mesh.Name)
 		}
 		seen[mesh.Name] = true
 		if mesh.Model == "" {
-			issues = appendTrackIssue(issues, "track.mesh.model", TrackIssueError, path + ".model", "mesh model is required: " + mesh.Name)
+			issues = appendTrackIssue(issues, "track.mesh.model", TrackIssueError, path + ".model", "mesh model is required: " +
+				mesh.Name)
 		}
 		if mesh.Collision != "" && mesh.Collision != "none" && mesh.Collision != "trimesh" {
-			issues = appendTrackIssue(issues, "track.mesh.collision", TrackIssueError, path + ".collision", "unsupported mesh collision: " + mesh.Name)
+			issues = appendTrackIssue(issues, "track.mesh.collision", TrackIssueError, path + ".collision", "unsupported mesh collision: " +
+				mesh.Name)
 		}
-		issues = appendFiniteVec3Issues(issues, path + ".position", mesh.Position.Vec3())
-		issues = appendFiniteVec3Issues(issues, path + ".rotation", mesh.Rotation.Vec3())
-		issues = appendFiniteVec3Issues(issues, path + ".scale", mesh.Scale.Vec3())
+		issues = appendFiniteVec3Issues(issues, path + ".position", mapVec3(mesh.Position))
+		issues = appendFiniteVec3Issues(issues, path + ".rotation", mapVec3(mesh.Rotation))
+		issues = appendFiniteVec3Issues(issues, path + ".scale", mapVec3(mesh.Scale))
 		if mesh.TintSet {
 			issues = appendFiniteColorIssues(issues, path + ".tint", mesh.Tint)
 		}
@@ -169,38 +184,53 @@ func validateTrackTerrain(terrain MapTerrain, issues []TrackIssue) []TrackIssue 
 }
 
 func validateTrackTerrainAtPath(terrain MapTerrain, path string, issues []TrackIssue) []TrackIssue {
-	issues = appendFiniteVec3Issues(issues, path + ".position", terrain.Position.Vec3())
-	if !trackFinite(terrain.Width) || !trackFinite(terrain.Height) || !trackFinite(terrain.Depth) || !trackFinite(terrain.UVScale) || !trackFinite(terrain.NormalScale) || !trackFinite(terrain.Roughness) || !trackFinite(terrain.Metallic) || !trackFinite(terrain.Friction) {
+	issues = appendFiniteVec3Issues(issues, path + ".position", mapVec3(terrain.Position))
+	if !trackFinite(terrain.Width) || !trackFinite(terrain.Height) || !trackFinite(terrain.Depth) ||
+		!trackFinite(terrain.UVScale) ||
+		!trackFinite(terrain.NormalScale) ||
+		!trackFinite(terrain.Roughness) ||
+		!trackFinite(terrain.Metallic) ||
+		!trackFinite(terrain.Friction) {
 		issues = appendTrackIssue(issues, "track.terrain.finite", TrackIssueError, path, "terrain numeric values must be finite")
 	}
 	if terrain.Splat != nil {
-		if terrain.Texture != "" || terrain.Normal != "" || terrain.MetallicRoughness != "" || terrain.UVScale != 0 || terrain.NormalScale != 0 || terrain.Roughness != 0 || terrain.Metallic != 0 {
+		if terrain.Texture != "" || terrain.Normal != "" || terrain.MetallicRoughness != "" ||
+			terrain.UVScale != 0 ||
+			terrain.NormalScale != 0 ||
+			terrain.Roughness != 0 ||
+			terrain.Metallic != 0 {
 			issues = appendTrackIssue(issues, "track.terrain.splat_mix", TrackIssueError, path + ".splat", "terrain single-material fields cannot be mixed with splat")
 		}
 		if terrain.Splat.Control == "" {
-			issues = appendTrackIssue(issues, "track.terrain.splat_control", TrackIssueError, path + ".splat.control", "terrain splat control is required")
+			issues = appendTrackIssue(issues, "track.terrain.splat_control", TrackIssueError, path +
+				".splat.control", "terrain splat control is required")
 		}
 		if len(terrain.Splat.Layers) != 4 {
-			issues = appendTrackIssue(issues, "track.terrain.splat_layers", TrackIssueError, path + ".splat.layers", "terrain splat requires exactly 4 layers")
+			issues = appendTrackIssue(issues, "track.terrain.splat_layers", TrackIssueError, path +
+				".splat.layers", "terrain splat requires exactly 4 layers")
 		}
 		for i, layer := range terrain.Splat.Layers {
 			layerPath := path + ".splat.layers[" + strconv.Itoa(i) + "]"
 			if layer.Texture == "" {
-				issues = appendTrackIssue(issues, "track.terrain.splat_layer_texture", TrackIssueError, layerPath + ".texture", "terrain splat layer texture is required")
+				issues = appendTrackIssue(issues, "track.terrain.splat_layer_texture", TrackIssueError, layerPath +
+					".texture", "terrain splat layer texture is required")
 			}
 			if !trackFinite(layer.UVScale) || !trackFinite(layer.NormalScale) {
 				issues = appendTrackIssue(issues, "track.terrain.splat_layer_finite", TrackIssueError, layerPath, "terrain splat layer numeric values must be finite")
 			}
 			if layer.UVScale < 0 {
-				issues = appendTrackIssue(issues, "track.terrain.splat_layer_uv_scale", TrackIssueError, layerPath + ".uvScale", "terrain splat layer uvScale must be >= 0")
+				issues = appendTrackIssue(issues, "track.terrain.splat_layer_uv_scale", TrackIssueError, layerPath +
+					".uvScale", "terrain splat layer uvScale must be >= 0")
 			}
 			if layer.NormalScale < 0 {
-				issues = appendTrackIssue(issues, "track.terrain.splat_layer_normal_scale", TrackIssueError, layerPath + ".normalScale", "terrain splat layer normalScale must be >= 0")
+				issues = appendTrackIssue(issues, "track.terrain.splat_layer_normal_scale", TrackIssueError, layerPath +
+					".normalScale", "terrain splat layer normalScale must be >= 0")
 			}
 		}
 	}
 	if terrain.NormalScale < 0 {
-		issues = appendTrackIssue(issues, "track.terrain.normal_scale", TrackIssueError, path + ".normalScale", "terrain normalScale must be >= 0")
+		issues = appendTrackIssue(issues, "track.terrain.normal_scale", TrackIssueError, path +
+			".normalScale", "terrain normalScale must be >= 0")
 	}
 	if terrain.Roughness < 0 {
 		issues = appendTrackIssue(issues, "track.terrain.roughness", TrackIssueError, path + ".roughness", "terrain roughness must be >= 0")
@@ -220,25 +250,32 @@ func validateTrackTerrainAtPath(terrain MapTerrain, path string, issues []TrackI
 func validateTrackElementNames(asset *TrackAsset, issues []TrackIssue) []TrackIssue {
 	seen := map[string]string{}
 	for i, mesh := range asset.Meshes {
-		issues = appendTrackElementNameIssue(issues, seen, mesh.Name, "meshes[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, mesh.Name, "meshes[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, surface := range asset.Surfaces {
-		issues = appendTrackElementNameIssue(issues, seen, surface.Name, "surfaces[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, surface.Name, "surfaces[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, gate := range asset.Gates {
-		issues = appendTrackElementNameIssue(issues, seen, gate.Name, "gates[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, gate.Name, "gates[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, spawn := range asset.Spawns {
-		issues = appendTrackElementNameIssue(issues, seen, spawn.Name, "spawns[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, spawn.Name, "spawns[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, respawn := range asset.Respawns {
-		issues = appendTrackElementNameIssue(issues, seen, respawn.Name, "respawns[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, respawn.Name, "respawns[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, trigger := range asset.Triggers {
-		issues = appendTrackElementNameIssue(issues, seen, trigger.Name, "triggers[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, trigger.Name, "triggers[" + strconv.Itoa(i) +
+			"].name")
 	}
 	for i, line := range asset.RacingLines {
-		issues = appendTrackElementNameIssue(issues, seen, line.Name, "racingLines[" + strconv.Itoa(i) + "].name")
+		issues = appendTrackElementNameIssue(issues, seen, line.Name, "racingLines[" + strconv.Itoa(i) +
+			"].name")
 	}
 	return issues
 }
@@ -256,7 +293,8 @@ func validateTrackDistanceSemantics(track *Track, issues []TrackIssue) []TrackIs
 	}
 	for i, surface := range asset.Surfaces {
 		path := "surfaces[" + strconv.Itoa(i) + "]"
-		if !trackDistanceInRange(surface.Start, track.length) || !trackDistanceInRange(surface.End, track.length) {
+		if !trackDistanceInRange(surface.Start, track.length) ||
+			!trackDistanceInRange(surface.End, track.length) {
 			issues = appendTrackIssue(issues, "track.surface.distance_range", TrackIssueError, path, "surface start/end must be within track length")
 		}
 		if !track.closed && surface.Start > surface.End {
@@ -266,7 +304,8 @@ func validateTrackDistanceSemantics(track *Track, issues []TrackIssue) []TrackIs
 			issues = appendTrackIssue(issues, "track.surface.friction", TrackIssueError, path + ".friction", "surface friction must be >= 0")
 		}
 		if !trackSurfaceKindKnown(surface.Kind) {
-			issues = appendTrackIssue(issues, "track.surface.kind_unknown", TrackIssueWarning, path + ".kind", "surface kind is game-defined: " + surface.Kind)
+			issues = appendTrackIssue(issues, "track.surface.kind_unknown", TrackIssueWarning, path + ".kind", "surface kind is game-defined: " +
+				surface.Kind)
 		}
 	}
 	for i, gate := range asset.Gates {
@@ -278,11 +317,12 @@ func validateTrackDistanceSemantics(track *Track, issues []TrackIssue) []TrackIs
 	for i, spawn := range asset.Spawns {
 		path := "spawns[" + strconv.Itoa(i) + "]"
 		if !trackDistanceInRange(spawn.Distance, track.length) {
-			issues = appendTrackIssue(issues, "track.spawn.distance_range", TrackIssueError, path + ".distance", "spawn distance must be within track length")
+			issues = appendTrackIssue(issues, "track.spawn.distance_range", TrackIssueError, path +
+				".distance", "spawn distance must be within track length")
 		}
 		pose := track.PoseAt(spawn.Distance)
 		if spawn.Position != (MapVec3{}) {
-			pose.Position = spawn.Position.Vec3()
+			pose.Position = mapVec3(spawn.Position)
 		}
 		if !track.IsOnRoad(pose.Position) {
 			issues = appendTrackIssue(issues, "track.spawn.offroad", TrackIssueError, path + ".position", "spawn pose must be on the road")
@@ -291,11 +331,12 @@ func validateTrackDistanceSemantics(track *Track, issues []TrackIssue) []TrackIs
 	for i, respawn := range asset.Respawns {
 		path := "respawns[" + strconv.Itoa(i) + "]"
 		if !trackDistanceInRange(respawn.Distance, track.length) {
-			issues = appendTrackIssue(issues, "track.respawn.distance_range", TrackIssueError, path + ".distance", "respawn distance must be within track length")
+			issues = appendTrackIssue(issues, "track.respawn.distance_range", TrackIssueError, path +
+				".distance", "respawn distance must be within track length")
 		}
 		pose := track.PoseAt(respawn.Distance)
 		if respawn.Position != (MapVec3{}) {
-			pose.Position = respawn.Position.Vec3()
+			pose.Position = mapVec3(respawn.Position)
 		}
 		if !track.IsOnRoad(pose.Position) {
 			issues = appendTrackIssue(issues, "track.respawn.offroad", TrackIssueError, path + ".position", "respawn pose must be on the road")
@@ -304,7 +345,8 @@ func validateTrackDistanceSemantics(track *Track, issues []TrackIssue) []TrackIs
 	for i, trigger := range asset.Triggers {
 		path := "triggers[" + strconv.Itoa(i) + "]"
 		if !trackDistanceInRange(trigger.Distance, track.length) {
-			issues = appendTrackIssue(issues, "track.trigger.distance_range", TrackIssueError, path + ".distance", "trigger distance must be within track length")
+			issues = appendTrackIssue(issues, "track.trigger.distance_range", TrackIssueError, path +
+				".distance", "trigger distance must be within track length")
 		}
 	}
 	return issues
@@ -402,7 +444,8 @@ func appendMissingTrackResource(issues []TrackIssue, path, resource string, exis
 	if resource == "" || exists(resource) {
 		return issues
 	}
-	return appendTrackIssue(issues, "track.resource.missing", TrackIssueError, path, "missing track resource: " + resource)
+	return appendTrackIssue(issues, "track.resource.missing", TrackIssueError, path, "missing track resource: " +
+		resource)
 }
 
 func validateTrackCenterline(asset *TrackAsset, issues []TrackIssue) []TrackIssue {
@@ -414,25 +457,28 @@ func validateTrackCenterline(asset *TrackAsset, issues []TrackIssue) []TrackIssu
 		if point.Width <= 0 {
 			issues = appendTrackIssue(issues, "track.centerline.width", TrackIssueError, path + ".width", "centerline width must be > 0")
 		}
-		issues = appendFiniteVec3Issues(issues, path + ".position", point.Position.Vec3())
+		issues = appendFiniteVec3Issues(issues, path + ".position", mapVec3(point.Position))
 		if !trackFinite(point.Width) {
-			issues = appendTrackIssue(issues, "track.centerline.width_finite", TrackIssueError, path + ".width", "centerline width must be finite")
+			issues = appendTrackIssue(issues, "track.centerline.width_finite", TrackIssueError, path +
+				".width", "centerline width must be finite")
 		}
 		if !trackFinite(point.Bank) {
 			issues = appendTrackIssue(issues, "track.centerline.bank_finite", TrackIssueError, path + ".bank", "centerline bank must be finite")
 		}
 		if i > 0 {
-			prev := asset.Centerline[i - 1].Position.Vec3()
-			if prev.Distance(point.Position.Vec3()) <= 0 {
-				issues = appendTrackIssue(issues, "track.centerline.zero_segment", TrackIssueError, path + ".position", "centerline segment length must be > 0")
+			prev := mapVec3(asset.Centerline[i - 1].Position)
+			if prev.Distance(mapVec3(point.Position)) <= 0 {
+				issues = appendTrackIssue(issues, "track.centerline.zero_segment", TrackIssueError, path +
+					".position", "centerline segment length must be > 0")
 			}
 		}
 	}
 	if asset.ClosedLoop {
-		first := asset.Centerline[0].Position.Vec3()
-		last := asset.Centerline[len(asset.Centerline) - 1].Position.Vec3()
+		first := mapVec3(asset.Centerline[0].Position)
+		last := mapVec3(asset.Centerline[len(asset.Centerline) - 1].Position)
 		if first.Distance(last) > trackContinuityTolerance {
-			issues = appendTrackIssue(issues, "track.centerline.closed_loop", TrackIssueError, "centerline", "closed loop endpoints must be continuous within " + strconv.FormatFloat(trackContinuityTolerance, 'f', 2, 64))
+			issues = appendTrackIssue(issues, "track.centerline.closed_loop", TrackIssueError, "centerline", "closed loop endpoints must be continuous within " +
+				strconv.FormatFloat(trackContinuityTolerance, 'f', 2, 64))
 		}
 		if len(asset.Centerline) < 3 {
 			issues = appendTrackIssue(issues, "track.centerline.closed_count", TrackIssueError, "centerline", "closed loop centerline must contain at least 3 points")
@@ -449,13 +495,17 @@ func validateTrackSurfaces(asset *TrackAsset, issues []TrackIssue) []TrackIssue 
 			issues = appendTrackIssue(issues, "track.surface.name", TrackIssueError, path + ".name", "surface name must not be empty")
 		}
 		if seen[surface.Name] {
-			issues = appendTrackIssue(issues, "track.surface.duplicate", TrackIssueError, path + ".name", "duplicate surface name: " + surface.Name)
+			issues = appendTrackIssue(issues, "track.surface.duplicate", TrackIssueError, path + ".name", "duplicate surface name: " +
+				surface.Name)
 		}
 		seen[surface.Name] = true
 		if surface.Kind == "" {
 			issues = appendTrackIssue(issues, "track.surface.kind", TrackIssueError, path + ".kind", "surface kind must not be empty")
 		}
-		if !trackFinite(surface.Start) || !trackFinite(surface.End) || !trackFinite(surface.Left) || !trackFinite(surface.Right) || !trackFinite(surface.Friction) || !trackFinite(surface.Boost) {
+		if !trackFinite(surface.Start) || !trackFinite(surface.End) || !trackFinite(surface.Left) ||
+			!trackFinite(surface.Right) ||
+			!trackFinite(surface.Friction) ||
+			!trackFinite(surface.Boost) {
 			issues = appendTrackIssue(issues, "track.surface.finite", TrackIssueError, path, "surface numeric values must be finite")
 		}
 		if surface.Left != 0 || surface.Right != 0 {
@@ -476,11 +526,13 @@ func validateTrackGates(asset *TrackAsset, issues []TrackIssue) []TrackIssue {
 			issues = appendTrackIssue(issues, "track.gate.name", TrackIssueError, path + ".name", "gate name must not be empty")
 		}
 		if seen[gate.Name] {
-			issues = appendTrackIssue(issues, "track.gate.duplicate", TrackIssueError, path + ".name", "duplicate gate name: " + gate.Name)
+			issues = appendTrackIssue(issues, "track.gate.duplicate", TrackIssueError, path + ".name", "duplicate gate name: " +
+				gate.Name)
 		}
 		seen[gate.Name] = true
 		if !trackFinite(gate.Distance) {
-			issues = appendTrackIssue(issues, "track.gate.distance_finite", TrackIssueError, path + ".distance", "gate distance must be finite")
+			issues = appendTrackIssue(issues, "track.gate.distance_finite", TrackIssueError, path +
+				".distance", "gate distance must be finite")
 		}
 		if gate.Distance <= lastDistance {
 			issues = appendTrackIssue(issues, "track.gate.order", TrackIssueError, path + ".distance", "gate distance must be strictly increasing")
@@ -501,7 +553,8 @@ func validateTrackNamedPoses(asset *TrackAsset, issues []TrackIssue) []TrackIssu
 			issues = appendTrackIssue(issues, "track.spawn.name", TrackIssueError, path + ".name", "spawn name must not be empty")
 		}
 		if seenSpawns[spawn.Name] {
-			issues = appendTrackIssue(issues, "track.spawn.duplicate", TrackIssueError, path + ".name", "duplicate spawn name: " + spawn.Name)
+			issues = appendTrackIssue(issues, "track.spawn.duplicate", TrackIssueError, path + ".name", "duplicate spawn name: " +
+				spawn.Name)
 		}
 		seenSpawns[spawn.Name] = true
 		if !trackFinite(spawn.Distance) || !trackFinite(spawn.Yaw) {
@@ -515,7 +568,8 @@ func validateTrackNamedPoses(asset *TrackAsset, issues []TrackIssue) []TrackIssu
 			issues = appendTrackIssue(issues, "track.respawn.name", TrackIssueError, path + ".name", "respawn name must not be empty")
 		}
 		if seenRespawns[respawn.Name] {
-			issues = appendTrackIssue(issues, "track.respawn.duplicate", TrackIssueError, path + ".name", "duplicate respawn name: " + respawn.Name)
+			issues = appendTrackIssue(issues, "track.respawn.duplicate", TrackIssueError, path + ".name", "duplicate respawn name: " +
+				respawn.Name)
 		}
 		seenRespawns[respawn.Name] = true
 		if !trackFinite(respawn.Distance) || !trackFinite(respawn.Yaw) {
@@ -529,7 +583,8 @@ func validateTrackNamedPoses(asset *TrackAsset, issues []TrackIssue) []TrackIssu
 			issues = appendTrackIssue(issues, "track.trigger.name", TrackIssueError, path + ".name", "trigger name must not be empty")
 		}
 		if seenTriggers[trigger.Name] {
-			issues = appendTrackIssue(issues, "track.trigger.duplicate", TrackIssueError, path + ".name", "duplicate trigger name: " + trigger.Name)
+			issues = appendTrackIssue(issues, "track.trigger.duplicate", TrackIssueError, path + ".name", "duplicate trigger name: " +
+				trigger.Name)
 		}
 		seenTriggers[trigger.Name] = true
 		if trigger.Kind == "" {
@@ -565,13 +620,16 @@ func validateTrackRacingLines(asset *TrackAsset, issues []TrackIssue) []TrackIss
 				issues = appendTrackIssue(issues, "track.racing_line.finite", TrackIssueError, pointPath, "racing line point values must be finite")
 			}
 			if point.Distance < 0 || point.Distance > track.length {
-				issues = appendTrackIssue(issues, "track.racing_line.distance_range", TrackIssueError, pointPath + ".distance", "racing line point distance must be within track length")
+				issues = appendTrackIssue(issues, "track.racing_line.distance_range", TrackIssueError, pointPath +
+					".distance", "racing line point distance must be within track length")
 			}
 			if j > 0 && point.Distance <= prevDistance {
-				issues = appendTrackIssue(issues, "track.racing_line.order", TrackIssueError, pointPath + ".distance", "racing line distances must be strictly increasing")
+				issues = appendTrackIssue(issues, "track.racing_line.order", TrackIssueError, pointPath +
+					".distance", "racing line distances must be strictly increasing")
 			}
 			if point.TargetSpeed < 0 {
-				issues = appendTrackIssue(issues, "track.racing_line.target_speed", TrackIssueError, pointPath + ".targetSpeed", "racing line target speed must be >= 0")
+				issues = appendTrackIssue(issues, "track.racing_line.target_speed", TrackIssueError, pointPath +
+					".targetSpeed", "racing line target speed must be >= 0")
 			}
 			prevDistance = point.Distance
 		}
@@ -586,13 +644,16 @@ func validateTrackHeightProbeSample(issues []TrackIssue, probe TrackHeightProbe,
 	height, ok := probe(pose.Position)
 	path := "distance:" + strconv.FormatFloat(pose.Distance, 'f', 2, 64)
 	if !ok {
-		return appendTrackIssue(issues, "track.traversability.height_probe_miss", TrackIssueError, path, "height probe missed road or terrain at " + trackFormatVec3(pose.Position))
+		return appendTrackIssue(issues, "track.traversability.height_probe_miss", TrackIssueError, path, "height probe missed road or terrain at " +
+			trackFormatVec3(pose.Position))
 	}
 	if !trackFinite(height) {
-		return appendTrackIssue(issues, "track.traversability.height_probe_finite", TrackIssueError, path, "height probe returned non-finite value at " + trackFormatVec3(pose.Position))
+		return appendTrackIssue(issues, "track.traversability.height_probe_finite", TrackIssueError, path, "height probe returned non-finite value at " +
+			trackFormatVec3(pose.Position))
 	}
 	if math.Abs(height - pose.Position.Y) > maxDelta {
-		return appendTrackIssue(issues, "track.traversability.height_probe_delta", TrackIssueError, path, "height probe differs from centerline by more than configured threshold at " + trackFormatVec3(pose.Position))
+		return appendTrackIssue(issues, "track.traversability.height_probe_delta", TrackIssueError, path, "height probe differs from centerline by more than configured threshold at " +
+			trackFormatVec3(pose.Position))
 	}
 	return issues
 }
@@ -606,7 +667,10 @@ func trackFinite(v float64) bool {
 }
 
 func trackFormatVec3(v voplay.Vec3) string {
-	return "(" + strconv.FormatFloat(v.X, 'f', 2, 64) + ", " + strconv.FormatFloat(v.Y, 'f', 2, 64) + ", " + strconv.FormatFloat(v.Z, 'f', 2, 64) + ")"
+	return "(" + strconv.FormatFloat(v.X, 'f', 2, 64) + ", " + strconv.FormatFloat(v.Y, 'f', 2, 64) +
+		", " +
+		strconv.FormatFloat(v.Z, 'f', 2, 64) +
+		")"
 }
 
 func trackBoundaryPoints(pose TrackPose) (voplay.Vec3, voplay.Vec3) {
@@ -634,7 +698,10 @@ func appendTrackElementNameIssue(issues []TrackIssue, seen map[string]string, na
 		return issues
 	}
 	if prev, ok := seen[name]; ok {
-		return appendTrackIssue(issues, "track.element.duplicate", TrackIssueError, path, "duplicate track element name: " + name + " already used at " + prev)
+		return appendTrackIssue(issues, "track.element.duplicate", TrackIssueError, path, "duplicate track element name: " +
+			name +
+			" already used at " +
+			prev)
 	}
 	seen[name] = path
 	return issues

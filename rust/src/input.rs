@@ -433,5 +433,3 @@ pub const POINTER_DOWN: u8 = INPUT_POINTER_DOWN;
 pub const POINTER_UP: u8 = INPUT_POINTER_UP;
 #[cfg(feature = "native")]
 pub const POINTER_MOVE: u8 = INPUT_POINTER_MOVE;
-#[allow(dead_code)]
-pub const SCROLL: u8 = INPUT_SCROLL;

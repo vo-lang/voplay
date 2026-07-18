@@ -1,5 +1,7 @@
 use super::*;
 
+type MeshMaterialUniformVectors = ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]);
+
 impl Pipeline3D {
     pub fn clear_texture_bind_group_cache(&mut self) {
         self.main_texture_bind_groups.clear();
@@ -263,7 +265,7 @@ impl Pipeline3D {
         material: &MaterialOverride,
         mesh_material: &MeshMaterial,
         key: MainTextureKey,
-    ) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    ) -> MeshMaterialUniformVectors {
         let override_emissive_texture_active =
             material.emissive_texture_id != 0 && key.emissive == material.emissive_texture_id;
         (
@@ -335,6 +337,10 @@ impl Pipeline3D {
         })
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order mirrors bindings 0..=16 in
+    // the terrain shader layout; expiry: remove when bind-group entries are generated from a
+    // typed terrain layout descriptor.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_terrain_texture_bind_group(
         &self,
         device: &wgpu::Device,

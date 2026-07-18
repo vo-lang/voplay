@@ -60,16 +60,25 @@ impl Renderer {
             &mut primitive_chunks,
             &mut primitive_chunk_info,
         );
-        let mut render_batch_plan = build_frame_batch_plan(
+        let terrain_batch_inputs = RenderBatchPlanner::terrain_inputs(
             context.frame_id,
             &context.scene.model_draws,
-            &context.scene.projected_decals,
-            &primitive_draws,
-            &primitive_chunks,
-            &primitive_chunk_info,
-            context.view.camera3d_uniform.as_ref(),
             &self.model_manager,
         );
+        let decal_batch_inputs =
+            RenderBatchPlanner::decal_inputs(context.frame_id, &context.scene.projected_decals);
+        let mut render_batch_plan = RenderBatchPlanner::build(RenderBatchBuildInput {
+            frame_id: context.frame_id,
+            scene_id: 0,
+            model_draws: &context.scene.model_draws,
+            terrain_inputs: &terrain_batch_inputs,
+            primitive_draws: &primitive_draws,
+            primitive_chunks: &primitive_chunks,
+            primitive_chunk_info: &primitive_chunk_info,
+            decal_inputs: &decal_batch_inputs,
+            camera: context.view.camera3d_uniform.as_ref(),
+            quality: RenderBatchQualityProfile::default(),
+        });
         let planned_model_draws = render_batch_plan.model_batches(&context.scene.model_draws);
         let planned_primitive_draws = render_batch_plan.primitive_draw_batches(&primitive_draws);
         let planned_primitive_chunks = render_batch_plan.primitive_chunk_batches(&primitive_chunks);
@@ -244,33 +253,6 @@ fn apply_frame_perf_overrides(context: &mut FrameWorkloadPlanContext<'_>) {
         context.scene.projected_decals.clear();
         context.scene.projected_decal_atlas_bindings.clear();
     }
-}
-
-fn build_frame_batch_plan(
-    frame_id: u32,
-    model_draws: &[ModelDraw],
-    projected_decals: &[PostDecalGpu],
-    primitive_draws: &[PrimitiveDraw],
-    primitive_chunks: &[PrimitiveChunkRef],
-    primitive_chunk_info: &[PrimitiveChunkBatchInfo],
-    camera: Option<&Camera3DUniform>,
-    model_manager: &ModelManager,
-) -> RenderBatchPlan {
-    let terrain_batch_inputs =
-        RenderBatchPlanner::terrain_inputs(frame_id, model_draws, model_manager);
-    let decal_batch_inputs = RenderBatchPlanner::decal_inputs(frame_id, projected_decals);
-    RenderBatchPlanner::build(
-        frame_id,
-        0,
-        model_draws,
-        &terrain_batch_inputs,
-        primitive_draws,
-        primitive_chunks,
-        primitive_chunk_info,
-        &decal_batch_inputs,
-        camera,
-        RenderBatchQualityProfile::default(),
-    )
 }
 
 fn material_group_count(render_batch_plan: &RenderBatchPlan) -> u32 {

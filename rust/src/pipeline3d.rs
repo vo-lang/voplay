@@ -150,6 +150,103 @@ pub struct ModelDraw {
     pub animation_target_id: u32,
 }
 
+fn color_targets(
+    surface_format: wgpu::TextureFormat,
+    receiver_mask_format: wgpu::TextureFormat,
+    surface_props_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: receiver_mask_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: surface_props_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ]
+}
+
+fn color_only_targets(
+    surface_format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        None,
+        None,
+    ]
+}
+
+/// The 3D mesh rendering pipeline.
+pub struct Pipeline3D {
+    pipeline_instanced_textured: wgpu::RenderPipeline,
+    pipeline_instanced_textured_color: wgpu::RenderPipeline,
+    pipeline_instanced_untextured: wgpu::RenderPipeline,
+    pipeline_instanced_untextured_color: wgpu::RenderPipeline,
+    pipeline_terrain_splat: wgpu::RenderPipeline,
+    pipeline_terrain_splat_color: wgpu::RenderPipeline,
+    pipeline_skinned_textured: wgpu::RenderPipeline,
+    pipeline_skinned_textured_color: wgpu::RenderPipeline,
+    pipeline_skinned_untextured: wgpu::RenderPipeline,
+    pipeline_skinned_untextured_color: wgpu::RenderPipeline,
+    // GPU buffers
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    model_bgl: wgpu::BindGroupLayout,
+    model_buffer: wgpu::Buffer,
+    model_bind_group: wgpu::BindGroup,
+    model_buffer_alignment: u32,
+    model_buffer_slot_count: u32,
+    skinned_model_buffer: wgpu::Buffer,
+    skinned_model_bind_group: wgpu::BindGroup,
+    skinned_model_buffer_slot_count: u32,
+    instance_buffer: wgpu::Buffer,
+    instance_buffer_capacity: u32,
+    light_buffer: wgpu::Buffer,
+    light_bind_group: wgpu::BindGroup,
+    main_texture_bind_group_layout: wgpu::BindGroupLayout,
+    terrain_texture_bind_group_layout: wgpu::BindGroupLayout,
+    material_samplers: Vec<wgpu::Sampler>,
+    material_clamp_sampler: wgpu::Sampler,
+    // 1x1 white fallback texture for untextured meshes
+    white_texture_view: wgpu::TextureView,
+    main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup>,
+    terrain_texture_bind_groups: HashMap<TerrainTextureKey, TerrainBindGroupEntry>,
+}
+
+impl Pipeline3D {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        receiver_mask_format: wgpu::TextureFormat,
+        surface_props_format: wgpu::TextureFormat,
+        sample_count: u32,
+    ) -> Self {
+        PipelineFactory::create(
+            device,
+            queue,
+            surface_format,
+            receiver_mask_format,
+            surface_props_format,
+            sample_count,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::material::{
@@ -158,7 +255,9 @@ mod tests {
     };
     use crate::model_loader::MeshMaterial;
 
-    use super::{MaterialOverride, Pipeline3D};
+    use super::MaterialOverride;
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    use super::Pipeline3D;
 
     #[test]
     fn material_override_packs_render_material_params() {
@@ -252,6 +351,8 @@ mod tests {
         );
     }
 
+    // Adapter/device creation uses pollster plus an OS-native wgpu backend.
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
     #[test]
     fn pipeline3d_creates_with_current_shader_layouts() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -291,108 +392,5 @@ mod tests {
             wgpu::TextureFormat::Rgba8Unorm,
             1,
         );
-    }
-}
-
-fn color_targets(
-    surface_format: wgpu::TextureFormat,
-    receiver_mask_format: wgpu::TextureFormat,
-    surface_props_format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
-) -> [Option<wgpu::ColorTargetState>; 3] {
-    [
-        Some(wgpu::ColorTargetState {
-            format: surface_format,
-            blend,
-            write_mask: wgpu::ColorWrites::ALL,
-        }),
-        Some(wgpu::ColorTargetState {
-            format: receiver_mask_format,
-            blend: None,
-            write_mask: wgpu::ColorWrites::ALL,
-        }),
-        Some(wgpu::ColorTargetState {
-            format: surface_props_format,
-            blend: None,
-            write_mask: wgpu::ColorWrites::ALL,
-        }),
-    ]
-}
-
-fn color_only_targets(
-    surface_format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
-) -> [Option<wgpu::ColorTargetState>; 3] {
-    [
-        Some(wgpu::ColorTargetState {
-            format: surface_format,
-            blend,
-            write_mask: wgpu::ColorWrites::ALL,
-        }),
-        None,
-        None,
-    ]
-}
-
-/// The 3D mesh rendering pipeline.
-pub struct Pipeline3D {
-    #[allow(dead_code)]
-    // owner: voplay/render; expiry: 2026-07-12; legacy direct pipelines retained during cache split.
-    pipeline_textured: wgpu::RenderPipeline,
-    #[allow(dead_code)]
-    // owner: voplay/render; expiry: 2026-07-12; legacy direct pipelines retained during cache split.
-    pipeline_untextured: wgpu::RenderPipeline,
-    pipeline_instanced_textured: wgpu::RenderPipeline,
-    pipeline_instanced_textured_color: wgpu::RenderPipeline,
-    pipeline_instanced_untextured: wgpu::RenderPipeline,
-    pipeline_instanced_untextured_color: wgpu::RenderPipeline,
-    pipeline_terrain_splat: wgpu::RenderPipeline,
-    pipeline_terrain_splat_color: wgpu::RenderPipeline,
-    pipeline_skinned_textured: wgpu::RenderPipeline,
-    pipeline_skinned_textured_color: wgpu::RenderPipeline,
-    pipeline_skinned_untextured: wgpu::RenderPipeline,
-    pipeline_skinned_untextured_color: wgpu::RenderPipeline,
-    // GPU buffers
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    model_bgl: wgpu::BindGroupLayout,
-    model_buffer: wgpu::Buffer,
-    model_bind_group: wgpu::BindGroup,
-    model_buffer_alignment: u32,
-    model_buffer_slot_count: u32,
-    skinned_model_buffer: wgpu::Buffer,
-    skinned_model_bind_group: wgpu::BindGroup,
-    skinned_model_buffer_slot_count: u32,
-    instance_buffer: wgpu::Buffer,
-    instance_buffer_capacity: u32,
-    light_buffer: wgpu::Buffer,
-    light_bind_group: wgpu::BindGroup,
-    main_texture_bind_group_layout: wgpu::BindGroupLayout,
-    terrain_texture_bind_group_layout: wgpu::BindGroupLayout,
-    material_samplers: Vec<wgpu::Sampler>,
-    material_clamp_sampler: wgpu::Sampler,
-    // 1x1 white fallback texture for untextured meshes
-    white_texture_view: wgpu::TextureView,
-    main_texture_bind_groups: HashMap<MainTextureKey, wgpu::BindGroup>,
-    terrain_texture_bind_groups: HashMap<TerrainTextureKey, TerrainBindGroupEntry>,
-}
-
-impl Pipeline3D {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        receiver_mask_format: wgpu::TextureFormat,
-        surface_props_format: wgpu::TextureFormat,
-        sample_count: u32,
-    ) -> Self {
-        PipelineFactory::create(
-            device,
-            queue,
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            sample_count,
-        )
     }
 }

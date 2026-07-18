@@ -3,14 +3,6 @@
 
 use bytemuck::{Pod, Zeroable};
 
-// Shape type constants (matched in WGSL shader).
-#[allow(dead_code)]
-const SHAPE_RECT: f32 = 0.0;
-#[allow(dead_code)]
-const SHAPE_CIRCLE: f32 = 1.0;
-#[allow(dead_code)]
-const SHAPE_LINE: f32 = 2.0;
-
 /// Vertex for the unit quad.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -160,24 +152,6 @@ pub struct Pipeline2D {
 const INITIAL_INSTANCE_CAPACITY: usize = 1024;
 
 impl Pipeline2D {
-    #[allow(dead_code)]
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        camera_bind_group_layout: &wgpu::BindGroupLayout,
-        sample_count: u32,
-    ) -> Self {
-        Self::create(
-            device,
-            queue,
-            surface_format,
-            camera_bind_group_layout,
-            sample_count,
-            true,
-        )
-    }
-
     pub fn new_overlay(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

@@ -450,6 +450,10 @@ impl PipelineDepth {
         batch_draws
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order follows the stable depth
+    // pass contract across frame resources, scene data, and model stores; expiry: remove when the
+    // render graph owns a typed depth-pass descriptor shared by every backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_depth_pass(
         &mut self,
         device: &wgpu::Device,
@@ -637,7 +641,8 @@ impl PipelineDepth {
     }
 }
 
-#[cfg(test)]
+// This test requests an OS-native wgpu adapter synchronously through pollster.
+#[cfg(all(test, feature = "native", not(target_arch = "wasm32")))]
 mod tests {
     use super::PipelineDepth;
 

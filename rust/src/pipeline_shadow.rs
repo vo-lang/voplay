@@ -501,6 +501,10 @@ impl PipelineShadow {
         data.draws
     }
 
+    // Clippy exception — owner: voplay/render; reason: argument order follows the stable shadow
+    // pass contract across frame resources, light data, scene data, and model stores; expiry:
+    // remove when the render graph owns a typed shadow-pass descriptor shared by every backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_shadow_pass(
         &mut self,
         device: &wgpu::Device,
@@ -647,6 +651,10 @@ impl PipelineShadow {
         );
     }
 
+    // Clippy exception — owner: voplay/render; reason: adjacent cascade-indexed slices encode the
+    // stable shadow-cascade pass contract; expiry: remove when a typed cascade-pass descriptor
+    // owns the corresponding light, primitive, and resident-chunk slices.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_shadow_cascade_pass(
         &mut self,
         device: &wgpu::Device,
@@ -894,7 +902,8 @@ impl PipelineShadow {
     }
 }
 
-#[cfg(test)]
+// This test requests an OS-native wgpu adapter synchronously through pollster.
+#[cfg(all(test, feature = "native", not(target_arch = "wasm32")))]
 mod tests {
     use super::PipelineShadow;
 

@@ -1,17 +1,24 @@
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+use super::PrimitivePipeline;
 use super::{
     primitive_render_mode, sort_primitive_batches, PrimitiveBatch, PrimitiveBatchKey,
-    PrimitivePipeline, PrimitiveRenderMode, PrimitiveTextureKey,
+    PrimitiveRenderMode, PrimitiveTextureKey,
 };
 use crate::material::MaterialSamplerKey;
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 use crate::math3d::{Quat, Vec3};
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 use crate::model_loader::ModelManager;
 use crate::pipeline3d::{MaterialOverride, ModelUniform};
-use crate::primitive_scene::{
-    PrimitiveDraw, PrimitiveObjectUpdate, PRIMITIVE_FLAG_ATLAS_UV, PRIMITIVE_FLAG_BILLBOARD,
-};
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+use crate::primitive_scene::PrimitiveObjectUpdate;
+use crate::primitive_scene::{PrimitiveDraw, PRIMITIVE_FLAG_ATLAS_UV, PRIMITIVE_FLAG_BILLBOARD};
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 use crate::texture::TextureManager;
 use bytemuck::Zeroable;
 
+// Adapter/device creation uses pollster plus an OS-native wgpu backend.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 #[test]
 fn primitive_pipeline_creates_with_current_shader_layouts() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -53,6 +60,8 @@ fn primitive_pipeline_creates_with_current_shader_layouts() {
     );
 }
 
+// Resident-buffer integration requires a real native wgpu device and queue.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 #[test]
 fn primitive_pipeline_tracks_resident_chunks() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -123,6 +132,8 @@ fn primitive_pipeline_tracks_resident_chunks() {
     assert!(pipeline.object_chunks.is_empty());
 }
 
+// Partial-upload integration requires a real native wgpu device and queue.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 #[test]
 fn primitive_pipeline_single_instance_update_uses_partial_upload() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());

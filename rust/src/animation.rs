@@ -25,9 +25,6 @@ impl Transform {
 
 #[derive(Clone, Debug)]
 pub struct Joint {
-    #[allow(dead_code)]
-    // owner: voplay/animation; expiry: 2026-07-12; retained for imported skeleton labels.
-    pub name: String,
     pub parent: Option<usize>,
     pub local_transform: Transform,
 }
@@ -606,12 +603,10 @@ mod tests {
         Skeleton {
             joints: vec![
                 Joint {
-                    name: "root".to_string(),
                     parent: None,
                     local_transform: Transform::IDENTITY,
                 },
                 Joint {
-                    name: "child".to_string(),
                     parent: Some(0),
                     local_transform: Transform {
                         translation: Vec3::new(0.0, 1.0, 0.0),

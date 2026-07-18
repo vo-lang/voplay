@@ -153,7 +153,7 @@ pub(crate) fn decode_trimesh_desc(body_id: u32, data: &[u8]) -> TrimeshDesc3D {
 
 pub(crate) fn decode_model_geometry_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u32>) {
     assert!(
-        data.len() >= 16,
+        data.len() >= 24,
         "voplay: model geometry too short: {}",
         data.len()
     );
@@ -169,11 +169,24 @@ pub(crate) fn decode_model_geometry_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u3
     let _flags = read_u32_le(data, &mut pos);
     let material_count = read_u32_le(data, &mut pos) as usize;
     let triangle_material_count = read_u32_le(data, &mut pos) as usize;
-    let expected_len = 24
-        + position_count * 48
-        + material_count * 84
-        + index_count * 4
-        + triangle_material_count * 4;
+    let position_bytes = position_count
+        .checked_mul(48)
+        .unwrap_or_else(|| panic!("voplay: model geometry position byte count overflow"));
+    let material_bytes = material_count
+        .checked_mul(84)
+        .unwrap_or_else(|| panic!("voplay: model geometry material byte count overflow"));
+    let index_bytes = index_count
+        .checked_mul(4)
+        .unwrap_or_else(|| panic!("voplay: model geometry index byte count overflow"));
+    let triangle_material_bytes = triangle_material_count
+        .checked_mul(4)
+        .unwrap_or_else(|| panic!("voplay: model geometry triangle-material byte count overflow"));
+    let expected_len = 24usize
+        .checked_add(position_bytes)
+        .and_then(|len| len.checked_add(material_bytes))
+        .and_then(|len| len.checked_add(index_bytes))
+        .and_then(|len| len.checked_add(triangle_material_bytes))
+        .unwrap_or_else(|| panic!("voplay: model geometry total byte count overflow"));
     assert!(
         data.len() == expected_len,
         "voplay: model geometry size mismatch: got {}, expected {}",
@@ -189,12 +202,50 @@ pub(crate) fn decode_model_geometry_bytes(data: &[u8]) -> (Vec<[f32; 3]>, Vec<u3
         ]);
         pos += 48;
     }
-    pos += material_count * 84;
+    pos += material_bytes;
     let mut indices = Vec::with_capacity(index_count);
     for _ in 0..index_count {
         indices.push(read_u32_le(data, &mut pos));
     }
     (positions, indices)
+}
+
+#[cfg(test)]
+mod model_geometry_bytes_tests {
+    use super::decode_model_geometry_bytes;
+
+    fn geometry_header(
+        position_count: u32,
+        index_count: u32,
+        material_count: u32,
+        triangle_material_count: u32,
+    ) -> Vec<u8> {
+        let mut data = Vec::with_capacity(24);
+        for value in [
+            1,
+            position_count,
+            index_count,
+            0,
+            material_count,
+            triangle_material_count,
+        ] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn decoder_accepts_an_empty_geometry_packet() {
+        let (positions, indices) = decode_model_geometry_bytes(&geometry_header(0, 0, 0, 0));
+        assert!(positions.is_empty());
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn decoder_rejects_an_impossible_position_count_before_allocation() {
+        let data = geometry_header(u32::MAX, 0, 0, 0);
+        assert!(std::panic::catch_unwind(|| decode_model_geometry_bytes(&data)).is_err());
+    }
 }
 
 pub(crate) fn spawn_trimesh_body_from_geometry(
@@ -210,7 +261,7 @@ pub(crate) fn spawn_trimesh_body_from_geometry(
     });
 }
 
-fn decode_heightfield_data(data: &[u8]) -> Vec<f32> {
+pub(crate) fn decode_heightfield_data(data: &[u8]) -> Vec<f32> {
     assert!(
         data.len().is_multiple_of(4),
         "voplay: heightfield bytes length must be a multiple of 4, got {}",
@@ -219,6 +270,22 @@ fn decode_heightfield_data(data: &[u8]) -> Vec<f32> {
     data.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
+}
+
+#[cfg(test)]
+mod heightfield_data_tests {
+    use super::decode_heightfield_data;
+
+    #[test]
+    fn decoder_rejects_every_partial_f32_tail() {
+        for trailing_bytes in 1..=3 {
+            let data = vec![0; 4 + trailing_bytes];
+            assert!(
+                std::panic::catch_unwind(|| decode_heightfield_data(&data)).is_err(),
+                "accepted {trailing_bytes} trailing heightfield bytes",
+            );
+        }
+    }
 }
 
 pub(crate) fn decode_raycast_vehicle_wheel_desc(data: &[u8]) -> RaycastVehicleWheelDesc3D {
@@ -391,11 +458,20 @@ pub fn physics3d_add_raycast_vehicle_wheel(call: &mut ExternCallContext) -> Exte
     ExternResult::Ok
 }
 
+pub(crate) fn decode_raycast_vehicle_wheel_index(value: u64) -> usize {
+    let wheel_index = u32::try_from(value).unwrap_or_else(|_| {
+        panic!("voplay: raycast vehicle wheel index exceeds u32 range: {value}")
+    });
+    usize::try_from(wheel_index).unwrap_or_else(|_| {
+        panic!("voplay: raycast vehicle wheel index is not representable: {value}")
+    })
+}
+
 #[vo_fn("voplay/scene3d", "physicsSetRaycastVehicleWheelControl")]
 pub fn physics3d_set_raycast_vehicle_wheel_control(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let vehicle_id = call.arg_u64(1) as u32;
-    let wheel_id = call.arg_u64(2) as usize;
+    let wheel_id = decode_raycast_vehicle_wheel_index(call.arg_u64(2));
     let steering = call.arg_f64(3) as f32;
     let engine_force = call.arg_f64(4) as f32;
     let brake = call.arg_f64(5) as f32;
@@ -403,6 +479,24 @@ pub fn physics3d_set_raycast_vehicle_wheel_control(call: &mut ExternCallContext)
         world.set_raycast_vehicle_wheel_control(vehicle_id, wheel_id, steering, engine_force, brake)
     });
     ExternResult::Ok
+}
+
+#[cfg(test)]
+mod raycast_vehicle_wheel_index_tests {
+    use super::decode_raycast_vehicle_wheel_index;
+
+    #[test]
+    fn wheel_index_has_a_target_independent_u32_domain() {
+        assert_eq!(decode_raycast_vehicle_wheel_index(0), 0);
+        assert_eq!(
+            decode_raycast_vehicle_wheel_index(u32::MAX as u64),
+            u32::MAX as usize,
+        );
+        assert!(std::panic::catch_unwind(|| {
+            decode_raycast_vehicle_wheel_index(u32::MAX as u64 + 1)
+        })
+        .is_err());
+    }
 }
 
 #[vo_fn("voplay/scene3d", "physicsApplyRaycastVehicleForces")]
@@ -423,13 +517,15 @@ pub fn physics3d_apply_raycast_vehicle_forces(call: &mut ExternCallContext) -> E
     crate::physics3d::with_world(world_id, |world| {
         world.apply_raycast_vehicle_forces(
             vehicle_id,
-            body_force,
-            drag_force,
-            downforce,
-            water_lift,
-            air_control,
-            wall_grip,
-            rail_grip,
+            crate::physics3d::RaycastVehicleForces {
+                body_force,
+                drag_force,
+                downforce,
+                water_lift,
+                air_control,
+                wall_grip,
+                rail_grip,
+            },
         )
     });
     ExternResult::Ok
@@ -478,7 +574,7 @@ pub fn physics3d_set_body_motion(call: &mut ExternCallContext) -> ExternResult {
 pub fn physics3d_set_body_sleep_state(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let body_id = call.arg_u64(1) as u32;
-    let sleeping = call.arg_u64(2) != 0;
+    let sleeping = call.arg_bool(2);
     crate::physics3d::with_world(world_id, |world| {
         world.set_body_sleep_state(body_id, sleeping)
     });
@@ -513,11 +609,9 @@ pub fn physics3d_step(call: &mut ExternCallContext) -> ExternResult {
     let cmds_owned = cmds.to_vec();
 
     let state = crate::physics3d::with_world(world_id, |world| {
-        if let Err(error) = world.apply_commands(&cmds_owned) {
-            return Err(error);
-        }
+        world.apply_commands(&cmds_owned)?;
         world.step(dt);
-        Ok(world.serialize_state())
+        Ok::<_, crate::physics_command::PhysicsCommandError>(world.serialize_state())
     });
     let state = match state {
         Ok(state) => state,

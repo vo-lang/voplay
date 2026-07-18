@@ -108,18 +108,18 @@ fn render_world_builds_unified_batch_plan() {
         0.0,
     )];
 
-    let plan = RenderBatchPlanner::build(
-        120,
-        7,
-        &model_draws,
-        &[],
-        &primitive_draws,
-        &primitive_chunks,
-        &primitive_chunk_info,
-        &[],
-        None,
-        RenderBatchQualityProfile::default(),
-    );
+    let plan = RenderBatchPlanner::build(RenderBatchBuildInput {
+        frame_id: 120,
+        scene_id: 7,
+        model_draws: &model_draws,
+        terrain_inputs: &[],
+        primitive_draws: &primitive_draws,
+        primitive_chunks: &primitive_chunks,
+        primitive_chunk_info: &primitive_chunk_info,
+        decal_inputs: &[],
+        camera: None,
+        quality: RenderBatchQualityProfile::default(),
+    });
 
     assert_eq!(plan.frame_id, 120);
     assert_eq!(plan.visible_objects, 3);
@@ -175,18 +175,18 @@ fn batch_planner_constructs_terrain_and_decal_entries() {
     )];
     let decal_inputs = RenderBatchPlanner::decal_inputs(41, &decals);
 
-    let mut plan = RenderBatchPlanner::build(
-        41,
-        3,
-        &[terrain_draw],
-        &terrain_inputs,
-        &[],
-        &[],
-        &[],
-        &decal_inputs,
-        None,
-        RenderBatchQualityProfile::default(),
-    );
+    let mut plan = RenderBatchPlanner::build(RenderBatchBuildInput {
+        frame_id: 41,
+        scene_id: 3,
+        model_draws: &[terrain_draw],
+        terrain_inputs: &terrain_inputs,
+        primitive_draws: &[],
+        primitive_chunks: &[],
+        primitive_chunk_info: &[],
+        decal_inputs: &decal_inputs,
+        camera: None,
+        quality: RenderBatchQualityProfile::default(),
+    });
 
     assert_eq!(plan.mesh_batches, 0);
     assert_eq!(plan.terrain_batches, 1);
@@ -230,18 +230,18 @@ fn batch_planner_selects_lod_from_distance_and_metadata() {
         _pad: 0.0,
     };
 
-    let plan = RenderBatchPlanner::build(
-        9,
-        1,
-        &[],
-        &[],
-        &primitive_draws,
-        &primitive_chunks,
-        &primitive_chunk_info,
-        &[],
-        Some(&camera),
-        RenderBatchQualityProfile::default(),
-    );
+    let plan = RenderBatchPlanner::build(RenderBatchBuildInput {
+        frame_id: 9,
+        scene_id: 1,
+        model_draws: &[],
+        terrain_inputs: &[],
+        primitive_draws: &primitive_draws,
+        primitive_chunks: &primitive_chunks,
+        primitive_chunk_info: &primitive_chunk_info,
+        decal_inputs: &[],
+        camera: Some(&camera),
+        quality: RenderBatchQualityProfile::default(),
+    });
 
     assert_eq!(plan.primitive_batches, 2);
     assert_eq!(plan.lod1_chunks, 2);
@@ -277,18 +277,18 @@ fn batch_planner_counts_frustum_and_distance_culls() {
         _pad: 0.0,
     };
 
-    let plan = RenderBatchPlanner::build(
-        10,
-        2,
-        &[far_model],
-        &[],
-        &primitive_draws,
-        &[],
-        &[],
-        &[],
-        Some(&camera),
-        RenderBatchQualityProfile::default(),
-    );
+    let plan = RenderBatchPlanner::build(RenderBatchBuildInput {
+        frame_id: 10,
+        scene_id: 2,
+        model_draws: &[far_model],
+        terrain_inputs: &[],
+        primitive_draws: &primitive_draws,
+        primitive_chunks: &[],
+        primitive_chunk_info: &[],
+        decal_inputs: &[],
+        camera: Some(&camera),
+        quality: RenderBatchQualityProfile::default(),
+    });
 
     assert_eq!(plan.frustum_culled_chunks, 1);
     assert_eq!(plan.distance_culled_chunks, 1);

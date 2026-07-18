@@ -630,14 +630,9 @@ fn raster_mesh_cell(
                 let mut nz = face_nz;
                 if mesh.has_normals {
                     (nx, ny, nz) = interpolated_view_normal(
-                        mesh.normals[i0],
-                        mesh.normals[i1],
-                        mesh.normals[i2],
-                        cw0,
-                        cw1,
-                        cw2,
-                        cos_yaw,
-                        sin_yaw,
+                        [mesh.normals[i0], mesh.normals[i1], mesh.normals[i2]],
+                        [cw0, cw1, cw2],
+                        (cos_yaw, sin_yaw),
                     );
                 }
                 let vertex_color = if mesh.has_colors {
@@ -866,15 +861,13 @@ fn triangle_view_normal(a: Vec3, b: Vec3, c: Vec3, cos_yaw: f32, sin_yaw: f32) -
 }
 
 fn interpolated_view_normal(
-    a: Vec3,
-    b: Vec3,
-    c: Vec3,
-    wa: f32,
-    wb: f32,
-    wc: f32,
-    cos_yaw: f32,
-    sin_yaw: f32,
+    normals: [Vec3; 3],
+    weights: [f32; 3],
+    yaw: (f32, f32),
 ) -> (f32, f32, f32) {
+    let [a, b, c] = normals;
+    let [wa, wb, wc] = weights;
+    let (cos_yaw, sin_yaw) = yaw;
     let nx = a.x * wa + b.x * wb + c.x * wc;
     let ny = a.y * wa + b.y * wb + c.y * wc;
     let nz = a.z * wa + b.z * wb + c.z * wc;

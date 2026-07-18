@@ -6,265 +6,198 @@ on:
     branches:
       - main
       - "release/v*"
+    tags:
+      - "v*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release tag (e.g. v0.1.0)"
-        required: true
-        type: string
-      source_ref:
-        description: "Git ref to build from (defaults to the triggering ref)"
-        required: false
-        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: module-ci-${{ github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 env:
-  VOLANG_REF: ffb280bb6d32188495cdc73aab7a04367d589576
-  VOGUI_REF: 0be8cd1b8abab4aabd510b6e2b9f74510f27f837
-  VOPACK_REF: d2063001e66405ad800bdabe0c7e7ff6343149de
+  VOLANG_REF: fc07de2a7f74d15c30420402e9df770fb0674f6b
+  VOGUI_REF: 402aa502bf4951111c6dce9bb36cf76ef7d5090e
+  VOPACK_REF: 895f9a786cf27f61a07c87c23df5f6ed8a272ae0
 
 jobs:
-  validate:
+  validate_workspace:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: checkouts/voplay
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Checkout voplay
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+          path: checkouts/voplay
 
-      - name: Install system deps
-        run: sudo apt-get install -y libasound2-dev
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Checkout volang toolchain
-        uses: actions/checkout@v6.0.2
+      - name: Checkout Volang toolchain
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: vo-lang/volang
           ref: ${{ env.VOLANG_REF }}
-          path: volang
+          path: checkouts/volang
 
-      - name: Checkout vogui source dependency
-        uses: actions/checkout@v6.0.2
+      - name: Checkout vogui workspace dependency
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: vo-lang/vogui
           ref: ${{ env.VOGUI_REF }}
-          path: dependency-vogui
+          path: checkouts/vogui
 
-      - name: Checkout vopack release source
-        uses: actions/checkout@v6.0.2
+      - name: Checkout vopack workspace dependency
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: vo-lang/vopack
           ref: ${{ env.VOPACK_REF }}
-          path: dependency-vopack
+          path: checkouts/vopack
 
-      - name: Mirror local volang layout
+      - name: Resolve immutable source identities
+        id: source
+        shell: bash
         run: |
-          ln -sfn "$GITHUB_WORKSPACE/volang" "$GITHUB_WORKSPACE/../volang"
-          ln -sfn "$GITHUB_WORKSPACE/dependency-vogui" "$GITHUB_WORKSPACE/../vogui"
-          ln -sfn "$GITHUB_WORKSPACE/dependency-vopack" "$GITHUB_WORKSPACE/../vopack"
+          echo "voplay=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
+          echo "volang=$(git -C ../volang rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
+          echo "vogui=$(git -C ../vogui rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
+          echo "vopack=$(git -C ../vopack rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build vo
-        run: cargo build --manifest-path volang/cmd/vo/Cargo.toml --release
-
-      - name: Expose vo on PATH
-        run: echo "$GITHUB_WORKSPACE/volang/target/release" >> "$GITHUB_PATH"
-
-      - name: Verify release state
-        env:
-          VOWORK: off
-        run: vo release verify .
-
-      - name: Check module
-        run: vo check .
-
-      - name: Test module
-        run: |
-          if [ -d tests ]; then
-            vo test tests
-          else
-            echo "no tests directory"
-          fi
-
-  build_native_release_artifacts:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/v')
-    needs: validate
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-            library: libvo_voplay.dylib
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            library: libvo_voplay.so
-    env:
-      VOWORK: off
-    steps:
-      - uses: actions/checkout@v6.0.2
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
-
-      - name: Install Linux system deps
-        if: runner.os == 'Linux'
+      - name: Install system dependencies
         run: sudo apt-get install -y libasound2-dev
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Checkout volang toolchain
-        uses: actions/checkout@v6.0.2
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
-          repository: vo-lang/volang
-          ref: ${{ env.VOLANG_REF }}
-          path: volang
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
 
-      - name: Mirror local volang layout
-        run: ln -sfn "$GITHUB_WORKSPACE/volang" "$GITHUB_WORKSPACE/../volang"
-
-      - name: Build native extension
-        run: cargo build --manifest-path rust/Cargo.toml --lib --release --target ${{ matrix.target }}
-
-      - name: Upload native artifact
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: native-${{ matrix.target }}
-          path: rust/target/${{ matrix.target }}/release/${{ matrix.library }}
-
-  release_assets:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/v')
-    needs:
-      - validate
-      - build_native_release_artifacts
-    runs-on: ubuntu-latest
-    env:
-      VOWORK: off
-    steps:
-      - uses: actions/checkout@v6.0.2
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
-          fetch-depth: 0
-
-      - name: Resolve release version
-        id: release
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#release/}"
-          fi
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "invalid release version: $VERSION" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v6.0.2
-        with:
-          repository: vo-lang/volang
-          ref: ${{ env.VOLANG_REF }}
-          path: volang
-
-      - name: Mirror local volang layout
-        run: ln -sfn "$GITHUB_WORKSPACE/volang" "$GITHUB_WORKSPACE/../volang"
-
-      - uses: ./volang/.github/actions/setup-rust
-
-      - uses: actions/setup-node@v6.4.0
+      - name: Install Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: checkouts/voplay/js/package-lock.json
 
-      - name: Build vo
-        run: cargo build --manifest-path volang/cmd/vo/Cargo.toml --release
+      - name: Build the pinned Vo toolchain
+        run: cargo build --locked --manifest-path ../volang/cmd/vo/Cargo.toml --release
 
-      - name: Expose vo on PATH
-        run: echo "$GITHUB_WORKSPACE/volang/target/release" >> "$GITHUB_PATH"
+      - name: Expose Vo on PATH
+        run: echo "$GITHUB_WORKSPACE/checkouts/volang/target/release" >> "$GITHUB_PATH"
+
+      - name: Verify all-local package authority
+        shell: bash
+        env:
+          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+        run: |
+          snapshot="$RUNNER_TEMP/voplay-module-snapshot.json"
+          vo mod snapshot . > "$snapshot"
+          jq -e \
+            --arg work "$GITHUB_WORKSPACE/checkouts/voplay/vo.work" \
+            --arg vogui "$GITHUB_WORKSPACE/checkouts/vogui" \
+            --arg vopack "$GITHUB_WORKSPACE/checkouts/vopack" \
+            '
+              .authority == "workspace"
+              and .workspace.file == $work
+              and (.modules | map(.module)) == [
+                "github.com/vo-lang/vogui",
+                "github.com/vo-lang/vopack"
+              ]
+              and ([.modules[].source.kind] | unique) == ["workspace"]
+              and ([.modules[] | select(.module == "github.com/vo-lang/vogui") | .source.directory] == [$vogui])
+              and ([.modules[] | select(.module == "github.com/vo-lang/vopack") | .source.directory] == [$vopack])
+              and ([.. | objects | select(.kind? == "registry" or .kind? == "release")] | length) == 0
+            ' "$snapshot"
+
+      - name: Check root module
+        env:
+          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+        run: vo check .
+
+      - name: Test root module
+        env:
+          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+        run: |
+          if [[ -d tests ]]; then
+            vo test tests
+          fi
+
+      - name: Check workspace examples
+        shell: bash
+        run: |
+          for example in empty_smoke primitive_smoke primitive_stress; do
+            root="$GITHUB_WORKSPACE/checkouts/voplay/examples/$example"
+            VOWORK="$root/vo.work" vo check "$root"
+          done
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
+
+      - name: Test native renderer and physics
+        run: cargo test --locked --manifest-path rust/Cargo.toml --lib
 
       - name: Install JS dependencies
-        working-directory: js
+        working-directory: checkouts/voplay/js
         run: npm ci
 
-      - name: Build Studio JS assets
-        working-directory: js
-        run: npm run build
+      - name: Check and build JS
+        working-directory: checkouts/voplay/js
+        run: |
+          npm run check
+          npm run build
+
+      - name: Verify tracked JS outputs
+        run: git diff --exit-code -- js/dist
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack --locked --version 0.13.1
+        run: cargo install wasm-pack --locked --version 0.14.0
 
-      - name: Build pkg-island release assets
-        working-directory: rust
+      - name: Build Studio WASM parity fixture
+        run: node ../volang/apps/studio/scripts/build_wasm.mjs
+
+      - name: Verify vehicle telemetry parity
+        env:
+          VO_BIN: ${{ github.workspace }}/checkouts/volang/target/release/vo
+          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+        run: node tools/check_vehicle_telemetry_parity.mjs
+
+      - name: Verify release and exposure tooling
         run: |
-          wasm-pack build --target web --out-dir pkg-island --out-name voplay_island --release . -- --no-default-features --features wasm-island
+          node tools/verify_github_release.mjs --self-test
+          node tools/check_render_exposure.mjs --self-test
 
-      - name: Install browser artifacts into source tree
+      - name: Build canonical current-source WASM
+        env:
+          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOPLAY_ROOT: ${{ github.workspace }}/checkouts/voplay
+          VOPLAY_EXPECTED_COMMIT: ${{ steps.source.outputs.voplay }}
+          VOGUI_ROOT: ${{ github.workspace }}/checkouts/vogui
+          VOGUI_EXPECTED_COMMIT: ${{ steps.source.outputs.vogui }}
+          VOPACK_ROOT: ${{ github.workspace }}/checkouts/vopack
+          VOPACK_EXPECTED_COMMIT: ${{ steps.source.outputs.vopack }}
+          VOPLAY_CURRENT_WASM_OUT_DIR: ${{ runner.temp }}/voplay-current-wasm
+        run: node ../volang/scripts/ci/voplay_current_wasm.mjs
+
+      - name: Verify tracked WASM outputs
+        shell: bash
         run: |
-          cp rust/pkg-island/voplay_island.js web-artifacts/voplay_island.js
-          cp rust/pkg-island/voplay_island_bg.wasm web-artifacts/voplay_island_bg.wasm
+          cmp "$RUNNER_TEMP/voplay-current-wasm/voplay_island.js" web-artifacts/voplay_island.js
+          cmp "$RUNNER_TEMP/voplay-current-wasm/voplay_island_bg.wasm" web-artifacts/voplay_island_bg.wasm
 
-      - name: Configure release git identity
+      - name: Verify clean generated state
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git diff --check
+          git diff --exit-code
 
-      - name: Commit browser artifacts
-        id: browser_artifacts
+  release_unavailable:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require registry-v3 bootstrap
+        shell: bash
         run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          git fetch origin --tags
-          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-            echo "release tag already exists: $VERSION" >&2
-            exit 1
-          fi
-          git add web-artifacts/voplay_island.js web-artifacts/voplay_island_bg.wasm
-          if git diff --cached --quiet; then
-            echo "Browser artifacts already match source."
-          else
-            git commit -m "chore: build voplay web artifacts $VERSION"
-          fi
-          echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Download staged release artifacts
-        uses: actions/download-artifact@v8.0.1
-        with:
-          path: ${{ runner.temp }}/release-artifacts
-          merge-multiple: true
-
-      - name: Stage release assets
-        id: stage_release
-        run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          vo release stage . \
-            --version "$VERSION" \
-            --commit "${{ steps.browser_artifacts.outputs.source_commit }}" \
-            --artifact extension-native aarch64-apple-darwin libvo_voplay.dylib "$RUNNER_TEMP/release-artifacts/libvo_voplay.dylib" \
-            --artifact extension-native x86_64-unknown-linux-gnu libvo_voplay.so "$RUNNER_TEMP/release-artifacts/libvo_voplay.so" \
-            --artifact extension-js-glue wasm32-unknown-unknown voplay_island.js web-artifacts/voplay_island.js \
-            --artifact extension-wasm wasm32-unknown-unknown voplay_island_bg.wasm web-artifacts/voplay_island_bg.wasm \
-            --out-dir release-dist
-          cp release-dist/vo.web.json vo.web.json
-          git add vo.web.json
-          git commit -m "chore: stage voplay web manifest $VERSION"
-          git tag -a "$VERSION" -m "$VERSION"
-          echo "stage_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Publish release tag
-        run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          git push origin HEAD:main
-          git push origin "refs/tags/$VERSION"
-          if [[ "$GITHUB_REF_NAME" == release/* ]]; then
-            git push origin --delete "$GITHUB_REF_NAME"
-          fi
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v3.0.0
-        with:
-          tag_name: ${{ steps.release.outputs.version }}
-          files: release-dist/*
+          echo "::error::voplay release is unavailable until registry-v3 vogui and vopack releases exist and VOWORK=off can generate a real vo.lock."
+          exit 1

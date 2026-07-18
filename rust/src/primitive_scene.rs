@@ -234,7 +234,8 @@ impl PrimitiveRenderWorld {
         scene.layers.clear();
     }
 
-    pub fn collect_draws(
+    #[cfg(test)]
+    fn collect_draws(
         &self,
         scene_id: u32,
         camera: Option<&Camera3DUniform>,

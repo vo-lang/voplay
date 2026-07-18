@@ -15,322 +15,14 @@ export function __voInit() {
 }
 
 /**
- * animationCrossfade(worldId, targetId, clipIndex, duration)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationCrossfade(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationCrossfade(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationDestroy(worldId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationDestroy(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationDestroy(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationInit() → uint32
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function animationInit(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationInit(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationModelInfo(modelId) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationModelInfo(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationModelInfo(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationPlay(worldId, targetId, clipIndex, looping, speed)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationPlay(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationPlay(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationProgress(worldId, targetId, modelId) → float
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationProgress(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationProgress(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationRemoveTarget(worldId, targetId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationRemoveTarget(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationRemoveTarget(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationSetSpeed(worldId, targetId, speed)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationSetSpeed(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationSetSpeed(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationStop(worldId, targetId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationStop(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationStop(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * animationTick(worldId, dt, entityModels []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function animationTick(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.animationTick(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * audioLoadFile(path string) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function audioLoadFile(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.audioLoadFile(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createCapsuleMesh(segments, halfHeight, radius) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createCapsuleMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createCapsuleMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createConeMesh(segments) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createConeMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createConeMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createCubeMesh() → uint32
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function createCubeMesh(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createCubeMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createCylinderMesh(segments) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createCylinderMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createCylinderMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createPlaneMesh(width, depth, subX, subZ) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createPlaneMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createPlaneMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * createRawMesh(data []byte) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createRawMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createRawMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createRoundedBoxMesh(bevelRadius, segments) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createRoundedBoxMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createRoundedBoxMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createSphereMesh(segments) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function createSphereMesh(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createSphereMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createWedgeMesh() → uint32
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function createWedgeMesh(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.createWedgeMesh(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
  * freeCubemap(id uint32)
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function freeCubemap(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a66726565437562656d6170(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.freeCubemap(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * freeFont(id uint32)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function freeFont(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.freeFont(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * freeModel(id uint32)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function freeModel(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.freeModel(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a66726565437562656d6170(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -341,10 +33,10 @@ export function freeModel(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function freeTexture(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6672656554657874757265(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.freeTexture(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6672656554657874757265(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -355,52 +47,10 @@ export function freeTexture(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function initSurface(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a696e697453757266616365(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.initSurface(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * isRendererReady() → bool
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function isRendererReady(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.isRendererReady(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * lastRendererPerfPacket() → []byte
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function lastRendererPerfPacket(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.lastRendererPerfPacket(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * lastWebGpuPerfPacket() → []byte
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function lastWebGpuPerfPacket(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.lastWebGpuPerfPacket(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a696e697453757266616365(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -411,80 +61,10 @@ export function lastWebGpuPerfPacket(_input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function loadCubemap(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6c6f6164437562656d6170(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadCubemap(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadCubemapBytes(right, left, top, bottom, front, back []byte) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadCubemapBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadCubemapBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadFont(path string) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadFont(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadFont(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadFontBytes(data []byte) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadFontBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadFontBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadModel(path string) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadModel(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadModel(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadModelBytes(data []byte) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadModelBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadModelBytes(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6c6f6164437562656d6170(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -495,80 +75,10 @@ export function loadModelBytes(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function loadTexture(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6c6f616454657874757265(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTexture(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadTextureBytes(data []byte) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadTextureBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTextureBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadTextureBytesLinear(data []byte) -> (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadTextureBytesLinear(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTextureBytesLinear(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadTextureLinear(path string) -> (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadTextureLinear(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTextureLinear(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadTextureRGBA(width uint32, height uint32, data []byte) -> (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadTextureRGBA(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTextureRGBA(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * loadTextureRGBALinear(width uint32, height uint32, data []byte) -> (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function loadTextureRGBALinear(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.loadTextureRGBALinear(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6c6f616454657874757265(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -579,10 +89,10 @@ export function loadTextureRGBALinear(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function measureText(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6d65617375726554657874(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.measureText(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6d65617375726554657874(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -593,584 +103,10 @@ export function measureText(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function modelBounds(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6d6f64656c426f756e6473(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.modelBounds(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * modelGeometryBytes(id uint32) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function modelGeometryBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.modelGeometryBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * pollInput() → []byte
- * @param {Uint8Array} _input
- * @returns {Uint8Array}
- */
-export function pollInput(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.pollInput(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsContacts(worldId) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsContacts(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsContacts(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsDestroy(worldId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsDestroy(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsDestroy(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsDestroyBody(worldId, bodyId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsDestroyBody(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsDestroyBody(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsInit(gx, gy) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsInit(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsInit(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsQueryRect(worldId, minX, minY, maxX, maxY) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsQueryRect(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsQueryRect(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsRayCast(worldId, ox, oy, dx, dy, maxDist) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsRayCast(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsRayCast(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsSetGravity(worldId, gx, gy)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsSetGravity(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsSetGravity(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsSpawnBody(worldId, bodyId, data []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsSpawnBody(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsSpawnBody(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene2d_physicsStep(worldId, dt, cmds []byte) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene2d_physicsStep(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene2d_physicsStep(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_bakeImpostorAtlasBytes(request []byte) → ([]byte, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_bakeImpostorAtlasBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_bakeImpostorAtlasBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createTerrain(path, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_createTerrain(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_createTerrain(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createTerrainBytes(data []byte, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_createTerrainBytes(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_createTerrainBytes(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createTerrainBytesSplat(data, sx, sy, sz, controlTexId, layerData) → terrain result
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_createTerrainBytesSplat(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_createTerrainBytesSplat(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createTerrainSplat(path, sx, sy, sz, controlTexId, layerData) → terrain result
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_createTerrainSplat(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_createTerrainSplat(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_createTerrainSplatModel(modelId, controlTexId, layerData) → (uint32, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_createTerrainSplatModel(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_createTerrainSplatModel(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_loadLevel(path string) → ([]byte, error)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_loadLevel(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_loadLevel(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsAddRaycastVehicleWheel(worldId, vehicleId, desc []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsAddRaycastVehicleWheel(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsAddRaycastVehicleWheel(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsApplyRaycastVehicleForces(worldId, vehicleId, fx, fy, fz, dragForce, downforce, waterLift, airControl, wallGrip, railGrip)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsApplyRaycastVehicleForces(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsApplyRaycastVehicleForces(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsContacts(worldId) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsContacts(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsContacts(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsCreateRaycastVehicle(worldId, vehicleId, bodyId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsCreateRaycastVehicle(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsCreateRaycastVehicle(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsDestroy(worldId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsDestroy(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsDestroy(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsDestroyBody(worldId, bodyId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsDestroyBody(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsDestroyBody(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsDestroyRaycastVehicle(worldId, vehicleId)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsDestroyRaycastVehicle(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsDestroyRaycastVehicle(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsInit(gx, gy, gz) → uint32
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsInit(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsInit(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsQueryAABB(worldId, minX, minY, minZ, maxX, maxY, maxZ) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsQueryAABB(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsQueryAABB(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsRayCast(worldId, ox, oy, oz, dx, dy, dz, maxDist) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsRayCast(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsRayCast(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsRaycastVehicleState(worldId, vehicleId) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsRaycastVehicleState(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsRaycastVehicleState(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSetBodyMotion(worldId, bodyId, lvx, lvy, lvz, avx, avy, avz)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSetBodyMotion(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSetBodyMotion(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSetBodyPose(worldId, bodyId, px, py, pz, qx, qy, qz, qw)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSetBodyPose(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSetBodyPose(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSetBodySleepState(worldId, bodyId, sleeping)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSetBodySleepState(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSetBodySleepState(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSetGravity(worldId, gx, gy, gz)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSetGravity(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSetGravity(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSetRaycastVehicleWheelControl(worldId, vehicleId, wheelId, steering, engineForce, brake)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSetRaycastVehicleWheelControl(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSetRaycastVehicleWheelControl(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSpawnBody(worldId, bodyId, data []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSpawnBody(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSpawnBody(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSpawnHeightfield(worldId, bodyId, heights []byte, rows, cols, sx, sy, sz, px, py, pz, layer, mask, friction, restitution)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSpawnHeightfield(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSpawnHeightfield(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSpawnTrimeshBody(worldId, bodyId, modelId, data []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSpawnTrimeshBody(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSpawnTrimeshBody(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsSpawnTrimeshBodyData(worldId, bodyId, data []byte, geometryData []byte)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsSpawnTrimeshBodyData(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsSpawnTrimeshBodyData(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_physicsStep(worldId, dt, cmds []byte) → []byte
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_physicsStep(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_physicsStep(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * scene3d_terrainHeightAt(worldId, bodyId, x, z) → (float, bool)
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function scene3d_terrainHeightAt(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.scene3d_terrainHeightAt(ptr0, len0);
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * setRendererPerfStatsEnabled(enabled bool) → error
- * @param {Uint8Array} input
- * @returns {Uint8Array}
- */
-export function setRendererPerfStatsEnabled(input) {
-    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.setRendererPerfStatsEnabled(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a6d6f64656c426f756e6473(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -1181,10 +117,388 @@ export function setRendererPerfStatsEnabled(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function submitFrame(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a7375626d69744672616d65(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.submitFrame(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31313a7375626d69744672616d65(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationInit() → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e496e6974(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e496e6974(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationPlay(worldId, targetId, clipIndex, looping, speed)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e506c6179(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e506c6179(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationStop(worldId, targetId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e53746f70(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e53746f70(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationTick(worldId, dt, entityModels []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e5469636b(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a616e696d6174696f6e5469636b(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * audioLoadFile(path string) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a617564696f4c6f616446696c65(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a617564696f4c6f616446696c65(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * createRawMesh(data []byte) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a6372656174655261774d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a6372656174655261774d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadFontBytes(data []byte) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a6c6f6164466f6e744279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31333a6c6f6164466f6e744279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createConeMesh(segments) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a637265617465436f6e654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a637265617465436f6e654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createCubeMesh() → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a637265617465437562654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a637265617465437562654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadModelBytes(data []byte) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a6c6f61644d6f64656c4279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31343a6c6f61644d6f64656c4279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createPlaneMesh(width, depth, subX, subZ) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a637265617465506c616e654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a637265617465506c616e654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createWedgeMesh() → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a63726561746557656467654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a63726561746557656467654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * isRendererReady() → (bool, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a697352656e64657265725265616479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a697352656e64657265725265616479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadTextureRGBA(width uint32, height uint32, data []byte) -> (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a6c6f61645465787475726552474241(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31353a6c6f61645465787475726552474241(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationDestroy(worldId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a616e696d6174696f6e44657374726f79(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a616e696d6174696f6e44657374726f79(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createSphereMesh(segments) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6372656174655370686572654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6372656174655370686572654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadCubemapBytes(right, left, top, bottom, front, back []byte) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6c6f6164437562656d61704279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6c6f6164437562656d61704279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadTextureBytes(data []byte) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6c6f6164546578747572654279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a6c6f6164546578747572654279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * waitDisplayPulse()
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a77616974446973706c617950756c7365(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31363a77616974446973706c617950756c7365(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationProgress(worldId, targetId, modelId) → float
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a616e696d6174696f6e50726f6772657373(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a616e696d6174696f6e50726f6772657373(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationSetSpeed(worldId, targetId, speed)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a616e696d6174696f6e5365745370656564(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a616e696d6174696f6e5365745370656564(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createCapsuleMesh(segments, halfHeight, radius) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a63726561746543617073756c654d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a63726561746543617073756c654d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadTextureLinear(path string) -> (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a6c6f6164546578747572654c696e656172(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31373a6c6f6164546578747572654c696e656172(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationCrossfade(worldId, targetId, clipIndex, duration)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a616e696d6174696f6e43726f737366616465(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a616e696d6174696f6e43726f737366616465(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationModelInfo(modelId) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a616e696d6174696f6e4d6f64656c496e666f(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a616e696d6174696f6e4d6f64656c496e666f(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createCylinderMesh(segments) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a63726561746543796c696e6465724d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a63726561746543796c696e6465724d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * modelGeometryBytes(id uint32) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a6d6f64656c47656f6d657472794279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a6d6f64656c47656f6d657472794279746573(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -1195,24 +509,724 @@ export function submitFrame(input) {
  * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function texturePixelsBytes(input) {
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a74657874757265506978656c734279746573(input) {
     const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.texturePixelsBytes(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a31383a74657874757265506978656c734279746573(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
 }
 
 /**
- * waitDisplayPulse()
- * @param {Uint8Array} _input
+ * scene3d_createRoundedBoxMesh(bevelRadius, segments) → uint32
+ * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-export function waitDisplayPulse(_input) {
-    const ptr0 = passArray8ToWasm0(_input, wasm.__wbindgen_malloc);
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32303a637265617465526f756e646564426f784d657368(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.waitDisplayPulse(ptr0, len0);
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32303a637265617465526f756e646564426f784d657368(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * lastWebGpuPerfPacket() → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32303a6c617374576562477075506572665061636b6574(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32303a6c617374576562477075506572665061636b6574(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * animationRemoveTarget(worldId, targetId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32313a616e696d6174696f6e52656d6f7665546172676574(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32313a616e696d6174696f6e52656d6f7665546172676574(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadTextureRGBALinear(width uint32, height uint32, data []byte) -> (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32313a6c6f616454657874757265524742414c696e656172(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32313a6c6f616454657874757265524742414c696e656172(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * lastRendererPerfPacket() → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32323a6c61737452656e6465726572506572665061636b6574(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32323a6c61737452656e6465726572506572665061636b6574(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadTextureBytesLinear(data []byte) -> (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32323a6c6f61645465787475726542797465734c696e656172(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32323a6c6f61645465787475726542797465734c696e656172(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * setRendererPerfStatsEnabled(enabled bool) → error
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32373a73657452656e6465726572506572665374617473456e61626c6564(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a32373a73657452656e6465726572506572665374617473456e61626c6564(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * freeFont(id uint32)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a383a66726565466f6e74(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a383a66726565466f6e74(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadFont(path string) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a383a6c6f6164466f6e74(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a383a6c6f6164466f6e74(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * freeModel(id uint32)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a667265654d6f64656c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a667265654d6f64656c(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * loadModel(path string) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a6c6f61644d6f64656c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a6c6f61644d6f64656c(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * pollInput() → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a706f6c6c496e707574(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a32353a6769746875622e636f6d2f766f2d6c616e672f766f706c61793a393a706f6c6c496e707574(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsInit(gx, gy) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31313a70687973696373496e6974(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31313a70687973696373496e6974(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsStep(worldId, dt, cmds []byte) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31313a7068797369637353746570(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31313a7068797369637353746570(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsDestroy(worldId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31343a7068797369637344657374726f79(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31343a7068797369637344657374726f79(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsRayCast(worldId, ox, oy, dx, dy, maxDist) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31343a7068797369637352617943617374(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31343a7068797369637352617943617374(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsContacts(worldId) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31353a70687973696373436f6e7461637473(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31353a70687973696373436f6e7461637473(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsQueryRect(worldId, minX, minY, maxX, maxY) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31363a70687973696373517565727952656374(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31363a70687973696373517565727952656374(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsSpawnBody(worldId, bodyId, data []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31363a70687973696373537061776e426f6479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31363a70687973696373537061776e426f6479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsSetGravity(worldId, gx, gy)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31373a7068797369637353657447726176697479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31373a7068797369637353657447726176697479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene2d_physicsDestroyBody(worldId, bodyId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31383a7068797369637344657374726f79426f6479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6532643a31383a7068797369637344657374726f79426f6479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsInit(gx, gy, gz) → uint32
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31313a70687973696373496e6974(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31313a70687973696373496e6974(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsStep(worldId, dt, cmds []byte) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31313a7068797369637353746570(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31313a7068797369637353746570(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createTerrain(path, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31333a6372656174655465727261696e(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31333a6372656174655465727261696e(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsDestroy(worldId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31343a7068797369637344657374726f79(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31343a7068797369637344657374726f79(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsRayCast(worldId, ox, oy, oz, dx, dy, dz, maxDist) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31343a7068797369637352617943617374(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31343a7068797369637352617943617374(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsContacts(worldId) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31353a70687973696373436f6e7461637473(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31353a70687973696373436f6e7461637473(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_terrainHeightAt(worldId, bodyId, x, z) → (float, bool)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31353a7465727261696e4865696768744174(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31353a7465727261696e4865696768744174(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsQueryAABB(worldId, minX, minY, minZ, maxX, maxY, maxZ) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31363a70687973696373517565727941414242(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31363a70687973696373517565727941414242(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSpawnBody(worldId, bodyId, data []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31363a70687973696373537061776e426f6479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31363a70687973696373537061776e426f6479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSetGravity(worldId, gx, gy, gz)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31373a7068797369637353657447726176697479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31373a7068797369637353657447726176697479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createTerrainBytes(data []byte, sx, sy, sz, uvScale, texId, normalTexId, mrTexId, normalScale, roughness, metallic) → terrain result
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a6372656174655465727261696e4279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a6372656174655465727261696e4279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createTerrainSplat(path, sx, sy, sz, controlTexId, layerData) → terrain result
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a6372656174655465727261696e53706c6174(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a6372656174655465727261696e53706c6174(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsDestroyBody(worldId, bodyId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a7068797369637344657374726f79426f6479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a7068797369637344657374726f79426f6479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSetBodyPose(worldId, bodyId, px, py, pz, qx, qy, qz, qw)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a70687973696373536574426f6479506f7365(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a31383a70687973696373536574426f6479506f7365(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSetBodyMotion(worldId, bodyId, lvx, lvy, lvz, avx, avy, avz)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32303a70687973696373536574426f64794d6f74696f6e(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32303a70687973696373536574426f64794d6f74696f6e(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_bakeImpostorAtlasBytes(request []byte) → ([]byte, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32323a62616b65496d706f73746f7241746c61734279746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32323a62616b65496d706f73746f7241746c61734279746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createTerrainBytesSplat(data, sx, sy, sz, controlTexId, layerData) → terrain result
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a6372656174655465727261696e427974657353706c6174(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a6372656174655465727261696e427974657353706c6174(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_createTerrainSplatModel(modelId, controlTexId, layerData) → (uint32, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a6372656174655465727261696e53706c61744d6f64656c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a6372656174655465727261696e53706c61744d6f64656c(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSpawnHeightfield(worldId, bodyId, heights []byte, rows, cols, sx, sy, sz, px, py, pz, layer, mask, friction, restitution)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a70687973696373537061776e4865696768746669656c64(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a70687973696373537061776e4865696768746669656c64(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSpawnTrimeshBody(worldId, bodyId, modelId, data []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a70687973696373537061776e5472696d657368426f6479(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32333a70687973696373537061776e5472696d657368426f6479(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSetBodySleepState(worldId, bodyId, sleeping)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32343a70687973696373536574426f6479536c6565705374617465(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32343a70687973696373536574426f6479536c6565705374617465(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsRaycastVehicleState(worldId, vehicleId) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32363a706879736963735261796361737456656869636c655374617465(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32363a706879736963735261796361737456656869636c655374617465(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsCreateRaycastVehicle(worldId, vehicleId, bodyId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a706879736963734372656174655261796361737456656869636c65(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a706879736963734372656174655261796361737456656869636c65(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsRaycastVehicleStates(worldId) → []byte
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a706879736963735261796361737456656869636c65537461746573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a706879736963735261796361737456656869636c65537461746573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSpawnTrimeshBodyData(worldId, bodyId, data []byte, geometryData []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a70687973696373537061776e5472696d657368426f647944617461(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32373a70687973696373537061776e5472696d657368426f647944617461(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsDestroyRaycastVehicle(worldId, vehicleId)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32383a7068797369637344657374726f795261796361737456656869636c65(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32383a7068797369637344657374726f795261796361737456656869636c65(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsAddRaycastVehicleWheel(worldId, vehicleId, desc []byte)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32393a706879736963734164645261796361737456656869636c65576865656c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a32393a706879736963734164645261796361737456656869636c65576865656c(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsApplyRaycastVehicleForces(worldId, vehicleId, fx, fy, fz, dragForce, downforce, waterLift, airControl, wallGrip, railGrip)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a33323a706879736963734170706c795261796361737456656869636c65466f72636573(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a33323a706879736963734170706c795261796361737456656869636c65466f72636573(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_physicsSetRaycastVehicleWheelControl(worldId, vehicleId, wheelId, steering, engineForce, brake)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a33363a706879736963735365745261796361737456656869636c65576865656c436f6e74726f6c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a33363a706879736963735365745261796361737456656869636c65576865656c436f6e74726f6c(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * scene3d_loadLevel(path string) → ([]byte, error)
+ * @param {Uint8Array} input
+ * @returns {Uint8Array}
+ */
+export function __vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a393a6c6f61644c6576656c(input) {
+    const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__vo_ext_766f313a33333a6769746875622e636f6d2f766f2d6c616e672f766f706c61792f7363656e6533643a393a6c6f61644c6576656c(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v2;
@@ -2446,23 +2460,23 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 422, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__he25a22c1584a576d);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 430, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___wasm_bindgen_dde396a894feebdf___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_dde396a894feebdf___JsError___true_);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("KeyboardEvent")], shim_idx: 70, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("KeyboardEvent")], shim_idx: 51, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("PointerEvent")], shim_idx: 70, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_2);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("PointerEvent")], shim_idx: 51, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__2);
             return ret;
         },
         __wbindgen_cast_0000000000000004: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("WheelEvent")], shim_idx: 70, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_3);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("WheelEvent")], shim_idx: 51, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__3);
             return ret;
         },
         __wbindgen_cast_0000000000000005: function(arg0) {
@@ -2491,20 +2505,20 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2(arg0, arg1, arg2);
+function wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true_(arg0, arg1, arg2) {
+    wasm.wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true_(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_2(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_2(arg0, arg1, arg2);
+function wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__2(arg0, arg1, arg2) {
+    wasm.wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__2(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_3(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__ha5682497b6095bf2_3(arg0, arg1, arg2);
+function wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__3(arg0, arg1, arg2) {
+    wasm.wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___web_sys_47f74fade612f2d6___features__gen_WheelEvent__WheelEvent______true__3(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__he25a22c1584a576d(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__he25a22c1584a576d(arg0, arg1, arg2);
+function wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___wasm_bindgen_dde396a894feebdf___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_dde396a894feebdf___JsError___true_(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen_dde396a894feebdf___convert__closures_____invoke___wasm_bindgen_dde396a894feebdf___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_dde396a894feebdf___JsError___true_(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }

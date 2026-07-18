@@ -3,12 +3,13 @@ use super::*;
 // ── scene3d physics externs ───────────────────────────────────────────────────
 
 /// scene3d_physicsInit(gx, gy, gz) → uint32
-#[wasm_bindgen(js_name = "scene3d_physicsInit")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsInit")]
 pub fn scene3d_physics_init(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let gx = in_f64(input, &mut pos) as f32;
     let gy = in_f64(input, &mut pos) as f32;
     let gz = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let world_id = crate::physics3d::create_world(gx, gy, gz);
     let mut out = Vec::new();
     out_value_u64(&mut out, world_id as u64);
@@ -16,35 +17,38 @@ pub fn scene3d_physics_init(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsDestroy(worldId)
-#[wasm_bindgen(js_name = "scene3d_physicsDestroy")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsDestroy")]
 pub fn scene3d_physics_destroy(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::terrain::remove_world(world_id);
     crate::physics3d::destroy_world(world_id);
     Vec::new()
 }
 
 /// scene3d_physicsSpawnBody(worldId, bodyId, data []byte)
-#[wasm_bindgen(js_name = "scene3d_physicsSpawnBody")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSpawnBody")]
 pub fn scene3d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
+    pos.finish();
     let desc = crate::externs::physics3d::decode_body3d_desc(body_id, data);
     crate::physics3d::with_world(world_id, |world| world.spawn_body(&desc));
     Vec::new()
 }
 
 /// scene3d_physicsSpawnTrimeshBody(worldId, bodyId, modelId, data []byte)
-#[wasm_bindgen(js_name = "scene3d_physicsSpawnTrimeshBody")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSpawnTrimeshBody")]
 pub fn scene3d_physics_spawn_trimesh_body(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let model_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
+    pos.finish();
     let desc = crate::externs::physics3d::decode_trimesh_desc(body_id, data);
     let geometry = crate::externs::util::with_renderer_or_panic("physicsSpawnTrimeshBody", |r| {
         r.get_model_geometry(model_id)
@@ -58,13 +62,14 @@ pub fn scene3d_physics_spawn_trimesh_body(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsSpawnTrimeshBodyData(worldId, bodyId, data []byte, geometryData []byte)
-#[wasm_bindgen(js_name = "scene3d_physicsSpawnTrimeshBodyData")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSpawnTrimeshBodyData")]
 pub fn scene3d_physics_spawn_trimesh_body_data(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
     let geometry_data = in_bytes(input, &mut pos);
+    pos.finish();
     crate::externs::physics3d::spawn_trimesh_body_from_geometry(
         world_id,
         body_id,
@@ -75,10 +80,10 @@ pub fn scene3d_physics_spawn_trimesh_body_data(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsSpawnHeightfield(worldId, bodyId, heights []byte, rows, cols, sx, sy, sz, px, py, pz, layer, mask, friction, restitution)
-#[wasm_bindgen(js_name = "scene3d_physicsSpawnHeightfield")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSpawnHeightfield")]
 pub fn scene3d_physics_spawn_heightfield(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let height_bytes = in_bytes(input, &mut pos);
@@ -94,11 +99,9 @@ pub fn scene3d_physics_spawn_heightfield(input: &[u8]) -> Vec<u8> {
     let mask = in_value(input, &mut pos) as u16;
     let friction = in_f64(input, &mut pos) as f32;
     let restitution = in_f64(input, &mut pos) as f32;
+    pos.finish();
 
-    let height_data: Vec<f32> = height_bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let height_data = crate::externs::physics3d::decode_heightfield_data(height_bytes);
     let origin = Vec3::new(px, py, pz);
     let desc = crate::physics3d::HeightfieldDesc3D {
         body_id,
@@ -135,23 +138,25 @@ pub fn scene3d_physics_spawn_heightfield(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsDestroyBody(worldId, bodyId)
-#[wasm_bindgen(js_name = "scene3d_physicsDestroyBody")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsDestroyBody")]
 pub fn scene3d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::terrain::remove_terrain(world_id, body_id);
     crate::physics3d::with_world(world_id, |world| world.destroy_body(body_id));
     Vec::new()
 }
 
 /// scene3d_physicsCreateRaycastVehicle(worldId, vehicleId, bodyId)
-#[wasm_bindgen(js_name = "scene3d_physicsCreateRaycastVehicle")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsCreateRaycastVehicle")]
 pub fn scene3d_physics_create_raycast_vehicle(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| {
         world.create_raycast_vehicle(vehicle_id, body_id)
     });
@@ -159,22 +164,24 @@ pub fn scene3d_physics_create_raycast_vehicle(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsDestroyRaycastVehicle(worldId, vehicleId)
-#[wasm_bindgen(js_name = "scene3d_physicsDestroyRaycastVehicle")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsDestroyRaycastVehicle")]
 pub fn scene3d_physics_destroy_raycast_vehicle(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| world.destroy_raycast_vehicle(vehicle_id));
     Vec::new()
 }
 
 /// scene3d_physicsAddRaycastVehicleWheel(worldId, vehicleId, desc []byte)
-#[wasm_bindgen(js_name = "scene3d_physicsAddRaycastVehicleWheel")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsAddRaycastVehicleWheel")]
 pub fn scene3d_physics_add_raycast_vehicle_wheel(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
     let desc_bytes = in_bytes(input, &mut pos);
+    pos.finish();
     let desc = crate::externs::physics3d::decode_raycast_vehicle_wheel_desc(desc_bytes);
     crate::physics3d::with_world(world_id, |world| {
         world.add_raycast_vehicle_wheel(vehicle_id, &desc)
@@ -183,15 +190,17 @@ pub fn scene3d_physics_add_raycast_vehicle_wheel(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsSetRaycastVehicleWheelControl(worldId, vehicleId, wheelId, steering, engineForce, brake)
-#[wasm_bindgen(js_name = "scene3d_physicsSetRaycastVehicleWheelControl")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSetRaycastVehicleWheelControl")]
 pub fn scene3d_physics_set_raycast_vehicle_wheel_control(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
-    let wheel_id = in_value(input, &mut pos) as usize;
+    let wheel_id =
+        crate::externs::physics3d::decode_raycast_vehicle_wheel_index(in_value(input, &mut pos));
     let steering = in_f64(input, &mut pos) as f32;
     let engine_force = in_f64(input, &mut pos) as f32;
     let brake = in_f64(input, &mut pos) as f32;
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| {
         world.set_raycast_vehicle_wheel_control(vehicle_id, wheel_id, steering, engine_force, brake)
     });
@@ -199,10 +208,10 @@ pub fn scene3d_physics_set_raycast_vehicle_wheel_control(input: &[u8]) -> Vec<u8
 }
 
 /// scene3d_physicsApplyRaycastVehicleForces(worldId, vehicleId, fx, fy, fz, dragForce, downforce, waterLift, airControl, wallGrip, railGrip)
-#[wasm_bindgen(js_name = "scene3d_physicsApplyRaycastVehicleForces")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsApplyRaycastVehicleForces")]
 pub fn scene3d_physics_apply_raycast_vehicle_forces(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
     let body_force = Vec3::new(
@@ -216,26 +225,29 @@ pub fn scene3d_physics_apply_raycast_vehicle_forces(input: &[u8]) -> Vec<u8> {
     let air_control = in_f64(input, &mut pos) as f32;
     let wall_grip = in_f64(input, &mut pos) as f32;
     let rail_grip = in_f64(input, &mut pos) as f32;
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| {
         world.apply_raycast_vehicle_forces(
             vehicle_id,
-            body_force,
-            drag_force,
-            downforce,
-            water_lift,
-            air_control,
-            wall_grip,
-            rail_grip,
+            crate::physics3d::RaycastVehicleForces {
+                body_force,
+                drag_force,
+                downforce,
+                water_lift,
+                air_control,
+                wall_grip,
+                rail_grip,
+            },
         )
     });
     Vec::new()
 }
 
 /// scene3d_physicsSetBodyPose(worldId, bodyId, px, py, pz, qx, qy, qz, qw)
-#[wasm_bindgen(js_name = "scene3d_physicsSetBodyPose")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSetBodyPose")]
 pub fn scene3d_physics_set_body_pose(input: &[u8]) -> Vec<u8> {
     use crate::math3d::{Quat, Vec3};
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let pos3 = Vec3::new(
@@ -249,15 +261,16 @@ pub fn scene3d_physics_set_body_pose(input: &[u8]) -> Vec<u8> {
         in_f64(input, &mut pos) as f32,
         in_f64(input, &mut pos) as f32,
     );
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| world.set_body_pose(body_id, pos3, rot));
     Vec::new()
 }
 
 /// scene3d_physicsSetBodyMotion(worldId, bodyId, lvx, lvy, lvz, avx, avy, avz)
-#[wasm_bindgen(js_name = "scene3d_physicsSetBodyMotion")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSetBodyMotion")]
 pub fn scene3d_physics_set_body_motion(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let linear = Vec3::new(
@@ -270,6 +283,7 @@ pub fn scene3d_physics_set_body_motion(input: &[u8]) -> Vec<u8> {
         in_f64(input, &mut pos) as f32,
         in_f64(input, &mut pos) as f32,
     );
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| {
         world.set_body_motion(body_id, linear, angular)
     });
@@ -277,12 +291,13 @@ pub fn scene3d_physics_set_body_motion(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsSetBodySleepState(worldId, bodyId, sleeping)
-#[wasm_bindgen(js_name = "scene3d_physicsSetBodySleepState")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSetBodySleepState")]
 pub fn scene3d_physics_set_body_sleep_state(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let sleeping = in_bool(input, &mut pos);
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| {
         world.set_body_sleep_state(body_id, sleeping)
     });
@@ -290,11 +305,12 @@ pub fn scene3d_physics_set_body_sleep_state(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsRaycastVehicleState(worldId, vehicleId) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsRaycastVehicleState")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsRaycastVehicleState")]
 pub fn scene3d_physics_raycast_vehicle_state(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let vehicle_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     let state = crate::physics3d::with_world(world_id, |world| {
         world.serialize_raycast_vehicle_state(vehicle_id)
     });
@@ -304,10 +320,11 @@ pub fn scene3d_physics_raycast_vehicle_state(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsRaycastVehicleStates(worldId) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsRaycastVehicleStates")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsRaycastVehicleStates")]
 pub fn scene3d_physics_raycast_vehicle_states(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     let state =
         crate::physics3d::with_world(world_id, |world| world.serialize_raycast_vehicle_states());
     let mut out = Vec::new();
@@ -316,12 +333,13 @@ pub fn scene3d_physics_raycast_vehicle_states(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsStep(worldId, dt, cmds []byte) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsStep")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsStep")]
 pub fn scene3d_physics_step(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let dt = in_f64(input, &mut pos) as f32;
     let cmds = in_bytes(input, &mut pos).to_vec();
+    pos.finish();
     let state = crate::physics3d::with_world(world_id, |world| {
         world
             .apply_commands(&cmds)
@@ -335,22 +353,24 @@ pub fn scene3d_physics_step(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsSetGravity(worldId, gx, gy, gz)
-#[wasm_bindgen(js_name = "scene3d_physicsSetGravity")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsSetGravity")]
 pub fn scene3d_physics_set_gravity(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let gx = in_f64(input, &mut pos) as f32;
     let gy = in_f64(input, &mut pos) as f32;
     let gz = in_f64(input, &mut pos) as f32;
+    pos.finish();
     crate::physics3d::with_world(world_id, |world| world.set_gravity(gx, gy, gz));
     Vec::new()
 }
 
 /// scene3d_physicsContacts(worldId) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsContacts")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsContacts")]
 pub fn scene3d_physics_contacts(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     let contacts = crate::physics3d::with_world(world_id, |world| world.get_contacts());
     let buf = crate::physics3d::serialize_contacts_packet(&contacts);
     let mut out = Vec::new();
@@ -359,10 +379,10 @@ pub fn scene3d_physics_contacts(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsRayCast(worldId, ox, oy, oz, dx, dy, dz, maxDist) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsRayCast")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsRayCast")]
 pub fn scene3d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let ox = in_f64(input, &mut pos) as f32;
     let oy = in_f64(input, &mut pos) as f32;
@@ -371,6 +391,7 @@ pub fn scene3d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
     let dy = in_f64(input, &mut pos) as f32;
     let dz = in_f64(input, &mut pos) as f32;
     let max_dist = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let origin = Vec3::new(ox, oy, oz);
     let dir = Vec3::new(dx, dy, dz);
     let result =
@@ -397,10 +418,10 @@ pub fn scene3d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene3d_physicsQueryAABB(worldId, minX, minY, minZ, maxX, maxY, maxZ) → []byte
-#[wasm_bindgen(js_name = "scene3d_physicsQueryAABB")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene3d", "physicsQueryAABB")]
 pub fn scene3d_physics_query_aabb(input: &[u8]) -> Vec<u8> {
     use crate::math3d::Vec3;
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let min_x = in_f64(input, &mut pos) as f32;
     let min_y = in_f64(input, &mut pos) as f32;
@@ -408,6 +429,7 @@ pub fn scene3d_physics_query_aabb(input: &[u8]) -> Vec<u8> {
     let max_x = in_f64(input, &mut pos) as f32;
     let max_y = in_f64(input, &mut pos) as f32;
     let max_z = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let min = Vec3::new(min_x, min_y, min_z);
     let max = Vec3::new(max_x, max_y, max_z);
     let ids = crate::physics3d::with_world(world_id, |world| world.query_aabb(min, max));
@@ -419,4 +441,35 @@ pub fn scene3d_physics_query_aabb(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out_bytes(&mut out, &buf);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scene3d_physics_set_raycast_vehicle_wheel_control;
+
+    fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = panic.downcast_ref::<String>() {
+            return message.clone();
+        }
+        if let Some(message) = panic.downcast_ref::<&str>() {
+            return (*message).to_string();
+        }
+        "non-string panic".to_string()
+    }
+
+    #[test]
+    fn wheel_control_rejects_a_wide_index_before_world_access() {
+        let mut input = Vec::new();
+        input.extend_from_slice(&0u64.to_le_bytes());
+        input.extend_from_slice(&0u64.to_le_bytes());
+        input.extend_from_slice(&(u32::MAX as u64 + 1).to_le_bytes());
+
+        let panic =
+            std::panic::catch_unwind(|| scene3d_physics_set_raycast_vehicle_wheel_control(&input))
+                .unwrap_err();
+        assert!(
+            panic_message(panic).contains("raycast vehicle wheel index exceeds u32 range"),
+            "wrapper reached another operation before validating wheelID",
+        );
+    }
 }

@@ -36,7 +36,9 @@ func (c *renderSlowLogCache) record(frame int, reason string, loopMs float64, su
 	if c.cooldown > 0 {
 		c.cooldown--
 	}
-	slow := renderSlowFrame{Frame: frame, Reason: reason, LoopMs: loopMs, SubmitMs: submitMs, DrawBytes: drawBytes}
+	slow := renderSlowFrame{
+		Frame: frame, Reason: reason, LoopMs: loopMs, SubmitMs: submitMs, DrawBytes: drawBytes,
+	}
 	c.frames[c.next] = slow
 	c.next = (c.next + 1) % renderSlowFrameCacheSize
 	if c.count < renderSlowFrameCacheSize {
@@ -51,14 +53,22 @@ func (c *renderSlowLogCache) record(frame int, reason string, loopMs float64, su
 	} else {
 		c.cooldown = renderSlowLogCooldownFrames
 	}
-	println("voplay render slow frame frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason + " loopMs=" + formatRenderSlowMs(slow.LoopMs) + " submitMs=" + formatRenderSlowMs(slow.SubmitMs) + " drawBytes=" + strconv.Itoa(slow.DrawBytes) + " cached=" + strconv.Itoa(c.count))
+	println("voplay render slow frame frame=" + strconv.Itoa(slow.Frame) + " reason=" + slow.Reason +
+		" loopMs=" +
+		formatRenderSlowMs(slow.LoopMs) +
+		" submitMs=" +
+		formatRenderSlowMs(slow.SubmitMs) +
+		" drawBytes=" +
+		strconv.Itoa(slow.DrawBytes) +
+		" cached=" +
+		strconv.Itoa(c.count))
 }
 
 // renderWorkerPorts holds the port endpoints for the render worker.
 type renderWorkerPorts struct {
-	frameSetup port renderFramePorts // publish render-owned frame ports to logic island
-	resReq     port []byte // recv resource requests from logic island
-	resResp    port []byte // send resource responses to logic island
+	frameSetup port<- renderFramePorts // publish render-owned send capabilities to logic island
+	frameReq port<- []byte // send frame requests to logic island
+	resResp port<- []byte // send resource responses to logic island
 }
 
 // runRenderWorker is the render island's main loop.
@@ -73,8 +83,9 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	// adding a second surface-vsync throttle on top of the display pulse pacer;
 	// uncapped stress runs also use no-vsync by definition.
 	noVsyncPresent := config.UncappedFrameRate || renderFrameRate > 0
-	initSurface(canvasRef, noVsyncPresent)?
-
+	if err := initSurface(canvasRef, noVsyncPresent); err != nil {
+		panic("voplay renderer surface init failed: " + err.Error())
+	}
 	// Wait for renderer async init without hammering the browser main thread.
 	waitFrames := 0
 	for {
@@ -91,20 +102,14 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 		}
 		waitDisplayPulse()
 	}
-
+	resReq := make(port []byte, 8)
+	frameReply := make(port renderFrameReply, 1)
 	go func() {
-		serviceResourceRequestsLoop(ports.resReq, ports.resResp)
+		serviceResourceRequestsLoop(resReq, ports.resResp)
 	}()
-
-	frameReq := make(port []byte, 2)
-	frameReply := make(port []byte, 1)
-
-	// Phase 2: Publish render-owned frame ports, then signal ready with an
-	// empty frame request. Render sends/receives on local queues, which keeps
-	// the frame-budget path off remote send acknowledgements.
-	ports.frameSetup <- renderFramePorts{frameReq: frameReq, frameReply: frameReply}
-	frameReq <- []byte{}
-
+	// Phase 2: Publish render-owned send capabilities. This setup message is
+	// the readiness signal; the first request is emitted by the paced loop.
+	ports.frameSetup <- renderFramePorts{frameReply: frameReply, resReq: resReq}
 	// Phase 3: Main render loop — render island drives the frame clock.
 	// Each iteration: sample input → request → wait reply → submit → present.
 	// The request always carries the render clock delta, so logic advances
@@ -112,20 +117,22 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 	pacer := newRenderDisplayPacer(renderFrameRate)
 	frameSeq := 0
 	lastLoopTime := time.Now()
-		lastReplyWaitMs := 0.0
-		lastSubmitMs := 0.0
-		lastInputPollMs := 0.0
-		lastRequestSendMs := 0.0
-		lastRequestEncodeMs := 0.0
-		lastRequestPortSendMs := 0.0
-		lastPerfPacketMs := 0.0
-		lastDrawBytes := 0
-		lastRenderWorkCost := time.Duration(0)
-		lastPerfPacket := []byte{}
-		lastGpuPacket := []byte{}
+	lastReplyWaitMs := 0.0
+	lastSubmitMs := 0.0
+	lastInputPollMs := 0.0
+	lastRequestSendMs := 0.0
+	lastRequestEncodeMs := 0.0
+	lastRequestPortSendMs := 0.0
+	lastPerfPacketMs := 0.0
+	lastDrawBytes := 0
+	lastRenderWorkCost := time.Duration(0)
+	lastPerfPacket := []byte{}
+	lastGpuPacket := []byte{}
 	perfRequested := false
 	rendererPerfEnabled := false
-	frameReqWriter := codec.NewByteWriter(framewire.RequestHeaderSize + 2 * framewire.PerfPacketHeaderSize + 512)
+	frameReqWriter := codec.NewByteWriter(framewire.RequestHeaderSize +
+		2 * framewire.PerfPacketHeaderSize +
+		512)
 	slowLog := &renderSlowLogCache{}
 	for {
 		paceStart := time.Now()
@@ -138,17 +145,22 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 			loopMs = float64(loopNow.Sub(lastLoopTime).Nanoseconds()) / 1e6
 		}
 		lastLoopTime = loopNow
-		if frameSeq > 1 && lastDrawBytes > 0 && shouldRecordRenderLoopSlow(loopMs, displayPulse, frameDivisor, config.UncappedFrameRate) {
+		if frameSeq > 1 && lastDrawBytes > 0 &&
+			shouldRecordRenderLoopSlow(loopMs, displayPulse, frameDivisor, config.UncappedFrameRate) {
 			slowLog.record(frameSeq, "loop", loopMs, 0, 0)
 		}
-
 		// Sample latest input from the host (keyboard, pointer, scroll).
 		inputStart := time.Now()
 		inputBytes := pollInput()
 		currentInputPollMs := durationMs(time.Now().Sub(inputStart))
-
 		// Send frame request carrying the input snapshot and authoritative display-clock timing.
-		timing := framewire.Timing{Frame: frameSeq, LoopMs: loopMs, PaceWaitMs: paceWaitMs, ReplyWaitMs: lastReplyWaitMs, SubmitMs: lastSubmitMs, WorkMs: durationMs(lastRenderWorkCost), InputPollMs: lastInputPollMs, RequestSendMs: lastRequestSendMs, RequestEncodeMs: lastRequestEncodeMs, RequestPortSendMs: lastRequestPortSendMs, PerfPacketMs: lastPerfPacketMs, DisplayPulseMs: durationMs(displayPulse), DrawBytes: lastDrawBytes, FrameDivisor: frameDivisor}
+		timing := framewire.Timing{
+			Frame: frameSeq, LoopMs: loopMs, PaceWaitMs: paceWaitMs, ReplyWaitMs: lastReplyWaitMs,
+			SubmitMs: lastSubmitMs, WorkMs: durationMs(lastRenderWorkCost), InputPollMs: lastInputPollMs,
+			RequestSendMs: lastRequestSendMs, RequestEncodeMs: lastRequestEncodeMs,
+			RequestPortSendMs: lastRequestPortSendMs, PerfPacketMs: lastPerfPacketMs,
+			DisplayPulseMs: durationMs(displayPulse), DrawBytes: lastDrawBytes, FrameDivisor: frameDivisor,
+		}
 		requestEncodeStart := time.Now()
 		requestBytes := []byte{}
 		if perfRequested && (len(lastPerfPacket) > 0 || len(lastGpuPacket) > 0) {
@@ -158,33 +170,42 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 		}
 		currentRequestEncodeMs := durationMs(time.Now().Sub(requestEncodeStart))
 		requestPortSendStart := time.Now()
-		frameReq <- requestBytes
+		ports.frameReq <- requestBytes
 		currentRequestPortSendMs := durationMs(time.Now().Sub(requestPortSendStart))
 		currentRequestSendMs := currentRequestEncodeMs + currentRequestPortSendMs
-
-			// Block until logic island replies with draw commands.
-			replyStart := time.Now()
-			drawCmds, ok := <-frameReply
-			if !ok {
-				return
-			}
-			replyWait := time.Now().Sub(replyStart)
-			lastReplyWaitMs = float64(replyWait.Nanoseconds()) / 1e6
-			reply := framewire.DecodeReply(drawCmds)
-			drawCmds = reply.DrawBytes
+		// Block until logic island replies with draw commands.
+		replyStart := time.Now()
+		frameReplyMessage, ok := <-frameReply
+		if !ok {
+			close(resReq)
+			return
+		}
+		if frameReplyMessage.Stop {
+			close(resReq)
+			close(frameReply)
+			return
+		}
+		drawCmds := frameReplyMessage.Data
+		replyWait := time.Now().Sub(replyStart)
+		lastReplyWaitMs = float64(replyWait.Nanoseconds()) / 1e6
+		reply := framewire.DecodeReply(drawCmds)
+		drawCmds = reply.DrawBytes
 		perfRequested = reply.WantRenderTiming
 		if perfRequested != rendererPerfEnabled {
-			setRendererPerfStatsEnabled(perfRequested)?
+			if err := setRendererPerfStatsEnabled(perfRequested); err != nil {
+				panic("voplay renderer perf configuration failed: " + err.Error())
+			}
 			rendererPerfEnabled = perfRequested
 		}
-
 		// Submit draw commands to GPU and present.
 		lastSubmitMs = 0
 		lastDrawBytes = len(drawCmds)
 		currentPerfPacketMs := 0.0
 		if len(drawCmds) > 0 {
 			submitStart := time.Now()
-			submitFrame(drawCmds)?
+			if err := submitFrame(drawCmds); err != nil {
+				panic("voplay frame submission failed: " + err.Error())
+			}
 			lastSubmitMs = float64(time.Now().Sub(submitStart).Nanoseconds()) / 1e6
 			if perfRequested {
 				perfPacketStart := time.Now()
@@ -202,18 +223,18 @@ func runRenderWorker(canvasRef string, config renderWorkerConfig, ports renderWo
 			lastPerfPacket = []byte{}
 			lastGpuPacket = []byte{}
 		}
-			lastInputPollMs = currentInputPollMs
-			lastRequestSendMs = currentRequestSendMs
-			lastRequestEncodeMs = currentRequestEncodeMs
-			lastRequestPortSendMs = currentRequestPortSendMs
-			lastPerfPacketMs = currentPerfPacketMs
-			lastRenderWorkCost = time.Now().Sub(activeStart) - replyWait
-			if lastRenderWorkCost < 0 {
-				lastRenderWorkCost = 0
-			}
-			pacer.reportFrameCost(lastRenderWorkCost)
+		lastInputPollMs = currentInputPollMs
+		lastRequestSendMs = currentRequestSendMs
+		lastRequestEncodeMs = currentRequestEncodeMs
+		lastRequestPortSendMs = currentRequestPortSendMs
+		lastPerfPacketMs = currentPerfPacketMs
+		lastRenderWorkCost = time.Now().Sub(activeStart) - replyWait
+		if lastRenderWorkCost < 0 {
+			lastRenderWorkCost = 0
 		}
+		pacer.reportFrameCost(lastRenderWorkCost)
 	}
+}
 
 func formatRenderSlowMs(value float64) string {
 	return strconv.FormatFloat(value, 'f', 2, 64) + "ms"
@@ -278,7 +299,7 @@ func durationMs(value time.Duration) float64 {
 	return float64(value.Nanoseconds()) / 1e6
 }
 
-func serviceResourceRequestsLoop(reqPort, respPort port []byte) {
+func serviceResourceRequestsLoop(reqPort <-port []byte, respPort port<- []byte) {
 	for {
 		req, ok := <-reqPort
 		if !ok {
@@ -289,7 +310,6 @@ func serviceResourceRequestsLoop(reqPort, respPort port []byte) {
 	}
 }
 
-
 // handleResourceRequest dispatches a single resource request and returns the response.
 func handleResourceRequest(req []byte) []byte {
 	if len(req) == 0 {
@@ -298,85 +318,85 @@ func handleResourceRequest(req []byte) []byte {
 	tag := req[0]
 	payload := req[1:]
 	switch tag {
-	case resTagLoadTexture:
-		return handleLoadTexture(payload)
-	case resTagLoadTextureBytes:
-		return handleLoadTextureBytes(payload)
-	case resTagLoadTextureRGBA:
-		return handleLoadTextureRGBA(payload)
-	case resTagLoadTextureRGBALinear:
-		return handleLoadTextureRGBALinear(payload)
-	case resTagLoadTextureLinear:
-		return handleLoadTextureLinear(payload)
-	case resTagLoadTextureBytesLinear:
-		return handleLoadTextureBytesLinear(payload)
-	case resTagFreeTexture:
-		return handleFreeTexture(payload)
-	case resTagTexturePixels:
-		return handleTexturePixels(payload)
-	case resTagLoadFont:
-		return handleLoadFont(payload)
-	case resTagLoadFontBytes:
-		return handleLoadFontBytes(payload)
-	case resTagFreeFont:
-		return handleFreeFont(payload)
-	case resTagMeasureText:
-		return handleMeasureText(payload)
-	case resTagLoadModel:
-		return handleLoadModel(payload)
-	case resTagLoadModelBytes:
-		return handleLoadModelBytes(payload)
-	case resTagFreeModel:
-		return handleFreeModel(payload)
-	case resTagModelBounds:
-		return handleModelBounds(payload)
-	case resTagModelGeometry:
-		return handleModelGeometry(payload)
-	case resTagLoadCubemap:
-		return handleLoadCubemap(payload)
-	case resTagLoadCubemapBytes:
-		return handleLoadCubemapBytes(payload)
-	case resTagFreeCubemap:
-		return handleFreeCubemap(payload)
-	case resTagCreatePlaneMesh:
-		return handleCreatePlaneMesh(payload)
-	case resTagCreateCubeMesh:
-		return handleCreateCubeMesh(payload)
-	case resTagCreateRoundedBoxMesh:
-		return handleCreateRoundedBoxMesh(payload)
-	case resTagCreateSphereMesh:
-		return handleCreateSphereMesh(payload)
-	case resTagCreateCylinderMesh:
-		return handleCreateCylinderMesh(payload)
-	case resTagCreateConeMesh:
-		return handleCreateConeMesh(payload)
-	case resTagCreateWedgeMesh:
-		return handleCreateWedgeMesh(payload)
-	case resTagCreateCapsuleMesh:
-		return handleCreateCapsuleMesh(payload)
-	case resTagCreateRawMesh:
-		return handleCreateRawMesh(payload)
-	case resTagAnimationInit:
-		return handleAnimationInit(payload)
-	case resTagAnimationDestroy:
-		return handleAnimationDestroy(payload)
-	case resTagAnimationPlay:
-		return handleAnimationPlay(payload)
-	case resTagAnimationStop:
-		return handleAnimationStop(payload)
-	case resTagAnimationCrossfade:
-		return handleAnimationCrossfade(payload)
-	case resTagAnimationSetSpeed:
-		return handleAnimationSetSpeed(payload)
-	case resTagAnimationRemoveTarget:
-		return handleAnimationRemoveTarget(payload)
-	case resTagAnimationTick:
-		return handleAnimationTick(payload)
-	case resTagAnimationProgress:
-		return handleAnimationProgress(payload)
-	case resTagAnimationModelInfo:
-		return handleAnimationModelInfo(payload)
-	default:
-		return encodeResError("unknown resource tag")
+		case resTagLoadTexture:
+			return handleLoadTexture(payload)
+		case resTagLoadTextureBytes:
+			return handleLoadTextureBytes(payload)
+		case resTagLoadTextureRGBA:
+			return handleLoadTextureRGBA(payload)
+		case resTagLoadTextureRGBALinear:
+			return handleLoadTextureRGBALinear(payload)
+		case resTagLoadTextureLinear:
+			return handleLoadTextureLinear(payload)
+		case resTagLoadTextureBytesLinear:
+			return handleLoadTextureBytesLinear(payload)
+		case resTagFreeTexture:
+			return handleFreeTexture(payload)
+		case resTagTexturePixels:
+			return handleTexturePixels(payload)
+		case resTagLoadFont:
+			return handleLoadFont(payload)
+		case resTagLoadFontBytes:
+			return handleLoadFontBytes(payload)
+		case resTagFreeFont:
+			return handleFreeFont(payload)
+		case resTagMeasureText:
+			return handleMeasureText(payload)
+		case resTagLoadModel:
+			return handleLoadModel(payload)
+		case resTagLoadModelBytes:
+			return handleLoadModelBytes(payload)
+		case resTagFreeModel:
+			return handleFreeModel(payload)
+		case resTagModelBounds:
+			return handleModelBounds(payload)
+		case resTagModelGeometry:
+			return handleModelGeometry(payload)
+		case resTagLoadCubemap:
+			return handleLoadCubemap(payload)
+		case resTagLoadCubemapBytes:
+			return handleLoadCubemapBytes(payload)
+		case resTagFreeCubemap:
+			return handleFreeCubemap(payload)
+		case resTagCreatePlaneMesh:
+			return handleCreatePlaneMesh(payload)
+		case resTagCreateCubeMesh:
+			return handleCreateCubeMesh(payload)
+		case resTagCreateRoundedBoxMesh:
+			return handleCreateRoundedBoxMesh(payload)
+		case resTagCreateSphereMesh:
+			return handleCreateSphereMesh(payload)
+		case resTagCreateCylinderMesh:
+			return handleCreateCylinderMesh(payload)
+		case resTagCreateConeMesh:
+			return handleCreateConeMesh(payload)
+		case resTagCreateWedgeMesh:
+			return handleCreateWedgeMesh(payload)
+		case resTagCreateCapsuleMesh:
+			return handleCreateCapsuleMesh(payload)
+		case resTagCreateRawMesh:
+			return handleCreateRawMesh(payload)
+		case resTagAnimationInit:
+			return handleAnimationInit(payload)
+		case resTagAnimationDestroy:
+			return handleAnimationDestroy(payload)
+		case resTagAnimationPlay:
+			return handleAnimationPlay(payload)
+		case resTagAnimationStop:
+			return handleAnimationStop(payload)
+		case resTagAnimationCrossfade:
+			return handleAnimationCrossfade(payload)
+		case resTagAnimationSetSpeed:
+			return handleAnimationSetSpeed(payload)
+		case resTagAnimationRemoveTarget:
+			return handleAnimationRemoveTarget(payload)
+		case resTagAnimationTick:
+			return handleAnimationTick(payload)
+		case resTagAnimationProgress:
+			return handleAnimationProgress(payload)
+		case resTagAnimationModelInfo:
+			return handleAnimationModelInfo(payload)
+		default:
+			return encodeResError("unknown resource tag")
 	}
 }

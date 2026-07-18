@@ -1,161 +1,39 @@
 package scene3d
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"github.com/vo-lang/vopack/scene3dmap"
 	"github.com/vo-lang/voplay"
 	"github.com/vo-lang/voplay/primitive3d"
 )
 
-type MapVec3 struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
-}
+type MapVec3 = scene3dmap.Vec3
 
-type MapColor struct {
-	R float64 `json:"r"`
-	G float64 `json:"g"`
-	B float64 `json:"b"`
-	A float64 `json:"a"`
-}
+type MapColor = scene3dmap.Color
 
-type MapTerrainSplatLayer struct {
-	Texture string `json:"texture"`
-	Normal string `json:"normal,omitempty"`
-	MetallicRoughness string `json:"metallicRoughness,omitempty"`
-	UVScale float64 `json:"uvScale,omitempty"`
-	NormalScale float64 `json:"normalScale,omitempty"`
-}
+type MapTerrainSplatLayer = scene3dmap.TerrainSplatLayer
 
-type MapTerrainMaterialTuning struct {
-	MacroScale float64 `json:"macroScale,omitempty"`
-	MacroStrength float64 `json:"macroStrength,omitempty"`
-	DetailNear float64 `json:"detailNear,omitempty"`
-	DetailFar float64 `json:"detailFar,omitempty"`
-	SlopeStart float64 `json:"slopeStart,omitempty"`
-	SlopeEnd float64 `json:"slopeEnd,omitempty"`
-	SlopeDirtStrength float64 `json:"slopeDirtStrength,omitempty"`
-	SlopeRockStrength float64 `json:"slopeRockStrength,omitempty"`
-	AntiTileStrength float64 `json:"antiTileStrength,omitempty"`
-	DetailStrength float64 `json:"detailStrength,omitempty"`
-	NormalNear float64 `json:"normalNear,omitempty"`
-	NormalFar float64 `json:"normalFar,omitempty"`
-	HeightBlendStrength float64 `json:"heightBlendStrength,omitempty"`
-	HeightLow float64 `json:"heightLow,omitempty"`
-	HeightHigh float64 `json:"heightHigh,omitempty"`
-	CurvatureStrength float64 `json:"curvatureStrength,omitempty"`
-}
+type MapTerrainMaterialTuning = scene3dmap.TerrainMaterialTuning
 
-type MapMaterial struct {
-	BaseColor MapColor `json:"baseColor,omitempty"`
-	BaseColorSet bool `json:"baseColorSet,omitempty"`
-	Roughness float64 `json:"roughness,omitempty"`
-	Metallic float64 `json:"metallic,omitempty"`
-	NormalScale float64 `json:"normalScale,omitempty"`
-	UVScale float64 `json:"uvScale,omitempty"`
-	DetailStrength float64 `json:"detailStrength,omitempty"`
-	MacroBlend float64 `json:"macroBlend,omitempty"`
-	RoughnessResponse float64 `json:"roughnessResponse,omitempty"`
-	ToonRampResponse float64 `json:"toonRampResponse,omitempty"`
-	ShadingMode int `json:"shadingMode,omitempty"`
-	WrapMode int `json:"wrapMode,omitempty"`
-	FilterMode int `json:"filterMode,omitempty"`
-}
+type MapMaterial = scene3dmap.Material
 
-type MapTerrainSplat struct {
-	Control string `json:"control"`
-	Layers []MapTerrainSplatLayer `json:"layers"`
-	Tuning MapTerrainMaterialTuning `json:"tuning,omitempty"`
-}
+type MapTerrainSplat = scene3dmap.TerrainSplat
 
-type MapTerrain struct {
-	Heightmap string `json:"heightmap"`
-	Texture string `json:"texture,omitempty"`
-	Normal string `json:"normal,omitempty"`
-	MetallicRoughness string `json:"metallicRoughness,omitempty"`
-	Splat *MapTerrainSplat `json:"splat,omitempty"`
-	Position MapVec3 `json:"position,omitempty"`
-	Width float64 `json:"width"`
-	Height float64 `json:"height"`
-	Depth float64 `json:"depth"`
-	UVScale float64 `json:"uvScale,omitempty"`
-	NormalScale float64 `json:"normalScale,omitempty"`
-	Roughness float64 `json:"roughness,omitempty"`
-	Metallic float64 `json:"metallic,omitempty"`
-	Tint MapColor `json:"tint,omitempty"`
-	TintSet bool `json:"tintSet,omitempty"`
-	Tag string `json:"tag,omitempty"`
-	Friction float64 `json:"friction,omitempty"`
-	CullDistance float64 `json:"cullDistance,omitempty"`
-	CullRadius float64 `json:"cullRadius,omitempty"`
-	FrustumCull bool `json:"frustumCull,omitempty"`
-}
+type MapTerrain = scene3dmap.Terrain
 
-type MapMesh struct {
-	Name string `json:"name"`
-	Model string `json:"model"`
-	LodLevels []MapMeshLodLevel `json:"lodLevels,omitempty"`
-	Collision string `json:"collision,omitempty"`
-	Hidden bool `json:"hidden,omitempty"`
-	Position MapVec3 `json:"position,omitempty"`
-	Rotation MapVec3 `json:"rotation,omitempty"`
-	Scale MapVec3 `json:"scale,omitempty"`
-	Material MapMaterial `json:"material,omitempty"`
-	Tint MapColor `json:"tint,omitempty"`
-	TintSet bool `json:"tintSet,omitempty"`
-	PickMode string `json:"pickMode,omitempty"`
-	Friction float64 `json:"friction,omitempty"`
-	CullDistance float64 `json:"cullDistance,omitempty"`
-	CullRadius float64 `json:"cullRadius,omitempty"`
-	FrustumCull bool `json:"frustumCull,omitempty"`
-}
+type MapMesh = scene3dmap.Mesh
 
-type MapMeshLodLevel struct {
-	Model string `json:"model"`
-	Distance float64 `json:"distance"`
-}
+type MapMeshLodLevel = scene3dmap.MeshLodLevel
 
-type MapMeshTerrain struct {
-	Name string `json:"name"`
-	Model string `json:"model"`
-	LodLevels []MapMeshLodLevel `json:"lodLevels,omitempty"`
-	HeightGrid string `json:"heightGrid"`
-	Splat *MapTerrainSplat `json:"splat,omitempty"`
-	Material MapMaterial `json:"material,omitempty"`
-	PickMode string `json:"pickMode,omitempty"`
-	Tag string `json:"tag,omitempty"`
-	CullDistance float64 `json:"cullDistance,omitempty"`
-	CullRadius float64 `json:"cullRadius,omitempty"`
-	FrustumCull bool `json:"frustumCull,omitempty"`
-}
+type MapMeshTerrain = scene3dmap.MeshTerrain
 
-type MapPrimitiveLayer struct {
-	Name string `json:"name"`
-	Source string `json:"source"`
-	Kind string `json:"kind,omitempty"`
-	ChunkCellSize float64 `json:"chunkCellSize,omitempty"`
-	PreloadChunks bool `json:"preloadChunks,omitempty"`
-	Slots []string `json:"slots"`
-}
+type MapPrimitiveLayer = scene3dmap.PrimitiveLayer
 
-type MapSpawn struct {
-	Name string `json:"name"`
-	Position MapVec3 `json:"position"`
-	Yaw float64 `json:"yaw,omitempty"`
-}
+type MapSpawn = scene3dmap.Spawn
 
-type MapAsset struct {
-	Version int `json:"version"`
-	Name string `json:"name"`
-	Terrain *MapTerrain `json:"terrain,omitempty"`
-	Meshes []MapMesh `json:"meshes,omitempty"`
-	MeshTerrains []MapMeshTerrain `json:"meshTerrains,omitempty"`
-	PrimitiveLayers []MapPrimitiveLayer `json:"primitiveLayers,omitempty"`
-	Spawns []MapSpawn `json:"spawns,omitempty"`
-}
+type MapAsset = scene3dmap.Asset
 
 type MapPrimitiveLayerTarget struct {
 	Name string
@@ -172,10 +50,7 @@ type MapPrimitiveLayerSpawnResult struct {
 	TotalInstances int
 }
 
-type MapDependency struct {
-	Path string
-	Kind string
-}
+type MapDependency = scene3dmap.Dependency
 
 type MapPreparedAsset struct {
 	Asset *MapAsset
@@ -215,10 +90,11 @@ func LoadMapAsset(path string) (*MapAsset, error) {
 	if readErr != nil {
 		return nil, errors.New("scene3d.LoadMapAsset: read " + path + ": " + readErr.Error())
 	}
-	var asset MapAsset
-	json.Unmarshal(data, &asset)?
-	validateMapAsset(&asset)?
-	return &asset, nil
+	asset, decodeErr := scene3dmap.Decode(data)
+	if decodeErr != nil {
+		return nil, errors.New("scene3d.LoadMapAsset: decode " + path + ": " + decodeErr.Error())
+	}
+	return asset, nil
 }
 
 func LoadMapAssetWithAssets(assets voplay.AssetSource, path string) (*MapAsset, error) {
@@ -232,10 +108,11 @@ func LoadMapAssetWithAssets(assets voplay.AssetSource, path string) (*MapAsset, 
 	if readErr != nil {
 		return nil, errors.New("scene3d.LoadMapAssetWithAssets: read " + path + ": " + readErr.Error())
 	}
-	var asset MapAsset
-	json.Unmarshal(data, &asset)?
-	validateMapAsset(&asset)?
-	return &asset, nil
+	asset, decodeErr := scene3dmap.Decode(data)
+	if decodeErr != nil {
+		return nil, errors.New("scene3d.LoadMapAssetWithAssets: decode " + path + ": " + decodeErr.Error())
+	}
+	return asset, nil
 }
 
 func LoadMap(scene *Scene, path string) (*MapSpawnResult, error) {
@@ -266,7 +143,9 @@ func PrepareMapWithAssets(assets voplay.AssetSource, path string) (*MapPreparedA
 	}
 	depErr := assets.VerifyPackDependencies(path)
 	if depErr != nil {
-		return nil, errors.New("scene3d.PrepareMapWithAssets: dependency verification failed for " + path + ": " + depErr.Error())
+		return nil, errors.New("scene3d.PrepareMapWithAssets: dependency verification failed for " + path +
+			": " +
+			depErr.Error())
 	}
 	asset, err := LoadMapAssetWithAssets(assets, path)
 	if err != nil {
@@ -283,7 +162,12 @@ func PrepareMapAssetWithAssets(assets voplay.AssetSource, asset *MapAsset, baseD
 		return nil, errors.New("scene3d.PrepareMapAssetWithAssets: asset is nil")
 	}
 	validateMapAsset(asset)?
-	prepared := &MapPreparedAsset{Asset: asset, BaseDir: baseDir, Dependencies: MapAssetDependencies(asset, baseDir), Models: map[string]voplay.ModelID{}, MeshLodModels: map[string][]voplay.ModelID{}, MeshTerrains: map[string]MapPreparedMeshTerrain{}, Textures: map[string]voplay.TextureID{}, LinearTextures: map[string]voplay.TextureID{}, PrimitiveLayers: map[string][]byte{}}
+	prepared := &MapPreparedAsset{
+		Asset: asset, BaseDir: baseDir, Dependencies: MapAssetDependencies(asset, baseDir),
+		Models: map[string]voplay.ModelID{}, MeshLodModels: map[string][]voplay.ModelID{},
+		MeshTerrains: map[string]MapPreparedMeshTerrain{}, Textures: map[string]voplay.TextureID{},
+		LinearTextures: map[string]voplay.TextureID{}, PrimitiveLayers: map[string][]byte{},
+	}
 	if asset.Terrain != nil {
 		err := prepareMapTerrainWithAssets(assets, prepared, *asset.Terrain, baseDir)
 		if err != nil {
@@ -294,7 +178,10 @@ func PrepareMapAssetWithAssets(assets voplay.AssetSource, asset *MapAsset, baseD
 		path := mapResolvePath(baseDir, mesh.Model)
 		model, err := assets.Model(path)
 		if err != nil {
-			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh " + mesh.Name + " from " + path + ": " + err.Error())
+			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh " + mesh.Name + " from " +
+				path +
+				": " +
+				err.Error())
 		}
 		prepared.Models[mesh.Name] = model
 		lods := []voplay.ModelID{}
@@ -302,7 +189,11 @@ func PrepareMapAssetWithAssets(assets voplay.AssetSource, asset *MapAsset, baseD
 			lodPath := mapResolvePath(baseDir, lod.Model)
 			lodModel, lodErr := assets.Model(lodPath)
 			if lodErr != nil {
-				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh lod " + mesh.Name + " from " + lodPath + ": " + lodErr.Error())
+				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh lod " + mesh.Name +
+					" from " +
+					lodPath +
+					": " +
+					lodErr.Error())
 			}
 			lods = append(lods, lodModel)
 		}
@@ -314,21 +205,34 @@ func PrepareMapAssetWithAssets(assets voplay.AssetSource, asset *MapAsset, baseD
 		modelPath := mapResolvePath(baseDir, terrain.Model)
 		model, err := assets.Model(modelPath)
 		if err != nil {
-			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name + " model from " + modelPath + ": " + err.Error())
+			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name +
+				" model from " +
+				modelPath +
+				": " +
+				err.Error())
 		}
 		lods := []voplay.ModelID{}
 		for _, lod := range terrain.LodLevels {
 			lodPath := mapResolvePath(baseDir, lod.Model)
 			lodModel, lodErr := assets.Model(lodPath)
 			if lodErr != nil {
-				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain lod " + terrain.Name + " from " + lodPath + ": " + lodErr.Error())
+				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain lod " +
+					terrain.Name +
+					" from " +
+					lodPath +
+					": " +
+					lodErr.Error())
 			}
 			lods = append(lods, lodModel)
 		}
 		gridPath := mapResolvePath(baseDir, terrain.HeightGrid)
 		grid, gridErr := assets.Bytes(gridPath)
 		if gridErr != nil {
-			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name + " height grid from " + gridPath + ": " + gridErr.Error())
+			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name +
+				" height grid from " +
+				gridPath +
+				": " +
+				gridErr.Error())
 		}
 		var splat *TerrainSplatMaterial
 		if terrain.Splat != nil {
@@ -338,16 +242,24 @@ func PrepareMapAssetWithAssets(assets voplay.AssetSource, asset *MapAsset, baseD
 			}
 			splat, err = loadMapTerrainSplat(assets, baseDir, terrain.Splat, nil)
 			if err != nil {
-				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name + " splat: " + err.Error())
+				return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load mesh terrain " + terrain.Name +
+					" splat: " +
+					err.Error())
 			}
 		}
-		prepared.MeshTerrains[terrain.Name] = MapPreparedMeshTerrain{Model: model, LodModels: lods, HeightGridData: grid, Splat: splat}
+		prepared.MeshTerrains[terrain.Name] = MapPreparedMeshTerrain{
+			Model: model, LodModels: lods, HeightGridData: grid, Splat: splat,
+		}
 	}
 	for _, layer := range asset.PrimitiveLayers {
 		path := mapResolvePath(baseDir, layer.Source)
 		data, err := assets.Bytes(path)
 		if err != nil {
-			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load primitive layer " + layer.Name + " from " + path + ": " + err.Error())
+			return nil, errors.New("scene3d.PrepareMapAssetWithAssets: load primitive layer " + layer.Name +
+				" from " +
+				path +
+				": " +
+				err.Error())
 		}
 		prepared.PrimitiveLayers[layer.Name] = data
 	}
@@ -404,7 +316,10 @@ func spawnMapWithAssets(scene *Scene, assets voplay.AssetSource, asset *MapAsset
 		return nil, errors.New("scene3d.SpawnMap: asset is nil")
 	}
 	validateMapAsset(asset)?
-	result := &MapSpawnResult{Asset: asset, MeshTerrains: map[string]*MeshTerrainAsset{}, Entities: []*Entity{}, Meshes: map[string]*Entity{}, Spawns: map[string]MapSpawn{}, Textures: []voplay.TextureID{}}
+	result := &MapSpawnResult{
+		Asset: asset, MeshTerrains: map[string]*MeshTerrainAsset{}, Entities: []*Entity{},
+		Meshes: map[string]*Entity{}, Spawns: map[string]MapSpawn{}, Textures: []voplay.TextureID{},
+	}
 	success := false
 	errdefer func() {
 		if success {

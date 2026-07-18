@@ -201,10 +201,7 @@ impl FontManager {
         x: f32,
         y: f32,
         size: f32,
-        r: f32,
-        g: f32,
-        b: f32,
-        a: f32,
+        color: [f32; 4],
     ) -> Vec<SpriteDraw> {
         let font_id = self.current_font;
         let size_px = (size.max(1.0)) as u16;
@@ -240,7 +237,7 @@ impl FontManager {
                                 glyph.height,
                             ],
                             src_rect: [glyph.u0, glyph.v0, glyph.u1, glyph.v1],
-                            color: [r, g, b, a],
+                            color,
                             params: [0.0, 0.0, 0.0, 0.0],
                         },
                     });

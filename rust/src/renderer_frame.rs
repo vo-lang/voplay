@@ -223,23 +223,41 @@ pub(crate) struct RenderFramePipeline {
     pub(crate) perf_packet: PerfPacketEncode,
 }
 
+pub(crate) struct RenderFrameMetrics<'a> {
+    pub(crate) frame_id: u32,
+    pub(crate) command_count: u32,
+    pub(crate) scene_mutation_count: u32,
+    pub(crate) overlay_command_count: u32,
+    pub(crate) decode_ms: f64,
+    pub(crate) visible_object_count: u32,
+    pub(crate) visible_chunk_count: u32,
+    pub(crate) material_group_count: u32,
+    pub(crate) diagnostic_flags: u32,
+    pub(crate) graph_report: &'a FrameGraphReport,
+    pub(crate) graph_build_ms: f64,
+    pub(crate) graph_execute_ms: f64,
+    pub(crate) perf_payload_version: u32,
+    pub(crate) perf_packet_ms: f64,
+}
+
 impl RenderFramePipeline {
-    pub(crate) fn from_frame_metrics(
-        frame_id: u32,
-        command_count: u32,
-        scene_mutation_count: u32,
-        overlay_command_count: u32,
-        decode_ms: f64,
-        visible_object_count: u32,
-        visible_chunk_count: u32,
-        material_group_count: u32,
-        diagnostic_flags: u32,
-        graph_report: &FrameGraphReport,
-        graph_build_ms: f64,
-        graph_execute_ms: f64,
-        perf_payload_version: u32,
-        perf_packet_ms: f64,
-    ) -> Self {
+    pub(crate) fn from_frame_metrics(metrics: RenderFrameMetrics<'_>) -> Self {
+        let RenderFrameMetrics {
+            frame_id,
+            command_count,
+            scene_mutation_count,
+            overlay_command_count,
+            decode_ms,
+            visible_object_count,
+            visible_chunk_count,
+            material_group_count,
+            diagnostic_flags,
+            graph_report,
+            graph_build_ms,
+            graph_execute_ms,
+            perf_payload_version,
+            perf_packet_ms,
+        } = metrics;
         RenderFramePipeline {
             decode: RenderFrameDecode {
                 frame_id,

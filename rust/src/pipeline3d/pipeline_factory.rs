@@ -249,12 +249,6 @@ impl PipelineFactory {
             ..wgpu::MultisampleState::default()
         };
 
-        let vertex_state = wgpu::VertexState {
-            module: &static_shader,
-            entry_point: Some("vs_main"),
-            buffers: &[MeshVertex::layout()],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
         let instanced_vertex_state = wgpu::VertexState {
             module: &static_shader,
             entry_point: Some("vs_instanced"),
@@ -272,29 +266,6 @@ impl PipelineFactory {
             conservative: false,
         };
 
-        // Textured pipeline
-        let textured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_textured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_mesh_textured"),
-            layout: Some(&pipeline_layout),
-            vertex: vertex_state.clone(),
-            fragment: Some(wgpu::FragmentState {
-                module: &static_shader,
-                entry_point: Some("fs_main"),
-                targets: &textured_targets,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample,
-            multiview: None,
-            cache: None,
-        });
         let instanced_textured_targets = color_targets(
             surface_format,
             receiver_mask_format,
@@ -497,34 +468,6 @@ impl PipelineFactory {
                 cache: None,
             });
 
-        // Untextured pipeline (uses fs_main_no_tex)
-        let untextured_targets = color_targets(
-            surface_format,
-            receiver_mask_format,
-            surface_props_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-        );
-        let pipeline_untextured = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("voplay_mesh_untextured"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &static_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[MeshVertex::layout()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &static_shader,
-                entry_point: Some("fs_main_no_tex"),
-                targets: &untextured_targets,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample,
-            multiview: None,
-            cache: None,
-        });
         let instanced_untextured_targets = color_targets(
             surface_format,
             receiver_mask_format,
@@ -698,8 +641,6 @@ impl PipelineFactory {
         );
         let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
         Pipeline3D {
-            pipeline_textured,
-            pipeline_untextured,
             pipeline_instanced_textured,
             pipeline_instanced_textured_color,
             pipeline_instanced_untextured,

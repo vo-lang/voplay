@@ -147,18 +147,6 @@ impl RenderWorld {
         }
     }
 
-    #[allow(dead_code)] // owner: voplay/render-world; expiry: 2026-07-12; public scene owner API kept for non-renderer callers.
-    pub fn collect_scene_primitive_draws(
-        &self,
-        scene_id: u32,
-        camera: Option<&Camera3DUniform>,
-        draws: &mut Vec<PrimitiveDraw>,
-        chunks: &mut Vec<PrimitiveChunkRef>,
-    ) {
-        self.primitive_scenes
-            .collect_draws(scene_id, camera, draws, chunks);
-    }
-
     pub fn collect_scene_primitive_draws_with_chunk_info(
         &self,
         scene_id: u32,
@@ -258,17 +246,17 @@ impl RenderWorld {
             &mut primitive_chunks,
             &mut primitive_chunk_info,
         );
-        RenderBatchPlanner::build(
+        RenderBatchPlanner::build(RenderBatchBuildInput {
             frame_id,
             scene_id,
-            &model_draws,
-            &[],
-            &primitive_draws,
-            &primitive_chunks,
-            &primitive_chunk_info,
-            &[],
+            model_draws: &model_draws,
+            terrain_inputs: &[],
+            primitive_draws: &primitive_draws,
+            primitive_chunks: &primitive_chunks,
+            primitive_chunk_info: &primitive_chunk_info,
+            decal_inputs: &[],
             camera,
-            RenderBatchQualityProfile::default(),
-        )
+            quality: RenderBatchQualityProfile::default(),
+        })
     }
 }

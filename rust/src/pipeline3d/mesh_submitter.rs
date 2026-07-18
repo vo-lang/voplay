@@ -120,6 +120,10 @@ fn missing_mesh_texture_references(
 }
 
 impl MeshSubmitter {
+    // Clippy exception — owner: voplay/render; reason: argument order follows the stable mesh
+    // pass contract from frame resources through scene and target bindings; expiry: remove when
+    // the render graph owns a typed mesh-pass descriptor shared by every backend.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn submit<'a>(
         owner: &'a mut Pipeline3D,
         device: &wgpu::Device,

@@ -12,7 +12,6 @@ use crate::primitive_scene::{
     PRIMITIVE_FLAG_Y_BILLBOARD,
 };
 use crate::render_world::RenderSkipStats;
-use crate::renderer_perf::{elapsed_ms, perf_now};
 use crate::texture::TextureManager;
 
 mod runtime;
@@ -127,16 +126,6 @@ pub struct PrimitiveDrawStats {
     pub triangle_count: u32,
     pub upload_bytes: u32,
     pub skips: RenderSkipStats,
-}
-
-#[allow(dead_code)]
-// owner: voplay/render; expiry: 2026-07-12; retained for combined main/water submitter regression coverage.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PrimitiveLayeredDrawStats {
-    pub main: PrimitiveDrawStats,
-    pub water: PrimitiveDrawStats,
-    pub main_cpu_ms: f64,
-    pub water_cpu_ms: f64,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -377,9 +366,6 @@ pub struct PrimitivePipeline {
     last_resident_chunk_rebuilds: u32,
     last_resident_rebuild_policy: ResidentRebuildPolicy,
     texture_bind_groups: HashMap<PrimitiveTextureKey, wgpu::BindGroup>,
-    last_main_batch_count: u32,
-    last_main_instance_count: u32,
-    last_main_triangle_count: u32,
 }
 
 fn align_up(value: u32, alignment: u32) -> u32 {
@@ -524,42 +510,6 @@ fn primitive_mode_matches_filter(mode: PrimitiveRenderMode, filter: PrimitiveRen
 
 fn sort_primitive_batches(batches: &mut [PrimitiveBatch]) {
     batches.sort_by(|a, b| compare_primitive_batch_key(a.key, b.key));
-}
-
-#[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; helper for retained combined submitter path.
-fn append_primitive_batch_draws(
-    batches: &mut [PrimitiveBatch],
-    instance_data: &mut Vec<PrimitiveInstanceGpu>,
-) -> Vec<PrimitiveBatchDraw> {
-    if batches.is_empty() {
-        return Vec::new();
-    }
-    sort_primitive_batches(batches);
-    let mut batch_draws = Vec::with_capacity(batches.len());
-    for batch in batches {
-        let start = instance_data.len() as u32;
-        instance_data.extend_from_slice(&batch.instances);
-        batch_draws.push(PrimitiveBatchDraw {
-            key: batch.key,
-            start,
-            count: batch.instances.len() as u32,
-        });
-    }
-    batch_draws
-}
-
-fn primitive_batch_triangle_count(batches: &[PrimitiveBatchDraw], models: &ModelManager) -> u32 {
-    let mut triangles = 0u32;
-    for batch in batches {
-        let Some(gpu_model) = models.get(batch.key.model_id) else {
-            continue;
-        };
-        let Some(mesh) = gpu_model.meshes.get(batch.key.mesh_index) else {
-            continue;
-        };
-        triangles = triangles.saturating_add((mesh.index_count / 3).saturating_mul(batch.count));
-    }
-    triangles
 }
 
 fn compare_resident_primitive_pass_batch_refs(

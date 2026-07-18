@@ -77,22 +77,22 @@ impl Renderer {
         perf.post_pass_ms = context.post_pass_ms;
         perf.overlay_pass_ms = context.overlay_pass_ms;
         let perf_packet_ms = self.update_last_perf_packet(context.perf_enabled, perf);
-        self.last_frame_pipeline = RenderFramePipeline::from_frame_metrics(
-            context.debug_frame_count.min(u32::MAX as u64) as u32,
-            context.decode_command_count,
-            context.decode_scene_mutation_count,
-            context.decode_overlay_command_count,
-            context.decode_elapsed_ms,
-            context.render_batch_plan.visible_objects,
-            saturating_u32(context.render_batch_plan.visible_chunks.len()),
-            context.material_group_count,
-            perf.diagnostic_flags,
-            &self.last_frame_graph_report,
-            context.frame_graph_build_ms,
-            self.last_frame_graph_report.total_pass_ms,
-            RENDERER_PERF_PAYLOAD_VERSION,
+        self.last_frame_pipeline = RenderFramePipeline::from_frame_metrics(RenderFrameMetrics {
+            frame_id: context.debug_frame_count.min(u32::MAX as u64) as u32,
+            command_count: context.decode_command_count,
+            scene_mutation_count: context.decode_scene_mutation_count,
+            overlay_command_count: context.decode_overlay_command_count,
+            decode_ms: context.decode_elapsed_ms,
+            visible_object_count: context.render_batch_plan.visible_objects,
+            visible_chunk_count: saturating_u32(context.render_batch_plan.visible_chunks.len()),
+            material_group_count: context.material_group_count,
+            diagnostic_flags: perf.diagnostic_flags,
+            graph_report: &self.last_frame_graph_report,
+            graph_build_ms: context.frame_graph_build_ms,
+            graph_execute_ms: self.last_frame_graph_report.total_pass_ms,
+            perf_payload_version: RENDERER_PERF_PAYLOAD_VERSION,
             perf_packet_ms,
-        );
+        });
     }
 
     fn populate_frame_perf_counters(

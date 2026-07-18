@@ -162,6 +162,42 @@ pub struct RaycastVehicleWheelDesc3D {
     pub max_suspension_force: f32,
 }
 
+#[derive(Clone, Copy)]
+struct RigidBodyBuildOptions {
+    body_type: PhysBodyType,
+    pos: Vec3,
+    rot: Quat,
+    linear_damping: f32,
+    angular_damping: f32,
+    fixed_rotation: bool,
+    locked_rotation_axes: [bool; 3],
+}
+
+impl RigidBodyBuildOptions {
+    fn static_body(pos: Vec3, rot: Quat) -> Self {
+        Self {
+            body_type: PhysBodyType::Static,
+            pos,
+            rot,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            fixed_rotation: false,
+            locked_rotation_axes: [false; 3],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RaycastVehicleForces {
+    pub body_force: Vec3,
+    pub drag_force: f32,
+    pub downforce: f32,
+    pub water_lift: f32,
+    pub air_control: f32,
+    pub wall_grip: f32,
+    pub rail_grip: f32,
+}
+
 /// Result of a 3D ray cast query.
 pub struct RayHit3D {
     pub body_id: u32,
@@ -236,38 +272,29 @@ impl PhysicsWorld3D {
         self.gravity = vector![gx, gy, gz];
     }
 
-    fn build_rigid_body(
-        body_type: PhysBodyType,
-        pos: Vec3,
-        rot: Quat,
-        linear_damping: f32,
-        angular_damping: f32,
-        fixed_rotation: bool,
-        lock_rotation_x: bool,
-        lock_rotation_y: bool,
-        lock_rotation_z: bool,
-    ) -> RigidBody {
-        let translation = vector![pos.x, pos.y, pos.z];
-        let rotation = UnitQuaternion::from_quaternion(Quaternion::new(rot.w, rot.x, rot.y, rot.z))
-            .scaled_axis();
+    fn build_rigid_body(options: RigidBodyBuildOptions) -> RigidBody {
+        let translation = vector![options.pos.x, options.pos.y, options.pos.z];
+        let rotation = UnitQuaternion::from_quaternion(Quaternion::new(
+            options.rot.w,
+            options.rot.x,
+            options.rot.y,
+            options.rot.z,
+        ))
+        .scaled_axis();
 
-        match body_type {
+        match options.body_type {
             PhysBodyType::Dynamic => {
                 let mut rb = RigidBodyBuilder::dynamic()
                     .translation(translation)
                     .rotation(rotation)
-                    .linear_damping(linear_damping)
-                    .angular_damping(angular_damping)
+                    .linear_damping(options.linear_damping)
+                    .angular_damping(options.angular_damping)
                     .build();
-                if fixed_rotation {
+                if options.fixed_rotation {
                     rb.lock_rotations(true, true);
-                } else if lock_rotation_x || lock_rotation_y || lock_rotation_z {
-                    rb.set_enabled_rotations(
-                        !lock_rotation_x,
-                        !lock_rotation_y,
-                        !lock_rotation_z,
-                        true,
-                    );
+                } else if options.locked_rotation_axes.iter().any(|locked| *locked) {
+                    let [lock_x, lock_y, lock_z] = options.locked_rotation_axes;
+                    rb.set_enabled_rotations(!lock_x, !lock_y, !lock_z, true);
                 }
                 rb
             }
@@ -302,17 +329,19 @@ impl PhysicsWorld3D {
 
     /// Spawn a rigid body + collider from a descriptor.
     pub fn spawn_body(&mut self, desc: &BodyDesc3D) {
-        let rb = Self::build_rigid_body(
-            desc.body_type,
-            desc.pos,
-            desc.rot,
-            desc.linear_damping,
-            desc.angular_damping,
-            desc.fixed_rotation,
-            desc.lock_rotation_x,
-            desc.lock_rotation_y,
-            desc.lock_rotation_z,
-        );
+        let rb = Self::build_rigid_body(RigidBodyBuildOptions {
+            body_type: desc.body_type,
+            pos: desc.pos,
+            rot: desc.rot,
+            linear_damping: desc.linear_damping,
+            angular_damping: desc.angular_damping,
+            fixed_rotation: desc.fixed_rotation,
+            locked_rotation_axes: [
+                desc.lock_rotation_x,
+                desc.lock_rotation_y,
+                desc.lock_rotation_z,
+            ],
+        });
 
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
@@ -382,17 +411,7 @@ impl PhysicsWorld3D {
             .map(|chunk| [chunk[0], chunk[1], chunk[2]])
             .collect();
 
-        let rb = Self::build_rigid_body(
-            PhysBodyType::Static,
-            desc.pos,
-            desc.rot,
-            0.0,
-            0.0,
-            false,
-            false,
-            false,
-            false,
-        );
+        let rb = Self::build_rigid_body(RigidBodyBuildOptions::static_body(desc.pos, desc.rot));
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
@@ -433,17 +452,8 @@ impl PhysicsWorld3D {
             rapier3d::na::DMatrix::from_fn(desc.rows as usize, desc.cols as usize, |r, c| {
                 heights[r * desc.cols as usize + c] * desc.scale_y
             });
-        let rb = Self::build_rigid_body(
-            PhysBodyType::Static,
-            desc.pos,
-            Quat::IDENTITY,
-            0.0,
-            0.0,
-            false,
-            false,
-            false,
-            false,
-        );
+        let rb =
+            Self::build_rigid_body(RigidBodyBuildOptions::static_body(desc.pos, Quat::IDENTITY));
         let groups = InteractionGroups::new(
             Group::from_bits_truncate(desc.layer.into()),
             Group::from_bits_truncate(desc.mask.into()),
@@ -547,17 +557,7 @@ impl PhysicsWorld3D {
         }
     }
 
-    pub fn apply_raycast_vehicle_forces(
-        &mut self,
-        vehicle_id: u32,
-        body_force: Vec3,
-        drag_force: f32,
-        downforce: f32,
-        water_lift: f32,
-        air_control: f32,
-        wall_grip: f32,
-        rail_grip: f32,
-    ) {
+    pub fn apply_raycast_vehicle_forces(&mut self, vehicle_id: u32, forces: RaycastVehicleForces) {
         let Some(vehicle) = self.raycast_vehicles.get(&vehicle_id) else {
             return;
         };
@@ -565,19 +565,23 @@ impl PhysicsWorld3D {
             return;
         };
 
-        let vertical_force = water_lift - downforce;
-        let mut force = vector![body_force.x, body_force.y, body_force.z];
+        let vertical_force = forces.water_lift - forces.downforce;
+        let mut force = vector![
+            forces.body_force.x,
+            forces.body_force.y,
+            forces.body_force.z
+        ];
         if force.y == 0.0 && vertical_force != 0.0 {
             force.y = vertical_force;
         }
 
         let vel = *rb.linvel();
         let speed = vel.norm();
-        if drag_force > 0.0 && speed > 0.0 {
-            force -= vel / speed * drag_force;
+        if forces.drag_force > 0.0 && speed > 0.0 {
+            force -= vel / speed * forces.drag_force;
         }
 
-        let grip = (wall_grip + rail_grip).clamp(0.0, 4.0);
+        let grip = (forces.wall_grip + forces.rail_grip).clamp(0.0, 4.0);
         if grip > 0.0 && speed > 0.0 {
             force.x -= vel.x * grip * 0.25;
             force.z -= vel.z * grip * 0.25;
@@ -587,8 +591,8 @@ impl PhysicsWorld3D {
             rb.add_force(force, true);
         }
 
-        if air_control > 0.0 {
-            let damping = (air_control * 0.02).clamp(0.0, 0.35);
+        if forces.air_control > 0.0 {
+            let damping = (forces.air_control * 0.02).clamp(0.0, 0.35);
             if damping > 0.0 {
                 rb.set_angvel(*rb.angvel() * (1.0 - damping), true);
             }

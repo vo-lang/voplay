@@ -227,19 +227,33 @@ fn collect_indexed_batches<T: Copy>(indices: &[usize], values: &[T]) -> (Vec<T>,
 
 pub struct RenderBatchPlanner;
 
+pub struct RenderBatchBuildInput<'a> {
+    pub frame_id: u32,
+    pub scene_id: u32,
+    pub model_draws: &'a [ModelDraw],
+    pub terrain_inputs: &'a [RenderTerrainBatchInput],
+    pub primitive_draws: &'a [PrimitiveDraw],
+    pub primitive_chunks: &'a [PrimitiveChunkRef],
+    pub primitive_chunk_info: &'a [PrimitiveChunkBatchInfo],
+    pub decal_inputs: &'a [RenderDecalBatchInput],
+    pub camera: Option<&'a Camera3DUniform>,
+    pub quality: RenderBatchQualityProfile,
+}
+
 impl RenderBatchPlanner {
-    pub fn build(
-        frame_id: u32,
-        scene_id: u32,
-        model_draws: &[ModelDraw],
-        terrain_inputs: &[RenderTerrainBatchInput],
-        primitive_draws: &[PrimitiveDraw],
-        primitive_chunks: &[PrimitiveChunkRef],
-        primitive_chunk_info: &[PrimitiveChunkBatchInfo],
-        decal_inputs: &[RenderDecalBatchInput],
-        camera: Option<&Camera3DUniform>,
-        quality: RenderBatchQualityProfile,
-    ) -> RenderBatchPlan {
+    pub fn build(input: RenderBatchBuildInput<'_>) -> RenderBatchPlan {
+        let RenderBatchBuildInput {
+            frame_id,
+            scene_id,
+            model_draws,
+            terrain_inputs,
+            primitive_draws,
+            primitive_chunks,
+            primitive_chunk_info,
+            decal_inputs,
+            camera,
+            quality,
+        } = input;
         let mut plan = RenderBatchPlan {
             frame_id,
             ..Default::default()

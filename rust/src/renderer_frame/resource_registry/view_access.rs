@@ -78,9 +78,4 @@ impl RenderResourceRegistry {
     pub(crate) fn surface_props_view(&self) -> Option<&wgpu::TextureView> {
         self.store.surface_props_view.as_ref()
     }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; exposed for resize/recreate stress probes.
-    pub(crate) fn resize_generation(&self) -> u32 {
-        self.resize_generation
-    }
 }

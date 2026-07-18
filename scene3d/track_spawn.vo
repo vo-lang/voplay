@@ -12,7 +12,10 @@ func SpawnTrackWithAssets(scene *Scene, assets voplay.AssetSource, track *Track,
 	if track == nil || track.asset == nil {
 		return nil, errors.New("scene3d.SpawnTrack: track is nil")
 	}
-	result := &TrackSpawnResult{Track: track, Entities: []*Entity{}, Meshes: map[string]*Entity{}, CollisionMeshes: map[string]*Entity{}, Textures: []voplay.TextureID{}}
+	result := &TrackSpawnResult{
+		Track: track, Entities: []*Entity{}, Meshes: map[string]*Entity{},
+		CollisionMeshes: map[string]*Entity{}, Textures: []voplay.TextureID{},
+	}
 	success := false
 	errdefer func() {
 		if success {
@@ -201,14 +204,26 @@ func SpawnTrackDebugOverlay(scene *Scene, track *Track, opts TrackDebugOptions) 
 			if width <= 0 {
 				width = pose.HalfWidth * 2
 			}
-			ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: width, Y: opts.LineThickness, Z: opts.LineThickness}, Model: model, Tint: opts.GateColor, TintSet: true, Tag: "track_debug_gate_" + gate.Name, PickMode: PickDisabled})
+			ent := scene.Spawn(EntityDesc{
+				Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation,
+				Scale: voplay.Vec3{X: width, Y: opts.LineThickness, Z: opts.LineThickness}, Model: model,
+				Tint: opts.GateColor, TintSet: true, Tag: "track_debug_gate_" + gate.Name,
+				PickMode: PickDisabled,
+			})
 			overlay.Entities = append(overlay.Entities, ent)
 		}
 	}
 	if opts.Respawns {
 		for _, respawn := range track.asset.Respawns {
 			pose := track.PoseAt(respawn.Distance)
-			ent := scene.Spawn(EntityDesc{Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: opts.LineThickness * 3, Y: opts.LineThickness * 3, Z: opts.LineThickness * 3}, Model: model, Tint: opts.RespawnColor, TintSet: true, Tag: "track_debug_respawn_" + respawn.Name, PickMode: PickDisabled})
+			ent := scene.Spawn(EntityDesc{
+				Position: pose.Position.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation,
+				Scale: voplay.Vec3{
+					X: opts.LineThickness * 3, Y: opts.LineThickness * 3, Z: opts.LineThickness * 3,
+				},
+				Model: model, Tint: opts.RespawnColor, TintSet: true,
+				Tag: "track_debug_respawn_" + respawn.Name, PickMode: PickDisabled,
+			})
 			overlay.Entities = append(overlay.Entities, ent)
 		}
 	}
@@ -248,7 +263,11 @@ func (o *TrackDebugOverlay) spawnTrackPolyline(scene *Scene, track *Track, model
 		}
 		mid := start.Lerp(end, 0.5)
 		yaw := trackYawFromForward(dir.Normalize())
-		ent := scene.Spawn(EntityDesc{Position: mid, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw), Scale: voplay.Vec3{X: opts.LineThickness, Y: opts.LineThickness, Z: length}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_line", PickMode: PickDisabled})
+		ent := scene.Spawn(EntityDesc{
+			Position: mid, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw),
+			Scale: voplay.Vec3{X: opts.LineThickness, Y: opts.LineThickness, Z: length}, Model: model,
+			Tint: color, TintSet: true, Tag: "track_debug_line", PickMode: PickDisabled,
+		})
 		o.Entities = append(o.Entities, ent)
 	}
 }
@@ -265,7 +284,10 @@ func (o *TrackDebugOverlay) spawnTrackSurfaceMarkers(scene *Scene, track *Track,
 	length := track.Length()
 	for distance := 0.0; distance < length; distance += step {
 		pose := track.PoseAt(distance)
-		laterals := []float64{-pose.HalfWidth - size * 2.8, -pose.HalfWidth * 0.55, 0, pose.HalfWidth * 0.55, pose.HalfWidth + size * 2.8}
+		laterals := []float64{
+			-pose.HalfWidth - size * 2.8, -pose.HalfWidth * 0.55, 0, pose.HalfWidth * 0.55,
+			pose.HalfWidth + size * 2.8,
+		}
 		for _, lateral := range laterals {
 			pos := pose.Position.Add(pose.Right.Scale(lateral))
 			hit := track.SurfaceAt(pos)
@@ -275,7 +297,11 @@ func (o *TrackDebugOverlay) spawnTrackSurfaceMarkers(scene *Scene, track *Track,
 			} else if hit.OnRoad || hit.Kind == TrackSurfaceRoad {
 				color = opts.RoadSurfaceColor
 			}
-			ent := scene.Spawn(EntityDesc{Position: pos.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation, Scale: voplay.Vec3{X: size, Y: size * 0.35, Z: size}, Model: model, Tint: color, TintSet: true, Tag: "track_debug_surface_" + hit.Kind, PickMode: PickDisabled})
+			ent := scene.Spawn(EntityDesc{
+				Position: pos.Add(voplay.Vec3{Y: opts.HeightOffset}), Rotation: pose.Rotation,
+				Scale: voplay.Vec3{X: size, Y: size * 0.35, Z: size}, Model: model, Tint: color, TintSet: true,
+				Tag: "track_debug_surface_" + hit.Kind, PickMode: PickDisabled,
+			})
 			o.Entities = append(o.Entities, ent)
 		}
 	}
@@ -292,9 +318,12 @@ func spawnTrackMesh(scene *Scene, assets voplay.AssetSource, mesh TrackMesh, bas
 			visualModel.Free()
 		}
 	}()
-	visualDesc := EntityDesc{Position: mesh.Position.Vec3(), Rotation: mapRotation(mesh.Rotation), Scale: mapScale(mesh.Scale), Model: visualModel, Tag: mesh.Name, StaticRenderable: true}
+	visualDesc := EntityDesc{
+		Position: mapVec3(mesh.Position), Rotation: mapRotation(mesh.Rotation),
+		Scale: mapScale(mesh.Scale), Model: visualModel, Tag: mesh.Name, StaticRenderable: true,
+	}
 	if mesh.TintSet {
-		visualDesc.Tint = mesh.Tint.Color()
+		visualDesc.Tint = mapColor(mesh.Tint)
 		visualDesc.TintSet = true
 	}
 	if visualOwned {
@@ -331,7 +360,11 @@ func spawnTrackMesh(scene *Scene, assets voplay.AssetSource, mesh TrackMesh, bas
 	if mesh.Friction > 0 {
 		physics.Friction = mesh.Friction
 	}
-	collisionDesc := EntityDesc{Position: mesh.Position.Vec3(), Rotation: mapRotation(mesh.Rotation), Scale: mapScale(mesh.Scale), Model: collisionModel, Tint: voplay.White, TintSet: true, Tag: mesh.Name + "_collision", Physics: physics}
+	collisionDesc := EntityDesc{
+		Position: mapVec3(mesh.Position), Rotation: mapRotation(mesh.Rotation),
+		Scale: mapScale(mesh.Scale), Model: collisionModel, Tint: voplay.White, TintSet: true,
+		Tag: mesh.Name + "_collision", Physics: physics,
+	}
 	if collisionOwned {
 		collisionDesc.ModelLease = voplay.NewModelLease(collisionModel)
 	}

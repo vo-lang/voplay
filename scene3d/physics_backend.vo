@@ -142,11 +142,7 @@ func (defaultPhysicsBackend) ApplyMotionReset(worldID, bodyID int, command Vehic
 }
 
 func (defaultPhysicsBackend) ApplySleepState(worldID, bodyID int, command VehicleSleepCommand) {
-	if command.Sleeping {
-		physicsSetBodySleepState(worldID, bodyID, 1)
-		return
-	}
-	physicsSetBodySleepState(worldID, bodyID, 0)
+	physicsSetBodySleepState(worldID, bodyID, command.Sleeping)
 }
 
 func (defaultPhysicsBackend) ApplyRecovery(worldID, bodyID int, command VehicleRecoveryCommand) {
@@ -228,7 +224,7 @@ func physicsSetBodyPose(worldID, bodyID int, posX, posY, posZ, rotX, rotY, rotZ,
 
 func physicsSetBodyMotion(worldID, bodyID int, linearX, linearY, linearZ, angularX, angularY, angularZ float64)
 
-func physicsSetBodySleepState(worldID, bodyID, sleeping int)
+func physicsSetBodySleepState(worldID, bodyID int, sleeping bool)
 
 func physicsRaycastVehicleState(worldID, vehicleID int) []byte
 

@@ -15,6 +15,7 @@ use crate::material::{
 };
 use crate::math3d::{self, Mat4, Quat, Vec3, MAT4_IDENTITY};
 use crate::primitives;
+use crate::terrain::TerrainBuildInput;
 use crate::texture::{TextureId, TextureManager};
 use base64::{engine::general_purpose, Engine as _};
 use image::{DynamicImage, GenericImageView, ImageFormat};
@@ -82,6 +83,37 @@ struct ParsedNodeModel {
     cpu_indices: Vec<u32>,
     cpu_triangle_materials: Vec<u32>,
     skinned: bool,
+}
+
+struct PendingGpuModel {
+    meshes: Vec<GpuMesh>,
+    cpu_positions: Vec<[f32; 3]>,
+    cpu_normals: Vec<[f32; 3]>,
+    cpu_uvs: Vec<[f32; 2]>,
+    cpu_colors: Vec<[f32; 4]>,
+    cpu_materials: Vec<MeshMaterial>,
+    cpu_indices: Vec<u32>,
+    cpu_triangle_materials: Vec<u32>,
+    skeleton: Option<Skeleton>,
+    clips: Vec<AnimationClip>,
+}
+
+struct ParsedSkinAnimation {
+    used_skin_index: Option<usize>,
+    skeleton: Option<Skeleton>,
+    clips: Vec<AnimationClip>,
+}
+
+struct ImportedGltf {
+    document: gltf::Document,
+    buffers: Vec<gltf::buffer::Data>,
+    images: Vec<gltf::image::Data>,
+}
+
+struct BuiltLevelModel {
+    model_id: ModelId,
+    aabb_min: [f32; 3],
+    aabb_max: [f32; 3],
 }
 
 #[derive(Debug)]
@@ -201,6 +233,18 @@ struct LevelTerrainPhysicsExtras {
 struct UploadedGltfTextures {
     srgb: HashMap<usize, TextureId>,
     linear: HashMap<usize, TextureId>,
+}
+
+struct LevelLoadContext<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    texture_manager: &'a mut TextureManager,
+    texture_cache: HashMap<String, TextureId>,
+    level_dir: &'a Path,
+    textures: &'a UploadedGltfTextures,
+    buffers: &'a [gltf::buffer::Data],
+    skin_animation: &'a ParsedSkinAnimation,
+    label: &'a str,
 }
 
 fn default_terrain_uv_scale() -> f32 {
@@ -439,6 +483,9 @@ impl MeshMaterial {
         }
     }
 
+    // This constructor mirrors the renderer's fixed terrain material schema; keeping each
+    // texture slot explicit makes accidental channel swaps visible at every call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn terrain_splat(
         base_color: [f32; 4],
         control_texture_id: TextureId,
@@ -728,19 +775,19 @@ impl ModelManager {
         (min, max)
     }
 
-    fn insert_model(
-        &mut self,
-        meshes: Vec<GpuMesh>,
-        cpu_positions: Vec<[f32; 3]>,
-        cpu_normals: Vec<[f32; 3]>,
-        cpu_uvs: Vec<[f32; 2]>,
-        cpu_colors: Vec<[f32; 4]>,
-        cpu_materials: Vec<MeshMaterial>,
-        cpu_indices: Vec<u32>,
-        cpu_triangle_materials: Vec<u32>,
-        skeleton: Option<Skeleton>,
-        clips: Vec<AnimationClip>,
-    ) -> ModelId {
+    fn insert_model(&mut self, pending: PendingGpuModel) -> ModelId {
+        let PendingGpuModel {
+            meshes,
+            cpu_positions,
+            cpu_normals,
+            cpu_uvs,
+            cpu_colors,
+            cpu_materials,
+            cpu_indices,
+            cpu_triangle_materials,
+            skeleton,
+            clips,
+        } = pending;
         let (aabb_min, aabb_max) = Self::compute_aabb(&cpu_positions);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let rest_joint_palette = skeleton
@@ -826,18 +873,18 @@ impl ModelManager {
         let cpu_colors: Vec<[f32; 4]> = vertices.iter().map(|vertex| vertex.color).collect();
         let triangle_count = indices.len() / 3;
         let mesh = Self::create_gpu_mesh(device, queue, vertices, indices, material);
-        self.insert_model(
-            vec![mesh],
+        self.insert_model(PendingGpuModel {
+            meshes: vec![mesh],
             cpu_positions,
             cpu_normals,
             cpu_uvs,
             cpu_colors,
-            vec![material],
-            indices.to_vec(),
-            vec![0; triangle_count],
-            None,
-            Vec::new(),
-        )
+            cpu_materials: vec![material],
+            cpu_indices: indices.to_vec(),
+            cpu_triangle_materials: vec![0; triangle_count],
+            skeleton: None,
+            clips: Vec::new(),
+        })
     }
 
     pub fn create_material_variant(
@@ -877,18 +924,18 @@ impl ModelManager {
                 source.cpu_indices.len() / 3,
             )
         };
-        Ok(self.insert_model(
+        Ok(self.insert_model(PendingGpuModel {
             meshes,
             cpu_positions,
             cpu_normals,
             cpu_uvs,
             cpu_colors,
-            vec![material],
+            cpu_materials: vec![material],
             cpu_indices,
-            vec![0; triangle_count],
-            None,
-            Vec::new(),
-        ))
+            cpu_triangle_materials: vec![0; triangle_count],
+            skeleton: None,
+            clips: Vec::new(),
+        }))
     }
 
     pub fn create_plane(
@@ -1134,7 +1181,7 @@ impl ModelManager {
         buffers: &[gltf::buffer::Data],
         node_parent: &HashMap<usize, usize>,
         label: &str,
-    ) -> Result<(Option<usize>, Option<Skeleton>, Vec<AnimationClip>), String> {
+    ) -> Result<ParsedSkinAnimation, String> {
         let mut used_skin_index: Option<usize> = None;
         for node in document.nodes() {
             if let Some(skin) = node.skin() {
@@ -1148,7 +1195,11 @@ impl ModelManager {
             }
         }
         let Some(skin_index) = used_skin_index else {
-            return Ok((None, None, Vec::new()));
+            return Ok(ParsedSkinAnimation {
+                used_skin_index: None,
+                skeleton: None,
+                clips: Vec::new(),
+            });
         };
         let skin = document
             .skins()
@@ -1194,7 +1245,6 @@ impl ModelManager {
                 }
                 let (translation, rotation, scale) = joint_node.transform().decomposed();
                 Joint {
-                    name: joint_node.name().unwrap_or("").to_string(),
                     parent: joint_parent,
                     local_transform: Transform {
                         translation: Vec3::from_array(translation),
@@ -1317,7 +1367,11 @@ impl ModelManager {
                 channels,
             });
         }
-        Ok((Some(skin_index), Some(skeleton), clips))
+        Ok(ParsedSkinAnimation {
+            used_skin_index: Some(skin_index),
+            skeleton: Some(skeleton),
+            clips,
+        })
     }
 
     fn upload_parsed_node_primitives(
@@ -1749,16 +1803,7 @@ impl ModelManager {
         Ok(nodes)
     }
 
-    fn import_path(
-        path: &Path,
-    ) -> Result<
-        (
-            gltf::Document,
-            Vec<gltf::buffer::Data>,
-            Vec<gltf::image::Data>,
-        ),
-        String,
-    > {
+    fn import_path(path: &Path) -> Result<ImportedGltf, String> {
         let path_label = path.display().to_string();
         let data = file_io::read_bytes(path)
             .map_err(|e| format!("gltf import '{}': {}", path_label, e))?;
@@ -1767,7 +1812,11 @@ impl ModelManager {
         let base_dir = path.parent();
         let buffers = Self::import_buffer_data(&gltf.document, base_dir, gltf.blob)?;
         let images = Self::import_image_data(&gltf.document, base_dir, &buffers)?;
-        Ok((gltf.document, buffers, images))
+        Ok(ImportedGltf {
+            document: gltf.document,
+            buffers,
+            images,
+        })
     }
 
     fn read_external_uri(
@@ -1920,19 +1969,22 @@ impl ModelManager {
 
     fn build_level_node_model(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        textures: &UploadedGltfTextures,
-        buffers: &[gltf::buffer::Data],
+        context: &LevelLoadContext<'_>,
         node: &gltf::Node,
-        used_skin_index: Option<usize>,
-        skeleton: &Option<Skeleton>,
-        clips: &[AnimationClip],
-        label: &str,
-    ) -> Result<(ModelId, [f32; 3], [f32; 3]), String> {
-        let Some(parsed) = Self::parse_node_model(node, textures, buffers, used_skin_index, label)?
+    ) -> Result<BuiltLevelModel, String> {
+        let Some(parsed) = Self::parse_node_model(
+            node,
+            context.textures,
+            context.buffers,
+            context.skin_animation.used_skin_index,
+            context.label,
+        )?
         else {
-            return Ok((0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]));
+            return Ok(BuiltLevelModel {
+                model_id: 0,
+                aabb_min: [0.0, 0.0, 0.0],
+                aabb_max: [0.0, 0.0, 0.0],
+            });
         };
         let (aabb_min, aabb_max) = Self::compute_aabb(&parsed.cpu_positions);
         let ParsedNodeModel {
@@ -1946,9 +1998,10 @@ impl ModelManager {
             cpu_triangle_materials,
             skinned,
         } = parsed;
-        let gpu_meshes = Self::upload_parsed_node_primitives(device, queue, primitives);
-        let model_id = self.insert_model(
-            gpu_meshes,
+        let gpu_meshes =
+            Self::upload_parsed_node_primitives(context.device, context.queue, primitives);
+        let model_id = self.insert_model(PendingGpuModel {
+            meshes: gpu_meshes,
             cpu_positions,
             cpu_normals,
             cpu_uvs,
@@ -1956,10 +2009,22 @@ impl ModelManager {
             cpu_materials,
             cpu_indices,
             cpu_triangle_materials,
-            if skinned { skeleton.clone() } else { None },
-            if skinned { clips.to_vec() } else { Vec::new() },
-        );
-        Ok((model_id, aabb_min, aabb_max))
+            skeleton: if skinned {
+                context.skin_animation.skeleton.clone()
+            } else {
+                None
+            },
+            clips: if skinned {
+                context.skin_animation.clips.clone()
+            } else {
+                Vec::new()
+            },
+        });
+        Ok(BuiltLevelModel {
+            model_id,
+            aabb_min,
+            aabb_max,
+        })
     }
 
     fn parse_level_terrain_extras(
@@ -1988,63 +2053,51 @@ impl ModelManager {
     }
 
     fn load_level_texture_cached(
-        texture_manager: &mut TextureManager,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_cache: &mut HashMap<String, TextureId>,
+        context: &mut LevelLoadContext<'_>,
         path: &Path,
     ) -> Result<TextureId, String> {
         let key = path.to_string_lossy().into_owned();
-        if let Some(id) = texture_cache.get(&key).copied() {
+        if let Some(id) = context.texture_cache.get(&key).copied() {
             return Ok(id);
         }
-        let id = texture_manager.load_file(device, queue, &key)?;
-        texture_cache.insert(key, id);
+        let id = context
+            .texture_manager
+            .load_file(context.device, context.queue, &key)?;
+        context.texture_cache.insert(key, id);
         Ok(id)
     }
 
     fn build_level_terrain_material(
-        texture_manager: &mut TextureManager,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_cache: &mut HashMap<String, TextureId>,
-        level_dir: &Path,
+        context: &mut LevelLoadContext<'_>,
         extras: &LevelTerrainExtras,
-        label: &str,
         node_name: &str,
     ) -> Result<MeshMaterial, String> {
         if extras.material.control.is_some() {
             if extras.material.albedo.is_some() {
                 return Err(format!(
                     "level '{}' node '{}' terrain material cannot mix albedo and splat",
-                    label, node_name
+                    context.label, node_name
                 ));
             }
             let control_path = Self::resolve_level_asset_path(
-                level_dir,
+                context.level_dir,
                 extras.material.control.as_deref().unwrap_or(""),
             );
             let layers = extras.material.layers.as_ref().ok_or_else(|| {
                 format!(
                     "level '{}' node '{}' terrain splat requires 4 layers",
-                    label, node_name
+                    context.label, node_name
                 )
             })?;
             if layers.len() != 4 {
                 return Err(format!(
                     "level '{}' node '{}' terrain splat requires exactly 4 layers, got {}",
-                    label,
+                    context.label,
                     node_name,
                     layers.len()
                 ));
             }
-            let control_texture_id = Self::load_level_texture_cached(
-                texture_manager,
-                device,
-                queue,
-                texture_cache,
-                &control_path,
-            )?;
+            let control_texture_id = Self::load_level_texture_cached(context, &control_path)?;
             let mut layer_texture_ids = [0u32; 4];
             let mut layer_normal_texture_ids = [0u32; 4];
             let mut layer_metallic_roughness_texture_ids = [0u32; 4];
@@ -2054,42 +2107,28 @@ impl ModelManager {
                 if layer.uv_scale <= 0.0 {
                     return Err(format!(
                         "level '{}' node '{}' terrain layer {} uvScale must be > 0",
-                        label, node_name, index
+                        context.label, node_name, index
                     ));
                 }
                 if layer.normal_scale < 0.0 {
                     return Err(format!(
                         "level '{}' node '{}' terrain layer {} normalScale must be >= 0",
-                        label, node_name, index
+                        context.label, node_name, index
                     ));
                 }
-                let texture_path = Self::resolve_level_asset_path(level_dir, &layer.texture);
-                layer_texture_ids[index] = Self::load_level_texture_cached(
-                    texture_manager,
-                    device,
-                    queue,
-                    texture_cache,
-                    &texture_path,
-                )?;
+                let texture_path =
+                    Self::resolve_level_asset_path(context.level_dir, &layer.texture);
+                layer_texture_ids[index] = Self::load_level_texture_cached(context, &texture_path)?;
                 if let Some(normal) = layer.normal.as_deref() {
-                    let normal_path = Self::resolve_level_asset_path(level_dir, normal);
-                    layer_normal_texture_ids[index] = Self::load_level_texture_cached(
-                        texture_manager,
-                        device,
-                        queue,
-                        texture_cache,
-                        &normal_path,
-                    )?;
+                    let normal_path = Self::resolve_level_asset_path(context.level_dir, normal);
+                    layer_normal_texture_ids[index] =
+                        Self::load_level_texture_cached(context, &normal_path)?;
                 }
                 if let Some(metallic_roughness) = layer.metallic_roughness.as_deref() {
-                    let mr_path = Self::resolve_level_asset_path(level_dir, metallic_roughness);
-                    layer_metallic_roughness_texture_ids[index] = Self::load_level_texture_cached(
-                        texture_manager,
-                        device,
-                        queue,
-                        texture_cache,
-                        &mr_path,
-                    )?;
+                    let mr_path =
+                        Self::resolve_level_asset_path(context.level_dir, metallic_roughness);
+                    layer_metallic_roughness_texture_ids[index] =
+                        Self::load_level_texture_cached(context, &mr_path)?;
                 }
                 uv_scales[index] = layer.uv_scale;
                 normal_scales[index] = layer.normal_scale;
@@ -2108,7 +2147,7 @@ impl ModelManager {
         if let Some(layers) = extras.material.layers.as_ref() {
             return Err(format!(
                 "level '{}' node '{}' terrain layers require a control texture, got {} layers",
-                label,
+                context.label,
                 node_name,
                 layers.len()
             ));
@@ -2116,19 +2155,13 @@ impl ModelManager {
         if extras.material.uv_scale <= 0.0 {
             return Err(format!(
                 "level '{}' node '{}' terrain uvScale must be > 0",
-                label, node_name
+                context.label, node_name
             ));
         }
         let texture_id = match extras.material.albedo.as_deref() {
             Some(value) => {
-                let path = Self::resolve_level_asset_path(level_dir, value);
-                Some(Self::load_level_texture_cached(
-                    texture_manager,
-                    device,
-                    queue,
-                    texture_cache,
-                    &path,
-                )?)
+                let path = Self::resolve_level_asset_path(context.level_dir, value);
+                Some(Self::load_level_texture_cached(context, &path)?)
             }
             None => None,
         };
@@ -2141,21 +2174,16 @@ impl ModelManager {
 
     fn build_level_terrain_node(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_manager: &mut TextureManager,
-        texture_cache: &mut HashMap<String, TextureId>,
-        level_dir: &Path,
+        context: &mut LevelLoadContext<'_>,
         node: &gltf::Node,
         flattened: &FlattenedLevelNodeInfo,
         extras: &LevelTerrainExtras,
-        label: &str,
     ) -> Result<LevelNode, String> {
         let node_name = &flattened.name;
         if node.mesh().is_some() {
             return Err(format!(
                 "level '{}' node '{}' terrain node must not contain a mesh",
-                label, node_name
+                context.label, node_name
             ));
         }
         let identity = [0.0, 0.0, 0.0, 1.0];
@@ -2167,7 +2195,7 @@ impl ModelManager {
         {
             return Err(format!(
                 "level '{}' node '{}' terrain node rotation must be identity",
-                label, node_name
+                context.label, node_name
             ));
         }
         let unit_scale = [1.0, 1.0, 1.0];
@@ -2179,52 +2207,41 @@ impl ModelManager {
         {
             return Err(format!(
                 "level '{}' node '{}' terrain node scale must be 1",
-                label, node_name
+                context.label, node_name
             ));
         }
         let [scale_x, scale_y, scale_z] = extras.size;
         if scale_x <= 0.0 || scale_y <= 0.0 || scale_z <= 0.0 {
             return Err(format!(
                 "level '{}' node '{}' terrain size must be > 0",
-                label, node_name
+                context.label, node_name
             ));
         }
         if extras.heightmap.is_empty() {
             return Err(format!(
                 "level '{}' node '{}' terrain heightmap path is required",
-                label, node_name
+                context.label, node_name
             ));
         }
-        let heightmap_path = Self::resolve_level_asset_path(level_dir, &extras.heightmap);
+        let heightmap_path = Self::resolve_level_asset_path(context.level_dir, &extras.heightmap);
         let image_data = file_io::read_bytes(&heightmap_path).map_err(|e| {
             format!(
                 "level '{}' node '{}' terrain heightmap read '{}': {}",
-                label,
+                context.label,
                 node_name,
                 heightmap_path.display(),
                 e
             )
         })?;
-        let material = Self::build_level_terrain_material(
-            texture_manager,
-            device,
-            queue,
-            texture_cache,
-            level_dir,
-            extras,
-            label,
-            node_name,
-        )?;
-        let terrain_data = crate::terrain::generate_terrain(
-            device,
-            queue,
-            self,
-            &image_data,
-            scale_x,
-            scale_y,
-            scale_z,
+        let material = Self::build_level_terrain_material(context, extras, node_name)?;
+        let terrain_data = crate::terrain::generate_terrain(TerrainBuildInput {
+            device: context.device,
+            queue: context.queue,
+            model_manager: self,
+            image_data: &image_data,
+            scale: [scale_x, scale_y, scale_z],
             material,
-        )?;
+        })?;
         let (min_height, max_height) = terrain_data.heights.iter().fold(
             (f32::INFINITY, f32::NEG_INFINITY),
             |(min_v, max_v), value| (min_v.min(*value), max_v.max(*value)),
@@ -2253,47 +2270,22 @@ impl ModelManager {
 
     fn collect_level_nodes(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_manager: &mut TextureManager,
-        texture_cache: &mut HashMap<String, TextureId>,
-        level_dir: &Path,
-        textures: &UploadedGltfTextures,
-        buffers: &[gltf::buffer::Data],
+        context: &mut LevelLoadContext<'_>,
         node: gltf::Node,
         parent_world: &Mat4,
-        used_skin_index: Option<usize>,
-        skeleton: &Option<Skeleton>,
-        clips: &[AnimationClip],
-        label: &str,
         out: &mut Vec<LevelNode>,
     ) -> Result<(), String> {
-        let (world, flattened) = Self::flatten_level_node(&node, parent_world, label)?;
-        if let Some(terrain_extras) = Self::parse_level_terrain_extras(&node, label)? {
-            let terrain_node = self.build_level_terrain_node(
-                device,
-                queue,
-                texture_manager,
-                texture_cache,
-                level_dir,
-                &node,
-                &flattened,
-                &terrain_extras,
-                label,
-            )?;
+        let (world, flattened) = Self::flatten_level_node(&node, parent_world, context.label)?;
+        if let Some(terrain_extras) = Self::parse_level_terrain_extras(&node, context.label)? {
+            let terrain_node =
+                self.build_level_terrain_node(context, &node, &flattened, &terrain_extras)?;
             out.push(terrain_node);
         } else {
-            let (model_id, aabb_min, aabb_max) = self.build_level_node_model(
-                device,
-                queue,
-                textures,
-                buffers,
-                &node,
-                used_skin_index,
-                skeleton,
-                clips,
-                label,
-            )?;
+            let BuiltLevelModel {
+                model_id,
+                aabb_min,
+                aabb_max,
+            } = self.build_level_node_model(context, &node)?;
             out.push(LevelNode {
                 kind: LevelNodeKind::Entity,
                 name: flattened.name,
@@ -2307,22 +2299,7 @@ impl ModelManager {
             });
         }
         for child in node.children() {
-            self.collect_level_nodes(
-                device,
-                queue,
-                texture_manager,
-                texture_cache,
-                level_dir,
-                textures,
-                buffers,
-                child,
-                &world,
-                used_skin_index,
-                skeleton,
-                clips,
-                label,
-                out,
-            )?;
+            self.collect_level_nodes(context, child, &world, out)?;
         }
         Ok(())
     }
@@ -2335,38 +2312,39 @@ impl ModelManager {
         path: &str,
     ) -> Result<Vec<LevelNode>, String> {
         let path_ref = Path::new(path);
-        let (document, buffers, images) = Self::import_path(path_ref)?;
-        let scene = document
+        let imported = Self::import_path(path_ref)?;
+        let scene = imported
+            .document
             .default_scene()
             .ok_or_else(|| format!("level '{}' has no default scene", path))?;
-        let textures =
-            Self::upload_resolved_textures(device, queue, texture_manager, &document, &images);
-        let node_parent = Self::build_node_parent_map(&document);
-        let (used_skin_index, skeleton, clips) =
-            Self::build_skin_and_clips(&document, &buffers, &node_parent, path)?;
+        let textures = Self::upload_resolved_textures(
+            device,
+            queue,
+            texture_manager,
+            &imported.document,
+            &imported.images,
+        );
+        let node_parent = Self::build_node_parent_map(&imported.document);
+        let skin_animation =
+            Self::build_skin_and_clips(&imported.document, &imported.buffers, &node_parent, path)?;
         let level_dir = path_ref
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let mut texture_cache = HashMap::new();
+        let mut context = LevelLoadContext {
+            device,
+            queue,
+            texture_manager,
+            texture_cache: HashMap::new(),
+            level_dir: &level_dir,
+            textures: &textures,
+            buffers: &imported.buffers,
+            skin_animation: &skin_animation,
+            label: path,
+        };
         let mut nodes = Vec::new();
         for root in scene.nodes() {
-            self.collect_level_nodes(
-                device,
-                queue,
-                texture_manager,
-                &mut texture_cache,
-                &level_dir,
-                &textures,
-                &buffers,
-                root,
-                &MAT4_IDENTITY,
-                used_skin_index,
-                &skeleton,
-                &clips,
-                path,
-                &mut nodes,
-            )?;
+            self.collect_level_nodes(&mut context, root, &MAT4_IDENTITY, &mut nodes)?;
         }
         Ok(nodes)
     }
@@ -2381,16 +2359,8 @@ impl ModelManager {
         texture_manager: &mut TextureManager,
         path: &str,
     ) -> Result<ModelId, String> {
-        let (document, buffers, images) = Self::import_path(Path::new(path))?;
-        self.upload_gltf(
-            device,
-            queue,
-            texture_manager,
-            document,
-            buffers,
-            images,
-            path,
-        )
+        let imported = Self::import_path(Path::new(path))?;
+        self.upload_gltf(device, queue, texture_manager, imported, path)
     }
 
     /// Load a model from raw glTF/GLB bytes.
@@ -2411,9 +2381,11 @@ impl ModelManager {
             device,
             queue,
             texture_manager,
-            document,
-            buffers,
-            images,
+            ImportedGltf {
+                document,
+                buffers,
+                images,
+            },
             label,
         )
     }
@@ -2424,16 +2396,18 @@ impl ModelManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture_manager: &mut TextureManager,
-        document: gltf::Document,
-        buffers: Vec<gltf::buffer::Data>,
-        images: Vec<gltf::image::Data>,
+        imported: ImportedGltf,
         label: &str,
     ) -> Result<ModelId, String> {
+        let ImportedGltf {
+            document,
+            buffers,
+            images,
+        } = imported;
         let textures =
             Self::upload_resolved_textures(device, queue, texture_manager, &document, &images);
         let node_parent = Self::build_node_parent_map(&document);
-        let (used_skin_index, skeleton, clips) =
-            Self::build_skin_and_clips(&document, &buffers, &node_parent, label)?;
+        let skin_animation = Self::build_skin_and_clips(&document, &buffers, &node_parent, label)?;
         let mut gpu_meshes = Vec::new();
         let mut cpu_positions = Vec::new();
         let mut cpu_normals = Vec::new();
@@ -2443,8 +2417,13 @@ impl ModelManager {
         let mut cpu_indices = Vec::new();
         let mut cpu_triangle_materials = Vec::new();
         for node in document.nodes() {
-            let Some(parsed) =
-                Self::parse_node_model(&node, &textures, &buffers, used_skin_index, label)?
+            let Some(parsed) = Self::parse_node_model(
+                &node,
+                &textures,
+                &buffers,
+                skin_animation.used_skin_index,
+                label,
+            )?
             else {
                 continue;
             };
@@ -2461,11 +2440,11 @@ impl ModelManager {
             } = parsed;
             let index_base = cpu_positions.len() as u32;
             let material_base = cpu_materials.len() as u32;
-            cpu_positions.extend(node_positions.into_iter());
-            cpu_normals.extend(node_normals.into_iter());
-            cpu_uvs.extend(node_uvs.into_iter());
-            cpu_colors.extend(node_colors.into_iter());
-            cpu_materials.extend(node_materials.into_iter());
+            cpu_positions.extend(node_positions);
+            cpu_normals.extend(node_normals);
+            cpu_uvs.extend(node_uvs);
+            cpu_colors.extend(node_colors);
+            cpu_materials.extend(node_materials);
             cpu_indices.extend(node_indices.into_iter().map(|index| index_base + index));
             cpu_triangle_materials.extend(
                 node_triangle_materials
@@ -2479,8 +2458,8 @@ impl ModelManager {
         if gpu_meshes.is_empty() {
             return Err(format!("model '{}' contains no renderable meshes", label));
         }
-        Ok(self.insert_model(
-            gpu_meshes,
+        Ok(self.insert_model(PendingGpuModel {
+            meshes: gpu_meshes,
             cpu_positions,
             cpu_normals,
             cpu_uvs,
@@ -2488,9 +2467,9 @@ impl ModelManager {
             cpu_materials,
             cpu_indices,
             cpu_triangle_materials,
-            skeleton,
-            clips,
-        ))
+            skeleton: skin_animation.skeleton,
+            clips: skin_animation.clips,
+        }))
     }
 
     /// Free a model by ID.
@@ -2566,14 +2545,13 @@ mod tests {
         TempFixture { dir, gltf_path }
     }
 
-    fn load_document(
-        path: &Path,
-    ) -> (
-        gltf::Document,
-        Vec<gltf::buffer::Data>,
-        Vec<gltf::image::Data>,
-    ) {
-        gltf::import(path).expect("import gltf fixture")
+    fn load_document(path: &Path) -> ImportedGltf {
+        let (document, buffers, images) = gltf::import(path).expect("import gltf fixture");
+        ImportedGltf {
+            document,
+            buffers,
+            images,
+        }
     }
 
     #[test]
@@ -2593,7 +2571,7 @@ mod tests {
             }"#,
             None,
         );
-        let (document, _, _) = load_document(&fixture.gltf_path);
+        let ImportedGltf { document, .. } = load_document(&fixture.gltf_path);
         let scene = document.default_scene().expect("default scene");
         let nodes =
             ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
@@ -2625,7 +2603,7 @@ mod tests {
             }"#,
             None,
         );
-        let (document, _, _) = load_document(&fixture.gltf_path);
+        let ImportedGltf { document, .. } = load_document(&fixture.gltf_path);
         let scene = document.default_scene().expect("default scene");
         let nodes =
             ModelManager::flatten_level_scene_nodes(scene, fixture.gltf_path.to_str().unwrap())
@@ -2681,7 +2659,9 @@ mod tests {
             }"#,
             Some(&bin),
         );
-        let (document, buffers, _) = load_document(&fixture.gltf_path);
+        let ImportedGltf {
+            document, buffers, ..
+        } = load_document(&fixture.gltf_path);
         let node = document.nodes().next().expect("triangle node");
         let parsed = ModelManager::parse_node_model(
             &node,

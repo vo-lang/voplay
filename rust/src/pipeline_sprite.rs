@@ -52,26 +52,6 @@ pub struct PipelineSprite {
 }
 
 impl PipelineSprite {
-    #[allow(dead_code)]
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        camera_bind_group_layout: &wgpu::BindGroupLayout,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        sample_count: u32,
-    ) -> Self {
-        Self::create(
-            device,
-            queue,
-            surface_format,
-            camera_bind_group_layout,
-            texture_bind_group_layout,
-            sample_count,
-            true,
-        )
-    }
-
     pub fn new_overlay(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

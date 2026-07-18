@@ -89,13 +89,15 @@ impl ShadowPassExecutor {
                                 let cascade_far = shadow_cascade_splits[cascade_index];
                                 shadow_cascade_vps[cascade_index] =
                                     math3d::compute_shadow_vp_for_camera_stabilized(
-                                        camera.eye,
-                                        camera.target,
-                                        camera.up,
-                                        camera.fov_degrees.to_radians(),
-                                        ctx.aspect,
-                                        cascade_near,
-                                        cascade_far,
+                                        math3d::ShadowCameraProjection {
+                                            eye: camera.eye,
+                                            target: camera.target,
+                                            up: camera.up,
+                                            fov_y_rad: camera.fov_degrees.to_radians(),
+                                            aspect: ctx.aspect,
+                                            near: cascade_near,
+                                            far: cascade_far,
+                                        },
                                         shadow_dir,
                                         tile_resolution,
                                     );
@@ -104,13 +106,15 @@ impl ShadowPassExecutor {
                             shadow_cascade_vps[0]
                         } else {
                             let shadow_vp = math3d::compute_shadow_vp_for_camera_stabilized(
-                                camera.eye,
-                                camera.target,
-                                camera.up,
-                                camera.fov_degrees.to_radians(),
-                                ctx.aspect,
-                                camera.near,
-                                shadow_far,
+                                math3d::ShadowCameraProjection {
+                                    eye: camera.eye,
+                                    target: camera.target,
+                                    up: camera.up,
+                                    fov_y_rad: camera.fov_degrees.to_radians(),
+                                    aspect: ctx.aspect,
+                                    near: camera.near,
+                                    far: shadow_far,
+                                },
                                 shadow_dir,
                                 tile_resolution,
                             );
@@ -142,9 +146,10 @@ impl ShadowPassExecutor {
                         {
                             cascade_primitive_shadow_draws.reserve(cascade_count);
                             cascade_primitive_shadow_chunks.reserve(cascade_count);
-                            for cascade_index in 0..cascade_count {
+                            for shadow_vp in shadow_cascade_vps.iter().copied().take(cascade_count)
+                            {
                                 let light_camera = Camera3DUniform {
-                                    view_proj: shadow_cascade_vps[cascade_index],
+                                    view_proj: shadow_vp,
                                     camera_pos: cam3d.camera_pos,
                                     _pad: 0.0,
                                 };

@@ -166,7 +166,6 @@ pub struct Primitive3DShapeCommand {
 
 /// Decoded draw command.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum DrawCommand {
     Clear {
         r: f32,
@@ -459,17 +458,6 @@ pub enum DrawCommand {
 
 mod reader;
 pub use reader::StreamReader;
-
-/// Decode every command in one validated frame.
-#[allow(dead_code)]
-pub fn decode_all(data: &[u8]) -> Result<Vec<DrawCommand>, DrawStreamError> {
-    let mut reader = StreamReader::new(data)?;
-    let mut commands = Vec::new();
-    while let Some(command) = reader.next_command()? {
-        commands.push(command);
-    }
-    Ok(commands)
-}
 
 #[cfg(test)]
 mod tests;

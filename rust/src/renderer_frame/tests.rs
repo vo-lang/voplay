@@ -437,22 +437,22 @@ fn render_frame_pipeline_captures_stage_metrics() {
     graph.record_pass(RenderPassKind::Overlay, 0.75);
     let report = graph.report();
 
-    let pipeline = RenderFramePipeline::from_frame_metrics(
-        13,
-        44,
-        3,
-        12,
-        0.5,
-        18,
-        7,
-        4,
-        0x20,
-        &report,
-        0.2,
-        report.total_pass_ms,
-        6,
-        0.1,
-    );
+    let pipeline = RenderFramePipeline::from_frame_metrics(RenderFrameMetrics {
+        frame_id: 13,
+        command_count: 44,
+        scene_mutation_count: 3,
+        overlay_command_count: 12,
+        decode_ms: 0.5,
+        visible_object_count: 18,
+        visible_chunk_count: 7,
+        material_group_count: 4,
+        diagnostic_flags: 0x20,
+        graph_report: &report,
+        graph_build_ms: 0.2,
+        graph_execute_ms: report.total_pass_ms,
+        perf_payload_version: 6,
+        perf_packet_ms: 0.1,
+    });
 
     assert_eq!(pipeline.decode.command_count, 44);
     assert_eq!(pipeline.snapshot.visible_chunk_count, 7);

@@ -4,15 +4,19 @@ use vo_ext::prelude::*;
 
 use super::util::{read_u32_le, ret_bytes, with_renderer_or_panic};
 
-fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
+pub(crate) fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
     assert!(
         data.len() >= 4,
         "voplay: animation entity-model map too short"
     );
     let mut pos = 0usize;
     let count = read_u32_le(data, &mut pos) as usize;
+    let expected_len = count
+        .checked_mul(8)
+        .and_then(|payload_len| 4usize.checked_add(payload_len))
+        .unwrap_or_else(|| panic!("voplay: animation entity-model map size overflow"));
     assert!(
-        data.len() == 4 + count * 8,
+        data.len() == expected_len,
         "voplay: animation entity-model map size mismatch"
     );
     let mut map = HashMap::with_capacity(count);
@@ -22,6 +26,13 @@ fn decode_entity_models(data: &[u8]) -> HashMap<u32, u32> {
         map.insert(target_id, model_id);
     }
     map
+}
+
+pub(crate) fn decode_animation_clip_index(value: u64) -> usize {
+    let clip_index = u32::try_from(value)
+        .unwrap_or_else(|_| panic!("voplay: animation clip index exceeds u32 range: {value}"));
+    usize::try_from(clip_index)
+        .unwrap_or_else(|_| panic!("voplay: animation clip index is not representable: {value}"))
 }
 
 pub(crate) fn serialize_model_animation_info(
@@ -62,7 +73,7 @@ pub fn animation_destroy(call: &mut ExternCallContext) -> ExternResult {
 pub fn animation_play(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let target_id = call.arg_u64(1) as u32;
-    let clip_index = call.arg_u64(2) as usize;
+    let clip_index = decode_animation_clip_index(call.arg_u64(2));
     let looping = call.arg_bool(3);
     let speed = call.arg_f64(4) as f32;
     crate::animation::with_world(world_id, |world| {
@@ -83,7 +94,7 @@ pub fn animation_stop(call: &mut ExternCallContext) -> ExternResult {
 pub fn animation_crossfade(call: &mut ExternCallContext) -> ExternResult {
     let world_id = call.arg_u64(0) as u32;
     let target_id = call.arg_u64(1) as u32;
-    let clip_index = call.arg_u64(2) as usize;
+    let clip_index = decode_animation_clip_index(call.arg_u64(2));
     let duration = call.arg_f64(3) as f32;
     crate::animation::with_world(world_id, |world| {
         world.crossfade(target_id, clip_index, duration)
@@ -146,4 +157,27 @@ pub fn animation_model_info(call: &mut ExternCallContext) -> ExternResult {
     let data = serialize_model_animation_info(info);
     ret_bytes(call, 0, &data);
     ExternResult::Ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_animation_clip_index, decode_entity_models};
+
+    #[test]
+    fn animation_clip_index_has_a_target_independent_u32_domain() {
+        assert_eq!(decode_animation_clip_index(0), 0);
+        assert_eq!(
+            decode_animation_clip_index(u32::MAX as u64),
+            u32::MAX as usize,
+        );
+        assert!(
+            std::panic::catch_unwind(|| decode_animation_clip_index(u32::MAX as u64 + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn entity_model_decoder_rejects_an_impossible_count_before_allocation() {
+        let data = u32::MAX.to_le_bytes();
+        assert!(std::panic::catch_unwind(|| decode_entity_models(&data)).is_err());
+    }
 }

@@ -54,17 +54,19 @@ impl PostPassSetup {
         let mut post_uniform = PostUniform::from_settings(
             ctx.surface_width,
             ctx.surface_height,
-            ctx.bloom_threshold,
-            ctx.bloom_strength,
-            ctx.sharpen_strength,
-            ctx.fxaa_strength,
-            ctx.contact_ao_strength,
-            ctx.contact_ao_radius,
-            ctx.contact_ao_depth_scale,
-            ctx.contact_ao_detail_strength,
-            ctx.contact_ao_detail_radius,
-            ctx.contact_ao_normal_bias,
-            ctx.contact_ao_quality,
+            PostUniformSettings {
+                bloom_threshold: ctx.bloom_threshold,
+                bloom_strength: ctx.bloom_strength,
+                sharpen_strength: ctx.sharpen_strength,
+                fxaa_strength: ctx.fxaa_strength,
+                contact_ao_strength: ctx.contact_ao_strength,
+                contact_ao_radius: ctx.contact_ao_radius,
+                contact_ao_depth_scale: ctx.contact_ao_depth_scale,
+                contact_ao_detail_strength: ctx.contact_ao_detail_strength,
+                contact_ao_detail_radius: ctx.contact_ao_detail_radius,
+                contact_ao_normal_bias: ctx.contact_ao_normal_bias,
+                contact_ao_quality: ctx.contact_ao_quality,
+            },
         );
         let mut post_decal_light_vectors = [[0.0f32; 4]; 3];
         let mut post_decal_light_colors = [[0.0f32; 4]; 3];

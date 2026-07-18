@@ -15,13 +15,18 @@ import (
 // splitPorts bundles all inter-island ports.
 type splitPorts struct {
 	frameSetup port renderFramePorts
-	resReq     port []byte
-	resResp    port []byte
+	frameReq port []byte
+	resResp port []byte
 }
 
 type renderFramePorts struct {
-	frameReq   port []byte
-	frameReply port []byte
+	frameReply port<- renderFrameReply
+	resReq port<- []byte
+}
+
+type renderFrameReply struct {
+	Stop bool
+	Data []byte
 }
 
 type splitHostState struct {
@@ -30,9 +35,9 @@ type splitHostState struct {
 }
 
 type splitWidgetEvent struct {
-	Type   string `json:"type"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
+	Type string `json:"type"`
+	Width int `json:"width"`
+	Height int `json:"height"`
 	PixelWidth int `json:"pixelWidth"`
 	PixelHeight int `json:"pixelHeight"`
 	DevicePixelRatio float64 `json:"devicePixelRatio"`
@@ -56,13 +61,10 @@ func startRenderIslandSplit(state *splitHostState, ctx *GameCtx, game *Game, por
 	state.Starting = true
 	renderIsland := make(island)
 	go @(renderIsland) runRenderWorker(canvasId, renderWorkerConfig{
-		UncappedFrameRate: game.UncappedFrameRate,
-		TargetFrameRate: game.TargetFrameRate,
+		UncappedFrameRate: game.UncappedFrameRate, TargetFrameRate: game.TargetFrameRate,
 		RenderFrameRate: ResolveRenderFrameRate(*game),
 	}, renderWorkerPorts{
-		frameSetup: ports.frameSetup,
-		resReq:     ports.resReq,
-		resResp:    ports.resResp,
+		frameSetup: ports.frameSetup, frameReq: ports.frameReq, resResp: ports.resResp,
 	})
 	if useRenderIslandHost() {
 		go func() {
@@ -81,8 +83,9 @@ func waitRenderIslandReady(state *splitHostState, ctx *GameCtx, game *Game, port
 	}
 	state.Started = true
 	state.Starting = false
+	configureSplitResourceProxy(ctx, framePorts.resReq, ports.resResp)
 	ctx.start(game.InitialState)
-	go runFrameDrivenGameLoop(ctx, game, framePorts.frameReq, framePorts.frameReply)
+	go runFrameDrivenGameLoop(ctx, game, ports.frameReq, framePorts.frameReply)
 }
 
 func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
@@ -110,10 +113,7 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 						startRenderIslandSplit(s, ctx, game, ports, evt.CanvasId)
 					}
 				})
-				return vogui.HostWidget(
-					"voplay-render-island",
-					map[string]any{},
-				).ObserveWidget(handler).W("100%").H("100%").Display("block").Overflow("hidden")
+				return vogui.HostWidget("voplay-render-island", map[string]any{}).ObserveWidget(handler).W("100%").H("100%").Display("block").Overflow("hidden")
 			}
 			_ = hostState
 			return vogui.Canvas(vogui.CanvasProps{
@@ -130,16 +130,15 @@ func runGameSplit(ctx *GameCtx, game *Game, ports splitPorts) {
 // island's frame clock. Each iteration: receive a frame request carrying
 // the latest input snapshot, advance game state, generate draw commands,
 // and reply. No tick provider, no select, no backlog.
-func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPort port []byte) {
+func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort <-port []byte, frameReplyPort port<- renderFrameReply) {
 	lastTime := time.Now()
 	firstFrame := true
 	frameReplyWriter := codec.NewByteWriter(framewire.ReplyHeaderSize + 256)
-
 	for {
 		// Block until render island sends next frame request.
 		reqBytes, ok := <-frameReqPort
 		if !ok {
-			// Render island closed (surface lost or shutdown).
+			// The frame request stream was closed during shutdown.
 			ctx.closed = true
 			if game.OnClose != nil {
 				game.OnClose(ctx)
@@ -153,7 +152,6 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		if req.HasPerfPackets && ctx.overlay.enabled {
 			ctx.overlay.recordPerfPackets(req.PerfPackets)
 		}
-
 		// Compute wall-frame dt from the render worker. The render loop interval
 		// is still recorded for diagnostics, but target-rate games advance from
 		// a stable simulation dt so display-pulse jitter does not pollute physics
@@ -165,7 +163,8 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 			fallbackDt := float64(now.Sub(lastTime).Nanoseconds()) / 1e9
 			if req.HasRenderTiming {
 				frameDt = req.RenderTiming.LoopMs / 1000.0
-				advanceDt = FrameClockAdvanceDt(game.TargetFrameRate, frameDt, req.RenderTiming.DisplayPulseMs / 1000.0)
+				advanceDt = FrameClockAdvanceDt(game.TargetFrameRate, frameDt, req.RenderTiming.DisplayPulseMs /
+					1000.0)
 			} else {
 				frameDt = fallbackDt
 				advanceDt = FrameClockAdvanceDt(game.TargetFrameRate, frameDt, 0)
@@ -173,51 +172,37 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 		}
 		firstFrame = false
 		lastTime = now
-
 		// Check if game has been closed (e.g. by a previous frame's callback).
 		if ctx.closed {
-			close(frameReplyPort)
-			if game.OnClose != nil {
-				game.OnClose(ctx)
-			}
+			finishFrameDrivenGame(ctx, game, frameReplyPort)
 			return
 		}
-
 		// --- Begin logic processing (timed for overlay) ---
 		logicStart := time.Now()
-
 		// Apply input from render island.
 		inputStart := time.Now()
 		if len(req.InputBytes) > 0 {
 			ctx.Input.unpackEvents(req.InputBytes)
 		}
 		inputNs := time.Now().Sub(inputStart).Nanoseconds()
-
 		// Advance game logic with fixed-step simulation.
 		advanceStart := time.Now()
 		ctx.Advance(advanceDt)
 		advanceNs := time.Now().Sub(advanceStart).Nanoseconds()
-
 		if ctx.closed {
 			ctx.Input.endFrame()
-			close(frameReplyPort)
-			if game.OnClose != nil {
-				game.OnClose(ctx)
-			}
+			finishFrameDrivenGame(ctx, game, frameReplyPort)
 			return
 		}
-
 		// Generate draw commands.
 		drawStart := time.Now()
 		ctx.Draw.reset()
 		ctx.States.Draw()
 		drawNs := time.Now().Sub(drawStart).Nanoseconds()
 		drawStats := ctx.Draw.Stats()
-
 		// --- End logic processing ---
 		logicNs := time.Now().Sub(logicStart).Nanoseconds()
 		drawBytes := len(ctx.Draw.Bytes())
-
 		cmds := ctx.Draw.Bytes()
 		if ctx.overlay != nil && ctx.overlay.enabled {
 			// Record metrics and draw the engine perf HUD only when diagnostics are enabled.
@@ -232,13 +217,22 @@ func runFrameDrivenGameLoop(ctx *GameCtx, game *Game, frameReqPort, frameReplyPo
 			ctx.overlay.recordOverlayTime(time.Now().Sub(overlayStart).Nanoseconds(), DrawStatsDelta(submitStats, drawStats))
 			cmds = ctx.Draw.Bytes()
 			ctx.overlay.recordSubmittedBytes(len(cmds), submitStats)
-			frameReplyPort <- framewire.EncodeReply(&frameReplyWriter, true, cmds)
+			frameReplyPort <- renderFrameReply{Data: framewire.EncodeReply(&frameReplyWriter, true, cmds)}
 			ctx.Input.endFrame()
 		} else {
-			frameReplyPort <- cmds
+			frameReplyPort <- renderFrameReply{Data: cmds}
 			ctx.Input.endFrame()
 		}
 	}
+}
+
+// finishFrameDrivenGame keeps the render-side resource service alive through
+// synchronous OnClose cleanup, then tells the render worker to stop.
+func finishFrameDrivenGame(ctx *GameCtx, game *Game, frameReplyPort port<- renderFrameReply) {
+	if game.OnClose != nil {
+		game.OnClose(ctx)
+	}
+	frameReplyPort <- renderFrameReply{Stop: true}
 }
 
 func FrameClockAdvanceDt(targetFrameRate int, frameDt float64, displayPulseDt float64) float64 {
@@ -256,17 +250,21 @@ func FrameClockAdvanceDt(targetFrameRate int, frameDt float64, displayPulseDt fl
 
 // --- Extern declarations for the render island (implemented in Rust) ---
 // These are called by render_worker.vo on the render island, not by logic island code.
-
 // Surface
 func initSurface(canvasRef string, uncappedFrameRate bool) error
+
 func submitFrame(cmds []byte) error
+
 func setRendererPerfStatsEnabled(enabled bool) error
+
 func lastRendererPerfPacket() []byte
+
 func lastWebGpuPerfPacket() []byte
+
 func waitDisplayPulse()
- 
+
 // Input
 func pollInput() []byte
- 
+
 // Runtime query
 func isRendererReady() (bool, error)

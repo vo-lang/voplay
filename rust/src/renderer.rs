@@ -17,7 +17,8 @@ use crate::pipeline3d::{
 };
 use crate::pipeline_depth::PipelineDepth;
 use crate::pipeline_post::{
-    PipelinePost, PostDecalGpu, PostDecalUniform, PostUniform, MAX_POST_DECAL_ATLASES,
+    PipelinePost, PostDecalAtlasRegion, PostDecalGpu, PostDecalUniform, PostUniform,
+    PostUniformSettings, MAX_POST_DECAL_ATLASES,
 };
 use crate::pipeline_shadow::PipelineShadow;
 use crate::pipeline_skybox::PipelineSkybox;
@@ -27,12 +28,14 @@ use crate::primitive_scene::{
     PrimitiveChunkBatchInfo, PrimitiveChunkRef, PrimitiveDraw, PrimitiveObjectUpdate,
 };
 use crate::render_world::{
-    RenderBatchPlanner, RenderBatchQualityProfile, RenderObjectUpdate, RenderSkipStats, RenderWorld,
+    RenderBatchBuildInput, RenderBatchPlanner, RenderBatchQualityProfile, RenderObjectUpdate,
+    RenderSkipStats, RenderWorld,
 };
 use crate::renderer_frame::{
     depth_attachment_store_contract, FrameGraph, FrameGraphPassOptions, FrameGraphReport,
-    RenderFramePipeline, RenderPassKind, RenderPassWorkload, RenderResourceRegistry, RES_DEPTH,
-    RES_MAIN_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP, RES_SURFACE_COLOR, RES_SURFACE_PROPS,
+    RenderFrameMetrics, RenderFramePipeline, RenderPassKind, RenderPassWorkload,
+    RenderResourceRegistry, RES_DEPTH, RES_MAIN_COLOR, RES_RECEIVER_MASK, RES_SHADOW_MAP,
+    RES_SURFACE_COLOR, RES_SURFACE_PROPS,
 };
 use crate::renderer_perf::{
     elapsed_ms_opt, encode_renderer_perf_packet, perf_now, saturating_u32, RendererPerfOverrides,
@@ -102,11 +105,11 @@ fn compute_shadow_cascade_splits(near: f32, far: f32, cascade_count: usize) -> [
     let count = cascade_count.clamp(1, 4);
     let lambda = 0.58;
     let mut splits = [far; 4];
-    for index in 0..count {
+    for (index, split) in splits.iter_mut().enumerate().take(count) {
         let p = (index + 1) as f32 / count as f32;
         let uniform = near + (far - near) * p;
         let logarithmic = near * (far / near).powf(p);
-        splits[index] = uniform * (1.0 - lambda) + logarithmic * lambda;
+        *split = uniform * (1.0 - lambda) + logarithmic * lambda;
     }
     splits[count - 1] = far;
     splits
@@ -152,7 +155,9 @@ fn raw_mesh_read_f32(data: &[u8], pos: &mut usize) -> Result<f32, String> {
     Ok(value)
 }
 
-fn decode_raw_mesh(data: &[u8]) -> Result<(Vec<MeshVertex>, Vec<u32>, [f32; 4]), String> {
+type DecodedRawMesh = (Vec<MeshVertex>, Vec<u32>, [f32; 4]);
+
+fn decode_raw_mesh(data: &[u8]) -> Result<DecodedRawMesh, String> {
     let mut pos = 0usize;
     let version = raw_mesh_read_u32(data, &mut pos)?;
     if version != 1 {
@@ -229,6 +234,71 @@ fn decode_raw_mesh(data: &[u8]) -> Result<(Vec<MeshVertex>, Vec<u32>, [f32; 4]),
         })
         .collect();
     Ok((vertices, indices, base_color))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerrainCreateOptions {
+    pub(crate) scale: [f32; 3],
+    pub(crate) uv_scale: f32,
+    pub(crate) texture_id: Option<TextureId>,
+    pub(crate) normal_texture_id: Option<TextureId>,
+    pub(crate) metallic_roughness_texture_id: Option<TextureId>,
+    pub(crate) normal_scale: f32,
+    pub(crate) roughness: f32,
+    pub(crate) metallic: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerrainSplatMaterialOptions {
+    pub(crate) control_texture_id: TextureId,
+    pub(crate) layer_texture_ids: [TextureId; 4],
+    pub(crate) layer_normal_texture_ids: [TextureId; 4],
+    pub(crate) layer_metallic_roughness_texture_ids: [TextureId; 4],
+    pub(crate) uv_scales: [f32; 4],
+    pub(crate) layer_normal_scales: [f32; 4],
+    pub(crate) terrain_tuning: TerrainMaterialTuning,
+}
+
+impl TerrainSplatMaterialOptions {
+    fn into_material(self, label: &str) -> Result<MeshMaterial, String> {
+        if self
+            .uv_scales
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(format!(
+                "{label} uv scales must be finite and > 0, got {:?}",
+                self.uv_scales
+            ));
+        }
+        if self
+            .layer_normal_scales
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(format!(
+                "{label} normal scales must be finite and >= 0, got {:?}",
+                self.layer_normal_scales
+            ));
+        }
+        let terrain_tuning = self.terrain_tuning.normalized()?;
+        Ok(MeshMaterial::terrain_splat(
+            [1.0, 1.0, 1.0, 1.0],
+            self.control_texture_id,
+            self.layer_texture_ids,
+            self.layer_normal_texture_ids,
+            self.layer_metallic_roughness_texture_ids,
+            self.uv_scales,
+            self.layer_normal_scales,
+            terrain_tuning,
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerrainSplatOptions {
+    pub(crate) scale: [f32; 3],
+    pub(crate) material: TerrainSplatMaterialOptions,
 }
 
 /// Renderer holds all wgpu state and rendering pipelines.
@@ -746,137 +816,54 @@ impl Renderer {
         ))
     }
 
-    pub fn create_terrain(
+    pub(crate) fn create_terrain(
         &mut self,
         image_data: &[u8],
-        scale_x: f32,
-        scale_y: f32,
-        scale_z: f32,
-        uv_scale: f32,
-        texture_id: Option<TextureId>,
-        normal_texture_id: Option<TextureId>,
-        metallic_roughness_texture_id: Option<TextureId>,
-        normal_scale: f32,
-        roughness: f32,
-        metallic: f32,
+        options: TerrainCreateOptions,
     ) -> Result<TerrainData, String> {
-        let mut material = MeshMaterial::standard([1.0, 1.0, 1.0, 1.0], texture_id, uv_scale);
-        material.normal_texture_id = normal_texture_id;
-        material.metallic_roughness_texture_id = metallic_roughness_texture_id;
-        if normal_scale > 0.0 {
-            material.normal_scale = normal_scale;
+        let mut material =
+            MeshMaterial::standard([1.0, 1.0, 1.0, 1.0], options.texture_id, options.uv_scale);
+        material.normal_texture_id = options.normal_texture_id;
+        material.metallic_roughness_texture_id = options.metallic_roughness_texture_id;
+        if options.normal_scale > 0.0 {
+            material.normal_scale = options.normal_scale;
         }
-        if roughness > 0.0 {
-            material.roughness = roughness.clamp(0.04, 1.0);
+        if options.roughness > 0.0 {
+            material.roughness = options.roughness.clamp(0.04, 1.0);
         }
-        material.metallic = metallic.clamp(0.0, 1.0);
-        crate::terrain::generate_terrain(
-            &self.device,
-            &self.queue,
-            &mut self.model_manager,
+        material.metallic = options.metallic.clamp(0.0, 1.0);
+        crate::terrain::generate_terrain(crate::terrain::TerrainBuildInput {
+            device: &self.device,
+            queue: &self.queue,
+            model_manager: &mut self.model_manager,
             image_data,
-            scale_x,
-            scale_y,
-            scale_z,
+            scale: options.scale,
             material,
-        )
+        })
     }
 
-    pub fn create_terrain_splat(
+    pub(crate) fn create_terrain_splat(
         &mut self,
         image_data: &[u8],
-        scale_x: f32,
-        scale_y: f32,
-        scale_z: f32,
-        control_texture_id: TextureId,
-        layer_texture_ids: [TextureId; 4],
-        layer_normal_texture_ids: [TextureId; 4],
-        layer_metallic_roughness_texture_ids: [TextureId; 4],
-        uv_scales: [f32; 4],
-        layer_normal_scales: [f32; 4],
-        terrain_tuning: TerrainMaterialTuning,
+        options: TerrainSplatOptions,
     ) -> Result<TerrainData, String> {
-        if uv_scales
-            .iter()
-            .any(|value| !value.is_finite() || *value <= 0.0)
-        {
-            return Err(format!(
-                "terrain splat uv scales must be finite and > 0, got {:?}",
-                uv_scales
-            ));
-        }
-        if layer_normal_scales
-            .iter()
-            .any(|value| !value.is_finite() || *value < 0.0)
-        {
-            return Err(format!(
-                "terrain splat normal scales must be finite and >= 0, got {:?}",
-                layer_normal_scales
-            ));
-        }
-        let terrain_tuning = terrain_tuning.normalized()?;
-        let material = MeshMaterial::terrain_splat(
-            [1.0, 1.0, 1.0, 1.0],
-            control_texture_id,
-            layer_texture_ids,
-            layer_normal_texture_ids,
-            layer_metallic_roughness_texture_ids,
-            uv_scales,
-            layer_normal_scales,
-            terrain_tuning,
-        );
-        crate::terrain::generate_terrain(
-            &self.device,
-            &self.queue,
-            &mut self.model_manager,
+        let material = options.material.into_material("terrain splat")?;
+        crate::terrain::generate_terrain(crate::terrain::TerrainBuildInput {
+            device: &self.device,
+            queue: &self.queue,
+            model_manager: &mut self.model_manager,
             image_data,
-            scale_x,
-            scale_y,
-            scale_z,
+            scale: options.scale,
             material,
-        )
+        })
     }
 
-    pub fn create_terrain_splat_model(
+    pub(crate) fn create_terrain_splat_model(
         &mut self,
         source_model_id: ModelId,
-        control_texture_id: TextureId,
-        layer_texture_ids: [TextureId; 4],
-        layer_normal_texture_ids: [TextureId; 4],
-        layer_metallic_roughness_texture_ids: [TextureId; 4],
-        uv_scales: [f32; 4],
-        layer_normal_scales: [f32; 4],
-        terrain_tuning: TerrainMaterialTuning,
+        options: TerrainSplatMaterialOptions,
     ) -> Result<ModelId, String> {
-        if uv_scales
-            .iter()
-            .any(|value| !value.is_finite() || *value <= 0.0)
-        {
-            return Err(format!(
-                "terrain splat model uv scales must be finite and > 0, got {:?}",
-                uv_scales
-            ));
-        }
-        if layer_normal_scales
-            .iter()
-            .any(|value| !value.is_finite() || *value < 0.0)
-        {
-            return Err(format!(
-                "terrain splat model normal scales must be finite and >= 0, got {:?}",
-                layer_normal_scales
-            ));
-        }
-        let terrain_tuning = terrain_tuning.normalized()?;
-        let material = MeshMaterial::terrain_splat(
-            [1.0, 1.0, 1.0, 1.0],
-            control_texture_id,
-            layer_texture_ids,
-            layer_normal_texture_ids,
-            layer_metallic_roughness_texture_ids,
-            uv_scales,
-            layer_normal_scales,
-            terrain_tuning,
-        );
+        let material = options.into_material("terrain splat model")?;
         self.model_manager
             .create_material_variant(source_model_id, material)
     }
@@ -1179,16 +1166,6 @@ impl Renderer {
         let perf_packet_start = Some(perf_now());
         self.last_perf_packet = encode_renderer_perf_packet(perf);
         elapsed_ms_opt(perf_packet_start)
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor used outside scoped unit filters.
-    pub(crate) fn last_frame_graph_report(&self) -> &FrameGraphReport {
-        &self.last_frame_graph_report
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; diagnostic accessor used outside scoped unit filters.
-    pub(crate) fn last_frame_pipeline(&self) -> &RenderFramePipeline {
-        &self.last_frame_pipeline
     }
 
     pub fn set_perf_stats_enabled(&mut self, enabled: bool) {

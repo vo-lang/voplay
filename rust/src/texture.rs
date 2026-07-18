@@ -52,7 +52,6 @@ pub(crate) fn resolve_texture_reference(
 }
 
 /// A loaded GPU texture with its bind group for sprite rendering.
-#[allow(dead_code)]
 pub struct GpuTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -72,12 +71,10 @@ pub struct TexturePixelsData {
     pub pixels: Vec<u8>,
 }
 
-#[allow(dead_code)]
 pub struct GpuCubemap {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
+    _texture: wgpu::Texture,
+    _view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
-    pub face_size: u32,
 }
 
 /// Manages all loaded textures, keyed by TextureId.
@@ -180,11 +177,6 @@ impl TextureManager {
     /// Returns the bind group layout for texture sampling (used by sprite pipeline).
     pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.bind_group_layout
-    }
-
-    #[allow(dead_code)] // owner: voplay/render; expiry: 2026-07-12; retained for sprite/material cache split callers.
-    pub fn sampler(&self) -> &wgpu::Sampler {
-        &self.sampler
     }
 
     pub fn cubemap_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
@@ -391,10 +383,9 @@ impl TextureManager {
         self.cubemaps.insert(
             id,
             GpuCubemap {
-                texture,
-                view,
+                _texture: texture,
+                _view: view,
                 bind_group,
-                face_size,
             },
         );
 

@@ -90,9 +90,7 @@ pub(super) fn apply_overlay_op(
             color,
         } => {
             font_manager.set_current(font_id);
-            for draw in
-                font_manager.layout_text(&text, x, y, size, color[0], color[1], color[2], color[3])
-            {
+            for draw in font_manager.layout_text(&text, x, y, size, color) {
                 draw_list.push_sprite(draw.texture_id, draw.instance);
             }
         }

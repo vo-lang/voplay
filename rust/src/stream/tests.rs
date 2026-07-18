@@ -1,4 +1,4 @@
-use super::{decode_all as decode_framed, DrawCommand, DrawStreamError};
+use super::{DrawCommand, DrawStreamError, StreamReader};
 use crate::draw_protocol::{
     DRAW_STREAM_FLAGS, DRAW_STREAM_HEADER_SIZE, DRAW_STREAM_MAGIC, DRAW_STREAM_VERSION,
 };
@@ -11,6 +11,15 @@ fn frame_payload(payload: &[u8]) -> Vec<u8> {
     framed.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     framed.extend_from_slice(payload);
     framed
+}
+
+fn decode_framed(data: &[u8]) -> Result<Vec<DrawCommand>, DrawStreamError> {
+    let mut reader = StreamReader::new(data)?;
+    let mut commands = Vec::new();
+    while let Some(command) = reader.next_command()? {
+        commands.push(command);
+    }
+    Ok(commands)
 }
 
 fn decode_all(payload: &[u8]) -> Vec<DrawCommand> {

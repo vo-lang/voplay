@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "VoPlay game engine — Rust renderer + physics + input"
+repository = "https://github.com/vo-lang/voplay"
+publish = false
 
 [package.metadata.vo]
 vomod = "../vo.mod"
@@ -33,9 +35,9 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-vo-ext       = { git = "https://github.com/vo-lang/volang", rev = "493852359ec920eadb2d0fdb56950319f0da78d2", default-features = false, optional = true }
-vo-ffi-macro = { git = "https://github.com/vo-lang/volang", rev = "493852359ec920eadb2d0fdb56950319f0da78d2", optional = true }
-vo-runtime   = { git = "https://github.com/vo-lang/volang", rev = "493852359ec920eadb2d0fdb56950319f0da78d2", default-features = false, optional = true }
+vo-ext       = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", default-features = false, optional = true }
+vo-ffi-macro = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", optional = true }
+vo-runtime   = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", default-features = false, optional = true }
 
 linkme       = { version = "0.3", optional = true }
 vogui        = { path = "../../vogui/rust/ext", default-features = false, optional = true }

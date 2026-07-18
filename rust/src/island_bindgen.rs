@@ -10,13 +10,16 @@
 //!   0xE0                           → nil error          (2 slots consumed)
 //!   0xE1 [u16 LE len] [len bytes]  → error string       (2 slots consumed)
 //!   0xE2 [u64 LE]                  → value              (1 slot)
-//!   0xE3 [u32 LE len] [len bytes]  → bytes/string       (1 slot)
+//!   0xE3 [u32 LE len] [len bytes]  → byte slice         (1 slot)
 //!   0xE4                           → nil reference      (1 slot)
+//!   0xE5 [u32 LE len] [UTF-8]      → string             (1 slot)
 //!
-//! Function names match what voCallExt extracts by stripping the module key prefix:
-//!   extern "github_com_vo_lang_voplay_initSurface"  → wasm-bindgen export "initSurface"
-//!   extern "github_com_vo_lang_voplay_scene2d_..."  → wasm-bindgen export "scene2d_..."
-//!   extern "github_com_vo_lang_voplay_scene3d_..."  → wasm-bindgen export "scene3d_..."
+//! Every bytes wrapper uses `vo_ext::vo_wasm_bindgen_export` with its source
+//! `(package, function)` identity. The attribute resolves the complete package
+//! through `vo.mod`, validates the Vo extern declaration, and derives the v3
+//! wasm-bindgen name as `__vo_ext_<lowercase hex UTF-8 canonical extern name>`.
+//! Dispatch therefore uses one injective full-identity key; package prefixes
+//! and legacy short wrapper names are never part of runtime lookup.
 
 use wasm_bindgen::prelude::*;
 
@@ -44,10 +47,13 @@ fn out_nil_error(out: &mut Vec<u8>) {
 #[inline]
 fn out_error(out: &mut Vec<u8>, msg: &str) {
     let bytes = msg.as_bytes();
-    let len = bytes.len().min(65535) as u16;
+    let mut len = bytes.len().min(u16::MAX as usize);
+    while !msg.is_char_boundary(len) {
+        len -= 1;
+    }
     out.push(TAG_ERROR_STR);
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(&bytes[..len as usize]);
+    out.extend_from_slice(&(len as u16).to_le_bytes());
+    out.extend_from_slice(&bytes[..len]);
 }
 
 #[inline]
@@ -130,6 +136,55 @@ fn out_bytes_result(out: &mut Vec<u8>, result: Result<Vec<u8>, String>) {
 
 // ── Input decoding helpers ────────────────────────────────────────────────────
 
+struct DecodePosition<'a> {
+    input: &'a [u8],
+    offset: usize,
+    finished: bool,
+}
+
+impl<'a> DecodePosition<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            offset: 0,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.offset != self.input.len() {
+            panic!(
+                "voplay: island input has {} trailing bytes at offset {}",
+                self.input.len().saturating_sub(self.offset),
+                self.offset,
+            );
+        }
+        self.finished = true;
+    }
+}
+
+impl std::ops::Deref for DecodePosition<'_> {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.offset
+    }
+}
+
+impl std::ops::DerefMut for DecodePosition<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.offset
+    }
+}
+
+impl Drop for DecodePosition<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() && !self.finished {
+            panic!("voplay: island wrapper returned without finishing input decoding");
+        }
+    }
+}
+
 #[inline]
 fn require_input(input: &[u8], pos: usize, needed: usize, field: &str) {
     let end = pos.checked_add(needed);
@@ -166,7 +221,11 @@ fn in_f64(input: &[u8], pos: &mut usize) -> f64 {
 
 #[inline]
 fn in_bool(input: &[u8], pos: &mut usize) -> bool {
-    in_value(input, pos) != 0
+    match in_value(input, pos) {
+        0 => false,
+        1 => true,
+        value => panic!("voplay: island input bool must be encoded as 0 or 1, found {value}"),
+    }
 }
 
 #[inline]
@@ -226,3 +285,80 @@ mod physics2d;
 mod physics3d;
 mod render;
 mod resource;
+
+#[cfg(test)]
+mod tests {
+    use super::{in_bool, out_error, DecodePosition, TAG_ERROR_STR};
+
+    const WRAPPER_SOURCES: [&str; 5] = [
+        include_str!("island_bindgen/animation.rs"),
+        include_str!("island_bindgen/physics2d.rs"),
+        include_str!("island_bindgen/physics3d.rs"),
+        include_str!("island_bindgen/render.rs"),
+        include_str!("island_bindgen/resource.rs"),
+    ];
+
+    #[test]
+    fn every_exact_key_wrapper_installs_one_complete_input_guard() {
+        let marker = "#[vo_ext::vo_wasm_bindgen_export";
+        let mut wrapper_count = 0usize;
+        for source in WRAPPER_SOURCES {
+            for wrapper in source.split(marker).skip(1) {
+                wrapper_count += 1;
+                assert_eq!(
+                    wrapper.matches("DecodePosition::new(input)").count(),
+                    1,
+                    "wrapper #{wrapper_count} must install exactly one complete-input guard",
+                );
+                assert_eq!(
+                    wrapper.matches("pos.finish();").count(),
+                    1,
+                    "wrapper #{wrapper_count} must finish input exactly once before dispatch",
+                );
+            }
+        }
+        assert_eq!(wrapper_count, 87);
+    }
+
+    #[test]
+    fn decode_position_rejects_trailing_input() {
+        let panic = std::panic::catch_unwind(|| {
+            let mut position = DecodePosition::new(&[0x7f]);
+            position.finish();
+        });
+        assert!(panic.is_err());
+    }
+
+    #[test]
+    fn bool_input_accepts_only_canonical_zero_or_one() {
+        for (wire, expected) in [(0u64, false), (1u64, true)] {
+            let input = wire.to_le_bytes();
+            let mut position = DecodePosition::new(&input);
+            assert_eq!(in_bool(&input, &mut position), expected);
+            position.finish();
+        }
+
+        let input = 2u64.to_le_bytes();
+        let panic = std::panic::catch_unwind(|| {
+            let mut position = DecodePosition::new(&input);
+            let _ = in_bool(&input, &mut position);
+        });
+        assert!(panic.is_err());
+    }
+
+    #[test]
+    fn error_output_truncates_at_a_utf8_boundary() {
+        let mut message = "a".repeat(u16::MAX as usize - 1);
+        message.push('界');
+
+        let mut output = Vec::new();
+        out_error(&mut output, &message);
+
+        assert_eq!(output[0], TAG_ERROR_STR);
+        let encoded_len = u16::from_le_bytes([output[1], output[2]]) as usize;
+        assert_eq!(encoded_len, u16::MAX as usize - 1);
+        assert_eq!(output.len(), 3 + encoded_len);
+        assert!(std::str::from_utf8(&output[3..]).is_ok());
+        assert_eq!(&output[3..], &message.as_bytes()[..encoded_len]);
+    }
+}

@@ -3,11 +3,12 @@ use super::*;
 // ── scene2d physics externs ───────────────────────────────────────────────────
 
 /// scene2d_physicsInit(gx, gy) → uint32
-#[wasm_bindgen(js_name = "scene2d_physicsInit")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsInit")]
 pub fn scene2d_physics_init(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let gx = in_f64(input, &mut pos) as f32;
     let gy = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let world_id = crate::physics::create_world(gx, gy);
     let mut out = Vec::new();
     out_value_u64(&mut out, world_id as u64);
@@ -15,43 +16,47 @@ pub fn scene2d_physics_init(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene2d_physicsDestroy(worldId)
-#[wasm_bindgen(js_name = "scene2d_physicsDestroy")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsDestroy")]
 pub fn scene2d_physics_destroy(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::physics::destroy_world(world_id);
     Vec::new()
 }
 
 /// scene2d_physicsSpawnBody(worldId, bodyId, data []byte)
-#[wasm_bindgen(js_name = "scene2d_physicsSpawnBody")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsSpawnBody")]
 pub fn scene2d_physics_spawn_body(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
     let data = in_bytes(input, &mut pos);
+    pos.finish();
     let desc = crate::externs::physics2d::decode_body_desc(body_id, data);
     crate::physics::with_world(world_id, |world| world.spawn_body(&desc));
     Vec::new()
 }
 
 /// scene2d_physicsDestroyBody(worldId, bodyId)
-#[wasm_bindgen(js_name = "scene2d_physicsDestroyBody")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsDestroyBody")]
 pub fn scene2d_physics_destroy_body(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let body_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     crate::physics::with_world(world_id, |world| world.destroy_body(body_id));
     Vec::new()
 }
 
 /// scene2d_physicsStep(worldId, dt, cmds []byte) → []byte
-#[wasm_bindgen(js_name = "scene2d_physicsStep")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsStep")]
 pub fn scene2d_physics_step(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let dt = in_f64(input, &mut pos) as f32;
     let cmds = in_bytes(input, &mut pos).to_vec();
+    pos.finish();
     let state = crate::physics::with_world(world_id, |world| {
         world
             .apply_commands(&cmds)
@@ -65,21 +70,23 @@ pub fn scene2d_physics_step(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene2d_physicsSetGravity(worldId, gx, gy)
-#[wasm_bindgen(js_name = "scene2d_physicsSetGravity")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsSetGravity")]
 pub fn scene2d_physics_set_gravity(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let gx = in_f64(input, &mut pos) as f32;
     let gy = in_f64(input, &mut pos) as f32;
+    pos.finish();
     crate::physics::with_world(world_id, |world| world.set_gravity(gx, gy));
     Vec::new()
 }
 
 /// scene2d_physicsContacts(worldId) → []byte
-#[wasm_bindgen(js_name = "scene2d_physicsContacts")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsContacts")]
 pub fn scene2d_physics_contacts(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
+    pos.finish();
     let contacts = crate::physics::with_world(world_id, |world| world.get_contacts());
     let mut buf = Vec::with_capacity(4 + contacts.len() * 8);
     buf.extend_from_slice(&(contacts.len() as u32).to_le_bytes());
@@ -93,15 +100,16 @@ pub fn scene2d_physics_contacts(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene2d_physicsRayCast(worldId, ox, oy, dx, dy, maxDist) → []byte
-#[wasm_bindgen(js_name = "scene2d_physicsRayCast")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsRayCast")]
 pub fn scene2d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let ox = in_f64(input, &mut pos) as f32;
     let oy = in_f64(input, &mut pos) as f32;
     let dx = in_f64(input, &mut pos) as f32;
     let dy = in_f64(input, &mut pos) as f32;
     let max_dist = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let result =
         crate::physics::with_world(world_id, |world| world.ray_cast(ox, oy, dx, dy, max_dist));
     let buf = match result {
@@ -124,14 +132,15 @@ pub fn scene2d_physics_ray_cast(input: &[u8]) -> Vec<u8> {
 }
 
 /// scene2d_physicsQueryRect(worldId, minX, minY, maxX, maxY) → []byte
-#[wasm_bindgen(js_name = "scene2d_physicsQueryRect")]
+#[vo_ext::vo_wasm_bindgen_export("voplay/scene2d", "physicsQueryRect")]
 pub fn scene2d_physics_query_rect(input: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
+    let mut pos = DecodePosition::new(input);
     let world_id = in_value(input, &mut pos) as u32;
     let min_x = in_f64(input, &mut pos) as f32;
     let min_y = in_f64(input, &mut pos) as f32;
     let max_x = in_f64(input, &mut pos) as f32;
     let max_y = in_f64(input, &mut pos) as f32;
+    pos.finish();
     let ids = crate::physics::with_world(world_id, |world| {
         world.query_rect(min_x, min_y, max_x, max_y)
     });

@@ -17,15 +17,10 @@ pub(crate) mod render;
 pub(crate) mod resource;
 pub(crate) mod util;
 
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use vo_runtime::bytecode::ExternDef;
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use vo_runtime::ffi::ExternRegistry;
-
-/// Set the renderer from pre-initialized wgpu parts (used by host/studio integration).
-#[allow(dead_code)]
-#[cfg(not(target_arch = "wasm32"))]
-pub fn set_renderer(renderer: crate::renderer::Renderer) -> Result<(), String> {
-    crate::renderer_runtime::set_renderer(renderer)
-}
 
 /// Access the renderer, dispatching to hosted runtime state or native APP.
 pub(crate) fn with_renderer<R>(
@@ -57,10 +52,13 @@ pub(crate) fn set_renderer_perf_stats_enabled(enabled: bool) -> Result<(), Strin
     crate::renderer_runtime::set_renderer_perf_stats_enabled(enabled)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-vo_ext::export_extensions!();
-
-#[cfg(target_arch = "wasm32")]
+// A native dylib is validated against the exact owner declared by its vo.mod,
+// so its ABI table must contain only voplay entries. The same authoritative
+// list is also used for statically registered browser providers.
+#[cfg(any(
+    all(feature = "native", not(target_arch = "wasm32")),
+    all(feature = "wasm", target_arch = "wasm32"),
+))]
 vo_ext::export_extensions!(
     vo_ext::vo_extension_entry!(render, "voplay", "initSurface"),
     vo_ext::vo_extension_entry!(render, "voplay", "submitFrame"),
@@ -159,52 +157,159 @@ vo_ext::export_extensions!(
     vo_ext::vo_extension_entry!(physics3d, "voplay/scene3d", "physicsQueryAABB"),
 );
 
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub fn vo_ext_register(registry: &mut ExternRegistry, externs: &[ExternDef]) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = registry.register_from_linkme(externs);
+    fn find_id(externs: &[ExternDef], name: &str) -> Option<u32> {
+        externs
+            .iter()
+            .position(|definition| definition.name == name)
+            .map(|index| index as u32)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        fn find_id(externs: &[ExternDef], name: &str) -> Option<u32> {
-            externs
-                .iter()
-                .position(|d| d.name == name)
-                .map(|i| i as u32)
-        }
-
-        for entry in VO_EXT_ENTRIES {
-            if let Some(id) = find_id(externs, entry.name()) {
-                entry.register(registry, id);
-            }
+    for entry in VO_EXT_ENTRIES {
+        if let Some(id) = find_id(externs, entry.name()) {
+            entry.register(registry, id);
         }
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "native", not(target_arch = "wasm32")))]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use vo_runtime::bytecode::ExternDef;
+    use vo_runtime::ffi::{ExternRegistry, EXTERN_MODULE_OWNER_TABLE, EXTERN_TABLE};
+
+    fn utf8_field(pointer: *const u8, length: u32) -> String {
+        assert!(!pointer.is_null(), "extension table field must not be null");
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length as usize) };
+        std::str::from_utf8(bytes)
+            .expect("extension table field must be valid UTF-8")
+            .to_owned()
+    }
 
     #[test]
-    fn native_extension_table_names_are_unique() {
+    fn native_extension_table_is_exactly_voplay_owned() {
         let table = super::vo_ext_get_entries();
         let entries = if table.entry_count == 0 {
             &[][..]
         } else {
             unsafe { std::slice::from_raw_parts(table.entries, table.entry_count as usize) }
         };
-        let mut seen = HashSet::with_capacity(entries.len());
+        let mut seen = BTreeSet::new();
         for entry in entries {
-            let name = unsafe {
-                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                    entry.name_ptr,
-                    entry.name_len as usize,
-                ))
-            };
-            assert!(
-                seen.insert(name.to_string()),
-                "duplicate extern entry {name}"
+            let name = utf8_field(entry.name_ptr, entry.name_len);
+            let owner = utf8_field(entry.module_owner_ptr, entry.module_owner_len);
+            assert_eq!(
+                owner, "github.com/vo-lang/voplay",
+                "native dylib entry {name} escaped the artifact owner boundary",
+            );
+            assert!(seen.insert(name.clone()), "duplicate extern entry {name}");
+        }
+    }
+
+    #[test]
+    fn native_catalog_contains_voplay_and_embedded_vogui() {
+        crate::ensure_linked();
+        vo_runtime::ffi::validate_linkme_extern_table()
+            .expect("the complete statically linked extension catalog must be valid");
+
+        let expected_owners = BTreeSet::from([
+            "github.com/vo-lang/vogui".to_owned(),
+            "github.com/vo-lang/voplay".to_owned(),
+        ]);
+        let mut owner_declaration_counts = BTreeMap::<String, usize>::new();
+        for entry in EXTERN_MODULE_OWNER_TABLE {
+            *owner_declaration_counts
+                .entry(utf8_field(entry.module_owner_ptr, entry.module_owner_len))
+                .or_default() += 1;
+        }
+        assert_eq!(
+            owner_declaration_counts
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            expected_owners,
+            "native catalog owner declarations diverged",
+        );
+        assert!(
+            owner_declaration_counts.values().all(|count| *count == 1),
+            "each native module owner must be declared exactly once: {owner_declaration_counts:?}",
+        );
+
+        let exported_table = super::vo_ext_get_entries();
+        let exported_entries = if exported_table.entry_count == 0 {
+            &[][..]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    exported_table.entries,
+                    exported_table.entry_count as usize,
+                )
+            }
+        };
+        let exported_entries = exported_entries
+            .iter()
+            .map(|entry| {
+                (
+                    utf8_field(entry.module_owner_ptr, entry.module_owner_len),
+                    utf8_field(entry.name_ptr, entry.name_len),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let linked_entries = EXTERN_TABLE
+            .iter()
+            .map(|entry| {
+                (
+                    utf8_field(entry.module_owner_ptr, entry.module_owner_len),
+                    utf8_field(entry.name_ptr, entry.name_len),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            exported_entries,
+            linked_entries
+                .iter()
+                .filter(|(owner, _)| owner == "github.com/vo-lang/voplay")
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            "the dylib table must export every voplay entry and no dependency entries",
+        );
+        assert_eq!(
+            linked_entries
+                .iter()
+                .map(|(owner, _)| owner.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_owners,
+            "every declared native owner must contribute extern entries",
+        );
+
+        let definitions = EXTERN_TABLE
+            .iter()
+            .map(|entry| {
+                ExternDef::call_site_variadic(
+                    utf8_field(entry.name_ptr, entry.name_len),
+                    0,
+                    entry
+                        .effects()
+                        .expect("generated native extern effects must be valid"),
+                    Vec::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut registry = ExternRegistry::new();
+        registry
+            .register_from_extension_catalogs(None, &definitions)
+            .expect("the combined voplay and vogui catalog must register atomically");
+
+        for (owner, name) in linked_entries {
+            let registered = registry
+                .registered_by_name(&name)
+                .unwrap_or_else(|| panic!("native catalog entry {name} was not registered"));
+            assert_eq!(
+                registered.provider_module_owner(),
+                Some(owner.as_str()),
+                "wrong provider owner for {name}",
             );
         }
     }

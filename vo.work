@@ -1,7 +1,2 @@
 version = 1
-
-[[use]]
-path = "../vopack"
-
-[[use]]
-path = "../vogui"
+members = [".", "../vogui", "../vopack"]

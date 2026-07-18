@@ -3,16 +3,16 @@ package voplay
 
 // Game defines a voplay game application.
 type Game struct {
-	Width           int
-	Height          int
-	Title           string
-	FixedStep       float64
+	Width int
+	Height int
+	Title string
+	FixedStep float64
 	MaxCatchUpSteps int
 	TargetFrameRate int // 0 = advance from display pulses; >0 = stable simulation/budget rate
 	RenderFrameRate int // 0 = use TargetFrameRate; >0 = cap render submits independently
 	UncappedFrameRate bool
-	InitialState    State
-	OnClose         func(g *GameCtx) // optional; called when the game loop exits
+	InitialState State
+	OnClose func(g *GameCtx) // optional; called when the game loop exits
 }
 
 type ScreenMetrics struct {
@@ -43,7 +43,10 @@ func NewScreenMetricsWithPixels(width, height, pixelWidth, pixelHeight int, devi
 	if devicePixelRatio <= 0 {
 		devicePixelRatio = 1
 	}
-	return ScreenMetrics{Width: width, Height: height, PixelWidth: pixelWidth, PixelHeight: pixelHeight, DevicePixelRatio: devicePixelRatio}
+	return ScreenMetrics{
+		Width: width, Height: height, PixelWidth: pixelWidth, PixelHeight: pixelHeight,
+		DevicePixelRatio: devicePixelRatio,
+	}
 }
 
 func (m ScreenMetrics) Rect() Rect {
@@ -84,26 +87,24 @@ type GameDiagnostics struct {
 
 // GameCtx is the game context passed to all callbacks.
 type GameCtx struct {
-	Input   *InputState
+	Input *InputState
 	Actions *ActionMap
-	Assets  *Assets
-	Draw    *DrawCtx
-	States  *StateStack
-	Screen  ScreenMetrics
+	Assets *Assets
+	Draw *DrawCtx
+	States *StateStack
+	Screen ScreenMetrics
 	FixedStep float64
-	Alpha     float64
-
-	MaxCatchUpSteps  int // 0 = use default (8); sets a ceiling on fixed steps per frame
-
+	Alpha float64
+	MaxCatchUpSteps int // 0 = use default (8); sets a ceiling on fixed steps per frame
 	// Internal lifecycle state (managed by host, not for game code).
-	gameInitialized  bool
-	closed           bool
-	lifecycleState   string
-	lifecyclePhase   string
-	issues           []GameIssue
-	accumulator      float64
-	lastFixedSteps   int
-	overlay          *DebugOverlay
+	gameInitialized bool
+	closed bool
+	lifecycleState string
+	lifecyclePhase string
+	issues []GameIssue
+	accumulator float64
+	lastFixedSteps int
+	overlay *DebugOverlay
 }
 
 // ShowDebugOverlay enables the engine performance HUD (FPS, frame time, logic time).
@@ -199,7 +200,9 @@ func (g *GameCtx) Diagnostics() GameDiagnostics {
 	if g == nil {
 		return GameDiagnostics{}
 	}
-	return GameDiagnostics{LifecycleState: g.lifecycleState, LifecyclePhase: g.lifecyclePhase, Issues: g.Issues()}
+	return GameDiagnostics{
+		LifecycleState: g.lifecycleState, LifecyclePhase: g.lifecyclePhase, Issues: g.Issues(),
+	}
 }
 
 func resolveFixedStep(step float64) float64 {
@@ -226,7 +229,10 @@ func (g *GameCtx) handleResize(w, h int) bool {
 }
 
 func (g *GameCtx) handleScreenMetrics(metrics ScreenMetrics) bool {
-	if metrics.Width == g.Screen.Width && metrics.Height == g.Screen.Height && metrics.PixelWidth == g.Screen.PixelWidth && metrics.PixelHeight == g.Screen.PixelHeight && metrics.DevicePixelRatio == g.Screen.DevicePixelRatio {
+	if metrics.Width == g.Screen.Width && metrics.Height == g.Screen.Height &&
+		metrics.PixelWidth == g.Screen.PixelWidth &&
+		metrics.PixelHeight == g.Screen.PixelHeight &&
+		metrics.DevicePixelRatio == g.Screen.DevicePixelRatio {
 		return false
 	}
 	g.Screen = metrics
@@ -311,67 +317,51 @@ func Run(game Game) {
 func runSplitMode(game Game) {
 	// Create ports for inter-island communication.
 	ports := splitPorts{
-		// The render island creates the per-frame request/reply ports and sends
-		// them back through this setup port. That keeps the frame-budget side of
-		// the loop on render-local ports, while logic waits through remote proxies.
-		frameSetup: make(port renderFramePorts, 1),
-		resReq:     make(port []byte, 8), // logic→render: resource requests
-		resResp:    make(port []byte, 8), // render→logic: resource responses
+		// Each receive-capable port is created on its owning island. The setup
+		// handshake returns only send capabilities created by the render island.
+		frameSetup: make(port renderFramePorts, 1), frameReq: make(port []byte, 2), // render→logic: frame requests
+		resResp: make(port []byte, 8), // render→logic: resource responses
 	}
-
-	// Build game context with proxy asset loaders that forward to render island.
-	ctx := newSplitGameCtx(game, ports.resReq, ports.resResp)
-
+	// Resource proxy capabilities arrive from the render island before the
+	// initial game state starts, so the context can be built without crossing a
+	// receive capability and configured during the setup handshake.
+	ctx := newSplitGameCtx(game)
 	// Run the split game loop via vogui platform.
 	// Render worker is spawned inside Init (see host.vo) after canvas exists.
 	runGameSplit(ctx, &game, ports)
 }
 
-// newSplitGameCtx creates a GameCtx with proxy asset loaders for split-island mode.
-func newSplitGameCtx(game Game, resReqPort, resRespPort port []byte) *GameCtx {
+// newSplitGameCtx creates the logic-island context. Resource proxy loaders are
+// installed after the render island publishes its send capability.
+func newSplitGameCtx(game Game) *GameCtx {
 	screen := NewScreenMetrics(game.Width, game.Height)
 	ctx := &GameCtx{
-		Input:           NewInputState(),
-		Draw:            NewDrawCtx(),
-		Screen:          screen,
-		FixedStep:       resolveFixedStep(game.FixedStep),
-		MaxCatchUpSteps: game.MaxCatchUpSteps,
-		lifecycleState:  LifecycleBoot,
-		lifecyclePhase:  "init",
-		overlay:         newDebugOverlay(game.TargetFrameRate),
+		Input: NewInputState(), Draw: NewDrawCtx(), Screen: screen,
+		FixedStep: resolveFixedStep(game.FixedStep), MaxCatchUpSteps: game.MaxCatchUpSteps,
+		lifecycleState: LifecycleBoot, lifecyclePhase: "init",
+		overlay: newDebugOverlay(game.TargetFrameRate),
 	}
 	ctx.Actions = NewActionMap(ctx.Input)
-	ctx.Assets = NewAssetsWithLoaders(proxyAssetLoaders(resReqPort, resRespPort))
+	ctx.Assets = NewAssets()
 	ctx.States = NewStateStack(ctx)
-
-	// Override model backend to proxy bounds queries to render island.
-	SetTextureBackend(&proxyTextureBackendImpl{
-		reqPort:  resReqPort,
-		respPort: resRespPort,
-	})
-	SetModelBackend(&proxyModelBackendImpl{
-		reqPort:  resReqPort,
-		respPort: resRespPort,
-	})
-	SetPrimitiveMeshBackend(&proxyPrimitiveMeshBackendImpl{
-		reqPort:  resReqPort,
-		respPort: resRespPort,
-	})
-	SetModelGeometryBackend(&proxyModelGeometryBackendImpl{
-		reqPort:  resReqPort,
-		respPort: resRespPort,
-	})
-	SetAnimationRuntimeBackend(&proxyAnimationRuntimeBackendImpl{
-		reqPort:  resReqPort,
-		respPort: resRespPort,
-	})
-
 	return ctx
 }
 
+func configureSplitResourceProxy(ctx *GameCtx, resReqPort port<- []byte, resRespPort <-port []byte) {
+	ctx.Assets = NewAssetsWithLoaders(proxyAssetLoaders(resReqPort, resRespPort))
+	// Override model backend to proxy bounds queries to render island.
+	SetTextureBackend(&proxyTextureBackendImpl{reqPort: resReqPort, respPort: resRespPort})
+	SetModelBackend(&proxyModelBackendImpl{reqPort: resReqPort, respPort: resRespPort})
+	SetPrimitiveMeshBackend(&proxyPrimitiveMeshBackendImpl{reqPort: resReqPort, respPort: resRespPort})
+	SetModelGeometryBackend(&proxyModelGeometryBackendImpl{reqPort: resReqPort, respPort: resRespPort})
+	SetAnimationRuntimeBackend(&proxyAnimationRuntimeBackendImpl{
+		reqPort: resReqPort, respPort: resRespPort,
+	})
+}
+
 type proxyTextureBackendImpl struct {
-	reqPort  port []byte
-	respPort port []byte
+	reqPort port<- []byte
+	respPort <-port []byte
 }
 
 func (b *proxyTextureBackendImpl) LoadFile(path string) (int, error) {
@@ -422,8 +412,8 @@ func (b *proxyTextureBackendImpl) Free(id int) {
 
 // proxyModelBackendImpl implements ModelBackend by forwarding to render island.
 type proxyModelBackendImpl struct {
-	reqPort  port []byte
-	respPort port []byte
+	reqPort port<- []byte
+	respPort <-port []byte
 }
 
 func (b *proxyModelBackendImpl) Free(id int) {
@@ -437,25 +427,22 @@ func (b *proxyModelBackendImpl) Bounds(id int) (AABB, bool) {
 	if !ok {
 		return AABB{}, false
 	}
-	return AABB{
-		Min: Vec3{X: minX, Y: minY, Z: minZ},
-		Max: Vec3{X: maxX, Y: maxY, Z: maxZ},
-	}, true
+	return AABB{Min: Vec3{X: minX, Y: minY, Z: minZ}, Max: Vec3{X: maxX, Y: maxY, Z: maxZ}}, true
 }
 
 type proxyPrimitiveMeshBackendImpl struct {
-	reqPort  port []byte
-	respPort port []byte
+	reqPort port<- []byte
+	respPort <-port []byte
 }
 
 type proxyModelGeometryBackendImpl struct {
-	reqPort  port []byte
-	respPort port []byte
+	reqPort port<- []byte
+	respPort <-port []byte
 }
 
 type proxyAnimationRuntimeBackendImpl struct {
-	reqPort  port []byte
-	respPort port []byte
+	reqPort port<- []byte
+	respPort <-port []byte
 }
 
 func (b *proxyPrimitiveMeshBackendImpl) Plane(width, depth float64, subX, subZ int) int {

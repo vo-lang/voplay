@@ -336,15 +336,19 @@ func newTrackUnchecked(asset *TrackAsset) *Track {
 			next = 0
 		}
 		segmentStarts[i] = total
-		a := points[i].Position.Vec3()
-		b := points[next].Position.Vec3()
+		a := mapVec3(points[i].Position)
+		b := mapVec3(points[next].Position)
 		segment := newTrackSegmentData(points[i], points[next], a, b, total)
 		segments[i] = segment
 		segmentLengths[i] = segment.Length
 		segmentBounds[i] = segment.Bounds
 		total += segment.Length
 	}
-	track := &Track{asset: asset, points: points, segmentStarts: segmentStarts, segmentLengths: segmentLengths, segmentBounds: segmentBounds, segments: segments, spatialCellSize: trackSpatialCellSize, spatialMarks: make([]int, segmentCount), length: total, closed: asset.ClosedLoop}
+	track := &Track{
+		asset: asset, points: points, segmentStarts: segmentStarts, segmentLengths: segmentLengths,
+		segmentBounds: segmentBounds, segments: segments, spatialCellSize: trackSpatialCellSize,
+		spatialMarks: make([]int, segmentCount), length: total, closed: asset.ClosedLoop,
+	}
 	track.rebuildSpatialIndex()
 	return track
 }
@@ -383,7 +387,8 @@ func (t *Track) ClosestPoint(pos voplay.Vec3) TrackPoint {
 			if i == hint {
 				continue
 			}
-			if len(t.segmentBounds) == len(t.segmentLengths) && trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
+			if len(t.segmentBounds) == len(t.segmentLengths) &&
+				trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
 				continue
 			}
 			candidate, distSq, ok := t.closestPointOnSegment(pos, i)
@@ -401,7 +406,8 @@ func (t *Track) ClosestPoint(pos voplay.Vec3) TrackPoint {
 			if i == hint {
 				continue
 			}
-			if len(t.segmentBounds) == len(t.segmentLengths) && trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
+			if len(t.segmentBounds) == len(t.segmentLengths) &&
+				trackSegmentBoundsDistanceSq(t.segmentBounds[i], pos) > bestDistanceSq {
 				continue
 			}
 			candidate, distSq, ok := t.closestPointOnSegment(pos, i)
@@ -436,7 +442,11 @@ func (t *Track) closestPointOnSegment(pos voplay.Vec3, i int) (TrackPoint, float
 		distSq := pos.Sub(point).LengthSq()
 		lateral := pos.Sub(point).Dot(seg.Right)
 		halfWidth := trackLerp(seg.HalfWidthA, seg.HalfWidthB, segT)
-		return TrackPoint{Position: point, Forward: seg.Forward, Right: seg.Right, Distance: seg.Start + seg.Length * segT, SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth}, distSq, true
+		return TrackPoint{
+			Position: point, Forward: seg.Forward, Right: seg.Right, Distance: seg.Start + seg.Length * segT,
+			SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth,
+			OnRoad: math.Abs(lateral) <= halfWidth,
+		}, distSq, true
 	}
 	next := i + 1
 	if next >= len(t.points) {
@@ -444,8 +454,8 @@ func (t *Track) closestPointOnSegment(pos voplay.Vec3, i int) (TrackPoint, float
 	}
 	a := t.points[i]
 	b := t.points[next]
-	aPos := a.Position.Vec3()
-	bPos := b.Position.Vec3()
+	aPos := mapVec3(a.Position)
+	bPos := mapVec3(b.Position)
 	ap := pos.Sub(aPos)
 	ab := bPos.Sub(aPos)
 	abLenSq := ab.LengthSq()
@@ -462,12 +472,18 @@ func (t *Track) closestPointOnSegment(pos voplay.Vec3, i int) (TrackPoint, float
 	}
 	lateral := pos.Sub(point).Dot(right)
 	halfWidth := trackLerp(a.Width, b.Width, segT) * 0.5
-	return TrackPoint{Position: point, Forward: forward, Right: right, Distance: t.segmentStarts[i] + t.segmentLengths[i] * segT, SegmentIndex: i, SegmentT: segT, LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth}, distSq, true
+	return TrackPoint{
+		Position: point, Forward: forward, Right: right,
+		Distance: t.segmentStarts[i] + t.segmentLengths[i] * segT, SegmentIndex: i, SegmentT: segT,
+		LateralDistance: lateral, HalfWidth: halfWidth, OnRoad: math.Abs(lateral) <= halfWidth,
+	}, distSq, true
 }
 
 func (t *Track) PoseAt(distance float64) TrackPose {
 	if t == nil || len(t.points) == 0 || len(t.segmentLengths) == 0 {
-		return TrackPose{Rotation: voplay.QuatIdentity(), Forward: voplay.Vec3{Z: -1}, Right: voplay.Vec3{X: 1}}
+		return TrackPose{
+			Rotation: voplay.QuatIdentity(), Forward: voplay.Vec3{Z: -1}, Right: voplay.Vec3{X: 1},
+		}
 	}
 	d := distance
 	if t.closed {
@@ -485,7 +501,12 @@ func (t *Track) PoseAt(distance float64) TrackPose {
 	if len(t.segments) == len(t.segmentLengths) {
 		seg := t.segments[idx]
 		pos := seg.A.Add(seg.Delta.Scale(segT))
-		return TrackPose{Position: pos, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, seg.Yaw), Forward: seg.Forward, Right: seg.Right, Yaw: seg.Yaw, Distance: d, Bank: trackLerp(seg.BankA, seg.BankB, segT), HalfWidth: trackLerp(seg.HalfWidthA, seg.HalfWidthB, segT)}
+		return TrackPose{
+			Position: pos, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, seg.Yaw),
+			Forward: seg.Forward, Right: seg.Right, Yaw: seg.Yaw, Distance: d,
+			Bank: trackLerp(seg.BankA, seg.BankB, segT),
+			HalfWidth: trackLerp(seg.HalfWidthA, seg.HalfWidthB, segT),
+		}
 	}
 	a := t.points[idx]
 	next := idx + 1
@@ -493,8 +514,8 @@ func (t *Track) PoseAt(distance float64) TrackPose {
 		next = 0
 	}
 	b := t.points[next]
-	pos := a.Position.Vec3().Lerp(b.Position.Vec3(), segT)
-	forward := b.Position.Vec3().Sub(a.Position.Vec3()).Normalize()
+	pos := mapVec3(a.Position).Lerp(mapVec3(b.Position), segT)
+	forward := mapVec3(b.Position).Sub(mapVec3(a.Position)).Normalize()
 	if forward.LengthSq() == 0 {
 		forward = voplay.Vec3{Z: -1}
 	}
@@ -503,7 +524,11 @@ func (t *Track) PoseAt(distance float64) TrackPose {
 		right = voplay.Vec3{X: 1}
 	}
 	yaw := trackYawFromForward(forward)
-	return TrackPose{Position: pos, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw), Forward: forward, Right: right, Yaw: yaw, Distance: d, Bank: trackLerp(a.Bank, b.Bank, segT), HalfWidth: trackLerp(a.Width, b.Width, segT) * 0.5}
+	return TrackPose{
+		Position: pos, Rotation: voplay.QuatFromAxisAngle(voplay.Vec3{Y: 1}, yaw), Forward: forward,
+		Right: right, Yaw: yaw, Distance: d, Bank: trackLerp(a.Bank, b.Bank, segT),
+		HalfWidth: trackLerp(a.Width, b.Width, segT) * 0.5,
+	}
 }
 
 func (t *Track) PoseOnLine(lineName string, distance float64) (TrackRacingLinePose, error) {
@@ -518,7 +543,8 @@ func (t *Track) PoseOnLine(lineName string, distance float64) (TrackRacingLinePo
 			return t.poseOnRacingLine(line, distance), nil
 		}
 	}
-	return TrackRacingLinePose{}, errors.New("scene3d.Track.PoseOnLine: racing line not found: " + lineName)
+	return TrackRacingLinePose{}, errors.New("scene3d.Track.PoseOnLine: racing line not found: " +
+		lineName)
 }
 
 func (t *Track) poseOnRacingLine(line TrackRacingLine, distance float64) TrackRacingLinePose {
@@ -562,7 +588,10 @@ func (t *Track) DistanceAlongTrack(pos voplay.Vec3) float64 {
 
 func (t *Track) SurfaceAt(pos voplay.Vec3) TrackSurfaceHit {
 	cp := t.ClosestPoint(pos)
-	best := TrackSurfaceHit{Name: TrackSurfaceOffroad, Kind: TrackSurfaceOffroad, Priority: -999999, Friction: 0.55, OnSurface: true, OnRoad: cp.OnRoad, Distance: cp.Distance, LateralDistance: cp.LateralDistance}
+	best := TrackSurfaceHit{
+		Name: TrackSurfaceOffroad, Kind: TrackSurfaceOffroad, Priority: -999999, Friction: 0.55,
+		OnSurface: true, OnRoad: cp.OnRoad, Distance: cp.Distance, LateralDistance: cp.LateralDistance,
+	}
 	if cp.OnRoad {
 		best.Name = TrackSurfaceRoad
 		best.Kind = TrackSurfaceRoad
@@ -587,7 +616,11 @@ func (t *Track) SurfaceAt(pos voplay.Vec3) TrackSurfaceHit {
 		if friction == 0 {
 			friction = 1
 		}
-		best = TrackSurfaceHit{Name: surface.Name, Kind: surface.Kind, Priority: surface.Priority, Friction: friction, Boost: surface.Boost, OnSurface: true, OnRoad: trackSurfaceIsRoad(surface, cp.OnRoad), Distance: cp.Distance, LateralDistance: cp.LateralDistance}
+		best = TrackSurfaceHit{
+			Name: surface.Name, Kind: surface.Kind, Priority: surface.Priority, Friction: friction,
+			Boost: surface.Boost, OnSurface: true, OnRoad: trackSurfaceIsRoad(surface, cp.OnRoad),
+			Distance: cp.Distance, LateralDistance: cp.LateralDistance,
+		}
 	}
 	return best
 }
@@ -608,7 +641,9 @@ func (t *Track) NextGate(index int) TrackGate {
 
 func (t *Track) RespawnPoseNear(pos voplay.Vec3) TrackPose {
 	if t == nil {
-		return TrackPose{Rotation: voplay.QuatIdentity(), Forward: voplay.Vec3{Z: -1}, Right: voplay.Vec3{X: 1}}
+		return TrackPose{
+			Rotation: voplay.QuatIdentity(), Forward: voplay.Vec3{Z: -1}, Right: voplay.Vec3{X: 1},
+		}
 	}
 	cp := t.ClosestPoint(pos)
 	if t.asset == nil || len(t.asset.Respawns) == 0 {
@@ -625,7 +660,7 @@ func (t *Track) RespawnPoseNear(pos voplay.Vec3) TrackPose {
 	}
 	pose := t.PoseAt(best.Distance)
 	if best.Position != (MapVec3{}) {
-		pose.Position = best.Position.Vec3()
+		pose.Position = mapVec3(best.Position)
 	}
 	if best.Yaw != 0 {
 		pose.Yaw = best.Yaw
@@ -642,8 +677,8 @@ func trackEffectivePointCount(asset *TrackAsset) int {
 	}
 	count := len(asset.Centerline)
 	if asset.ClosedLoop && count > 1 {
-		first := asset.Centerline[0].Position.Vec3()
-		last := asset.Centerline[count - 1].Position.Vec3()
+		first := mapVec3(asset.Centerline[0].Position)
+		last := mapVec3(asset.Centerline[count - 1].Position)
 		if first.Distance(last) <= trackContinuityTolerance {
 			count--
 		}
@@ -702,15 +737,25 @@ func newTrackSegmentData(aPoint, bPoint TrackControlPoint, a, b voplay.Vec3, sta
 	if right.LengthSq() == 0 {
 		right = voplay.Vec3{X: 1}
 	}
-	return trackSegmentData{Start: start, Length: length, LengthSq: lengthSq, A: a, B: b, Delta: delta, Forward: forward, Right: right, Yaw: trackYawFromForward(forward), HalfWidthA: aPoint.Width * 0.5, HalfWidthB: bPoint.Width * 0.5, BankA: aPoint.Bank, BankB: bPoint.Bank, Bounds: trackSegmentBoundsBetween(a, b)}
+	return trackSegmentData{
+		Start: start, Length: length, LengthSq: lengthSq, A: a, B: b, Delta: delta, Forward: forward,
+		Right: right, Yaw: trackYawFromForward(forward), HalfWidthA: aPoint.Width * 0.5,
+		HalfWidthB: bPoint.Width * 0.5, BankA: aPoint.Bank, BankB: bPoint.Bank,
+		Bounds: trackSegmentBoundsBetween(a, b),
+	}
 }
 
 func trackSegmentBoundsBetween(a, b voplay.Vec3) trackSegmentBounds {
-	return trackSegmentBounds{Min: voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)}, Max: voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)}}
+	return trackSegmentBounds{
+		Min: voplay.Vec3{X: math.Min(a.X, b.X), Y: math.Min(a.Y, b.Y), Z: math.Min(a.Z, b.Z)},
+		Max: voplay.Vec3{X: math.Max(a.X, b.X), Y: math.Max(a.Y, b.Y), Z: math.Max(a.Z, b.Z)},
+	}
 }
 
 func trackSegmentBoundsDistanceSq(bounds trackSegmentBounds, pos voplay.Vec3) float64 {
-	return trackAxisOutsideDistanceSq(pos.X, bounds.Min.X, bounds.Max.X) + trackAxisOutsideDistanceSq(pos.Y, bounds.Min.Y, bounds.Max.Y) + trackAxisOutsideDistanceSq(pos.Z, bounds.Min.Z, bounds.Max.Z)
+	return trackAxisOutsideDistanceSq(pos.X, bounds.Min.X, bounds.Max.X) +
+		trackAxisOutsideDistanceSq(pos.Y, bounds.Min.Y, bounds.Max.Y) +
+		trackAxisOutsideDistanceSq(pos.Z, bounds.Min.Z, bounds.Max.Z)
 }
 
 func trackAxisOutsideDistanceSq(v, lo, hi float64) float64 {
@@ -750,7 +795,8 @@ func (t *Track) rebuildSpatialIndex() {
 }
 
 func (t *Track) spatialCandidateSegments(pos voplay.Vec3, bestDistanceSq float64) ([]int, bool) {
-	if t == nil || len(t.spatialIndex) == 0 || len(t.spatialMarks) != len(t.segmentLengths) || bestDistanceSq <= 0 {
+	if t == nil || len(t.spatialIndex) == 0 || len(t.spatialMarks) != len(t.segmentLengths) ||
+		bestDistanceSq <= 0 {
 		return nil, false
 	}
 	radius := math.Sqrt(bestDistanceSq)

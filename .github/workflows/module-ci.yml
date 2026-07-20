@@ -18,9 +18,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 env:
-  VOLANG_REF: ebe5e93d30156995b8fd289898edd13980787570
-  VOGUI_REF: b7181177e755b4fbafa078c30eecb9b8c0578fb1
-  VOPACK_REF: e5a133aadd7ce9964610e55c924d912fbe53b6e2
+  VOLANG_REF: 325a469316e79443274648e037ca5889bce338dc
+  VOGUI_REF: 6e4be8ee1292bfbbb7684e46770c1c268a121077
+  VOPACK_REF: f9c0fe4427c9598e24f2bae4418d9966b7075dbb
 
 jobs:
   validate_workspace:
@@ -85,6 +85,7 @@ jobs:
         with:
           toolchain: "1.94.0"
           targets: wasm32-unknown-unknown
+          components: rustfmt
 
       - name: Install Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0

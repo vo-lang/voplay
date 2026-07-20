@@ -1,0 +1,20 @@
+format = 1
+root = "sha256:0d04f9c2379af23d75844de7b5fdb372f0a34e34787e8ef54264af0d803f94ac"
+
+[[module]]
+path = "github.com/vo-lang/vogui"
+version = "0.1.0"
+origin = "workspace"
+intent = "sha256:3ed56e5442b47a5688e0bba534864afd40460afd7f7a407fabf6339ced172208"
+
+[[module]]
+path = "github.com/vo-lang/vopack"
+version = "0.1.0"
+origin = "workspace"
+intent = "sha256:38d36a6ff1b865a1d9939b8bb53956620bf6eb8863aaea3b125c0bd856dbd45b"
+
+[[module]]
+path = "github.com/vo-lang/voplay"
+version = "0.1.0"
+origin = "workspace"
+intent = "sha256:0d484dd8d92b03384599adb90f8d6fecfe1691d76b653ae3500cb0f2e9d2b5cf"

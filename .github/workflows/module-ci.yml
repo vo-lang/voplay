@@ -18,9 +18,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 env:
-  VOLANG_REF: fc07de2a7f74d15c30420402e9df770fb0674f6b
-  VOGUI_REF: 402aa502bf4951111c6dce9bb36cf76ef7d5090e
-  VOPACK_REF: 895f9a786cf27f61a07c87c23df5f6ed8a272ae0
+  VOLANG_REF: ebe5e93d30156995b8fd289898edd13980787570
+  VOGUI_REF: b7181177e755b4fbafa078c30eecb9b8c0578fb1
+  VOPACK_REF: e5a133aadd7ce9964610e55c924d912fbe53b6e2
 
 jobs:
   validate_workspace:
@@ -57,6 +57,15 @@ jobs:
           ref: ${{ env.VOPACK_REF }}
           path: checkouts/vopack
 
+      - name: Configure workspace
+        working-directory: checkouts
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'format = 1' \
+            'members = ["vogui", "vopack", "voplay", "voplay/examples/empty_smoke", "voplay/examples/primitive_smoke", "voplay/examples/primitive_stress"]' \
+            > vo.work
+
       - name: Resolve immutable source identities
         id: source
         shell: bash
@@ -67,7 +76,9 @@ jobs:
           echo "vopack=$(git -C ../vopack rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libasound2-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
@@ -91,16 +102,16 @@ jobs:
       - name: Verify all-local package authority
         shell: bash
         env:
-          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
         run: |
-          snapshot="$RUNNER_TEMP/voplay-module-snapshot.json"
-          vo mod snapshot . > "$snapshot"
+          graph="$RUNNER_TEMP/voplay-module-graph.json"
+          vo mod graph --json . > "$graph"
           jq -e \
-            --arg work "$GITHUB_WORKSPACE/checkouts/voplay/vo.work" \
+            --arg work "$GITHUB_WORKSPACE/checkouts/vo.work" \
             --arg vogui "$GITHUB_WORKSPACE/checkouts/vogui" \
             --arg vopack "$GITHUB_WORKSPACE/checkouts/vopack" \
             '
-              .authority == "workspace"
+              .authority == "lock"
               and .workspace.file == $work
               and (.modules | map(.module)) == [
                 "github.com/vo-lang/vogui",
@@ -110,16 +121,16 @@ jobs:
               and ([.modules[] | select(.module == "github.com/vo-lang/vogui") | .source.directory] == [$vogui])
               and ([.modules[] | select(.module == "github.com/vo-lang/vopack") | .source.directory] == [$vopack])
               and ([.. | objects | select(.kind? == "registry" or .kind? == "release")] | length) == 0
-            ' "$snapshot"
+            ' "$graph"
 
       - name: Check root module
         env:
-          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
         run: vo check .
 
       - name: Test root module
         env:
-          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
         run: |
           if [[ -d tests ]]; then
             vo test tests
@@ -127,10 +138,12 @@ jobs:
 
       - name: Check workspace examples
         shell: bash
+        env:
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
         run: |
           for example in empty_smoke primitive_smoke primitive_stress; do
             root="$GITHUB_WORKSPACE/checkouts/voplay/examples/$example"
-            VOWORK="$root/vo.work" vo check "$root"
+            vo check "$root"
           done
 
       - name: Check Rust formatting
@@ -161,7 +174,7 @@ jobs:
       - name: Verify vehicle telemetry parity
         env:
           VO_BIN: ${{ github.workspace }}/checkouts/volang/target/release/vo
-          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
         run: node tools/check_vehicle_telemetry_parity.mjs
 
       - name: Verify release and exposure tooling
@@ -171,7 +184,7 @@ jobs:
 
       - name: Build canonical current-source WASM
         env:
-          VOWORK: ${{ github.workspace }}/checkouts/voplay/vo.work
+          VOWORK: ${{ github.workspace }}/checkouts/vo.work
           VOPLAY_ROOT: ${{ github.workspace }}/checkouts/voplay
           VOPLAY_EXPECTED_COMMIT: ${{ steps.source.outputs.voplay }}
           VOGUI_ROOT: ${{ github.workspace }}/checkouts/vogui
@@ -196,8 +209,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
-      - name: Require registry-v3 bootstrap
+      - name: Require registry bootstrap
         shell: bash
         run: |
-          echo "::error::voplay release is unavailable until registry-v3 vogui and vopack releases exist and VOWORK=off can generate a real vo.lock."
+          echo "::error::voplay release is unavailable until registry releases for vogui and vopack can replace the workspace lock."
           exit 1

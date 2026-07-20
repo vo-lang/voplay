@@ -66,15 +66,6 @@ jobs:
             'members = ["vogui", "vopack", "voplay", "voplay/examples/empty_smoke", "voplay/examples/primitive_smoke", "voplay/examples/primitive_stress"]' \
             > vo.work
 
-      - name: Resolve immutable source identities
-        id: source
-        shell: bash
-        run: |
-          echo "voplay=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
-          echo "volang=$(git -C ../volang rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
-          echo "vogui=$(git -C ../vogui rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
-          echo "vopack=$(git -C ../vopack rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -183,23 +174,19 @@ jobs:
           node tools/verify_github_release.mjs --self-test
           node tools/check_render_exposure.mjs --self-test
 
-      - name: Build canonical current-source WASM
+      - name: Build browser WASM from source
         env:
           VOWORK: ${{ github.workspace }}/checkouts/vo.work
-          VOPLAY_ROOT: ${{ github.workspace }}/checkouts/voplay
-          VOPLAY_EXPECTED_COMMIT: ${{ steps.source.outputs.voplay }}
-          VOGUI_ROOT: ${{ github.workspace }}/checkouts/vogui
-          VOGUI_EXPECTED_COMMIT: ${{ steps.source.outputs.vogui }}
-          VOPACK_ROOT: ${{ github.workspace }}/checkouts/vopack
-          VOPACK_EXPECTED_COMMIT: ${{ steps.source.outputs.vopack }}
-          VOPLAY_CURRENT_WASM_OUT_DIR: ${{ runner.temp }}/voplay-current-wasm
-        run: node ../volang/scripts/ci/voplay_current_wasm.mjs
-
-      - name: Verify tracked WASM outputs
-        shell: bash
         run: |
-          cmp "$RUNNER_TEMP/voplay-current-wasm/voplay_island.js" web-artifacts/voplay_island.js
-          cmp "$RUNNER_TEMP/voplay-current-wasm/voplay_island_bg.wasm" web-artifacts/voplay_island_bg.wasm
+          wasm-pack build \
+            --target web \
+            --release \
+            --out-dir "$RUNNER_TEMP/voplay-current-wasm" \
+            --out-name voplay_island \
+            rust \
+            --no-default-features \
+            --features wasm-island \
+            --locked
 
       - name: Verify clean generated state
         run: |

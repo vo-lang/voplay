@@ -8,9 +8,10 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(root);
 const vo = process.env.VO_BIN ?? join(dirname(root), 'volang', 'target', 'debug', 'vo');
 const studioWasmDir = join(repoRoot, 'volang', 'apps', 'studio', 'public', 'wasm');
+const nativeProbe = join(root, 'tools', 'vehicle_telemetry_parity.vo');
 
 function runNativeProbe() {
-  const result = spawnSync(vo, ['run', 'tools/vehicle_telemetry_parity.vo'], {
+  const result = spawnSync(vo, ['run', nativeProbe], {
     cwd: root,
     encoding: 'utf8',
   });
@@ -811,11 +812,11 @@ async function runWebProbe() {
   const webProjectRoot = join(repoRoot, '.vehicle-telemetry-parity-web');
   writeVfsFile(
     join(webProjectRoot, 'vo.mod'),
-    new TextEncoder().encode(`module = "github.com/vo-lang/vehicle-telemetry-parity-web"\nvo = "^0.1.0"\n\n[dependencies]\n"github.com/vo-lang/vogui" = "^0.1.0"\n"github.com/vo-lang/vopack" = "^0.1.0"\n"github.com/vo-lang/voplay" = "^0.1.0"\n`),
+    new TextEncoder().encode(`format = 1\nmodule = "github.com/vo-lang/vehicle-telemetry-parity-web"\nversion = "0.1.0"\nvo = "0.1.0"\n\n[dependencies]\n"github.com/vo-lang/vogui" = "^0.1.0"\n"github.com/vo-lang/vopack" = "^0.1.0"\n"github.com/vo-lang/voplay" = "^0.1.0"\n`),
   );
   writeVfsFile(
     join(webProjectRoot, 'vo.work'),
-    new TextEncoder().encode(`version = 1\nmembers = ["../vogui", "../vopack", "../voplay"]\n`),
+    new TextEncoder().encode(`format = 1\nmembers = ["../vogui", "../vopack", "../voplay"]\n`),
   );
   writeVfsFile(join(webProjectRoot, 'main.vo'), probeSource);
 

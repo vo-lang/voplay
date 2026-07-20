@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(root);
 const vo = process.env.VO_BIN ?? join(dirname(root), 'volang', 'target', 'debug', 'vo');
-const studioWasmDir = join(repoRoot, 'volang', 'apps', 'studio', 'public', 'wasm');
+const studioWasmDir = process.env.VO_STUDIO_WASM_DIR ?? join(repoRoot, 'volang', 'apps', 'studio', 'public', 'wasm');
 const nativeProbe = join(root, 'tools', 'vehicle_telemetry_parity.vo');
 
 function runNativeProbe() {
@@ -40,12 +40,12 @@ function parseProbeOutput(output, label) {
   };
 }
 
-function assertNativeBaseline(nativeResult) {
-  if (nativeResult.wheelCount !== 4) {
-    throw new Error(`native wheel_count mismatch: ${nativeResult.wheelCount}`);
+function assertProbeBaseline(result) {
+  if (result.wheelCount !== 4) {
+    throw new Error(`${result.label} wheel_count mismatch: ${result.wheelCount}`);
   }
-  if (nativeResult.contacts <= 0) {
-    throw new Error(`native contacts mismatch: ${nativeResult.contacts}`);
+  if (result.contacts <= 0) {
+    throw new Error(`${result.label} contacts mismatch: ${result.contacts}`);
   }
 }
 
@@ -809,14 +809,12 @@ async function runWebProbe() {
   addFsTreeToVfs(join(repoRoot, 'vogui'));
   addFsTreeToVfs(join(repoRoot, 'vopack'));
   const probeSource = readFileSync(join(root, 'tools', 'vehicle_telemetry_parity.vo'));
-  const webProjectRoot = join(repoRoot, '.vehicle-telemetry-parity-web');
+  // Reuse a tracked module so its checked-in lock file remains authoritative.
+  // The probe source only replaces main.vo inside the in-memory filesystem.
+  const webProjectRoot = join(root, 'examples', 'empty_smoke');
   writeVfsFile(
-    join(webProjectRoot, 'vo.mod'),
-    new TextEncoder().encode(`format = 1\nmodule = "github.com/vo-lang/vehicle-telemetry-parity-web"\nversion = "0.1.0"\nvo = "0.1.0"\n\n[dependencies]\n"github.com/vo-lang/vogui" = "^0.1.0"\n"github.com/vo-lang/vopack" = "^0.1.0"\n"github.com/vo-lang/voplay" = "^0.1.0"\n`),
-  );
-  writeVfsFile(
-    join(webProjectRoot, 'vo.work'),
-    new TextEncoder().encode(`format = 1\nmembers = ["../vogui", "../vopack", "../voplay"]\n`),
+    join(repoRoot, 'vo.work'),
+    new TextEncoder().encode(`format = 1\nmembers = ["vogui", "vopack", "voplay", "voplay/examples/empty_smoke"]\n`),
   );
   writeVfsFile(join(webProjectRoot, 'main.vo'), probeSource);
 
@@ -984,9 +982,13 @@ function assertParity(nativeResult, webResult) {
 if (process.argv.includes('--selftest')) {
   await runSelfTest();
   console.log('VO:TELEMETRY_PARITY_SELFTEST PASS');
+} else if (process.argv.includes('--web-only')) {
+  const webResult = await runWebProbe();
+  assertProbeBaseline(webResult);
+  console.log(`VO:PARITY_WEB ${webResult.line}`);
 } else {
   const nativeResult = runNativeProbe();
-  assertNativeBaseline(nativeResult);
+  assertProbeBaseline(nativeResult);
   const webResult = await runWebProbe();
   assertParity(nativeResult, webResult);
   console.log(`VO:PARITY_NATIVE ${nativeResult.line}`);

@@ -596,10 +596,18 @@ export class VoplayBrowserAssetProvider {
     if (packet.header.channelEpoch !== BigInt(lane.binding.channelEpoch)) {
       throw new Error("Voplay asset packet channel epoch mismatch");
     }
-    if (packet.header.sequence <= this.#lastSequence) {
+    const lifecyclePacket =
+      packet.header.kind === MessageKind.EngineStart
+      || packet.header.kind === MessageKind.EngineSuspend
+      || packet.header.kind === MessageKind.EngineResume
+      || packet.header.kind === MessageKind.EngineClose
+      || packet.header.kind === MessageKind.WorkerWake;
+    if (!lifecyclePacket && packet.header.sequence <= this.#lastSequence) {
       throw new Error("Voplay asset packet sequence regression");
     }
-    this.#lastSequence = packet.header.sequence;
+    if (!lifecyclePacket) {
+      this.#lastSequence = packet.header.sequence;
+    }
   }
 
   #requireState(engine: GenerationalHandle, ...states: AssetProviderState[]): void {

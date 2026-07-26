@@ -71,6 +71,15 @@ capabilities = ["frame-debug-capture", "inspection", "shader-diagnostics"]
 [extension]
 name = "voplay"
 
+[extension.wasm]
+kind = "bindgen"
+wasm = "voplay_extension_bg.wasm"
+js = "voplay_extension.js"
+
+[build.wasm]
+wasm = "rust/pkg-web/voplay_extension_bg.wasm"
+js = "rust/pkg-web/voplay_extension.js"
+
 [extension.web]
 provider_role = "game-logic"
 provider_roles = ["game-logic", "game-asset", "game-renderer", "game-audio"]

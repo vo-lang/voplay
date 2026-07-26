@@ -1,0 +1,8 @@
+[package]
+name = "voplay-render-2d"
+version = "0.1.0"
+edition = "2021"
+description = "Voplay retained 2D render feature artifact"
+
+[dependencies]
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "render2d"] }

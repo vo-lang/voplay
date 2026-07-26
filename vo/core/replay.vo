@@ -1,0 +1,263 @@
+package core
+
+type DeterministicRng struct {
+	State0 uint64
+	State1 uint64
+	Draws uint64
+}
+
+type DeterministicRngSnapshot struct {
+	State0 uint64
+	State1 uint64
+	Draws uint64
+}
+
+func NewDeterministicRng(seed uint64, stream uint64) (DeterministicRng, bool) {
+	if seed == 0 && stream == 0 {
+		return DeterministicRng{}, false
+	}
+	state0 := mixSeed(seed ^ 11400714819323198485)
+	state1 := mixSeed(stream ^ seed ^ 13787848793156543929)
+	if state0 == 0 && state1 == 0 {
+		state1 = 1
+	}
+	return DeterministicRng{State0: state0, State1: state1}, true
+}
+
+func (rng *DeterministicRng) NextU64() (uint64, bool) {
+	if rng == nil || rng.State0 == 0 && rng.State1 == 0 ||
+		rng.Draws == 18446744073709551615 {
+		return 0, false
+	}
+	left := rng.State0
+	right := rng.State1
+	result := left + right
+	right ^= left
+	rng.State0 = rotateLeft64(left, 24) ^ right ^ right << 16
+	rng.State1 = rotateLeft64(right, 37)
+	rng.Draws++
+	return result, true
+}
+
+func (rng *DeterministicRng) Range(limit uint64) (uint64, bool) {
+	if limit == 0 {
+		return 0, false
+	}
+	threshold := (0 - limit) % limit
+	for {
+		value, ok := rng.NextU64()
+		if !ok {
+			return 0, false
+		}
+		if value >= threshold {
+			return value % limit, true
+		}
+	}
+}
+
+func (rng *DeterministicRng) Snapshot() (DeterministicRngSnapshot, bool) {
+	if rng == nil || rng.State0 == 0 && rng.State1 == 0 {
+		return DeterministicRngSnapshot{}, false
+	}
+	return DeterministicRngSnapshot{
+		State0: rng.State0, State1: rng.State1, Draws: rng.Draws,
+	}, true
+}
+
+func RestoreDeterministicRng(
+	snapshot DeterministicRngSnapshot) (DeterministicRng, bool) {
+	if snapshot.State0 == 0 && snapshot.State1 == 0 {
+		return DeterministicRng{}, false
+	}
+	return DeterministicRng{
+		State0: snapshot.State0, State1: snapshot.State1,
+		Draws: snapshot.Draws,
+	}, true
+}
+
+type ReplayHeader struct {
+	Format uint32
+	FixedTickNanos uint64
+	ScheduleHash uint64
+	ComponentSchemaFingerprint [32]byte
+	GameArtifactFingerprint [32]byte
+	InitialWorldHash uint64
+	Rng DeterministicRngSnapshot
+}
+
+type ReplayFrame struct {
+	Tick uint64
+	Input []byte
+	WorldRevision uint64
+	SimulationHash uint64
+	WorldHash uint64
+	Rng DeterministicRngSnapshot
+}
+
+type ReplayCheckpoint struct {
+	Tick uint64
+	FrameIndex uint32
+	WorldSnapshot []byte
+	WorldHash uint64
+}
+
+type ReplayRecorder struct {
+	Header ReplayHeader
+	Frames []ReplayFrame
+	Checkpoints []ReplayCheckpoint
+	MaxFrames uint32
+	MaxInputBytes uint64
+	MaxCheckpointBytes uint64
+	InputBytes uint64
+	CheckpointBytes uint64
+	Closed bool
+}
+
+func NewReplayRecorder(header ReplayHeader, maxFrames uint32,
+	maxInputBytes uint64, maxCheckpointBytes uint64) (*ReplayRecorder, bool) {
+	if !header.Valid() || maxFrames == 0 || maxFrames > 10000000 ||
+		maxInputBytes == 0 || maxInputBytes > 1073741824 ||
+		maxCheckpointBytes > 4294967296 {
+		return nil, false
+	}
+	return &ReplayRecorder{
+		Header: header, MaxFrames: maxFrames,
+		MaxInputBytes: maxInputBytes,
+		MaxCheckpointBytes: maxCheckpointBytes,
+	}, true
+}
+
+func (recorder *ReplayRecorder) Record(frame ReplayFrame) bool {
+	if recorder == nil || recorder.Closed ||
+		len(recorder.Frames) >= int(recorder.MaxFrames) ||
+		frame.Tick != uint64(len(recorder.Frames)+1) ||
+		frame.WorldRevision == 0 || frame.SimulationHash == 0 ||
+		frame.WorldHash == 0 ||
+		frame.Rng.State0 == 0 && frame.Rng.State1 == 0 ||
+		uint64(len(frame.Input)) > recorder.MaxInputBytes-recorder.InputBytes {
+		return false
+	}
+	frame.Input = append([]byte{}, frame.Input...)
+	recorder.Frames = append(recorder.Frames, frame)
+	recorder.InputBytes += uint64(len(frame.Input))
+	return true
+}
+
+func (recorder *ReplayRecorder) Checkpoint(tick uint64,
+	worldSnapshot []byte, worldHash uint64) bool {
+	if recorder == nil || recorder.Closed || tick == 0 ||
+		tick > uint64(len(recorder.Frames)) || worldHash == 0 ||
+		uint64(len(worldSnapshot)) >
+			recorder.MaxCheckpointBytes-recorder.CheckpointBytes {
+		return false
+	}
+	if len(recorder.Checkpoints) != 0 &&
+		recorder.Checkpoints[len(recorder.Checkpoints)-1].Tick >= tick {
+		return false
+	}
+	recorder.Checkpoints = append(recorder.Checkpoints, ReplayCheckpoint{
+		Tick: tick, FrameIndex: uint32(tick - 1),
+		WorldSnapshot: append([]byte{}, worldSnapshot...),
+		WorldHash: worldHash,
+	})
+	recorder.CheckpointBytes += uint64(len(worldSnapshot))
+	return true
+}
+
+func (recorder *ReplayRecorder) Close() bool {
+	if recorder == nil || recorder.Closed || len(recorder.Frames) == 0 {
+		return false
+	}
+	recorder.Closed = true
+	return true
+}
+
+type ReplayPlayer struct {
+	Header ReplayHeader
+	Frames []ReplayFrame
+	Checkpoints []ReplayCheckpoint
+	Cursor uint32
+}
+
+func OpenReplay(header ReplayHeader, frames []ReplayFrame,
+	checkpoints []ReplayCheckpoint) (*ReplayPlayer, bool) {
+	if !header.Valid() || len(frames) == 0 {
+		return nil, false
+	}
+	player := &ReplayPlayer{Header: header}
+	for index, frame := range frames {
+		if frame.Tick != uint64(index+1) || frame.WorldRevision == 0 ||
+			frame.SimulationHash == 0 || frame.WorldHash == 0 ||
+			frame.Rng.State0 == 0 && frame.Rng.State1 == 0 {
+			return nil, false
+		}
+		frame.Input = append([]byte{}, frame.Input...)
+		player.Frames = append(player.Frames, frame)
+	}
+	for index, checkpoint := range checkpoints {
+		if checkpoint.Tick == 0 ||
+			checkpoint.FrameIndex != uint32(checkpoint.Tick-1) ||
+			checkpoint.Tick > uint64(len(frames)) || checkpoint.WorldHash == 0 ||
+			index > 0 && checkpoints[index-1].Tick >= checkpoint.Tick {
+			return nil, false
+		}
+		checkpoint.WorldSnapshot =
+			append([]byte{}, checkpoint.WorldSnapshot...)
+		player.Checkpoints = append(player.Checkpoints, checkpoint)
+	}
+	return player, true
+}
+
+func (player *ReplayPlayer) Next() (ReplayFrame, bool) {
+	if player == nil || int(player.Cursor) >= len(player.Frames) {
+		return ReplayFrame{}, false
+	}
+	frame := player.Frames[player.Cursor]
+	frame.Input = append([]byte{}, frame.Input...)
+	player.Cursor++
+	return frame, true
+}
+
+func (player *ReplayPlayer) Seek(tick uint64) (ReplayCheckpoint, bool) {
+	if player == nil || tick == 0 || tick > uint64(len(player.Frames)) {
+		return ReplayCheckpoint{}, false
+	}
+	selected := -1
+	for index, checkpoint := range player.Checkpoints {
+		if checkpoint.Tick <= tick {
+			selected = index
+		} else {
+			break
+		}
+	}
+	if selected < 0 {
+		player.Cursor = 0
+		return ReplayCheckpoint{}, true
+	}
+	checkpoint := player.Checkpoints[selected]
+	checkpoint.WorldSnapshot = append([]byte{}, checkpoint.WorldSnapshot...)
+	player.Cursor = checkpoint.FrameIndex + 1
+	return checkpoint, true
+}
+
+func (header ReplayHeader) Valid() bool {
+	return header.Format == 1 && header.FixedTickNanos != 0 &&
+		header.ScheduleHash != 0 &&
+		header.ComponentSchemaFingerprint != [32]byte{} &&
+		header.GameArtifactFingerprint != [32]byte{} &&
+		header.InitialWorldHash != 0 &&
+		(header.Rng.State0 != 0 || header.Rng.State1 != 0)
+}
+
+func mixSeed(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 13787848793156543929
+	value ^= value >> 27
+	value *= 10723151780598845931
+	value ^= value >> 31
+	return value
+}
+
+func rotateLeft64(value uint64, count uint32) uint64 {
+	return value << count | value >> (64 - count)
+}

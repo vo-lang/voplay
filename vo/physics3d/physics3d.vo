@@ -1,0 +1,468 @@
+package physics3d
+
+type BodyRef struct {
+	Index uint32
+	Generation uint32
+}
+
+func (body BodyRef) Valid() bool {
+	return body.Index != 0 && body.Generation != 0
+}
+
+type BodyKind uint32
+
+const (
+	BodyStatic BodyKind = iota + 1
+	BodyKinematic
+	BodyDynamic
+)
+
+type BodyDesc struct {
+	Dynamic bool
+	Kind BodyKind
+	Position [3]int64
+	Velocity [3]int64
+	Shape []byte
+}
+
+type ColliderRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type ColliderDesc struct {
+	Body BodyRef
+	HalfExtent [3]uint32
+	Layer uint32
+	Mask uint32
+	Sensor bool
+}
+
+type ContactEvent struct {
+	A BodyRef
+	B BodyRef
+	Normal [3]int32
+	Tick uint64
+	Sensor bool
+}
+
+type BodyState struct {
+	Ref BodyRef
+	Kind BodyKind
+	Position [3]int64
+	Velocity [3]int64
+	Alive bool
+}
+
+type ColliderState struct {
+	Ref ColliderRef
+	Descriptor ColliderDesc
+	Alive bool
+}
+
+type CommandKind uint32
+
+const (
+	CommandWorldPose CommandKind = iota + 1
+	CommandKinematicTarget
+	CommandTeleport
+	CommandImpulse
+	CommandVelocity
+)
+
+type Command struct {
+	Kind CommandKind
+	Body BodyRef
+	Value [3]int64
+}
+
+type QuerySnapshot struct {
+	Tick uint64
+	Bodies []BodyState
+	Colliders []ColliderState
+}
+
+type CastKind uint32
+
+const (
+	CastRay CastKind = iota + 1
+	CastBox
+)
+
+type Cast struct {
+	Kind CastKind
+	Origin [3]int64
+	Delta [3]int64
+	HalfExtent [3]uint32
+	LayerMask uint32
+}
+
+type CastHit struct {
+	Collider ColliderRef
+	Body BodyRef
+	Numerator uint64
+	Denominator uint64
+	Sensor bool
+}
+
+type Runtime struct {
+	Tick uint64
+	Bodies []BodyState
+	Colliders []ColliderState
+	BodyFree []uint32
+	ColliderFree []uint32
+	Commands []Command
+	Contacts []ContactEvent
+	MaxBodies uint32
+	MaxColliders uint32
+	MaxCommands uint32
+	MaxContacts uint32
+}
+
+func NewRuntime(maxBodies uint32, maxColliders uint32, maxCommands uint32,
+	maxContacts uint32) (*Runtime, bool) {
+	if maxBodies == 0 || maxBodies > 1000000 ||
+		maxColliders == 0 || maxColliders > 2000000 ||
+		maxCommands == 0 || maxCommands > 1000000 ||
+		maxContacts == 0 || maxContacts > 2000000 {
+		return nil, false
+	}
+	return &Runtime{
+		MaxBodies: maxBodies, MaxColliders: maxColliders,
+		MaxCommands: maxCommands, MaxContacts: maxContacts,
+	}, true
+}
+
+func (runtime *Runtime) CreateBody(descriptor BodyDesc) (BodyRef, bool) {
+	if runtime == nil || len(runtime.Bodies)-len(runtime.BodyFree) >= int(runtime.MaxBodies) {
+		return BodyRef{}, false
+	}
+	kind := descriptor.Kind
+	if kind == 0 {
+		if descriptor.Dynamic {
+			kind = BodyDynamic
+		} else {
+			kind = BodyStatic
+		}
+	}
+	if kind < BodyStatic || kind > BodyDynamic {
+		return BodyRef{}, false
+	}
+	if len(runtime.BodyFree) != 0 {
+		last := len(runtime.BodyFree) - 1
+		index := runtime.BodyFree[last]
+		runtime.BodyFree = runtime.BodyFree[:last]
+		previous := runtime.Bodies[index-1]
+		if previous.Ref.Generation == 4294967295 {
+			return BodyRef{}, false
+		}
+		ref := BodyRef{Index: index, Generation: previous.Ref.Generation + 1}
+		runtime.Bodies[index-1] = BodyState{
+			Ref: ref, Kind: kind, Position: descriptor.Position,
+			Velocity: descriptor.Velocity, Alive: true,
+		}
+		return ref, true
+	}
+	index := uint32(len(runtime.Bodies) + 1)
+	ref := BodyRef{Index: index, Generation: 1}
+	runtime.Bodies = append(runtime.Bodies, BodyState{
+		Ref: ref, Kind: kind, Position: descriptor.Position,
+		Velocity: descriptor.Velocity, Alive: true,
+	})
+	return ref, true
+}
+
+func (runtime *Runtime) DestroyBody(body BodyRef) bool {
+	index, ok := runtime.bodyIndex(body)
+	if !ok {
+		return false
+	}
+	for _, collider := range runtime.Colliders {
+		if collider.Alive && collider.Descriptor.Body == body {
+			return false
+		}
+	}
+	runtime.Bodies[index].Alive = false
+	runtime.BodyFree = append(runtime.BodyFree, body.Index)
+	return true
+}
+
+func (runtime *Runtime) CreateCollider(descriptor ColliderDesc) (ColliderRef, bool) {
+	if runtime == nil || descriptor.HalfExtent[0] == 0 ||
+		descriptor.HalfExtent[1] == 0 || descriptor.HalfExtent[2] == 0 ||
+		descriptor.Layer == 0 || descriptor.Mask == 0 ||
+		len(runtime.Colliders)-len(runtime.ColliderFree) >= int(runtime.MaxColliders) {
+		return ColliderRef{}, false
+	}
+	if _, ok := runtime.bodyIndex(descriptor.Body); !ok {
+		return ColliderRef{}, false
+	}
+	if len(runtime.ColliderFree) != 0 {
+		last := len(runtime.ColliderFree) - 1
+		index := runtime.ColliderFree[last]
+		runtime.ColliderFree = runtime.ColliderFree[:last]
+		previous := runtime.Colliders[index-1]
+		if previous.Ref.Generation == 4294967295 {
+			return ColliderRef{}, false
+		}
+		ref := ColliderRef{Index: index, Generation: previous.Ref.Generation + 1}
+		runtime.Colliders[index-1] = ColliderState{
+			Ref: ref, Descriptor: descriptor, Alive: true,
+		}
+		return ref, true
+	}
+	index := uint32(len(runtime.Colliders) + 1)
+	ref := ColliderRef{Index: index, Generation: 1}
+	runtime.Colliders = append(runtime.Colliders, ColliderState{
+		Ref: ref, Descriptor: descriptor, Alive: true,
+	})
+	return ref, true
+}
+
+func (runtime *Runtime) DestroyCollider(collider ColliderRef) bool {
+	index, ok := runtime.colliderIndex(collider)
+	if !ok {
+		return false
+	}
+	runtime.Colliders[index].Alive = false
+	runtime.ColliderFree = append(runtime.ColliderFree, collider.Index)
+	return true
+}
+
+func (runtime *Runtime) Submit(command Command) bool {
+	index, ok := runtime.bodyIndex(command.Body)
+	if !ok || len(runtime.Commands) >= int(runtime.MaxCommands) ||
+		command.Kind < CommandWorldPose || command.Kind > CommandVelocity {
+		return false
+	}
+	body := runtime.Bodies[index]
+	if command.Kind == CommandWorldPose && body.Kind != BodyStatic ||
+		command.Kind == CommandKinematicTarget && body.Kind != BodyKinematic ||
+		(command.Kind == CommandImpulse || command.Kind == CommandVelocity) &&
+			body.Kind != BodyDynamic {
+		return false
+	}
+	for _, pending := range runtime.Commands {
+		if pending.Body == command.Body {
+			return false
+		}
+	}
+	runtime.Commands = append(runtime.Commands, command)
+	return true
+}
+
+func (runtime *Runtime) Step(tick uint64, fixedNanos uint64) ([]ContactEvent, bool) {
+	if runtime == nil || tick == 0 || tick != runtime.Tick+1 ||
+		fixedNanos == 0 || fixedNanos > 1000000000 {
+		return nil, false
+	}
+	for _, command := range runtime.Commands {
+		index, ok := runtime.bodyIndex(command.Body)
+		if !ok {
+			return nil, false
+		}
+		switch command.Kind {
+		case CommandWorldPose, CommandKinematicTarget, CommandTeleport:
+			runtime.Bodies[index].Position = command.Value
+		case CommandImpulse:
+			for axis := 0; axis < 3; axis++ {
+				runtime.Bodies[index].Velocity[axis] += command.Value[axis]
+			}
+		case CommandVelocity:
+			runtime.Bodies[index].Velocity = command.Value
+		default:
+			return nil, false
+		}
+	}
+	runtime.Commands = runtime.Commands[:0]
+	for index, body := range runtime.Bodies {
+		if !body.Alive || body.Kind != BodyDynamic {
+			continue
+		}
+		for axis := 0; axis < 3; axis++ {
+			runtime.Bodies[index].Position[axis] +=
+				body.Velocity[axis] * int64(fixedNanos) / 1000000000
+		}
+	}
+	runtime.Contacts = runtime.Contacts[:0]
+	for left := 0; left < len(runtime.Colliders); left++ {
+		first := runtime.Colliders[left]
+		if !first.Alive {
+			continue
+		}
+		for right := left + 1; right < len(runtime.Colliders); right++ {
+			second := runtime.Colliders[right]
+			if !second.Alive || first.Descriptor.Body == second.Descriptor.Body ||
+				first.Descriptor.Layer&second.Descriptor.Mask == 0 ||
+				second.Descriptor.Layer&first.Descriptor.Mask == 0 {
+				continue
+			}
+			a, aok := runtime.body(first.Descriptor.Body)
+			b, bok := runtime.body(second.Descriptor.Body)
+			if !aok || !bok || !overlaps3d(a, first.Descriptor, b, second.Descriptor) {
+				continue
+			}
+			if len(runtime.Contacts) >= int(runtime.MaxContacts) {
+				return nil, false
+			}
+			runtime.Contacts = append(runtime.Contacts, ContactEvent{
+				A: a.Ref, B: b.Ref, Normal: contactNormal(a.Position, b.Position),
+				Tick: tick, Sensor: first.Descriptor.Sensor || second.Descriptor.Sensor,
+			})
+		}
+	}
+	runtime.Tick = tick
+	return append([]ContactEvent{}, runtime.Contacts...), true
+}
+
+func (runtime *Runtime) Snapshot() (QuerySnapshot, bool) {
+	if runtime == nil {
+		return QuerySnapshot{}, false
+	}
+	return QuerySnapshot{
+		Tick: runtime.Tick,
+		Bodies: append([]BodyState{}, runtime.Bodies...),
+		Colliders: append([]ColliderState{}, runtime.Colliders...),
+	}, true
+}
+
+func (snapshot QuerySnapshot) Cast(query Cast, maxHits uint32) ([]CastHit, bool) {
+	if snapshot.Tick == 0 || query.Kind < CastRay || query.Kind > CastBox ||
+		query.LayerMask == 0 || maxHits == 0 || maxHits > 65536 {
+		return nil, false
+	}
+	hits := make([]CastHit, 0)
+	for _, collider := range snapshot.Colliders {
+		if !collider.Alive || collider.Descriptor.Layer&query.LayerMask == 0 {
+			continue
+		}
+		body, ok := snapshotBody(snapshot.Bodies, collider.Descriptor.Body)
+		if !ok || !castIntersects(query, body.Position, collider.Descriptor.HalfExtent) {
+			continue
+		}
+		hits = append(hits, CastHit{
+			Collider: collider.Ref, Body: body.Ref,
+			Numerator: squaredDistance(query.Origin, body.Position),
+			Denominator: squaredDistance([3]int64{}, query.Delta),
+			Sensor: collider.Descriptor.Sensor,
+		})
+		if len(hits) >= int(maxHits) {
+			break
+		}
+	}
+	sortHits(hits)
+	return hits, true
+}
+
+func (runtime *Runtime) bodyIndex(body BodyRef) (int, bool) {
+	if runtime == nil || !body.Valid() || int(body.Index) > len(runtime.Bodies) {
+		return 0, false
+	}
+	index := int(body.Index - 1)
+	state := runtime.Bodies[index]
+	return index, state.Alive && state.Ref == body
+}
+
+func (runtime *Runtime) colliderIndex(collider ColliderRef) (int, bool) {
+	if runtime == nil || collider.Index == 0 || collider.Generation == 0 ||
+		int(collider.Index) > len(runtime.Colliders) {
+		return 0, false
+	}
+	index := int(collider.Index - 1)
+	state := runtime.Colliders[index]
+	return index, state.Alive && state.Ref == collider
+}
+
+func (runtime *Runtime) body(ref BodyRef) (BodyState, bool) {
+	index, ok := runtime.bodyIndex(ref)
+	if !ok {
+		return BodyState{}, false
+	}
+	return runtime.Bodies[index], true
+}
+
+func snapshotBody(bodies []BodyState, ref BodyRef) (BodyState, bool) {
+	if !ref.Valid() || int(ref.Index) > len(bodies) {
+		return BodyState{}, false
+	}
+	body := bodies[ref.Index-1]
+	return body, body.Alive && body.Ref == ref
+}
+
+func overlaps3d(a BodyState, ac ColliderDesc, b BodyState, bc ColliderDesc) bool {
+	for axis := 0; axis < 3; axis++ {
+		if absolute(a.Position[axis]-b.Position[axis]) >
+			int64(ac.HalfExtent[axis])+int64(bc.HalfExtent[axis]) {
+			return false
+		}
+	}
+	return true
+}
+
+func contactNormal(left [3]int64, right [3]int64) [3]int32 {
+	axis := 0
+	distance := absolute(left[0] - right[0])
+	for candidate := 1; candidate < 3; candidate++ {
+		next := absolute(left[candidate] - right[candidate])
+		if next > distance {
+			axis = candidate
+			distance = next
+		}
+	}
+	normal := [3]int32{}
+	if left[axis] <= right[axis] {
+		normal[axis] = 1
+	} else {
+		normal[axis] = -1
+	}
+	return normal
+}
+
+func castIntersects(query Cast, center [3]int64, half [3]uint32) bool {
+	end := [3]int64{
+		query.Origin[0] + query.Delta[0],
+		query.Origin[1] + query.Delta[1],
+		query.Origin[2] + query.Delta[2],
+	}
+	for axis := 0; axis < 3; axis++ {
+		minimum := query.Origin[axis]
+		maximum := end[axis]
+		if minimum > maximum {
+			minimum, maximum = maximum, minimum
+		}
+		padding := int64(half[axis])
+		if query.Kind == CastBox {
+			padding += int64(query.HalfExtent[axis])
+		}
+		if maximum < center[axis]-padding || minimum > center[axis]+padding {
+			return false
+		}
+	}
+	return true
+}
+
+func squaredDistance(left [3]int64, right [3]int64) uint64 {
+	x := left[0] - right[0]
+	y := left[1] - right[1]
+	z := left[2] - right[2]
+	return uint64(x*x + y*y + z*z)
+}
+
+func absolute(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func sortHits(hits []CastHit) {
+	for index := 1; index < len(hits); index++ {
+		value := hits[index]
+		cursor := index
+		for cursor > 0 && hits[cursor-1].Numerator > value.Numerator {
+			hits[cursor] = hits[cursor-1]
+			cursor--
+		}
+		hits[cursor] = value
+	}
+}

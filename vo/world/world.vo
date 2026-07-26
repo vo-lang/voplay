@@ -1,0 +1,410 @@
+package world
+
+type Entity struct {
+	Index uint32
+	Generation uint32
+}
+
+func (entity Entity) Valid() bool {
+	return entity.Index != 0 && entity.Generation != 0
+}
+
+func (entity Entity) Key() uint64 {
+	if !entity.Valid() {
+		return 0
+	}
+	return uint64(entity.Generation) << 32 | uint64(entity.Index)
+}
+
+func EntityFromKey(key uint64) (Entity, bool) {
+	entity := Entity{Index: uint32(key), Generation: uint32(key >> 32)}
+	return entity, entity.Valid()
+}
+
+type EntityAllocator struct {
+	Generations []uint32
+	Alive []bool
+	Free []uint32
+	Next uint32
+	Max uint32
+}
+
+func NewEntityAllocator(maxEntities uint32) (*EntityAllocator, bool) {
+	if maxEntities == 0 || maxEntities > 1000000 {
+		return nil, false
+	}
+	return &EntityAllocator{
+		Generations: make([]uint32, int(maxEntities) + 1), Alive: make([]bool, int(maxEntities) + 1),
+		Next: 1, Max: maxEntities,
+	}, true
+}
+
+func (allocator *EntityAllocator) Spawn() (Entity, bool) {
+	var index uint32
+	if len(allocator.Free) != 0 {
+		last := len(allocator.Free) - 1
+		index = allocator.Free[last]
+		allocator.Free = allocator.Free[:last]
+	} else {
+		if allocator.Next == 0 || allocator.Next > allocator.Max {
+			return Entity{}, false
+		}
+		index = allocator.Next
+		allocator.Next++
+	}
+	generation := allocator.Generations[index]
+	if generation == 0 {
+		generation = 1
+		allocator.Generations[index] = generation
+	}
+	allocator.Alive[index] = true
+	return Entity{Index: index, Generation: generation}, true
+}
+
+func (allocator *EntityAllocator) IsAlive(entity Entity) bool {
+	return entity.Valid() && entity.Index <= allocator.Max && allocator.Alive[entity.Index] &&
+		allocator.Generations[entity.Index] == entity.Generation
+}
+
+func (allocator *EntityAllocator) Destroy(entity Entity) bool {
+	if !allocator.IsAlive(entity) || entity.Generation == 4294967295 {
+		return false
+	}
+	allocator.Alive[entity.Index] = false
+	allocator.Generations[entity.Index]++
+	allocator.Free = append(allocator.Free, entity.Index)
+	return true
+}
+
+type ComponentId struct {
+	High uint64
+	Low uint64
+}
+
+type WorldRef struct {
+	EngineIndex uint32
+	EngineGeneration uint32
+	WorldIndex uint32
+	WorldGeneration uint32
+}
+
+type CommandBuffer struct {
+	World WorldRef
+	ExpectedRevision uint64
+	Bytes []byte
+}
+
+type SnapshotRef struct {
+	World WorldRef
+	Revision uint64
+	Fingerprint [32]byte
+}
+
+type ComponentRecord struct {
+	Entity Entity
+	Component uint64
+	Value []byte
+}
+
+type StableEntityRecord struct {
+	StableKey uint64
+	Entity Entity
+}
+
+type CommandKind uint32
+
+const (
+	CommandSpawn CommandKind = iota + 1
+	CommandDespawn
+	CommandSetComponent
+	CommandRemoveComponent
+)
+
+type Command struct {
+	Kind CommandKind
+	Entity Entity
+	StableKey uint64
+	Component uint64
+	Value []byte
+}
+
+type Change struct {
+	Revision uint64
+	Kind CommandKind
+	Entity Entity
+	StableKey uint64
+	Component uint64
+}
+
+type World struct {
+	Ref WorldRef
+	Allocator *EntityAllocator
+	Revision uint64
+	Components []ComponentRecord
+	StableEntities []StableEntityRecord
+	Changes []Change
+	MaxComponents uint32
+	MaxCommands uint32
+	MaxComponentBytes uint32
+}
+
+type Commands struct {
+	World *World
+	ExpectedRevision uint64
+	Values []Command
+}
+
+func NewWorld(ref WorldRef, maxEntities uint32, maxComponents uint32,
+	maxCommands uint32, maxComponentBytes uint32) (*World, bool) {
+	if ref.EngineGeneration == 0 || ref.WorldGeneration == 0 ||
+		maxComponents == 0 || maxComponents > 16777216 ||
+		maxCommands == 0 || maxCommands > 1048576 ||
+		maxComponentBytes == 0 || maxComponentBytes > 16777216 {
+		return nil, false
+	}
+	allocator, ok := NewEntityAllocator(maxEntities)
+	if !ok {
+		return nil, false
+	}
+	return &World{
+		Ref: ref, Allocator: allocator, MaxComponents: maxComponents,
+		MaxCommands: maxCommands, MaxComponentBytes: maxComponentBytes,
+	}, true
+}
+
+func (world *World) Begin() (*Commands, bool) {
+	if world == nil || world.Allocator == nil {
+		return nil, false
+	}
+	return &Commands{World: world, ExpectedRevision: world.Revision}, true
+}
+
+func (commands *Commands) Spawn(stableKey uint64, components []ComponentRecord) bool {
+	if !commands.canAppend() || stableKey == 0 {
+		return false
+	}
+	for _, record := range commands.World.StableEntities {
+		if record.StableKey == stableKey {
+			return false
+		}
+	}
+	for _, command := range commands.Values {
+		if command.Kind == CommandSpawn && command.StableKey == stableKey {
+			return false
+		}
+	}
+	commands.Values = append(commands.Values, Command{Kind: CommandSpawn, StableKey: stableKey})
+	for _, component := range components {
+		if component.Component == 0 || len(component.Value) > int(commands.World.MaxComponentBytes) ||
+			!commands.canAppend() {
+			return false
+		}
+		value := append([]byte{}, component.Value...)
+		commands.Values = append(commands.Values, Command{
+			Kind: CommandSetComponent, StableKey: stableKey,
+			Component: component.Component, Value: value,
+		})
+	}
+	return true
+}
+
+func (commands *Commands) Despawn(entity Entity) bool {
+	if !commands.canAppend() || !commands.World.Allocator.IsAlive(entity) ||
+		commands.targets(entity, 0) {
+		return false
+	}
+	commands.Values = append(commands.Values, Command{Kind: CommandDespawn, Entity: entity})
+	return true
+}
+
+func (commands *Commands) Set(entity Entity, component uint64, value []byte) bool {
+	if !commands.canAppend() || !commands.World.Allocator.IsAlive(entity) ||
+		component == 0 || len(value) > int(commands.World.MaxComponentBytes) ||
+		commands.targets(entity, component) {
+		return false
+	}
+	commands.Values = append(commands.Values, Command{
+		Kind: CommandSetComponent, Entity: entity, Component: component,
+		Value: append([]byte{}, value...),
+	})
+	return true
+}
+
+func (commands *Commands) Remove(entity Entity, component uint64) bool {
+	if !commands.canAppend() || !commands.World.Allocator.IsAlive(entity) ||
+		component == 0 || commands.targets(entity, component) {
+		return false
+	}
+	if _, ok := commands.World.Get(entity, component); !ok {
+		return false
+	}
+	commands.Values = append(commands.Values, Command{
+		Kind: CommandRemoveComponent, Entity: entity, Component: component,
+	})
+	return true
+}
+
+func (commands *Commands) Commit() (uint64, bool) {
+	if commands == nil || commands.World == nil ||
+		commands.ExpectedRevision != commands.World.Revision ||
+		len(commands.Values) == 0 || commands.World.Revision == 18446744073709551615 {
+		return 0, false
+	}
+	world := commands.World
+	revision := world.Revision + 1
+	spawned := make([]StableEntityRecord, 0)
+	for _, command := range commands.Values {
+		if command.Kind != CommandSpawn {
+			continue
+		}
+		entity, ok := world.Allocator.Spawn()
+		if !ok {
+			return 0, false
+		}
+		spawned = append(spawned, StableEntityRecord{StableKey: command.StableKey, Entity: entity})
+		world.StableEntities = append(world.StableEntities, spawned[len(spawned)-1])
+		world.Changes = append(world.Changes, Change{
+			Revision: revision, Kind: CommandSpawn, Entity: entity, StableKey: command.StableKey,
+		})
+	}
+	for _, command := range commands.Values {
+		entity := command.Entity
+		if !entity.Valid() && command.StableKey != 0 {
+			for _, record := range spawned {
+				if record.StableKey == command.StableKey {
+					entity = record.Entity
+					break
+				}
+			}
+		}
+		switch command.Kind {
+		case CommandSpawn:
+		case CommandDespawn:
+			world.removeAll(entity)
+			stableKey := world.removeStable(entity)
+			if !world.Allocator.Destroy(entity) {
+				return 0, false
+			}
+			world.Changes = append(world.Changes, Change{
+				Revision: revision, Kind: CommandDespawn, Entity: entity, StableKey: stableKey,
+			})
+		case CommandSetComponent:
+			if !world.set(entity, command.Component, command.Value) {
+				return 0, false
+			}
+			world.Changes = append(world.Changes, Change{
+				Revision: revision, Kind: CommandSetComponent,
+				Entity: entity, Component: command.Component,
+			})
+		case CommandRemoveComponent:
+			if !world.remove(entity, command.Component) {
+				return 0, false
+			}
+			world.Changes = append(world.Changes, Change{
+				Revision: revision, Kind: CommandRemoveComponent,
+				Entity: entity, Component: command.Component,
+			})
+		default:
+			return 0, false
+		}
+	}
+	world.Revision = revision
+	commands.Values = nil
+	commands.ExpectedRevision = revision
+	return revision, true
+}
+
+func (world *World) Get(entity Entity, component uint64) ([]byte, bool) {
+	if world == nil || !world.Allocator.IsAlive(entity) || component == 0 {
+		return nil, false
+	}
+	for _, record := range world.Components {
+		if record.Entity == entity && record.Component == component {
+			return record.Value, true
+		}
+	}
+	return nil, false
+}
+
+func (world *World) Entity(stableKey uint64) (Entity, bool) {
+	for _, record := range world.StableEntities {
+		if record.StableKey == stableKey && world.Allocator.IsAlive(record.Entity) {
+			return record.Entity, true
+		}
+	}
+	return Entity{}, false
+}
+
+func (world *World) TakeChanges() ([]Change, uint64) {
+	changes := world.Changes
+	world.Changes = nil
+	return changes, world.Revision
+}
+
+func (commands *Commands) canAppend() bool {
+	return commands != nil && commands.World != nil &&
+		commands.ExpectedRevision == commands.World.Revision &&
+		len(commands.Values) < int(commands.World.MaxCommands)
+}
+
+func (commands *Commands) targets(entity Entity, component uint64) bool {
+	for _, command := range commands.Values {
+		if command.Entity == entity &&
+			(command.Kind == CommandDespawn || command.Component == component) {
+			return true
+		}
+	}
+	return false
+}
+
+func (world *World) set(entity Entity, component uint64, value []byte) bool {
+	if !world.Allocator.IsAlive(entity) {
+		return false
+	}
+	for index, record := range world.Components {
+		if record.Entity == entity && record.Component == component {
+			world.Components[index].Value = append([]byte{}, value...)
+			return true
+		}
+	}
+	if len(world.Components) >= int(world.MaxComponents) {
+		return false
+	}
+	world.Components = append(world.Components, ComponentRecord{
+		Entity: entity, Component: component, Value: append([]byte{}, value...),
+	})
+	return true
+}
+
+func (world *World) remove(entity Entity, component uint64) bool {
+	for index, record := range world.Components {
+		if record.Entity == entity && record.Component == component {
+			copy(world.Components[index:], world.Components[index+1:])
+			world.Components = world.Components[:len(world.Components)-1]
+			return true
+		}
+	}
+	return false
+}
+
+func (world *World) removeAll(entity Entity) {
+	write := 0
+	for _, record := range world.Components {
+		if record.Entity != entity {
+			world.Components[write] = record
+			write++
+		}
+	}
+	world.Components = world.Components[:write]
+}
+
+func (world *World) removeStable(entity Entity) uint64 {
+	for index, record := range world.StableEntities {
+		if record.Entity == entity {
+			copy(world.StableEntities[index:], world.StableEntities[index+1:])
+			world.StableEntities = world.StableEntities[:len(world.StableEntities)-1]
+			return record.StableKey
+		}
+	}
+	return 0
+}

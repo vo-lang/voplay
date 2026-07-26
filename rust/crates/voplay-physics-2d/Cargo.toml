@@ -1,0 +1,11 @@
+[package]
+name = "voplay-physics-2d"
+version = "0.1.0"
+edition = "2021"
+description = "Voplay deterministic 2D physics artifact"
+
+[dependencies]
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "physics2d"] }
+
+[dev-dependencies]
+voplay-protocol = { path = "../voplay-protocol" }

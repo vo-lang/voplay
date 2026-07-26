@@ -1,0 +1,291 @@
+package world
+
+type SparseIndex struct {
+	Sparse []uint32
+	Dense []Entity
+	Revision uint64
+	MaxEntities uint32
+}
+
+func NewSparseIndex(maxEntities uint32) (*SparseIndex, bool) {
+	if maxEntities == 0 || maxEntities > 1000000 {
+		return nil, false
+	}
+	return &SparseIndex{
+		Sparse: make([]uint32, int(maxEntities) + 1),
+		MaxEntities: maxEntities,
+	}, true
+}
+
+func (index *SparseIndex) Contains(entity Entity) bool {
+	if index == nil || !entity.Valid() || entity.Index > index.MaxEntities {
+		return false
+	}
+	slot := index.Sparse[entity.Index]
+	if slot == 0 || int(slot) > len(index.Dense) {
+		return false
+	}
+	return index.Dense[slot-1] == entity
+}
+
+func (index *SparseIndex) Insert(entity Entity) (uint32, bool) {
+	if index == nil || !entity.Valid() || entity.Index > index.MaxEntities ||
+		index.Contains(entity) || index.Revision == 18446744073709551615 {
+		return 0, false
+	}
+	index.Dense = append(index.Dense, entity)
+	slot := uint32(len(index.Dense))
+	index.Sparse[entity.Index] = slot
+	index.Revision++
+	return slot - 1, true
+}
+
+func (index *SparseIndex) Remove(entity Entity) (Entity, uint32, bool) {
+	if !index.Contains(entity) || index.Revision == 18446744073709551615 {
+		return Entity{}, 0, false
+	}
+	slot := index.Sparse[entity.Index] - 1
+	last := uint32(len(index.Dense) - 1)
+	moved := Entity{}
+	if slot != last {
+		moved = index.Dense[last]
+		index.Dense[slot] = moved
+		index.Sparse[moved.Index] = slot + 1
+	}
+	index.Dense = index.Dense[:last]
+	index.Sparse[entity.Index] = 0
+	index.Revision++
+	return moved, slot, true
+}
+
+func (index *SparseIndex) DenseSlot(entity Entity) (uint32, bool) {
+	if !index.Contains(entity) {
+		return 0, false
+	}
+	return index.Sparse[entity.Index] - 1, true
+}
+
+type ComponentRevision struct {
+	Component uint64
+	Revision uint64
+}
+
+type QueryPlan struct {
+	Required []uint64
+	Excluded []uint64
+	ChangedSince uint64
+	Stable bool
+}
+
+func CompileQuery(required []uint64, excluded []uint64, changedSince uint64,
+	stable bool) (QueryPlan, bool) {
+	if len(required) == 0 || len(required) > 256 || len(excluded) > 256 {
+		return QueryPlan{}, false
+	}
+	plan := QueryPlan{ChangedSince: changedSince, Stable: stable}
+	for _, component := range required {
+		if component == 0 || containsComponent(plan.Required, component) ||
+			containsComponent(excluded, component) {
+			return QueryPlan{}, false
+		}
+		plan.Required = append(plan.Required, component)
+	}
+	for _, component := range excluded {
+		if component == 0 || containsComponent(plan.Excluded, component) {
+			return QueryPlan{}, false
+		}
+		plan.Excluded = append(plan.Excluded, component)
+	}
+	sortComponents(plan.Required)
+	sortComponents(plan.Excluded)
+	return plan, true
+}
+
+func (world *World) Query(plan QueryPlan) ([]Entity, bool) {
+	if world == nil || world.Allocator == nil || len(plan.Required) == 0 {
+		return nil, false
+	}
+	entities := make([]Entity, 0)
+	for _, stable := range world.StableEntities {
+		entity := stable.Entity
+		if !world.Allocator.IsAlive(entity) || !world.matches(entity, plan) {
+			continue
+		}
+		entities = append(entities, entity)
+	}
+	if plan.Stable {
+		sortEntities(entities)
+	}
+	return entities, true
+}
+
+func (world *World) matches(entity Entity, plan QueryPlan) bool {
+	for _, component := range plan.Required {
+		if _, ok := world.Get(entity, component); !ok {
+			return false
+		}
+	}
+	for _, component := range plan.Excluded {
+		if _, ok := world.Get(entity, component); ok {
+			return false
+		}
+	}
+	if plan.ChangedSince != 0 {
+		changed := false
+		for _, change := range world.Changes {
+			if change.Revision > plan.ChangedSince && change.Entity == entity &&
+				containsComponent(plan.Required, change.Component) {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return false
+		}
+	}
+	return true
+}
+
+func containsComponent(values []uint64, expected uint64) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortComponents(values []uint64) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1] > value {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortEntities(values []Entity) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Key() > value.Key() {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+type ResourceRecord struct {
+	Id uint64
+	Revision uint64
+	Value []byte
+}
+
+type ResourceStore struct {
+	Values []ResourceRecord
+	Revision uint64
+	MaxResources uint32
+	MaxBytes uint32
+}
+
+func NewResourceStore(maxResources uint32, maxBytes uint32) (*ResourceStore, bool) {
+	if maxResources == 0 || maxResources > 65536 ||
+		maxBytes == 0 || maxBytes > 16777216 {
+		return nil, false
+	}
+	return &ResourceStore{MaxResources: maxResources, MaxBytes: maxBytes}, true
+}
+
+func (store *ResourceStore) Set(id uint64, value []byte) (uint64, bool) {
+	if store == nil || id == 0 || len(value) > int(store.MaxBytes) ||
+		store.Revision == 18446744073709551615 {
+		return 0, false
+	}
+	for index, record := range store.Values {
+		if record.Id == id {
+			store.Revision++
+			store.Values[index].Revision = store.Revision
+			store.Values[index].Value = append([]byte{}, value...)
+			return store.Revision, true
+		}
+	}
+	if len(store.Values) >= int(store.MaxResources) {
+		return 0, false
+	}
+	store.Revision++
+	store.Values = append(store.Values, ResourceRecord{
+		Id: id, Revision: store.Revision, Value: append([]byte{}, value...),
+	})
+	return store.Revision, true
+}
+
+func (store *ResourceStore) Get(id uint64) ([]byte, uint64, bool) {
+	if store == nil || id == 0 {
+		return nil, 0, false
+	}
+	for _, record := range store.Values {
+		if record.Id == id {
+			return append([]byte{}, record.Value...), record.Revision, true
+		}
+	}
+	return nil, 0, false
+}
+
+type EventRecord struct {
+	Kind uint64
+	Sequence uint64
+	Payload []byte
+}
+
+type EventBuffer struct {
+	Current []EventRecord
+	Next []EventRecord
+	Sequence uint64
+	MaxEvents uint32
+	MaxPayloadBytes uint32
+}
+
+func NewEventBuffer(maxEvents uint32, maxPayloadBytes uint32) (*EventBuffer, bool) {
+	if maxEvents == 0 || maxEvents > 1048576 ||
+		maxPayloadBytes == 0 || maxPayloadBytes > 1048576 {
+		return nil, false
+	}
+	return &EventBuffer{MaxEvents: maxEvents, MaxPayloadBytes: maxPayloadBytes}, true
+}
+
+func (buffer *EventBuffer) Send(kind uint64, payload []byte) (uint64, bool) {
+	if buffer == nil || kind == 0 || len(payload) > int(buffer.MaxPayloadBytes) ||
+		len(buffer.Next) >= int(buffer.MaxEvents) ||
+		buffer.Sequence == 18446744073709551615 {
+		return 0, false
+	}
+	buffer.Sequence++
+	buffer.Next = append(buffer.Next, EventRecord{
+		Kind: kind, Sequence: buffer.Sequence, Payload: append([]byte{}, payload...),
+	})
+	return buffer.Sequence, true
+}
+
+func (buffer *EventBuffer) AdvanceStage() []EventRecord {
+	if buffer == nil {
+		return nil
+	}
+	delivered := buffer.Current
+	buffer.Current = buffer.Next
+	buffer.Next = delivered[:0]
+	return append([]EventRecord{}, buffer.Current...)
+}
+
+func (buffer *EventBuffer) Events(kind uint64) []EventRecord {
+	events := make([]EventRecord, 0)
+	for _, event := range buffer.Current {
+		if event.Kind == kind {
+			events = append(events, event)
+		}
+	}
+	return events
+}

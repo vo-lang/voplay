@@ -1,0 +1,506 @@
+package assets
+
+type AssetRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type AssetTicket struct {
+	Index uint32
+	Generation uint32
+}
+
+type AssetDescriptor struct {
+	TypeId uint64
+	CanonicalUri string
+	ExpectedHash [32]byte
+	Options []byte
+}
+
+type AssetState struct {
+	Asset AssetRef
+	SourceRevision uint64
+	ArtifactHash [32]byte
+	Ready bool
+}
+
+func (asset AssetRef) Valid() bool {
+	return asset.Index != 0 && asset.Generation != 0
+}
+
+func (ticket AssetTicket) Valid() bool {
+	return ticket.Index != 0 && ticket.Generation != 0
+}
+
+type ScopeKind uint32
+
+const (
+	ScopeEngine ScopeKind = iota + 1
+	ScopeScene
+	ScopeMode
+	ScopeTemporary
+)
+
+type AssetScope struct {
+	Index uint32
+	Generation uint32
+}
+
+type TicketState uint32
+
+const (
+	TicketPending TicketState = iota + 1
+	TicketDispatched
+	TicketReady
+	TicketFailed
+	TicketCancelled
+	TicketExpired
+)
+
+type AssetNode struct {
+	Ref AssetRef
+	Descriptor AssetDescriptor
+	SourceRevision uint64
+	ArtifactHash [32]byte
+	Dependencies []AssetRef
+	Ready bool
+	Failed bool
+	LeaseCount uint32
+}
+
+type ScopeRecord struct {
+	Ref AssetScope
+	Kind ScopeKind
+	Open bool
+	Assets []AssetRef
+}
+
+type TicketRecord struct {
+	Ref AssetTicket
+	Scope AssetScope
+	Asset AssetRef
+	Deadline uint64
+	Priority int32
+	State TicketState
+	Error []byte
+}
+
+type AssetGraph struct {
+	Nodes []AssetNode
+	Scopes []ScopeRecord
+	Tickets []TicketRecord
+	AssetFree []uint32
+	ScopeFree []uint32
+	TicketFree []uint32
+	MaxAssets uint32
+	MaxScopes uint32
+	MaxTickets uint32
+	MaxDependencies uint32
+	MaxDescriptorBytes uint32
+	Revision uint64
+}
+
+func NewAssetGraph(maxAssets uint32, maxScopes uint32, maxTickets uint32,
+	maxDependencies uint32, maxDescriptorBytes uint32) (*AssetGraph, bool) {
+	if maxAssets == 0 || maxAssets > 1000000 ||
+		maxScopes == 0 || maxScopes > 65536 ||
+		maxTickets == 0 || maxTickets > 1000000 ||
+		maxDependencies == 0 || maxDependencies > 4096 ||
+		maxDescriptorBytes == 0 || maxDescriptorBytes > 1048576 {
+		return nil, false
+	}
+	return &AssetGraph{
+		MaxAssets: maxAssets, MaxScopes: maxScopes,
+		MaxTickets: maxTickets, MaxDependencies: maxDependencies,
+		MaxDescriptorBytes: maxDescriptorBytes,
+	}, true
+}
+
+func (graph *AssetGraph) OpenScope(kind ScopeKind) (AssetScope, bool) {
+	if graph == nil || kind < ScopeEngine || kind > ScopeTemporary ||
+		len(graph.Scopes)-len(graph.ScopeFree) >= int(graph.MaxScopes) {
+		return AssetScope{}, false
+	}
+	if len(graph.ScopeFree) != 0 {
+		last := len(graph.ScopeFree) - 1
+		index := graph.ScopeFree[last]
+		graph.ScopeFree = graph.ScopeFree[:last]
+		previous := graph.Scopes[index-1].Ref
+		if previous.Generation == 4294967295 {
+			return AssetScope{}, false
+		}
+		ref := AssetScope{Index: index, Generation: previous.Generation + 1}
+		graph.Scopes[index-1] = ScopeRecord{Ref: ref, Kind: kind, Open: true}
+		graph.Revision++
+		return ref, true
+	}
+	ref := AssetScope{Index: uint32(len(graph.Scopes) + 1), Generation: 1}
+	graph.Scopes = append(graph.Scopes, ScopeRecord{Ref: ref, Kind: kind, Open: true})
+	graph.Revision++
+	return ref, true
+}
+
+func (graph *AssetGraph) Register(descriptor AssetDescriptor,
+	sourceRevision uint64, artifactHash [32]byte,
+	dependencies []AssetRef) (AssetRef, bool) {
+	if graph == nil || descriptor.TypeId == 0 || descriptor.CanonicalUri == "" ||
+		len(descriptor.CanonicalUri)+len(descriptor.Options) >
+			int(graph.MaxDescriptorBytes) ||
+		sourceRevision == 0 || artifactHash == [32]byte{} ||
+		len(dependencies) > int(graph.MaxDependencies) ||
+		hasDuplicateAssets(dependencies) ||
+		len(graph.Nodes)-len(graph.AssetFree) >= int(graph.MaxAssets) {
+		return AssetRef{}, false
+	}
+	for _, node := range graph.Nodes {
+		if node.Ref.Valid() && node.Descriptor.CanonicalUri == descriptor.CanonicalUri {
+			return AssetRef{}, false
+		}
+	}
+	for _, dependency := range dependencies {
+		if _, ok := graph.nodeIndex(dependency); !ok {
+			return AssetRef{}, false
+		}
+	}
+	copyDescriptor := descriptor
+	copyDescriptor.Options = append([]byte{}, descriptor.Options...)
+	copyDependencies := append([]AssetRef{}, dependencies...)
+	sortAssetRefs(copyDependencies)
+	var ref AssetRef
+	if len(graph.AssetFree) != 0 {
+		last := len(graph.AssetFree) - 1
+		index := graph.AssetFree[last]
+		graph.AssetFree = graph.AssetFree[:last]
+		previous := graph.Nodes[index-1].Ref
+		if previous.Generation == 4294967295 {
+			return AssetRef{}, false
+		}
+		ref = AssetRef{Index: index, Generation: previous.Generation + 1}
+		graph.Nodes[index-1] = AssetNode{
+			Ref: ref, Descriptor: copyDescriptor, SourceRevision: sourceRevision,
+			ArtifactHash: artifactHash, Dependencies: copyDependencies,
+		}
+	} else {
+		ref = AssetRef{Index: uint32(len(graph.Nodes) + 1), Generation: 1}
+		graph.Nodes = append(graph.Nodes, AssetNode{
+			Ref: ref, Descriptor: copyDescriptor, SourceRevision: sourceRevision,
+			ArtifactHash: artifactHash, Dependencies: copyDependencies,
+		})
+	}
+	if graph.assetCycle(ref, ref, nil) {
+		graph.removeNode(ref)
+		return AssetRef{}, false
+	}
+	graph.Revision++
+	return ref, true
+}
+
+func (graph *AssetGraph) Request(scope AssetScope, asset AssetRef,
+	deadline uint64, priority int32) (AssetTicket, bool) {
+	scopeIndex, ok := graph.scopeIndex(scope)
+	if !ok || deadline == 0 ||
+		len(graph.Tickets)-len(graph.TicketFree) >= int(graph.MaxTickets) {
+		return AssetTicket{}, false
+	}
+	if _, ok := graph.nodeIndex(asset); !ok {
+		return AssetTicket{}, false
+	}
+	if !containsAsset(graph.Scopes[scopeIndex].Assets, asset) {
+		graph.Scopes[scopeIndex].Assets = append(graph.Scopes[scopeIndex].Assets, asset)
+		nodeIndex, _ := graph.nodeIndex(asset)
+		graph.Nodes[nodeIndex].LeaseCount++
+	}
+	var ref AssetTicket
+	if len(graph.TicketFree) != 0 {
+		last := len(graph.TicketFree) - 1
+		index := graph.TicketFree[last]
+		graph.TicketFree = graph.TicketFree[:last]
+		previous := graph.Tickets[index-1].Ref
+		if previous.Generation == 4294967295 {
+			return AssetTicket{}, false
+		}
+		ref = AssetTicket{Index: index, Generation: previous.Generation + 1}
+		graph.Tickets[index-1] = TicketRecord{
+			Ref: ref, Scope: scope, Asset: asset, Deadline: deadline,
+			Priority: priority, State: TicketPending,
+		}
+	} else {
+		ref = AssetTicket{Index: uint32(len(graph.Tickets) + 1), Generation: 1}
+		graph.Tickets = append(graph.Tickets, TicketRecord{
+			Ref: ref, Scope: scope, Asset: asset, Deadline: deadline,
+			Priority: priority, State: TicketPending,
+		})
+	}
+	graph.Revision++
+	return ref, true
+}
+
+func (graph *AssetGraph) TakeWork(maxTickets uint32) []TicketRecord {
+	if graph == nil || maxTickets == 0 {
+		return nil
+	}
+	pending := make([]TicketRecord, 0)
+	for _, ticket := range graph.Tickets {
+		if ticket.Ref.Valid() && ticket.State == TicketPending {
+			pending = append(pending, ticket)
+		}
+	}
+	sortTickets(pending)
+	if len(pending) > int(maxTickets) {
+		pending = pending[:int(maxTickets)]
+	}
+	for _, ticket := range pending {
+		index, ok := graph.ticketIndex(ticket.Ref)
+		if ok {
+			graph.Tickets[index].State = TicketDispatched
+		}
+	}
+	return pending
+}
+
+func (graph *AssetGraph) Complete(ticket AssetTicket,
+	sourceRevision uint64, artifactHash [32]byte) bool {
+	ticketIndex, ok := graph.ticketIndex(ticket)
+	if !ok || graph.Tickets[ticketIndex].State != TicketDispatched {
+		return false
+	}
+	nodeIndex, ok := graph.nodeIndex(graph.Tickets[ticketIndex].Asset)
+	if !ok || graph.Nodes[nodeIndex].SourceRevision != sourceRevision ||
+		graph.Nodes[nodeIndex].ArtifactHash != artifactHash {
+		return false
+	}
+	graph.Nodes[nodeIndex].Ready = true
+	graph.Nodes[nodeIndex].Failed = false
+	for index, candidate := range graph.Tickets {
+		if candidate.Asset == graph.Nodes[nodeIndex].Ref &&
+			(candidate.State == TicketPending || candidate.State == TicketDispatched) {
+			graph.Tickets[index].State = TicketReady
+		}
+	}
+	graph.Revision++
+	return true
+}
+
+func (graph *AssetGraph) Fail(ticket AssetTicket, reason []byte) bool {
+	index, ok := graph.ticketIndex(ticket)
+	if !ok || (graph.Tickets[index].State != TicketPending &&
+		graph.Tickets[index].State != TicketDispatched) ||
+		len(reason) == 0 || len(reason) > 4096 {
+		return false
+	}
+	graph.Tickets[index].State = TicketFailed
+	graph.Tickets[index].Error = append([]byte{}, reason...)
+	nodeIndex, found := graph.nodeIndex(graph.Tickets[index].Asset)
+	if found {
+		graph.Nodes[nodeIndex].Failed = true
+	}
+	graph.Revision++
+	return true
+}
+
+func (graph *AssetGraph) Cancel(ticket AssetTicket) bool {
+	index, ok := graph.ticketIndex(ticket)
+	if !ok || (graph.Tickets[index].State != TicketPending &&
+		graph.Tickets[index].State != TicketDispatched) {
+		return false
+	}
+	graph.Tickets[index].State = TicketCancelled
+	graph.Revision++
+	return true
+}
+
+func (graph *AssetGraph) Expire(now uint64) uint32 {
+	var expired uint32
+	for index, ticket := range graph.Tickets {
+		if (ticket.State == TicketPending || ticket.State == TicketDispatched) &&
+			ticket.Deadline <= now {
+			graph.Tickets[index].State = TicketExpired
+			expired++
+		}
+	}
+	if expired != 0 {
+		graph.Revision++
+	}
+	return expired
+}
+
+func (graph *AssetGraph) HotReload(asset AssetRef, sourceRevision uint64,
+	artifactHash [32]byte, dependencies []AssetRef) bool {
+	index, ok := graph.nodeIndex(asset)
+	if !ok || sourceRevision <= graph.Nodes[index].SourceRevision ||
+		artifactHash == [32]byte{} ||
+		len(dependencies) > int(graph.MaxDependencies) ||
+		hasDuplicateAssets(dependencies) {
+		return false
+	}
+	for _, dependency := range dependencies {
+		if _, ok := graph.nodeIndex(dependency); !ok {
+			return false
+		}
+	}
+	previous := graph.Nodes[index]
+	graph.Nodes[index].SourceRevision = sourceRevision
+	graph.Nodes[index].ArtifactHash = artifactHash
+	graph.Nodes[index].Dependencies = append([]AssetRef{}, dependencies...)
+	graph.Nodes[index].Ready = false
+	graph.Nodes[index].Failed = false
+	if graph.assetCycle(asset, asset, nil) {
+		graph.Nodes[index] = previous
+		return false
+	}
+	for ticketIndex, ticket := range graph.Tickets {
+		if ticket.Asset == asset && ticket.State == TicketReady {
+			graph.Tickets[ticketIndex].State = TicketPending
+		}
+	}
+	graph.Revision++
+	return true
+}
+
+func (graph *AssetGraph) CloseScope(scope AssetScope) bool {
+	index, ok := graph.scopeIndex(scope)
+	if !ok {
+		return false
+	}
+	for ticketIndex, ticket := range graph.Tickets {
+		if ticket.Scope == scope &&
+			(ticket.State == TicketPending || ticket.State == TicketDispatched) {
+			graph.Tickets[ticketIndex].State = TicketCancelled
+		}
+	}
+	for _, asset := range graph.Scopes[index].Assets {
+		nodeIndex, found := graph.nodeIndex(asset)
+		if found && graph.Nodes[nodeIndex].LeaseCount != 0 {
+			graph.Nodes[nodeIndex].LeaseCount--
+		}
+	}
+	graph.Scopes[index].Open = false
+	graph.ScopeFree = append(graph.ScopeFree, scope.Index)
+	graph.Revision++
+	return true
+}
+
+func (graph *AssetGraph) State(asset AssetRef) (AssetState, bool) {
+	index, ok := graph.nodeIndex(asset)
+	if !ok {
+		return AssetState{}, false
+	}
+	node := graph.Nodes[index]
+	return AssetState{
+		Asset: asset, SourceRevision: node.SourceRevision,
+		ArtifactHash: node.ArtifactHash, Ready: node.Ready,
+	}, true
+}
+
+func (graph *AssetGraph) nodeIndex(asset AssetRef) (int, bool) {
+	if graph == nil || !asset.Valid() || int(asset.Index) > len(graph.Nodes) {
+		return 0, false
+	}
+	index := int(asset.Index - 1)
+	return index, graph.Nodes[index].Ref == asset
+}
+
+func (graph *AssetGraph) scopeIndex(scope AssetScope) (int, bool) {
+	if graph == nil || scope.Index == 0 || scope.Generation == 0 ||
+		int(scope.Index) > len(graph.Scopes) {
+		return 0, false
+	}
+	index := int(scope.Index - 1)
+	return index, graph.Scopes[index].Ref == scope && graph.Scopes[index].Open
+}
+
+func (graph *AssetGraph) ticketIndex(ticket AssetTicket) (int, bool) {
+	if graph == nil || !ticket.Valid() || int(ticket.Index) > len(graph.Tickets) {
+		return 0, false
+	}
+	index := int(ticket.Index - 1)
+	return index, graph.Tickets[index].Ref == ticket
+}
+
+func (graph *AssetGraph) assetCycle(origin AssetRef, current AssetRef,
+	visited []AssetRef) bool {
+	index, ok := graph.nodeIndex(current)
+	if !ok {
+		return false
+	}
+	for _, dependency := range graph.Nodes[index].Dependencies {
+		if dependency == origin {
+			return true
+		}
+		if !containsAsset(visited, dependency) &&
+			graph.assetCycle(origin, dependency, append(visited, dependency)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (graph *AssetGraph) removeNode(asset AssetRef) {
+	index, ok := graph.nodeIndex(asset)
+	if ok {
+		graph.Nodes[index] = AssetNode{Ref: asset}
+		graph.AssetFree = append(graph.AssetFree, asset.Index)
+	}
+}
+
+func hasDuplicateAssets(values []AssetRef) bool {
+	for index, value := range values {
+		if !value.Valid() {
+			return true
+		}
+		for previous := 0; previous < index; previous++ {
+			if values[previous] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsAsset(values []AssetRef, expected AssetRef) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortAssetRefs(values []AssetRef) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && assetKey(values[cursor-1]) > assetKey(value) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortTickets(values []TicketRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && ticketLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func ticketLess(left TicketRecord, right TicketRecord) bool {
+	return left.Priority > right.Priority ||
+		left.Priority == right.Priority && left.Deadline < right.Deadline ||
+		left.Priority == right.Priority && left.Deadline == right.Deadline &&
+			assetTicketKey(left.Ref) < assetTicketKey(right.Ref)
+}
+
+func assetKey(asset AssetRef) uint64 {
+	return uint64(asset.Generation) << 32 | uint64(asset.Index)
+}
+
+func assetTicketKey(ticket AssetTicket) uint64 {
+	return uint64(ticket.Generation) << 32 | uint64(ticket.Index)
+}

@@ -1,0 +1,791 @@
+package editor
+
+import "github.com/vo-lang/voplay/vo/core"
+import "github.com/vo-lang/voplay/vo/world"
+
+type InspectionRequest struct {
+	ExpectedRevision uint64
+	Cursor uint64
+	MaxEntries uint32
+	MaxBytes uint32
+}
+
+type EditTransaction struct {
+	ExpectedWorldRevision uint64
+	Operations []byte
+}
+
+type InspectedComponent struct {
+	Component uint64
+	Value []byte
+}
+
+type InspectedEntity struct {
+	Entity world.Entity
+	StableKey uint64
+	Components []InspectedComponent
+}
+
+type InspectionPage struct {
+	World world.WorldRef
+	Revision uint64
+	Entities []InspectedEntity
+	NextCursor uint64
+	HasMore bool
+}
+
+type FieldEdit struct {
+	Entity world.Entity
+	Component uint64
+	Value []byte
+}
+
+type WorldEditTransaction struct {
+	Id uint64
+	ExpectedWorldRevision uint64
+	Edits []FieldEdit
+}
+
+type EditResult struct {
+	TransactionId uint64
+	WorldRevision uint64
+	ChangedComponents uint32
+}
+
+type HistoryEntry struct {
+	TransactionId uint64
+	Forward []FieldEdit
+	Reverse []FieldEdit
+	Bytes uint64
+}
+
+type PickRequest struct {
+	Id uint64
+	ExpectedWorldRevision uint64
+	ExpectedRenderSignature uint64
+	Position [2]uint32
+}
+
+type PickCandidate struct {
+	Entity world.Entity
+	Depth uint64
+	Primitive uint32
+}
+
+type PickResult struct {
+	RequestId uint64
+	Selected world.Entity
+	SelectionRevision uint64
+}
+
+type PlayModeResources struct {
+	World world.WorldRef
+	InputScope core.Handle
+	RenderTarget core.Handle
+	AssetScope core.Handle
+}
+
+type PlayModeWorldConfig struct {
+	MaxEntities uint64
+	MaxComponentsPerEntity uint64
+	MaxComponentBytes uint64
+	MaxSnapshotBytes uint64
+}
+
+type PlayModeAuthoringField struct {
+	Component uint32
+	Offset uint64
+	Width uint64
+}
+
+type StartPlayModeRequest struct {
+	RequestId uint64
+	AuthoringWorld world.WorldRef
+	Resources PlayModeResources
+	WorldConfig PlayModeWorldConfig
+	WritebackFields []PlayModeAuthoringField
+}
+
+type ExitPlayModeRequest struct {
+	RequestId uint64
+	Session core.Handle
+	ApplyAuthoring bool
+	ExpectedAuthoringRevision uint64
+}
+
+type PlayModeResponseKind uint32
+
+const (
+	PlayModeStarted PlayModeResponseKind = iota + 1
+	PlayModeExited
+	PlayModeRevisionConflict
+	PlayModeRejected
+)
+
+type PlayModeResponse struct {
+	RequestId uint64
+	Kind PlayModeResponseKind
+	Session core.Handle
+	AuthoringWorld world.WorldRef
+	AuthoringRevision uint64
+	Resources PlayModeResources
+	ClonedEntities uint64
+	ClonedBytes uint64
+	ChangedComponents uint64
+	HasAuthoringRevision bool
+	ActualRevision uint64
+}
+
+func EncodeStartPlayModeRequest(request StartPlayModeRequest) []byte {
+	if request.RequestId == 0 || !validWorldRef(request.AuthoringWorld) ||
+		!validPlayModeResources(request.Resources) ||
+		request.AuthoringWorld.EngineIndex == request.Resources.World.EngineIndex &&
+			request.AuthoringWorld.EngineGeneration == request.Resources.World.EngineGeneration ||
+		request.WorldConfig.MaxEntities == 0 ||
+		request.WorldConfig.MaxComponentsPerEntity == 0 ||
+		request.WorldConfig.MaxComponentBytes == 0 ||
+		request.WorldConfig.MaxSnapshotBytes == 0 ||
+		len(request.WritebackFields) > 4096 {
+		return nil
+	}
+	bytes := []byte{'V', 'E', 'P', '1'}
+	bytes = appendEditorU64(bytes, request.RequestId)
+	bytes = append(bytes, 1)
+	bytes = appendEditorHandle(bytes, core.Handle{
+		Index: request.AuthoringWorld.WorldIndex,
+		Generation: request.AuthoringWorld.WorldGeneration,
+	})
+	bytes = appendPlayModeResources(bytes, request.Resources)
+	bytes = appendEditorU64(bytes, request.WorldConfig.MaxEntities)
+	bytes = appendEditorU64(bytes, request.WorldConfig.MaxComponentsPerEntity)
+	bytes = appendEditorU64(bytes, request.WorldConfig.MaxComponentBytes)
+	bytes = appendEditorU64(bytes, request.WorldConfig.MaxSnapshotBytes)
+	bytes = appendEditorU32(bytes, uint32(len(request.WritebackFields)))
+	for _, field := range request.WritebackFields {
+		if field.Component == 0 || field.Width == 0 ||
+			field.Offset > 18446744073709551615-field.Width {
+			return nil
+		}
+		bytes = appendEditorU32(bytes, field.Component)
+		bytes = appendEditorU64(bytes, field.Offset)
+		bytes = appendEditorU64(bytes, field.Width)
+	}
+	return bytes
+}
+
+func EncodeExitPlayModeRequest(request ExitPlayModeRequest) []byte {
+	if request.RequestId == 0 || !validHandle(request.Session) ||
+		request.ApplyAuthoring && request.ExpectedAuthoringRevision == 0 ||
+		!request.ApplyAuthoring && request.ExpectedAuthoringRevision != 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'E', 'P', '1'}
+	bytes = appendEditorU64(bytes, request.RequestId)
+	bytes = append(bytes, 2)
+	bytes = appendEditorHandle(bytes, request.Session)
+	if request.ApplyAuthoring {
+		bytes = append(bytes, 2)
+	} else {
+		bytes = append(bytes, 1)
+	}
+	return appendEditorU64(bytes, request.ExpectedAuthoringRevision)
+}
+
+func DecodePlayModeResponse(editorEngine core.Handle, bytes []byte) (PlayModeResponse, bool) {
+	if !validHandle(editorEngine) || len(bytes) < 13 ||
+		bytes[0] != 'V' || bytes[1] != 'E' || bytes[2] != 'R' || bytes[3] != '1' {
+		return PlayModeResponse{}, false
+	}
+	requestId, ok := readEditorU64(bytes, 4)
+	if !ok || requestId == 0 {
+		return PlayModeResponse{}, false
+	}
+	response := PlayModeResponse{RequestId: requestId}
+	switch bytes[12] {
+	case 1:
+		if len(bytes) != 93 {
+			return PlayModeResponse{}, false
+		}
+		session, ok := readEditorHandle(bytes, 13)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		authoring, ok := readEditorHandle(bytes, 21)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		authoringRevision, ok := readEditorU64(bytes, 29)
+		if !ok || authoringRevision == 0 {
+			return PlayModeResponse{}, false
+		}
+		resources, ok := readPlayModeResources(bytes, 37)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		clonedEntities, ok := readEditorU64(bytes, 77)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		clonedBytes, ok := readEditorU64(bytes, 85)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		response.Kind = PlayModeStarted
+		response.Session = session
+		response.AuthoringWorld = world.WorldRef{
+			EngineIndex: editorEngine.Index,
+			EngineGeneration: editorEngine.Generation,
+			WorldIndex: authoring.Index,
+			WorldGeneration: authoring.Generation,
+		}
+		response.AuthoringRevision = authoringRevision
+		response.Resources = resources
+		response.ClonedEntities = clonedEntities
+		response.ClonedBytes = clonedBytes
+	case 2:
+		if len(bytes) != 78 {
+			return PlayModeResponse{}, false
+		}
+		session, ok := readEditorHandle(bytes, 13)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		resources, ok := readPlayModeResources(bytes, 21)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		changed, ok := readEditorU64(bytes, 61)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		revision, ok := readEditorU64(bytes, 70)
+		if !ok || bytes[69] > 1 || bytes[69] == 0 && revision != 0 ||
+			bytes[69] == 1 && revision == 0 {
+			return PlayModeResponse{}, false
+		}
+		response.Kind = PlayModeExited
+		response.Session = session
+		response.Resources = resources
+		response.ChangedComponents = changed
+		response.HasAuthoringRevision = bytes[69] == 1
+		response.AuthoringRevision = revision
+	case 3:
+		if len(bytes) != 21 {
+			return PlayModeResponse{}, false
+		}
+		actual, ok := readEditorU64(bytes, 13)
+		if !ok {
+			return PlayModeResponse{}, false
+		}
+		response.Kind = PlayModeRevisionConflict
+		response.ActualRevision = actual
+	case 4:
+		if len(bytes) != 13 {
+			return PlayModeResponse{}, false
+		}
+		response.Kind = PlayModeRejected
+	default:
+		return PlayModeResponse{}, false
+	}
+	return response, true
+}
+
+type Service struct {
+	World *world.World
+	Paused bool
+	PendingSteps uint32
+	Selection []world.Entity
+	SelectionRevision uint64
+	PendingPicks []PickRequest
+	Undo []HistoryEntry
+	Redo []HistoryEntry
+	MaxPageEntries uint32
+	MaxPageBytes uint32
+	MaxEdits uint32
+	MaxEditBytes uint64
+	MaxHistoryEntries uint32
+	MaxHistoryBytes uint64
+	MaxPendingPicks uint32
+	MaxPendingSteps uint32
+	HistoryBytes uint64
+	LastTransaction uint64
+	LastPick uint64
+}
+
+func NewService(value *world.World, maxPageEntries uint32,
+	maxPageBytes uint32, maxEdits uint32, maxEditBytes uint64,
+	maxHistoryEntries uint32, maxHistoryBytes uint64,
+	maxPendingPicks uint32, maxPendingSteps uint32) (*Service, bool) {
+	if value == nil || maxPageEntries == 0 || maxPageEntries > 65536 ||
+		maxPageBytes == 0 || maxPageBytes > 16777216 ||
+		maxEdits == 0 || maxEdits > 65536 ||
+		maxEditBytes == 0 || maxEditBytes > 16777216 ||
+		maxHistoryEntries == 0 || maxHistoryEntries > 65536 ||
+		maxHistoryBytes == 0 || maxHistoryBytes > 1073741824 ||
+		maxPendingPicks == 0 || maxPendingPicks > 4096 ||
+		maxPendingSteps == 0 || maxPendingSteps > 65536 {
+		return nil, false
+	}
+	return &Service{
+		World: value, MaxPageEntries: maxPageEntries,
+		MaxPageBytes: maxPageBytes, MaxEdits: maxEdits,
+		MaxEditBytes: maxEditBytes, MaxHistoryEntries: maxHistoryEntries,
+		MaxHistoryBytes: maxHistoryBytes, MaxPendingPicks: maxPendingPicks,
+		MaxPendingSteps: maxPendingSteps,
+	}, true
+}
+
+func (service *Service) Inspect(request InspectionRequest) (InspectionPage, bool) {
+	if service == nil || service.World == nil ||
+		request.ExpectedRevision != service.World.Revision ||
+		request.MaxEntries == 0 || request.MaxEntries > service.MaxPageEntries ||
+		request.MaxBytes == 0 || request.MaxBytes > service.MaxPageBytes {
+		return InspectionPage{}, false
+	}
+	stable := append([]world.StableEntityRecord{}, service.World.StableEntities...)
+	sortStableEntities(stable)
+	if request.Cursor > uint64(len(stable)) {
+		return InspectionPage{}, false
+	}
+	page := InspectionPage{
+		World: service.World.Ref, Revision: service.World.Revision,
+		NextCursor: request.Cursor,
+	}
+	var bytes uint32
+	for index := int(request.Cursor); index < len(stable); index++ {
+		if len(page.Entities) >= int(request.MaxEntries) {
+			page.HasMore = true
+			break
+		}
+		record := stable[index]
+		if !service.World.Allocator.IsAlive(record.Entity) {
+			continue
+		}
+		entity := InspectedEntity{Entity: record.Entity, StableKey: record.StableKey}
+		size := uint32(24)
+		for _, component := range service.World.Components {
+			if component.Entity != record.Entity {
+				continue
+			}
+			size += uint32(16 + len(component.Value))
+			entity.Components = append(entity.Components, InspectedComponent{
+				Component: component.Component,
+				Value: append([]byte{}, component.Value...),
+			})
+		}
+		if bytes+size > request.MaxBytes {
+			page.HasMore = true
+			break
+		}
+		sortInspectedComponents(entity.Components)
+		page.Entities = append(page.Entities, entity)
+		bytes += size
+		page.NextCursor = uint64(index + 1)
+	}
+	if page.NextCursor < uint64(len(stable)) {
+		page.HasMore = true
+	}
+	return page, true
+}
+
+func (service *Service) Apply(transaction WorldEditTransaction) (EditResult, bool) {
+	if service == nil || service.World == nil || transaction.Id == 0 ||
+		transaction.Id <= service.LastTransaction ||
+		transaction.ExpectedWorldRevision != service.World.Revision ||
+		len(transaction.Edits) == 0 || len(transaction.Edits) > int(service.MaxEdits) {
+		return EditResult{}, false
+	}
+	var bytes uint64
+	reverse := make([]FieldEdit, 0, len(transaction.Edits))
+	seen := make([]FieldEdit, 0, len(transaction.Edits))
+	for _, edit := range transaction.Edits {
+		if !service.World.Allocator.IsAlive(edit.Entity) || edit.Component == 0 ||
+			len(edit.Value) > int(service.World.MaxComponentBytes) {
+			return EditResult{}, false
+		}
+		for _, previous := range seen {
+			if previous.Entity == edit.Entity && previous.Component == edit.Component {
+				return EditResult{}, false
+			}
+		}
+		old, ok := service.World.Get(edit.Entity, edit.Component)
+		if !ok {
+			return EditResult{}, false
+		}
+		bytes += uint64(len(old) + len(edit.Value) + 32)
+		if bytes > service.MaxEditBytes {
+			return EditResult{}, false
+		}
+		reverse = append(reverse, FieldEdit{
+			Entity: edit.Entity, Component: edit.Component,
+			Value: append([]byte{}, old...),
+		})
+		seen = append(seen, edit)
+	}
+	commands, ok := service.World.Begin()
+	if !ok {
+		return EditResult{}, false
+	}
+	for _, edit := range transaction.Edits {
+		if !commands.Set(edit.Entity, edit.Component, edit.Value) {
+			return EditResult{}, false
+		}
+	}
+	revision, ok := commands.Commit()
+	if !ok {
+		return EditResult{}, false
+	}
+	entry := HistoryEntry{
+		TransactionId: transaction.Id,
+		Forward: cloneEdits(transaction.Edits), Reverse: reverse, Bytes: bytes,
+	}
+	service.pushUndo(entry)
+	service.Redo = nil
+	service.LastTransaction = transaction.Id
+	return EditResult{
+		TransactionId: transaction.Id, WorldRevision: revision,
+		ChangedComponents: uint32(len(transaction.Edits)),
+	}, true
+}
+
+func (service *Service) UndoLast(expectedRevision uint64) (EditResult, bool) {
+	if service == nil || service.World == nil ||
+		service.World.Revision != expectedRevision || len(service.Undo) == 0 {
+		return EditResult{}, false
+	}
+	last := len(service.Undo) - 1
+	entry := service.Undo[last]
+	revision, ok := service.applyHistory(entry.Reverse)
+	if !ok {
+		return EditResult{}, false
+	}
+	service.Undo = service.Undo[:last]
+	service.HistoryBytes -= entry.Bytes
+	service.Redo = append(service.Redo, entry)
+	return EditResult{
+		TransactionId: entry.TransactionId, WorldRevision: revision,
+		ChangedComponents: uint32(len(entry.Reverse)),
+	}, true
+}
+
+func (service *Service) RedoLast(expectedRevision uint64) (EditResult, bool) {
+	if service == nil || service.World == nil ||
+		service.World.Revision != expectedRevision || len(service.Redo) == 0 {
+		return EditResult{}, false
+	}
+	last := len(service.Redo) - 1
+	entry := service.Redo[last]
+	revision, ok := service.applyHistory(entry.Forward)
+	if !ok {
+		return EditResult{}, false
+	}
+	service.Redo = service.Redo[:last]
+	service.pushUndo(entry)
+	return EditResult{
+		TransactionId: entry.TransactionId, WorldRevision: revision,
+		ChangedComponents: uint32(len(entry.Forward)),
+	}, true
+}
+
+func (service *Service) ReplaceSelection(expectedRevision uint64,
+	entities []world.Entity) (uint64, bool) {
+	if service == nil || expectedRevision != service.SelectionRevision ||
+		len(entities) > 4096 {
+		return 0, false
+	}
+	next := append([]world.Entity{}, entities...)
+	sortEntities(next)
+	for index, entity := range next {
+		if !service.World.Allocator.IsAlive(entity) ||
+			index > 0 && next[index-1] == entity {
+			return 0, false
+		}
+	}
+	if service.SelectionRevision == 18446744073709551615 {
+		return 0, false
+	}
+	service.Selection = next
+	service.SelectionRevision++
+	return service.SelectionRevision, true
+}
+
+func (service *Service) SubmitPick(request PickRequest) bool {
+	if service == nil || request.Id == 0 || request.Id <= service.LastPick ||
+		request.ExpectedWorldRevision != service.World.Revision ||
+		request.ExpectedRenderSignature == 0 ||
+		len(service.PendingPicks) >= int(service.MaxPendingPicks) {
+		return false
+	}
+	service.PendingPicks = append(service.PendingPicks, request)
+	service.LastPick = request.Id
+	return true
+}
+
+func (service *Service) CompletePick(requestId uint64, renderSignature uint64,
+	candidates []PickCandidate) (PickResult, bool) {
+	if service == nil || len(candidates) > 65536 {
+		return PickResult{}, false
+	}
+	requestIndex := -1
+	for index, request := range service.PendingPicks {
+		if request.Id == requestId {
+			requestIndex = index
+			if request.ExpectedWorldRevision != service.World.Revision ||
+				request.ExpectedRenderSignature != renderSignature {
+				return PickResult{}, false
+			}
+			break
+		}
+	}
+	if requestIndex < 0 {
+		return PickResult{}, false
+	}
+	for _, candidate := range candidates {
+		if !service.World.Allocator.IsAlive(candidate.Entity) {
+			return PickResult{}, false
+		}
+	}
+	sortPickCandidates(candidates)
+	selected := world.Entity{}
+	if len(candidates) != 0 {
+		selected = candidates[0].Entity
+	}
+	nextSelection := make([]world.Entity, 0)
+	if selected.Valid() {
+		nextSelection = append(nextSelection, selected)
+	}
+	revision, ok := service.ReplaceSelection(service.SelectionRevision, nextSelection)
+	if !ok {
+		return PickResult{}, false
+	}
+	copy(service.PendingPicks[requestIndex:], service.PendingPicks[requestIndex+1:])
+	service.PendingPicks = service.PendingPicks[:len(service.PendingPicks)-1]
+	return PickResult{
+		RequestId: requestId, Selected: selected, SelectionRevision: revision,
+	}, true
+}
+
+func (service *Service) Pause() bool {
+	if service == nil || service.Paused {
+		return false
+	}
+	service.Paused = true
+	return true
+}
+
+func (service *Service) Resume() bool {
+	if service == nil || !service.Paused {
+		return false
+	}
+	service.Paused = false
+	service.PendingSteps = 0
+	return true
+}
+
+func (service *Service) Step(count uint32) bool {
+	if service == nil || !service.Paused || count == 0 ||
+		count > service.MaxPendingSteps-service.PendingSteps {
+		return false
+	}
+	service.PendingSteps += count
+	return true
+}
+
+func (service *Service) TakeStep() bool {
+	if service == nil || !service.Paused || service.PendingSteps == 0 {
+		return false
+	}
+	service.PendingSteps--
+	return true
+}
+
+func (service *Service) applyHistory(edits []FieldEdit) (uint64, bool) {
+	commands, ok := service.World.Begin()
+	if !ok {
+		return 0, false
+	}
+	for _, edit := range edits {
+		if !commands.Set(edit.Entity, edit.Component, edit.Value) {
+			return 0, false
+		}
+	}
+	return commands.Commit()
+}
+
+func (service *Service) pushUndo(entry HistoryEntry) {
+	for len(service.Undo) >= int(service.MaxHistoryEntries) ||
+		service.HistoryBytes+entry.Bytes > service.MaxHistoryBytes {
+		if len(service.Undo) == 0 {
+			return
+		}
+		service.HistoryBytes -= service.Undo[0].Bytes
+		copy(service.Undo, service.Undo[1:])
+		service.Undo = service.Undo[:len(service.Undo)-1]
+	}
+	service.Undo = append(service.Undo, entry)
+	service.HistoryBytes += entry.Bytes
+}
+
+func cloneEdits(values []FieldEdit) []FieldEdit {
+	result := make([]FieldEdit, len(values))
+	for index, value := range values {
+		result[index] = value
+		result[index].Value = append([]byte{}, value.Value...)
+	}
+	return result
+}
+
+func sortStableEntities(values []world.StableEntityRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].StableKey > value.StableKey {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortInspectedComponents(values []InspectedComponent) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Component > value.Component {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortEntities(values []world.Entity) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Key() > value.Key() {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortPickCandidates(values []PickCandidate) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && pickLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func pickLess(left PickCandidate, right PickCandidate) bool {
+	return left.Depth < right.Depth ||
+		left.Depth == right.Depth && left.Entity.Key() < right.Entity.Key() ||
+		left.Depth == right.Depth && left.Entity == right.Entity &&
+			left.Primitive < right.Primitive
+}
+
+func validHandle(handle core.Handle) bool {
+	return handle.Index != 0 && handle.Generation != 0
+}
+
+func validWorldRef(value world.WorldRef) bool {
+	return value.EngineIndex != 0 && value.EngineGeneration != 0 &&
+		value.WorldIndex != 0 && value.WorldGeneration != 0
+}
+
+func validPlayModeResources(resources PlayModeResources) bool {
+	return validWorldRef(resources.World) && validHandle(resources.InputScope) &&
+		validHandle(resources.RenderTarget) && validHandle(resources.AssetScope)
+}
+
+func appendPlayModeResources(bytes []byte, resources PlayModeResources) []byte {
+	bytes = appendEditorHandle(bytes, core.Handle{
+		Index: resources.World.EngineIndex,
+		Generation: resources.World.EngineGeneration,
+	})
+	bytes = appendEditorHandle(bytes, core.Handle{
+		Index: resources.World.WorldIndex,
+		Generation: resources.World.WorldGeneration,
+	})
+	bytes = appendEditorHandle(bytes, resources.InputScope)
+	bytes = appendEditorHandle(bytes, resources.RenderTarget)
+	return appendEditorHandle(bytes, resources.AssetScope)
+}
+
+func appendEditorHandle(bytes []byte, handle core.Handle) []byte {
+	bytes = appendEditorU32(bytes, handle.Index)
+	return appendEditorU32(bytes, handle.Generation)
+}
+
+func appendEditorU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendEditorU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
+		byte(value >> 32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func readPlayModeResources(bytes []byte, offset int) (PlayModeResources, bool) {
+	engine, ok := readEditorHandle(bytes, offset)
+	if !ok {
+		return PlayModeResources{}, false
+	}
+	worldHandle, ok := readEditorHandle(bytes, offset+8)
+	if !ok {
+		return PlayModeResources{}, false
+	}
+	input, ok := readEditorHandle(bytes, offset+16)
+	if !ok {
+		return PlayModeResources{}, false
+	}
+	target, ok := readEditorHandle(bytes, offset+24)
+	if !ok {
+		return PlayModeResources{}, false
+	}
+	assets, ok := readEditorHandle(bytes, offset+32)
+	if !ok {
+		return PlayModeResources{}, false
+	}
+	return PlayModeResources{
+		World: world.WorldRef{
+			EngineIndex: engine.Index, EngineGeneration: engine.Generation,
+			WorldIndex: worldHandle.Index, WorldGeneration: worldHandle.Generation,
+		},
+		InputScope: input, RenderTarget: target, AssetScope: assets,
+	}, true
+}
+
+func readEditorHandle(bytes []byte, offset int) (core.Handle, bool) {
+	index, ok := readEditorU32(bytes, offset)
+	if !ok {
+		return core.Handle{}, false
+	}
+	generation, ok := readEditorU32(bytes, offset+4)
+	handle := core.Handle{Index: index, Generation: generation}
+	return handle, ok && validHandle(handle)
+}
+
+func readEditorU32(bytes []byte, offset int) (uint32, bool) {
+	if offset < 0 || offset+4 > len(bytes) {
+		return 0, false
+	}
+	return uint32(bytes[offset]) | uint32(bytes[offset+1]) << 8 |
+		uint32(bytes[offset+2]) << 16 | uint32(bytes[offset+3]) << 24, true
+}
+
+func readEditorU64(bytes []byte, offset int) (uint64, bool) {
+	if offset < 0 || offset+8 > len(bytes) {
+		return 0, false
+	}
+	return uint64(bytes[offset]) | uint64(bytes[offset+1]) << 8 |
+		uint64(bytes[offset+2]) << 16 | uint64(bytes[offset+3]) << 24 |
+		uint64(bytes[offset+4]) << 32 | uint64(bytes[offset+5]) << 40 |
+		uint64(bytes[offset+6]) << 48 | uint64(bytes[offset+7]) << 56, true
+}

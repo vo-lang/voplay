@@ -1,13 +1,5 @@
 /rust/target/
-/rust/.cargo/
-.DS_Store
-**/.DS_Store
-*.wasm
-!web-artifacts/
-!web-artifacts/*.wasm
-js/node_modules/
-**/.vo-cache/
-**/.vo-project.lock
-**/.vo-project.transaction
+/web/node_modules/
 **/.volang/
-.codex-release-stage/
+.DS_Store
+# Clean-slate workspace outputs are listed explicitly.

@@ -1,0 +1,804 @@
+package audio
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type AudioBusRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type PersistentSourceRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type OneShot struct {
+	AssetIndex uint32
+	AssetGeneration uint32
+	Bus AudioBusRef
+	GainMilli int32
+	Tick uint64
+	Spatial *SpatialSource
+}
+
+type SpatialSource struct {
+	PositionMilli [3]int32
+	MinDistanceMilli uint32
+	MaxDistanceMilli uint32
+}
+
+func EncodeOneShot(oneShot OneShot) []byte {
+	if oneShot.Bus.Index == 4294967295 || oneShot.Bus.Generation == 0 || oneShot.GainMilli < 0 ||
+		oneShot.GainMilli > 1000 {
+		return nil
+	}
+	gainQ15 := uint16(uint32(oneShot.GainMilli) * 32767 / 1000)
+	if oneShot.AssetIndex == 4294967295 || oneShot.AssetGeneration == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'A', 'E', '2', 1}
+	bytes = appendAudioU32(bytes, oneShot.AssetIndex)
+	bytes = appendAudioU32(bytes, oneShot.AssetGeneration)
+	bytes = appendAudioU32(bytes, oneShot.Bus.Index)
+	bytes = appendAudioU32(bytes, oneShot.Bus.Generation)
+	bytes = appendAudioU16(bytes, gainQ15)
+	if oneShot.Spatial == nil {
+		return append(bytes, 0)
+	}
+	spatial := oneShot.Spatial
+	if spatial.MinDistanceMilli == 0 || spatial.MaxDistanceMilli < spatial.MinDistanceMilli {
+		return nil
+	}
+	bytes = append(bytes, 1)
+	for _, value := range spatial.PositionMilli {
+		bytes = appendAudioU32(bytes, uint32(value))
+	}
+	bytes = appendAudioU32(bytes, spatial.MinDistanceMilli)
+	return appendAudioU32(bytes, spatial.MaxDistanceMilli)
+}
+
+func appendAudioU16(bytes []byte, value uint16) []byte {
+	return append(bytes, byte(value), byte(value >> 8))
+}
+
+func appendAudioU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func (bus AudioBusRef) Valid() bool {
+	return bus.Index != 0 && bus.Generation != 0
+}
+
+func (source PersistentSourceRef) Valid() bool {
+	return source.Index != 0 && source.Generation != 0
+}
+
+type RecoveryPolicy uint32
+
+const (
+	ResumeTimeline RecoveryPolicy = iota + 1
+	RestartOnRecovery
+	StopOnRecovery
+)
+
+type BusDescriptor struct {
+	Parent AudioBusRef
+	GainMilli int32
+	Muted bool
+	Solo bool
+	DuckTarget AudioBusRef
+	DuckGainMilli int32
+}
+
+type SourceDescriptor struct {
+	AssetIndex uint32
+	AssetGeneration uint32
+	Bus AudioBusRef
+	GainMilli int32
+	Looping bool
+	Playing bool
+	TransportTick uint64
+	Recovery RecoveryPolicy
+	Spatial *SpatialSource
+}
+
+type Listener struct {
+	PositionMilli [3]int32
+	ForwardMilli [3]int32
+	UpMilli [3]int32
+	RightQ15 [3]int16
+}
+
+type BusRecord struct {
+	Ref AudioBusRef
+	Descriptor BusDescriptor
+	Alive bool
+}
+
+type SourceRecord struct {
+	Ref PersistentSourceRef
+	Descriptor SourceDescriptor
+	Alive bool
+}
+
+type ControlOperationKind uint32
+
+const (
+	ControlCreateBus ControlOperationKind = iota + 1
+	ControlUpdateBus
+	ControlDestroyBus
+	ControlCreateSource
+	ControlUpdateSource
+	ControlDestroySource
+	ControlSetListener
+)
+
+type ControlOperation struct {
+	Kind ControlOperationKind
+	Bus AudioBusRef
+	Source PersistentSourceRef
+	BusValue BusDescriptor
+	SourceValue SourceDescriptor
+	ListenerValue Listener
+}
+
+type ControlTransaction struct {
+	ExpectedRevision uint64
+	Operations []ControlOperation
+}
+
+type ControlCommit struct {
+	Revision uint64
+	CreatedBuses []AudioBusRef
+	CreatedSources []PersistentSourceRef
+}
+
+type ControlState struct {
+	Revision uint64
+	ObservedRevision uint64
+	EndpointGeneration uint32
+	Buses []BusRecord
+	Sources []SourceRecord
+	BusFree []uint32
+	SourceFree []uint32
+	Listener Listener
+	MaxBuses uint32
+	MaxSources uint32
+	MaxOperations uint32
+}
+
+func NewControlState(maxBuses uint32, maxSources uint32, maxOperations uint32) (*ControlState, bool) {
+	if maxBuses == 0 || maxBuses > 65536 || maxSources == 0 || maxSources > 1000000 ||
+		maxOperations == 0 ||
+		maxOperations > 65536 {
+		return nil, false
+	}
+	state := &ControlState{
+		MaxBuses: maxBuses, MaxSources: maxSources, MaxOperations: maxOperations,
+		Listener: Listener{ForwardMilli: [3]int32{0, 0, -1000}, UpMilli: [3]int32{0, 1000, 0}},
+	}
+	state.Buses = append(state.Buses, BusRecord{
+		Ref: AudioBusRef{Index: 1, Generation: 1}, Descriptor: BusDescriptor{GainMilli: 1000},
+		Alive: true,
+	})
+	state.Revision = 1
+	return state, true
+}
+
+func (state *ControlState) Master() AudioBusRef {
+	if state == nil || len(state.Buses) == 0 {
+		return AudioBusRef{}
+	}
+	return state.Buses[0].Ref
+}
+
+func (state *ControlState) Commit(transaction ControlTransaction) (ControlCommit, bool) {
+	if state == nil || transaction.ExpectedRevision != state.Revision ||
+		len(transaction.Operations) == 0 ||
+		len(transaction.Operations) > int(state.MaxOperations) ||
+		state.Revision == 18446744073709551615 {
+		return ControlCommit{}, false
+	}
+	staged := state.clone()
+	result := ControlCommit{}
+	for _, operation := range transaction.Operations {
+		switch operation.Kind {
+			case ControlCreateBus:
+				ref, ok := staged.createBus(operation.BusValue)
+				if !ok {
+					return ControlCommit{}, false
+				}
+				result.CreatedBuses = append(result.CreatedBuses, ref)
+			case ControlUpdateBus:
+				if !staged.updateBus(operation.Bus, operation.BusValue) {
+					return ControlCommit{}, false
+				}
+			case ControlDestroyBus:
+				if !staged.destroyBus(operation.Bus) {
+					return ControlCommit{}, false
+				}
+			case ControlCreateSource:
+				ref, ok := staged.createSource(operation.SourceValue)
+				if !ok {
+					return ControlCommit{}, false
+				}
+				result.CreatedSources = append(result.CreatedSources, ref)
+			case ControlUpdateSource:
+				if !staged.updateSource(operation.Source, operation.SourceValue) {
+					return ControlCommit{}, false
+				}
+			case ControlDestroySource:
+				if !staged.destroySource(operation.Source) {
+					return ControlCommit{}, false
+				}
+			case ControlSetListener:
+				if !validListener(operation.ListenerValue) {
+					return ControlCommit{}, false
+				}
+				staged.Listener = operation.ListenerValue
+			default:
+				return ControlCommit{}, false
+		}
+	}
+	if staged.busCycle() {
+		return ControlCommit{}, false
+	}
+	staged.Revision++
+	*state = staged
+	result.Revision = state.Revision
+	return result, true
+}
+
+func (state *ControlState) Bus(ref AudioBusRef) (BusDescriptor, bool) {
+	index, ok := state.busIndex(ref)
+	if !ok {
+		return BusDescriptor{}, false
+	}
+	return state.Buses[index].Descriptor, true
+}
+
+func (state *ControlState) Source(ref PersistentSourceRef) (SourceDescriptor, bool) {
+	index, ok := state.sourceIndex(ref)
+	if !ok {
+		return SourceDescriptor{}, false
+	}
+	return cloneSourceDescriptor(state.Sources[index].Descriptor), true
+}
+
+func (state *ControlState) RecoverySnapshot() ControlState {
+	if state == nil {
+		return ControlState{}
+	}
+	return state.clone()
+}
+
+func (state *ControlState) ApplyRecovery() {
+	if state == nil {
+		return
+	}
+	for index, source := range state.Sources {
+		if !source.Alive {
+			continue
+		}
+		switch source.Descriptor.Recovery {
+			case ResumeTimeline:
+			case RestartOnRecovery:
+				state.Sources[index].Descriptor.TransportTick = 0
+			case StopOnRecovery:
+				state.Sources[index].Descriptor.Playing = false
+		}
+	}
+}
+
+func (state *ControlState) createBus(descriptor BusDescriptor) (AudioBusRef, bool) {
+	if !validBusDescriptor(descriptor) || descriptor.Parent.Valid() && !state.hasBus(descriptor.Parent) ||
+		descriptor.DuckTarget.Valid() && !state.hasBus(descriptor.DuckTarget) ||
+		len(state.Buses) - len(state.BusFree) >= int(state.MaxBuses) {
+		return AudioBusRef{}, false
+	}
+	if len(state.BusFree) != 0 {
+		last := len(state.BusFree) - 1
+		index := state.BusFree[last]
+		state.BusFree = state.BusFree[:last]
+		previous := state.Buses[index - 1].Ref
+		if previous.Generation == 4294967295 {
+			return AudioBusRef{}, false
+		}
+		ref := AudioBusRef{Index: index, Generation: previous.Generation + 1}
+		state.Buses[index - 1] = BusRecord{Ref: ref, Descriptor: descriptor, Alive: true}
+		return ref, true
+	}
+	ref := AudioBusRef{Index: uint32(len(state.Buses) + 1), Generation: 1}
+	state.Buses = append(state.Buses, BusRecord{Ref: ref, Descriptor: descriptor, Alive: true})
+	return ref, true
+}
+
+func (state *ControlState) updateBus(ref AudioBusRef, descriptor BusDescriptor) bool {
+	index, ok := state.busIndex(ref)
+	if !ok || !validBusDescriptor(descriptor) || descriptor.Parent == ref ||
+		descriptor.DuckTarget == ref ||
+		descriptor.Parent.Valid() && !state.hasBus(descriptor.Parent) ||
+		descriptor.DuckTarget.Valid() && !state.hasBus(descriptor.DuckTarget) {
+		return false
+	}
+	state.Buses[index].Descriptor = descriptor
+	return true
+}
+
+func (state *ControlState) destroyBus(ref AudioBusRef) bool {
+	index, ok := state.busIndex(ref)
+	if !ok || ref == state.Master() {
+		return false
+	}
+	for _, bus := range state.Buses {
+		if bus.Alive && (bus.Descriptor.Parent == ref || bus.Descriptor.DuckTarget == ref) {
+			return false
+		}
+	}
+	for _, source := range state.Sources {
+		if source.Alive && source.Descriptor.Bus == ref {
+			return false
+		}
+	}
+	state.Buses[index].Alive = false
+	state.BusFree = append(state.BusFree, ref.Index)
+	return true
+}
+
+func (state *ControlState) createSource(descriptor SourceDescriptor) (PersistentSourceRef, bool) {
+	if !validSourceDescriptor(descriptor) || !state.hasBus(descriptor.Bus) ||
+		len(state.Sources) - len(state.SourceFree) >= int(state.MaxSources) {
+		return PersistentSourceRef{}, false
+	}
+	descriptor = cloneSourceDescriptor(descriptor)
+	if len(state.SourceFree) != 0 {
+		last := len(state.SourceFree) - 1
+		index := state.SourceFree[last]
+		state.SourceFree = state.SourceFree[:last]
+		previous := state.Sources[index - 1].Ref
+		if previous.Generation == 4294967295 {
+			return PersistentSourceRef{}, false
+		}
+		ref := PersistentSourceRef{Index: state.MaxBuses + index, Generation: previous.Generation + 1}
+		state.Sources[index - 1] = SourceRecord{Ref: ref, Descriptor: descriptor, Alive: true}
+		return ref, true
+	}
+	ref := PersistentSourceRef{Index: state.MaxBuses + uint32(len(state.Sources) + 1), Generation: 1}
+	state.Sources = append(state.Sources, SourceRecord{Ref: ref, Descriptor: descriptor, Alive: true})
+	return ref, true
+}
+
+func (state *ControlState) updateSource(ref PersistentSourceRef, descriptor SourceDescriptor) bool {
+	index, ok := state.sourceIndex(ref)
+	if !ok || !validSourceDescriptor(descriptor) || !state.hasBus(descriptor.Bus) {
+		return false
+	}
+	state.Sources[index].Descriptor = cloneSourceDescriptor(descriptor)
+	return true
+}
+
+func (state *ControlState) destroySource(ref PersistentSourceRef) bool {
+	index, ok := state.sourceIndex(ref)
+	if !ok {
+		return false
+	}
+	state.Sources[index].Alive = false
+	state.SourceFree = append(state.SourceFree, uint32(index + 1))
+	return true
+}
+
+func (state *ControlState) busCycle() bool {
+	for _, bus := range state.Buses {
+		if !bus.Alive {
+			continue
+		}
+		visited := make([]AudioBusRef, 0)
+		cursor := bus.Ref
+		for cursor.Valid() {
+			if containsBus(visited, cursor) {
+				return true
+			}
+			visited = append(visited, cursor)
+			index, ok := state.busIndex(cursor)
+			if !ok {
+				return true
+			}
+			cursor = state.Buses[index].Descriptor.Parent
+		}
+	}
+	return false
+}
+
+func (state *ControlState) hasBus(ref AudioBusRef) bool {
+	_, ok := state.busIndex(ref)
+	return ok
+}
+
+func (state *ControlState) busIndex(ref AudioBusRef) (int, bool) {
+	if state == nil || !ref.Valid() || int(ref.Index) > len(state.Buses) {
+		return 0, false
+	}
+	index := int(ref.Index - 1)
+	return index, state.Buses[index].Alive && state.Buses[index].Ref == ref
+}
+
+func (state *ControlState) sourceIndex(ref PersistentSourceRef) (int, bool) {
+	if state == nil || !ref.Valid() || ref.Index <= state.MaxBuses ||
+		int(ref.Index - state.MaxBuses) > len(state.Sources) {
+		return 0, false
+	}
+	index := int(ref.Index - state.MaxBuses - 1)
+	return index, state.Sources[index].Alive && state.Sources[index].Ref == ref
+}
+
+func (state *ControlState) clone() ControlState {
+	result := *state
+	result.Buses = append([]BusRecord{}, state.Buses...)
+	result.Sources = make([]SourceRecord, len(state.Sources))
+	for index, source := range state.Sources {
+		result.Sources[index] = source
+		result.Sources[index].Descriptor = cloneSourceDescriptor(source.Descriptor)
+	}
+	result.BusFree = append([]uint32{}, state.BusFree...)
+	result.SourceFree = append([]uint32{}, state.SourceFree...)
+	return result
+}
+
+func validBusDescriptor(descriptor BusDescriptor) bool {
+	return descriptor.GainMilli >= 0 && descriptor.GainMilli <= 1000 && descriptor.DuckGainMilli >= 0 &&
+		descriptor.DuckGainMilli <= 1000
+}
+
+func validSourceDescriptor(descriptor SourceDescriptor) bool {
+	if descriptor.AssetIndex == 0 || descriptor.AssetGeneration == 0 || !descriptor.Bus.Valid() ||
+		descriptor.GainMilli < 0 ||
+		descriptor.GainMilli > 1000 ||
+		descriptor.Recovery < ResumeTimeline ||
+		descriptor.Recovery > StopOnRecovery {
+		return false
+	}
+	if descriptor.Spatial != nil &&
+		(descriptor.Spatial.MinDistanceMilli == 0 ||
+			descriptor.Spatial.MaxDistanceMilli < descriptor.Spatial.MinDistanceMilli) {
+		return false
+	}
+	return true
+}
+
+func validListener(listener Listener) bool {
+	return listener.ForwardMilli != [3]int32{} && listener.UpMilli != [3]int32{}
+}
+
+func cloneSourceDescriptor(value SourceDescriptor) SourceDescriptor {
+	if value.Spatial != nil {
+		spatial := *value.Spatial
+		value.Spatial = &spatial
+	}
+	return value
+}
+
+func containsBus(values []AudioBusRef, expected AudioBusRef) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+type ControlAuthorityAck struct {
+	Transaction uint64
+	Revision uint64
+}
+
+type ControlRealizationAck struct {
+	Transaction uint64
+	Revision uint64
+	ChannelEpoch uint64
+}
+
+// EncodeSnapshotPacket sends the current desired AudioControlState to the
+// GameLogic authority lane. Accepted state is forwarded to AudioEndpoint.
+func (state *ControlState) EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64) ([]byte, bool) {
+	if state == nil || state.Revision == 0 || channelEpoch == 0 || engine.Engine.Generation == 0 ||
+		engine.Engine.Index == 4294967295 {
+		return nil, false
+	}
+	entries := make([][]byte, 0)
+	for _, bus := range state.Buses {
+		if !bus.Alive {
+			continue
+		}
+		descriptor, ok := encodeBusControlDescriptor(engine, state, bus)
+		if !ok {
+			return nil, false
+		}
+		entries = append(entries, encodeAudioControlEntry(3, bus.Ref.Index, bus.Ref.Generation, descriptor))
+	}
+	for _, source := range state.Sources {
+		if !source.Alive || !source.Descriptor.Playing {
+			continue
+		}
+		descriptor, ok := encodeSourceControlDescriptor(engine, source)
+		if !ok {
+			return nil, false
+		}
+		entries = append(entries, encodeAudioControlEntry(4, source.Ref.Index, source.Ref.Generation, descriptor))
+	}
+	payload := []byte{'V', 'A', 'C', 'S', 1, 0, 0, 0}
+	payload = appendAudioU64(payload, state.Revision)
+	payload = appendAudioU32(payload, uint32(len(entries)))
+	for _, entry := range entries {
+		payload = append(payload, entry...)
+	}
+	if len(payload) + 80 > 16777216 {
+		return nil, false
+	}
+	packet := make([]byte, 80)
+	putAudioU16(packet, 0, 8)
+	putAudioU32(packet, 4, engine.Engine.Index)
+	putAudioU32(packet, 8, engine.Engine.Generation)
+	putAudioU64(packet, 12, channelEpoch)
+	putAudioU64(packet, 20, state.Revision)
+	putAudioU64(packet, 28, state.Revision - 1)
+	putAudioU64(packet, 36, state.Revision)
+	putAudioU64(packet, 60, state.Revision)
+	putAudioU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeAuthorityAck(engine voplay.EngineRef, packet []byte) (ControlAuthorityAck, bool) {
+	if len(packet) != 80 || readAudioU16(packet, 0) != 11 ||
+		readAudioU32(packet, 4) != engine.Engine.Index ||
+		readAudioU32(packet, 8) != engine.Engine.Generation ||
+		readAudioU64(packet, 12) == 0 ||
+		readAudioU32(packet, 76) != 0 {
+		return ControlAuthorityAck{}, false
+	}
+	ack := ControlAuthorityAck{
+		Transaction: readAudioU64(packet, 20), Revision: readAudioU64(packet, 36),
+	}
+	return ack, ack.Transaction != 0 && ack.Revision != 0
+}
+
+func DecodeRealizationAck(engine voplay.EngineRef, packet []byte) (ControlRealizationAck, bool) {
+	if len(packet) != 80 || readAudioU16(packet, 0) != 11 ||
+		readAudioU32(packet, 4) != engine.Engine.Index ||
+		readAudioU32(packet, 8) != engine.Engine.Generation ||
+		readAudioU64(packet, 12) == 0 ||
+		readAudioU32(packet, 76) != 0 {
+		return ControlRealizationAck{}, false
+	}
+	ack := ControlRealizationAck{
+		Transaction: readAudioU64(packet, 20), Revision: readAudioU64(packet, 36),
+		ChannelEpoch: readAudioU64(packet, 12),
+	}
+	return ack, ack.Transaction != 0 && ack.Revision != 0
+}
+
+func (state *ControlState) ApplyRealizationAck(ack ControlRealizationAck, endpointGeneration uint32) bool {
+	if state == nil || ack.Transaction == 0 || ack.Revision != state.Revision || ack.ChannelEpoch == 0 ||
+		endpointGeneration == 0 {
+		return false
+	}
+	state.ObservedRevision = ack.Revision
+	state.EndpointGeneration = endpointGeneration
+	return true
+}
+
+func (state *ControlState) RestartEndpoint(endpointGeneration uint32) bool {
+	if state == nil || endpointGeneration == 0 || endpointGeneration == state.EndpointGeneration {
+		return false
+	}
+	state.EndpointGeneration = endpointGeneration
+	state.ObservedRevision = 0
+	state.ApplyRecovery()
+	return true
+}
+
+func encodeAudioControlEntry(kind byte, index uint32, generation uint32, descriptor []byte) []byte {
+	entry := []byte{kind, 1, 0, 0}
+	entry = appendAudioU32(entry, index)
+	entry = appendAudioU32(entry, generation)
+	entry = appendAudioU32(entry, uint32(len(descriptor)))
+	for fence := 0; fence < 4; fence++ {
+		entry = appendAudioU64(entry, 0)
+	}
+	return append(entry, descriptor...)
+}
+
+func encodeBusControlDescriptor(engine voplay.EngineRef, state *ControlState, bus BusRecord) ([]byte, bool) {
+	if !validBusDescriptor(bus.Descriptor) {
+		return nil, false
+	}
+	bytes := []byte{'V', 'A', 'C', '1', 1}
+	bytes = appendAudioU32(bytes, engine.Engine.Index)
+	bytes = appendAudioU32(bytes, engine.Engine.Generation)
+	if bus.Descriptor.Parent.Valid() {
+		bytes = append(bytes, 1, 2, 3)
+		bytes = appendAudioU32(bytes, bus.Descriptor.Parent.Index)
+		bytes = appendAudioU32(bytes, bus.Descriptor.Parent.Generation)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	bytes = appendAudioU16(bytes, gainMilliQ15(bus.Descriptor.GainMilli))
+	flags := byte(0)
+	if bus.Descriptor.Muted {
+		flags |= 1
+	}
+	if bus.Descriptor.Solo {
+		flags |= 2
+	}
+	bytes = append(bytes, flags)
+	if bus.Ref == state.Master() {
+		if !validListener(state.Listener) {
+			return nil, false
+		}
+		bytes = append(bytes, 1)
+		for _, value := range state.Listener.PositionMilli {
+			bytes = appendAudioI32(bytes, value)
+		}
+		right := state.Listener.RightQ15
+		if right == [3]int16{} {
+			right = [3]int16{32767, 0, 0}
+		}
+		for _, value := range right {
+			bytes = appendAudioI16(bytes, value)
+		}
+	} else {
+		bytes = append(bytes, 0)
+	}
+	if bus.Descriptor.DuckTarget.Valid() {
+		bytes = appendAudioU16(bytes, 1)
+		bytes = append(bytes, 2, 3)
+		bytes = appendAudioU32(bytes, bus.Descriptor.DuckTarget.Index)
+		bytes = appendAudioU32(bytes, bus.Descriptor.DuckTarget.Generation)
+		bytes = appendAudioU16(bytes, gainMilliQ15(bus.Descriptor.DuckGainMilli))
+	} else {
+		bytes = appendAudioU16(bytes, 0)
+	}
+	return bytes, true
+}
+
+func EncodeAuthorityBusDescriptor(engine voplay.EngineRef, state *ControlState, bus BusRecord) ([]byte, []voplay.ControlDependency, bool) {
+	bytes, ok := encodeBusControlDescriptor(engine, state, bus)
+	if !ok {
+		return nil, nil, false
+	}
+	dependencies := make([]voplay.ControlDependency, 0)
+	offset := 13
+	if bus.Descriptor.Parent.Valid() {
+		stable := voplay.StableControlRef{
+			Handle: voplay.Handle{
+				Index: bus.Descriptor.Parent.Index, Generation: bus.Descriptor.Parent.Generation,
+			},
+			Kind: voplay.ControlKindAudioBus,
+		}
+		dependencies = append(dependencies, voplay.ControlDependency{
+			Offset: uint32(offset + 1), Stable: &stable,
+		})
+		offset += 11
+	} else {
+		offset++
+	}
+	offset += 3
+	if bytes[offset] == 1 {
+		offset += 19
+	} else {
+		offset++
+	}
+	if bus.Descriptor.DuckTarget.Valid() {
+		stable := voplay.StableControlRef{
+			Handle: voplay.Handle{
+				Index: bus.Descriptor.DuckTarget.Index, Generation: bus.Descriptor.DuckTarget.Generation,
+			},
+			Kind: voplay.ControlKindAudioBus,
+		}
+		dependencies = append(dependencies, voplay.ControlDependency{
+			Offset: uint32(offset + 2), Stable: &stable,
+		})
+	}
+	return bytes, dependencies, true
+}
+
+func encodeSourceControlDescriptor(engine voplay.EngineRef, source SourceRecord) ([]byte, bool) {
+	value := source.Descriptor
+	if !validSourceDescriptor(value) {
+		return nil, false
+	}
+	bytes := []byte{'V', 'A', 'C', '1', 2}
+	bytes = appendAudioU32(bytes, engine.Engine.Index)
+	bytes = appendAudioU32(bytes, engine.Engine.Generation)
+	bytes = append(bytes, 2, 3)
+	bytes = appendAudioU32(bytes, value.Bus.Index)
+	bytes = appendAudioU32(bytes, value.Bus.Generation)
+	bytes = appendAudioU32(bytes, value.AssetIndex)
+	bytes = appendAudioU32(bytes, value.AssetGeneration)
+	bytes = appendAudioU16(bytes, gainMilliQ15(value.GainMilli))
+	flags := byte(0)
+	if value.Looping {
+		flags |= 1
+	}
+	if value.Spatial != nil {
+		flags |= 2
+	}
+	bytes = append(bytes, flags, byte(value.Recovery))
+	bytes = appendAudioU64(bytes, value.TransportTick)
+	if value.Spatial != nil {
+		for _, position := range value.Spatial.PositionMilli {
+			bytes = appendAudioI32(bytes, position)
+		}
+		bytes = appendAudioU32(bytes, value.Spatial.MinDistanceMilli)
+		bytes = appendAudioU32(bytes, value.Spatial.MaxDistanceMilli)
+	}
+	return bytes, true
+}
+
+func EncodeAuthoritySourceDescriptor(engine voplay.EngineRef, value SourceDescriptor) ([]byte, []voplay.ControlDependency, bool) {
+	source := SourceRecord{
+		Ref: PersistentSourceRef{Index: 1, Generation: 1}, Descriptor: value, Alive: true,
+	}
+	bytes, ok := encodeSourceControlDescriptor(engine, source)
+	if !ok {
+		return nil, nil, false
+	}
+	stable := voplay.StableControlRef{
+		Handle: voplay.Handle{Index: value.Bus.Index, Generation: value.Bus.Generation},
+		Kind: voplay.ControlKindAudioBus,
+	}
+	return bytes, []voplay.ControlDependency{{Offset: 13, Stable: &stable}}, true
+}
+
+func gainMilliQ15(value int32) uint16 {
+	return uint16(uint32(value) * 32767 / 1000)
+}
+
+func appendAudioU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func appendAudioI16(bytes []byte, value int16) []byte {
+	return appendAudioU16(bytes, uint16(value))
+}
+
+func appendAudioI32(bytes []byte, value int32) []byte {
+	return appendAudioU32(bytes, uint32(value))
+}
+
+func putAudioU16(bytes []byte, offset int, value uint16) {
+	bytes[offset] = byte(value)
+	bytes[offset + 1] = byte(value >> 8)
+}
+
+func putAudioU32(bytes []byte, offset int, value uint32) {
+	for index := 0; index < 4; index++ {
+		bytes[offset + index] = byte(value >> uint32(index * 8))
+	}
+}
+
+func putAudioU64(bytes []byte, offset int, value uint64) {
+	for index := 0; index < 8; index++ {
+		bytes[offset + index] = byte(value >> uint64(index * 8))
+	}
+}
+
+func readAudioU16(bytes []byte, offset int) uint16 {
+	return uint16(bytes[offset]) | uint16(bytes[offset + 1]) << 8
+}
+
+func readAudioU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) | uint32(bytes[offset + 1]) << 8 | uint32(bytes[offset + 2]) << 16 |
+		uint32(bytes[offset + 3]) << 24
+}
+
+func readAudioU64(bytes []byte, offset int) uint64 {
+	return uint64(bytes[offset]) | uint64(bytes[offset + 1]) << 8 | uint64(bytes[offset + 2]) << 16 |
+		uint64(bytes[offset + 3]) << 24 |
+		uint64(bytes[offset + 4]) << 32 |
+		uint64(bytes[offset + 5]) << 40 |
+		uint64(bytes[offset + 6]) << 48 |
+		uint64(bytes[offset + 7]) << 56
+}

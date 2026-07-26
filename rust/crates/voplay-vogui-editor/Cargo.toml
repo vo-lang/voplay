@@ -1,0 +1,11 @@
+[package]
+name = "voplay-vogui-editor"
+version = "0.1.0"
+edition = "2021"
+description = "Vogui editor Views and typed Voplay Inspection client"
+
+[dependencies]
+vogui-runtime = { path = "../../../../vogui/rust/runtime" }
+vogui-protocol = { path = "../../../../vogui/rust/protocol" }
+voplay-protocol = { path = "../voplay-protocol" }
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["editor"] }

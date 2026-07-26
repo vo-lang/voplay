@@ -1,0 +1,8 @@
+[package]
+name = "voplay-import-gltf"
+version = "0.1.0"
+edition = "2021"
+description = "Bounded glTF/GLB validation and import boundary for Voplay"
+
+[dependencies]
+serde_json = "1"

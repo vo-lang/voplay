@@ -1,0 +1,16 @@
+[package]
+name = "voplay-render-3d"
+version = "0.1.0"
+edition = "2021"
+description = "Voplay retained 3D graph feature artifact"
+
+[dependencies]
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "render3d"] }
+voplay-import-gltf = { path = "../voplay-import-gltf" }
+voplay-protocol = { path = "../voplay-protocol" }
+voplay-render-core = { path = "../voplay-render-core", optional = true }
+wgpu = { version = "=24.0.5", optional = true }
+
+[features]
+default = []
+native-wgpu = ["dep:wgpu", "dep:voplay-render-core", "voplay-render-core/native-wgpu"]

@@ -1,0 +1,17 @@
+[package]
+name = "voplay-render-core"
+version = "0.1.0"
+edition = "2021"
+description = "Device-generation-scoped native render surface owner for Voplay"
+
+[dependencies]
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "render"] }
+wgpu = { version = "=24.0.5", optional = true }
+
+[dev-dependencies]
+vo-app-protocol = { path = "../../../../volang/lang/crates/vo-app-protocol", features = ["std"] }
+voplay-protocol = { path = "../voplay-protocol" }
+
+[features]
+default = []
+native-wgpu = ["dep:wgpu"]

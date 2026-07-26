@@ -1,66 +1,20 @@
-[package]
-name = "vo-voplay"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "VoPlay game engine — Rust renderer + physics + input"
-repository = "https://github.com/vo-lang/voplay"
-publish = false
-
-[package.metadata.vo]
-vomod = "../vo.mod"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[features]
-default = ["native"]
-native = ["dep:linkme", "dep:vo-ext", "dep:vo-ffi-macro", "dep:vo-runtime", "dep:vogui", "vo-ext/native", "vo-runtime/std", "vogui/native", "dep:pollster", "dep:raw-window-handle"]
-wasm = ["dep:vo-ext", "dep:vo-ffi-macro", "dep:vo-runtime", "dep:vogui", "vogui/bindgen", "vo-ext/wasm", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:js-sys", "dep:console_error_panic_hook"]
-wasm-standalone = []
-wasm-island = ["wasm"]
-
-[dependencies]
-wgpu = "24"
-pollster = { version = "0.4", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
-base64 = "0.22"
-bytemuck = { version = "1", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
-rapier2d = { version = "0.22", features = ["enhanced-determinism"] }
-rapier3d = { version = "0.22", features = ["enhanced-determinism"] }
-fontdue = "0.9"
-gltf = { version = "1", features = ["extras"] }
-log = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-vo-ext       = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", default-features = false, optional = true }
-vo-ffi-macro = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", optional = true }
-vo-runtime   = { git = "https://github.com/vo-lang/volang", rev = "fc07de2a7f74d15c30420402e9df770fb0674f6b", default-features = false, optional = true }
-
-linkme       = { version = "0.3", optional = true }
-vogui        = { path = "../../vogui/rust/ext", default-features = false, optional = true }
-
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys      = { version = "0.3", optional = true, features = [
-    "Document", "Window", "Location", "HtmlCanvasElement", "Element", "DomRect",
-    "KeyboardEvent", "PointerEvent", "MouseEvent", "WheelEvent", "EventTarget",
-    "Performance", "console",
-] }
-js-sys       = { version = "0.3", optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
-
 [workspace]
-
-[patch."https://github.com/vo-lang/volang"]
-vo-common = { path = "../../volang/lang/crates/vo-common" }
-vo-common-core = { path = "../../volang/lang/crates/vo-common-core" }
-vo-ext = { path = "../../volang/lang/crates/vo-ext" }
-vo-ffi-macro = { path = "../../volang/lang/crates/vo-ffi-macro" }
-vo-module = { path = "../../volang/lang/crates/vo-module" }
-vo-runtime = { path = "../../volang/lang/crates/vo-runtime" }
-vo-stdlib = { path = "../../volang/lang/crates/vo-stdlib" }
-vo-syntax = { path = "../../volang/lang/crates/vo-syntax" }
-vo-vm = { path = "../../volang/lang/crates/vo-vm" }
+members = [
+    "crates/voplay-assets",
+    "crates/voplay-audio",
+    "crates/voplay-animation",
+    "crates/voplay-codegen",
+    "crates/voplay-extension",
+    "crates/voplay-import-gltf",
+    "crates/voplay-physics-2d",
+    "crates/voplay-physics-3d",
+    "crates/voplay-protocol",
+    "crates/voplay-render-2d",
+    "crates/voplay-render-3d",
+    "crates/voplay-render-core",
+    "crates/voplay-runtime",
+    "crates/voplay-vogui-editor",
+    "crates/voplay-vogui",
+]
+resolver = "2"
+# Integration crates remain separate package/profile units.

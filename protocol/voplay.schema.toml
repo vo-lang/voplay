@@ -1,0 +1,360 @@
+schema = "voplay.engine"
+schema_format = 1
+payload_major = 1
+payload_minor = 1
+
+[packet]
+endianness = "little"
+header_bytes = 80
+
+[[packet.field]]
+name = "kind"
+type = "message_kind"
+offset = 0
+
+[[packet.field]]
+name = "engine"
+type = "handle"
+offset = 4
+
+[[packet.field]]
+name = "channel_epoch"
+type = "u64"
+offset = 12
+
+[[packet.field]]
+name = "commit_id"
+type = "u64"
+offset = 20
+
+[[packet.field]]
+name = "base_revision"
+type = "u64"
+offset = 28
+
+[[packet.field]]
+name = "new_revision"
+type = "u64"
+offset = 36
+
+[[packet.field]]
+name = "required_control_revision"
+type = "u64"
+offset = 44
+
+[[packet.field]]
+name = "source_simulation_revision"
+type = "u64"
+offset = 52
+
+[[packet.field]]
+name = "sequence"
+type = "u64"
+offset = 60
+
+[[packet.field]]
+name = "payload_len"
+type = "payload_length_u32"
+offset = 76
+
+[limits]
+max_packet_bytes = 67108864
+max_transaction_ops = 131072
+max_snapshot_objects = 1000000
+max_event_payload_bytes = 262144
+max_staged_events = 4096
+max_staged_event_bytes = 4194304
+
+[tick_output]
+magic = "voplay-tick-output-v1\\0"
+endianness = "little"
+count_type = "u32"
+role_type = "u8"
+packet_length_type = "u32"
+max_packets = 4096
+max_packet_bytes = 1048576
+max_bytes = 16777216
+canonical_role_order = ["render", "asset", "audio", "logic"]
+
+[tick_input]
+version = 6
+endianness = "little"
+fixed_header_bytes = 36
+return_count_type = "u32"
+return_packet_length_type = "u32"
+max_return_packets = 4096
+max_return_packet_bytes = 1048576
+max_bytes = 16777216
+canonical_return_role_order = ["render", "asset", "audio", "logic"]
+bootstrap_count_type = "u32"
+bootstrap_handle_type = "u64"
+bootstrap_descriptor_length_type = "u32"
+max_bootstrap_records = 65536
+max_bootstrap_descriptor_bytes = 1048576
+canonical_bootstrap_order = ["initial-entity", "requested-asset", "render-view"]
+
+[[tick_output.role]]
+name = "render"
+tag = 1
+
+[[tick_output.role]]
+name = "asset"
+tag = 2
+
+[[tick_output.role]]
+name = "audio"
+tag = 3
+
+[[tick_output.role]]
+name = "logic"
+tag = 4
+
+[[message]]
+name = "RenderStateTransaction"
+kind = 1
+lane = "framework"
+
+[[message]]
+name = "RenderStateAck"
+kind = 2
+lane = "completion"
+
+[[message]]
+name = "RenderStateSnapshot"
+kind = 3
+lane = "framework"
+
+[[message]]
+name = "RenderEvent"
+kind = 4
+lane = "presentation"
+
+[[message]]
+name = "RenderEventResult"
+kind = 5
+lane = "completion"
+
+[[message]]
+name = "RenderControlTransaction"
+kind = 6
+lane = "control"
+
+[[message]]
+name = "RenderControlAck"
+kind = 7
+lane = "completion"
+
+[[message]]
+name = "AudioControlTransaction"
+kind = 8
+lane = "control"
+
+[[message]]
+name = "AudioEvent"
+kind = 9
+lane = "presentation"
+
+[[message]]
+name = "AudioEventResult"
+kind = 10
+lane = "completion"
+
+[[message]]
+name = "AudioControlAck"
+kind = 11
+lane = "completion"
+
+[[message]]
+name = "EngineStart"
+kind = 12
+lane = "control"
+
+[[message]]
+name = "EngineReady"
+kind = 13
+lane = "completion"
+
+[[message]]
+name = "EngineSuspend"
+kind = 14
+lane = "control"
+
+[[message]]
+name = "EngineResume"
+kind = 15
+lane = "control"
+
+[[message]]
+name = "EngineClose"
+kind = 16
+lane = "control"
+
+[[message]]
+name = "EngineClosed"
+kind = 17
+lane = "completion"
+
+[[message]]
+name = "TickInput"
+kind = 18
+lane = "input"
+
+[[message]]
+name = "TickResult"
+kind = 19
+lane = "completion"
+
+[[message]]
+name = "FramePulse"
+kind = 20
+lane = "presentation"
+
+[[message]]
+name = "AssetRequest"
+kind = 21
+lane = "request"
+
+[[message]]
+name = "AssetCompletion"
+kind = 22
+lane = "completion"
+
+[[message]]
+name = "AssetControl"
+kind = 23
+lane = "control"
+
+[[message]]
+name = "PhysicsBatch"
+kind = 24
+lane = "command"
+
+[[message]]
+name = "PhysicsResult"
+kind = 25
+lane = "completion"
+
+[[message]]
+name = "Diagnostics"
+kind = 26
+lane = "diagnostics"
+
+[[message]]
+name = "InspectionRequest"
+kind = 27
+lane = "request"
+
+[[message]]
+name = "InspectionResponse"
+kind = 28
+lane = "completion"
+
+[[message]]
+name = "RenderTransient"
+kind = 29
+lane = "presentation"
+
+[[message]]
+name = "SurfaceControl"
+kind = 30
+lane = "control"
+
+[[message]]
+name = "DeviceEvent"
+kind = 31
+lane = "control"
+
+[[message]]
+name = "WorkerWake"
+kind = 32
+lane = "control"
+
+[[message]]
+name = "PlatformInput"
+kind = 33
+lane = "input"
+
+[[message]]
+name = "HapticsCommand"
+kind = 34
+lane = "command"
+
+[[message]]
+name = "HapticsResult"
+kind = 35
+lane = "completion"
+
+[[message]]
+name = "AudioAssetData"
+kind = 36
+lane = "command"
+
+[[message]]
+name = "RenderAssetData"
+kind = 37
+lane = "command"
+
+[[message]]
+name = "RenderAssetAck"
+kind = 38
+lane = "completion"
+
+[[message]]
+name = "AudioAssetAck"
+kind = 39
+lane = "completion"
+
+[[message]]
+name = "RenderReadbackRequest"
+kind = 40
+lane = "request"
+
+[[message]]
+name = "RenderReadbackResult"
+kind = 41
+lane = "completion"
+
+[[message]]
+name = "ControlLeaseRequest"
+kind = 42
+lane = "control"
+
+[[message]]
+name = "ControlLeaseGranted"
+kind = 43
+lane = "completion"
+
+[[message]]
+name = "ControlCommit"
+kind = 44
+lane = "control"
+
+[[message]]
+name = "ControlCommitted"
+kind = 45
+lane = "completion"
+
+[[message]]
+name = "ControlRealizationResult"
+kind = 46
+lane = "completion"
+
+[[message]]
+name = "ControlObserved"
+kind = 47
+lane = "control"
+
+[[message]]
+name = "ControlObservedAck"
+kind = 48
+lane = "completion"
+
+[[message]]
+name = "ControlStateAdopt"
+kind = 49
+lane = "control"
+
+[[message]]
+name = "ControlStateAdopted"
+kind = 50
+lane = "completion"

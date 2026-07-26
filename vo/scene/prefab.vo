@@ -1,0 +1,249 @@
+package scene
+
+type PrefabRegistration struct {
+	SourceAsset [16]byte
+	SourceRevision uint64
+	SchemaVersion uint32
+	Dependencies [][16]byte
+}
+
+type PrefabRegistry struct {
+	Entries []PrefabRegistration
+	MaxPrefabs uint32
+	MaxDependencies uint32
+	Fingerprint uint64
+	Frozen bool
+}
+
+func NewPrefabRegistry(maxPrefabs uint32,
+	maxDependencies uint32) (*PrefabRegistry, bool) {
+	if maxPrefabs == 0 || maxPrefabs > 1000000 ||
+		maxDependencies == 0 || maxDependencies > 4096 {
+		return nil, false
+	}
+	return &PrefabRegistry{
+		MaxPrefabs: maxPrefabs, MaxDependencies: maxDependencies,
+	}, true
+}
+
+func (registry *PrefabRegistry) RegisterBatch(values []PrefabRegistration) bool {
+	if registry == nil || registry.Frozen || len(values) == 0 ||
+		len(registry.Entries)+len(values) > int(registry.MaxPrefabs) {
+		return false
+	}
+	staged := clonePrefabRegistrations(registry.Entries)
+	for _, value := range values {
+		if !validPrefabRegistration(value, registry.MaxDependencies) ||
+			findPrefab(staged, value.SourceAsset) >= 0 {
+			return false
+		}
+		staged = append(staged, clonePrefabRegistration(value))
+	}
+	for _, entry := range staged {
+		for _, dependency := range entry.Dependencies {
+			if findPrefab(staged, dependency) < 0 ||
+				prefabCycle(staged, entry.SourceAsset, dependency, nil) {
+				return false
+			}
+		}
+	}
+	sortPrefabRegistrations(staged)
+	registry.Entries = staged
+	return true
+}
+
+func (registry *PrefabRegistry) HotReload(value PrefabRegistration) bool {
+	if registry == nil || registry.Frozen ||
+		!validPrefabRegistration(value, registry.MaxDependencies) {
+		return false
+	}
+	index := findPrefab(registry.Entries, value.SourceAsset)
+	if index < 0 || value.SourceRevision <= registry.Entries[index].SourceRevision {
+		return false
+	}
+	staged := clonePrefabRegistrations(registry.Entries)
+	staged[index] = clonePrefabRegistration(value)
+	for _, entry := range staged {
+		for _, dependency := range entry.Dependencies {
+			if findPrefab(staged, dependency) < 0 ||
+				prefabCycle(staged, entry.SourceAsset, dependency, nil) {
+				return false
+			}
+		}
+	}
+	registry.Entries = staged
+	return true
+}
+
+func (registry *PrefabRegistry) Freeze() (uint64, bool) {
+	if registry == nil || len(registry.Entries) == 0 {
+		return 0, false
+	}
+	if registry.Frozen {
+		return registry.Fingerprint, true
+	}
+	hash := uint64(14695981039346656037)
+	for _, entry := range registry.Entries {
+		for _, value := range entry.SourceAsset {
+			hash = (hash ^ uint64(value)) * 1099511628211
+		}
+		hash = prefabHashU64(hash, entry.SourceRevision)
+		hash = prefabHashU64(hash, uint64(entry.SchemaVersion))
+		dependencies := append([][16]byte{}, entry.Dependencies...)
+		sortPrefabIds(dependencies)
+		for _, dependency := range dependencies {
+			for _, value := range dependency {
+				hash = (hash ^ uint64(value)) * 1099511628211
+			}
+		}
+		hash = (hash ^ 255) * 1099511628211
+	}
+	if hash == 0 {
+		hash = 1
+	}
+	registry.Fingerprint = hash
+	registry.Frozen = true
+	return hash, true
+}
+
+func (registry *PrefabRegistry) Lookup(source [16]byte) (PrefabRegistration, bool) {
+	index := findPrefab(registry.Entries, source)
+	if index < 0 {
+		return PrefabRegistration{}, false
+	}
+	return clonePrefabRegistration(registry.Entries[index]), true
+}
+
+func (registry *PrefabRegistry) InstantiateKey(root SceneRef, parentPath []uint64,
+	instanceSegment uint64, source [16]byte, localObject uint64) (RuntimeObjectKey, bool) {
+	if registry == nil || !registry.Frozen || !root.Valid() ||
+		instanceSegment == 0 || localObject == 0 ||
+		findPrefab(registry.Entries, source) < 0 ||
+		len(parentPath) >= 256 {
+		return RuntimeObjectKey{}, false
+	}
+	for _, segment := range parentPath {
+		if segment == 0 {
+			return RuntimeObjectKey{}, false
+		}
+	}
+	path := append([]uint64{}, parentPath...)
+	path = append(path, instanceSegment)
+	return RuntimeObjectKey{
+		Root: root, PrefabPath: path,
+		SourceAsset: source, LocalObject: localObject,
+	}, true
+}
+
+func validPrefabRegistration(value PrefabRegistration,
+	maxDependencies uint32) bool {
+	if value.SourceAsset == [16]byte{} || value.SourceRevision == 0 ||
+		value.SchemaVersion == 0 ||
+		len(value.Dependencies) > int(maxDependencies) {
+		return false
+	}
+	for index, dependency := range value.Dependencies {
+		if dependency == [16]byte{} || dependency == value.SourceAsset {
+			return false
+		}
+		for previous := 0; previous < index; previous++ {
+			if value.Dependencies[previous] == dependency {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func prefabCycle(entries []PrefabRegistration, origin [16]byte,
+	current [16]byte, visited [][16]byte) bool {
+	if current == origin {
+		return true
+	}
+	if containsPrefabId(visited, current) {
+		return false
+	}
+	index := findPrefab(entries, current)
+	if index < 0 {
+		return false
+	}
+	visited = append(visited, current)
+	for _, dependency := range entries[index].Dependencies {
+		if prefabCycle(entries, origin, dependency, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func findPrefab(entries []PrefabRegistration, source [16]byte) int {
+	for index, entry := range entries {
+		if entry.SourceAsset == source {
+			return index
+		}
+	}
+	return -1
+}
+
+func containsPrefabId(values [][16]byte, expected [16]byte) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func clonePrefabRegistration(value PrefabRegistration) PrefabRegistration {
+	value.Dependencies = append([][16]byte{}, value.Dependencies...)
+	return value
+}
+
+func clonePrefabRegistrations(values []PrefabRegistration) []PrefabRegistration {
+	result := make([]PrefabRegistration, len(values))
+	for index, value := range values {
+		result[index] = clonePrefabRegistration(value)
+	}
+	return result
+}
+
+func sortPrefabRegistrations(values []PrefabRegistration) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && prefabIdLess(value.SourceAsset,
+			values[cursor-1].SourceAsset) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortPrefabIds(values [][16]byte) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && prefabIdLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func prefabIdLess(left [16]byte, right [16]byte) bool {
+	for index := 0; index < 16; index++ {
+		if left[index] != right[index] {
+			return left[index] < right[index]
+		}
+	}
+	return false
+}
+
+func prefabHashU64(hash uint64, value uint64) uint64 {
+	for shift := uint32(0); shift < 64; shift += 8 {
+		hash = (hash ^ uint64(byte(value >> shift))) * 1099511628211
+	}
+	return hash
+}

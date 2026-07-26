@@ -1,0 +1,17 @@
+format = 1
+
+[[generation]]
+provider = "voplay.component-store"
+version = "12"
+schema_kind = "voplay.components"
+executable = "rust/target/debug/voplay-generator-provider"
+schema = "components.schema.example.toml"
+outputs = [
+  # Vo sources live in the package directory so ordinary package collection
+  # sees them before name resolution. Non-source manifests stay under generated/.
+  "transform_component.vo",
+  "velocity_component.vo",
+  "example_game_game.vo",
+  "generated/voplay_components.manifest",
+]
+capabilities = ["core"]

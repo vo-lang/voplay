@@ -1,0 +1,132 @@
+package editor
+
+type FaultPoint uint32
+
+const (
+	FaultProtocolDecode FaultPoint = iota + 1
+	FaultEndpointQueue
+	FaultWorkerDispatch
+	FaultResourceAcquire
+	FaultSurfaceSubmit
+	FaultSurfacePresent
+	FaultDeviceOperation
+	FaultAudioOperation
+	FaultReadback
+	FaultFrameCapture
+	FaultShutdown
+)
+
+type InjectedFault uint32
+
+const (
+	FaultRejectBeforeDispatch InjectedFault = iota + 1
+	FaultFailOwner
+	FaultDropLatestOnly
+	FaultOutcomeUnknown
+	FaultSurfaceLost
+	FaultDeviceLost
+	FaultAudioDeviceLost
+)
+
+type FaultRule struct {
+	Point FaultPoint
+	Fault InjectedFault
+	Skip uint64
+	Every uint64
+	Remaining uint64
+}
+
+type FaultInjectionMetrics struct {
+	InstalledRules uint64
+	Evaluated uint64
+	Injected uint64
+	Exhausted uint64
+}
+
+type FaultInjectionResponse struct {
+	Action uint32
+	Affected uint64
+	Metrics FaultInjectionMetrics
+}
+
+func EncodeFaultInstall(rule FaultRule) []byte {
+	if !validFaultPoint(rule.Point) || !validInjectedFault(rule.Fault) || rule.Every == 0 ||
+		rule.Remaining == 0 {
+		return nil
+	}
+	bytes := faultCommandPrefix(1)
+	bytes = append(bytes, byte(rule.Point), byte(rule.Fault), 0, 0, 0, 0, 0, 0)
+	bytes = appendFaultU64(bytes, rule.Skip)
+	bytes = appendFaultU64(bytes, rule.Every)
+	return appendFaultU64(bytes, rule.Remaining)
+}
+
+func EncodeFaultRemove(point FaultPoint) []byte {
+	if !validFaultPoint(point) {
+		return nil
+	}
+	bytes := faultCommandPrefix(2)
+	return append(bytes, byte(point), 0, 0, 0, 0, 0, 0, 0)
+}
+
+func EncodeFaultClear() []byte {
+	return faultCommandPrefix(3)
+}
+
+func EncodeFaultMetricsRequest() []byte {
+	return faultCommandPrefix(4)
+}
+
+func DecodeFaultInjectionResponse(bytes []byte) (FaultInjectionResponse, bool) {
+	if len(bytes) != 48 || bytes[0] != 'V' || bytes[1] != 'F' || bytes[2] != 'I' || bytes[3] != '2' ||
+		bytes[4] != 1 ||
+		bytes[5] != 0 ||
+		bytes[6] < 1 ||
+		bytes[6] > 4 ||
+		bytes[7] != 0 {
+		return FaultInjectionResponse{}, false
+	}
+	affected, okAffected := readFaultU64(bytes, 8)
+	installed, okInstalled := readFaultU64(bytes, 16)
+	evaluated, okEvaluated := readFaultU64(bytes, 24)
+	injected, okInjected := readFaultU64(bytes, 32)
+	exhausted, okExhausted := readFaultU64(bytes, 40)
+	if !okAffected || !okInstalled || !okEvaluated || !okInjected || !okExhausted {
+		return FaultInjectionResponse{}, false
+	}
+	return FaultInjectionResponse{
+		Action: uint32(bytes[6]), Affected: affected,
+		Metrics: FaultInjectionMetrics{
+			InstalledRules: installed, Evaluated: evaluated, Injected: injected, Exhausted: exhausted,
+		},
+	}, true
+}
+
+func faultCommandPrefix(action uint32) []byte {
+	return []byte{'V', 'F', 'I', '1', 1, 0, byte(action), 0}
+}
+
+func validFaultPoint(point FaultPoint) bool {
+	return point >= FaultProtocolDecode && point <= FaultShutdown
+}
+
+func validInjectedFault(fault InjectedFault) bool {
+	return fault >= FaultRejectBeforeDispatch && fault <= FaultAudioDeviceLost
+}
+
+func appendFaultU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func readFaultU64(bytes []byte, offset int) (uint64, bool) {
+	if offset < 0 || offset + 8 > len(bytes) {
+		return 0, false
+	}
+	return uint64(bytes[offset]) | uint64(bytes[offset + 1]) << 8 | uint64(bytes[offset + 2]) << 16 |
+		uint64(bytes[offset + 3]) << 24 |
+		uint64(bytes[offset + 4]) << 32 |
+		uint64(bytes[offset + 5]) << 40 |
+		uint64(bytes[offset + 6]) << 48 |
+		uint64(bytes[offset + 7]) << 56, true
+}

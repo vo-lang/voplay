@@ -1,0 +1,482 @@
+package input
+
+type InputSnapshot struct {
+	Tick uint64
+	Sequence uint64
+	FromTimestampMicros uint64
+	ThroughTimestampMicros uint64
+	ActionMapRevision uint64
+	Buttons []byte
+	Axes []int32
+	Text []byte
+}
+
+type ActionId struct {
+	Value uint64
+}
+
+type ActionValue struct {
+	Action ActionId
+	XMilli int32
+	YMilli int32
+	Pressed bool
+}
+
+type DeviceId struct {
+	Index uint32
+	Generation uint32
+}
+
+type DeviceKind uint32
+
+const (
+	DeviceKeyboard DeviceKind = iota + 1
+	DevicePointer
+	DeviceTouch
+	DeviceGamepad
+)
+
+type DeviceDescriptor struct {
+	Device DeviceId
+	Kind DeviceKind
+	PlatformIndex uint32
+	Mapping []byte
+}
+
+type ActionBinding struct {
+	Kind uint16
+	Code uint32
+	Action ActionId
+}
+
+type ActionMap struct {
+	Revision uint64
+	Bindings []ActionBinding
+}
+
+type InputScopeId struct {
+	EngineIndex uint32
+	EngineGeneration uint32
+	ScopeIndex uint32
+	ScopeGeneration uint32
+}
+
+type RumbleRequest struct {
+	RequestId uint64
+	Scope InputScopeId
+	Device DeviceId
+	DurationMillis uint32
+	StrongMagnitude uint16
+	WeakMagnitude uint16
+	DeadlineMillis uint64
+}
+
+type HapticsOutcome uint32
+
+const (
+	HapticsSucceeded HapticsOutcome = iota + 1
+	HapticsUnsupported
+	HapticsCancelled
+	HapticsDeviceLost
+	HapticsFailed
+	HapticsTimedOut
+)
+
+type HapticsCompletion struct {
+	RequestId uint64
+	Scope InputScopeId
+	Device DeviceId
+	Outcome HapticsOutcome
+}
+
+type HapticsCommandKind uint32
+
+const (
+	HapticsStart HapticsCommandKind = iota + 1
+	HapticsCancel
+)
+
+type HapticsCommand struct {
+	Kind HapticsCommandKind
+	Request RumbleRequest
+	RequestId uint64
+	Device DeviceId
+}
+
+type hapticsPending struct {
+	Request RumbleRequest
+	Started bool
+}
+
+type HapticsBridge struct {
+	Devices []DeviceId
+	Pending []hapticsPending
+	Commands []HapticsCommand
+	Completions []HapticsCompletion
+	MaxDevices uint32
+	MaxPending uint32
+	MaxCommands uint32
+	MaxCompletions uint32
+}
+
+func NewHapticsBridge(maxDevices uint32, maxPending uint32,
+	maxCommands uint32, maxCompletions uint32) (*HapticsBridge, bool) {
+	if maxDevices == 0 || maxDevices > 256 ||
+		maxPending == 0 || maxPending > 4096 ||
+		maxCommands == 0 || maxCommands > 8192 ||
+		maxCompletions == 0 || maxCompletions > 8192 {
+		return nil, false
+	}
+	return &HapticsBridge{
+		MaxDevices: maxDevices, MaxPending: maxPending,
+		MaxCommands: maxCommands, MaxCompletions: maxCompletions,
+	}, true
+}
+
+func (bridge *HapticsBridge) Connect(device DeviceId) bool {
+	if bridge == nil || !device.Valid() {
+		return false
+	}
+	for _, current := range bridge.Devices {
+		if current == device {
+			return true
+		}
+		if current.Index == device.Index &&
+			current.Generation > device.Generation {
+			return false
+		}
+	}
+	if len(bridge.Devices) >= int(bridge.MaxDevices) {
+		return false
+	}
+	for index, current := range bridge.Devices {
+		if current.Index == device.Index {
+			bridge.loseDeviceAt(index, HapticsDeviceLost)
+			bridge.Devices[index] = device
+			return true
+		}
+	}
+	bridge.Devices = append(bridge.Devices, device)
+	sortHapticsDevices(bridge.Devices)
+	return true
+}
+
+func (bridge *HapticsBridge) Disconnect(device DeviceId) bool {
+	if bridge == nil {
+		return false
+	}
+	for index, current := range bridge.Devices {
+		if current == device {
+			bridge.loseDeviceAt(index, HapticsDeviceLost)
+			bridge.Devices = append(bridge.Devices[:index],
+				bridge.Devices[index+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (bridge *HapticsBridge) Request(request RumbleRequest,
+	nowMillis uint64) bool {
+	if bridge == nil || !request.Valid() ||
+		request.DeadlineMillis <= nowMillis ||
+		len(bridge.Pending) >= int(bridge.MaxPending) ||
+		len(bridge.Commands) >= int(bridge.MaxCommands) ||
+		!bridge.hasDevice(request.Device) {
+		return false
+	}
+	for _, pending := range bridge.Pending {
+		if pending.Request.RequestId == request.RequestId {
+			return false
+		}
+	}
+	bridge.Pending = append(bridge.Pending, hapticsPending{Request: request})
+	bridge.Commands = append(bridge.Commands, HapticsCommand{
+		Kind: HapticsStart, Request: request,
+		RequestId: request.RequestId, Device: request.Device,
+	})
+	return true
+}
+
+func (bridge *HapticsBridge) Cancel(requestId uint64) bool {
+	if bridge == nil || requestId == 0 ||
+		len(bridge.Commands) >= int(bridge.MaxCommands) {
+		return false
+	}
+	for _, pending := range bridge.Pending {
+		if pending.Request.RequestId == requestId {
+			bridge.Commands = append(bridge.Commands, HapticsCommand{
+				Kind: HapticsCancel, RequestId: requestId,
+				Device: pending.Request.Device,
+			})
+			return true
+		}
+	}
+	return false
+}
+
+func (bridge *HapticsBridge) TakeCommands(max uint32) []HapticsCommand {
+	if bridge == nil || max == 0 || len(bridge.Commands) == 0 {
+		return nil
+	}
+	count := int(max)
+	if count > len(bridge.Commands) {
+		count = len(bridge.Commands)
+	}
+	result := append([]HapticsCommand{}, bridge.Commands[:count]...)
+	bridge.Commands = append([]HapticsCommand{}, bridge.Commands[count:]...)
+	for _, command := range result {
+		if command.Kind == HapticsStart {
+			for index, pending := range bridge.Pending {
+				if pending.Request.RequestId == command.RequestId {
+					bridge.Pending[index].Started = true
+					break
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (bridge *HapticsBridge) Complete(requestId uint64,
+	outcome HapticsOutcome) bool {
+	if bridge == nil || requestId == 0 ||
+		outcome < HapticsSucceeded || outcome > HapticsTimedOut ||
+		len(bridge.Completions) >= int(bridge.MaxCompletions) {
+		return false
+	}
+	for index, pending := range bridge.Pending {
+		if pending.Request.RequestId == requestId {
+			bridge.Completions = append(bridge.Completions,
+				HapticsCompletion{
+					RequestId: requestId, Scope: pending.Request.Scope,
+					Device: pending.Request.Device, Outcome: outcome,
+				})
+			bridge.Pending = append(bridge.Pending[:index],
+				bridge.Pending[index+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (bridge *HapticsBridge) Expire(nowMillis uint64) uint32 {
+	if bridge == nil {
+		return 0
+	}
+	expired := uint32(0)
+	for index := len(bridge.Pending) - 1; index >= 0; index-- {
+		pending := bridge.Pending[index]
+		if pending.Request.DeadlineMillis > nowMillis ||
+			len(bridge.Completions) >= int(bridge.MaxCompletions) {
+			continue
+		}
+		bridge.Completions = append(bridge.Completions,
+			HapticsCompletion{
+				RequestId: pending.Request.RequestId,
+				Scope: pending.Request.Scope, Device: pending.Request.Device,
+				Outcome: HapticsTimedOut,
+			})
+		bridge.Pending = append(bridge.Pending[:index],
+			bridge.Pending[index+1:]...)
+		expired++
+	}
+	return expired
+}
+
+func (bridge *HapticsBridge) CloseScope(scope InputScopeId) uint32 {
+	if bridge == nil || !scope.Valid() {
+		return 0
+	}
+	closed := uint32(0)
+	for index := len(bridge.Pending) - 1; index >= 0; index-- {
+		pending := bridge.Pending[index]
+		if pending.Request.Scope != scope ||
+			len(bridge.Completions) >= int(bridge.MaxCompletions) {
+			continue
+		}
+		bridge.Completions = append(bridge.Completions,
+			HapticsCompletion{
+				RequestId: pending.Request.RequestId, Scope: scope,
+				Device: pending.Request.Device, Outcome: HapticsCancelled,
+			})
+		bridge.Pending = append(bridge.Pending[:index],
+			bridge.Pending[index+1:]...)
+		closed++
+	}
+	return closed
+}
+
+func (bridge *HapticsBridge) TakeCompletions(
+	max uint32) []HapticsCompletion {
+	if bridge == nil || max == 0 || len(bridge.Completions) == 0 {
+		return nil
+	}
+	count := int(max)
+	if count > len(bridge.Completions) {
+		count = len(bridge.Completions)
+	}
+	result := append([]HapticsCompletion{},
+		bridge.Completions[:count]...)
+	bridge.Completions = append([]HapticsCompletion{},
+		bridge.Completions[count:]...)
+	return result
+}
+
+func (bridge *HapticsBridge) hasDevice(device DeviceId) bool {
+	for _, current := range bridge.Devices {
+		if current == device {
+			return true
+		}
+	}
+	return false
+}
+
+func (bridge *HapticsBridge) loseDeviceAt(
+	deviceIndex int, outcome HapticsOutcome) {
+	device := bridge.Devices[deviceIndex]
+	for index := len(bridge.Pending) - 1; index >= 0; index-- {
+		pending := bridge.Pending[index]
+		if pending.Request.Device != device ||
+			len(bridge.Completions) >= int(bridge.MaxCompletions) {
+			continue
+		}
+		bridge.Completions = append(bridge.Completions,
+			HapticsCompletion{
+				RequestId: pending.Request.RequestId,
+				Scope: pending.Request.Scope, Device: device,
+				Outcome: outcome,
+			})
+		bridge.Pending = append(bridge.Pending[:index],
+			bridge.Pending[index+1:]...)
+	}
+}
+
+func sortHapticsDevices(devices []DeviceId) {
+	for index := 1; index < len(devices); index++ {
+		value := devices[index]
+		position := index
+		for position > 0 &&
+			(devices[position-1].Index > value.Index ||
+				(devices[position-1].Index == value.Index &&
+					devices[position-1].Generation > value.Generation)) {
+			devices[position] = devices[position-1]
+			position--
+		}
+		devices[position] = value
+	}
+}
+
+type PlatformEvent struct {
+	Sequence uint64
+	TimestampMicros uint64
+	Scope InputScopeId
+	Device DeviceId
+	Kind uint16
+	Code uint32
+	Value int32
+	Modifiers uint16
+	ConsumedByUi bool
+	Payload []byte
+}
+
+func DecodePlatformEvent(bytes []byte) (PlatformEvent, bool) {
+	if len(bytes) < 73 ||
+		bytes[0] != 'v' || bytes[1] != 'o' || bytes[2] != 'p' || bytes[3] != 'l' ||
+		bytes[4] != 'a' || bytes[5] != 'y' || bytes[6] != '-' || bytes[7] != 'i' ||
+		bytes[8] != 'n' || bytes[9] != 'p' || bytes[10] != 'u' || bytes[11] != 't' ||
+		bytes[12] != '-' || bytes[13] != 'v' || bytes[14] != '1' || bytes[15] != 0 {
+		return PlatformEvent{}, false
+	}
+	payloadLength := readInputU32(bytes, 69)
+	if payloadLength > 65536 || int(payloadLength) != len(bytes)-73 ||
+		(bytes[68] != 0 && bytes[68] != 1) {
+		return PlatformEvent{}, false
+	}
+	event := PlatformEvent{
+		Sequence: readInputU64(bytes, 16),
+		TimestampMicros: readInputU64(bytes, 24),
+		Scope: InputScopeId{
+			EngineIndex: readInputU32(bytes, 32),
+			EngineGeneration: readInputU32(bytes, 36),
+			ScopeIndex: readInputU32(bytes, 40),
+			ScopeGeneration: readInputU32(bytes, 44),
+		},
+		Device: DeviceId{
+			Index: readInputU32(bytes, 48),
+			Generation: readInputU32(bytes, 52),
+		},
+		Kind: readInputU16(bytes, 56),
+		Code: readInputU32(bytes, 58),
+		Value: int32(readInputU32(bytes, 62)),
+		Modifiers: readInputU16(bytes, 66),
+		ConsumedByUi: bytes[68] == 1,
+		Payload: append([]byte{}, bytes[73:]...),
+	}
+	if event.Sequence == 0 || !event.Scope.Valid() || !event.Device.Valid() ||
+		event.Kind == 0 {
+		return PlatformEvent{}, false
+	}
+	return event, true
+}
+
+func (device DeviceId) Valid() bool {
+	return device.Index != 4294967295 && device.Generation != 0
+}
+
+func (descriptor DeviceDescriptor) Valid() bool {
+	return descriptor.Device.Valid() && descriptor.Kind >= DeviceKeyboard &&
+		descriptor.Kind <= DeviceGamepad &&
+		len(descriptor.Mapping) <= 65536
+}
+
+func (actionMap ActionMap) Valid() bool {
+	if actionMap.Revision == 0 || len(actionMap.Bindings) > 4096 {
+		return false
+	}
+	for index, binding := range actionMap.Bindings {
+		if binding.Kind == 0 || binding.Code == 0 || binding.Action.Value == 0 {
+			return false
+		}
+		for previous := 0; previous < index; previous++ {
+			other := actionMap.Bindings[previous]
+			if other.Kind == binding.Kind && other.Code == binding.Code {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (scope InputScopeId) Valid() bool {
+	return scope.EngineIndex != 4294967295 && scope.EngineGeneration != 0 &&
+		scope.ScopeIndex != 4294967295 &&
+		scope.ScopeGeneration != 0
+}
+
+func readInputU16(bytes []byte, offset int) uint16 {
+	return uint16(bytes[offset]) | uint16(bytes[offset+1]) << 8
+}
+
+func readInputU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) | uint32(bytes[offset+1]) << 8 |
+		uint32(bytes[offset+2]) << 16 | uint32(bytes[offset+3]) << 24
+}
+
+func readInputU64(bytes []byte, offset int) uint64 {
+	return uint64(readInputU32(bytes, offset)) | uint64(readInputU32(bytes, offset+4)) << 32
+}
+
+func (request RumbleRequest) Valid() bool {
+	return request.RequestId != 0 && request.Scope.Valid() && request.Device.Valid() &&
+		request.DurationMillis != 0 &&
+		request.DurationMillis <= 60000 &&
+		(request.StrongMagnitude != 0 || request.WeakMagnitude != 0) &&
+		request.DeadlineMillis != 0
+}
+
+func (completion HapticsCompletion) Valid() bool {
+	return completion.RequestId != 0 && completion.Scope.Valid() && completion.Device.Valid() &&
+		completion.Outcome >= HapticsSucceeded &&
+		completion.Outcome <= HapticsTimedOut
+}

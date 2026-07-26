@@ -1,0 +1,405 @@
+package animation
+
+type ClipRef struct {
+	Index uint32
+	Generation uint32
+}
+
+func (clip ClipRef) Valid() bool {
+	return clip.Index != 0 && clip.Generation != 0
+}
+
+type AnimatorState struct {
+	Clip ClipRef
+	LocalTick uint64
+	SpeedMilli int32
+	Looping bool
+}
+
+type Transition struct {
+	From ClipRef
+	To ClipRef
+	DurationTicks uint32
+}
+
+type StateId uint32
+
+type ParameterId uint32
+
+type StateDescriptor struct {
+	Id StateId
+	Clip ClipRef
+	DurationTicks uint64
+	SpeedMilli int32
+	Looping bool
+	RootMotionPerTick [3]int64
+	EventTicks []uint64
+	EventKinds []uint64
+}
+
+type TransitionCondition struct {
+	Parameter ParameterId
+	Minimum int64
+	Maximum int64
+}
+
+type TransitionDescriptor struct {
+	From StateId
+	To StateId
+	DurationTicks uint32
+	Priority int32
+	Conditions []TransitionCondition
+}
+
+type MachineDescriptor struct {
+	Initial StateId
+	States []StateDescriptor
+	Transitions []TransitionDescriptor
+	MaxParameters uint32
+	MaxEventsPerTick uint32
+}
+
+type ParameterValue struct {
+	Id ParameterId
+	Value int64
+}
+
+type GameplayEvent struct {
+	Tick uint64
+	Kind uint64
+	State StateId
+	LocalTick uint64
+}
+
+type Pose struct {
+	State StateId
+	Previous StateId
+	Clip ClipRef
+	PreviousClip ClipRef
+	LocalTick uint64
+	BlendElapsed uint32
+	BlendDuration uint32
+	RootMotion [3]int64
+}
+
+type MachineSnapshot struct {
+	Tick uint64
+	State StateId
+	Previous StateId
+	LocalTick uint64
+	PreviousLocalTick uint64
+	BlendElapsed uint32
+	BlendDuration uint32
+	Parameters []ParameterValue
+}
+
+type Machine struct {
+	Descriptor MachineDescriptor
+	Tick uint64
+	State StateId
+	Previous StateId
+	LocalTick uint64
+	PreviousLocalTick uint64
+	BlendElapsed uint32
+	BlendDuration uint32
+	Parameters []ParameterValue
+	Events []GameplayEvent
+}
+
+func NewMachine(descriptor MachineDescriptor) (*Machine, bool) {
+	if !validateDescriptor(descriptor) {
+		return nil, false
+	}
+	return &Machine{Descriptor: descriptor, State: descriptor.Initial}, true
+}
+
+func (machine *Machine) SetParameter(id ParameterId, value int64) bool {
+	if machine == nil || id == 0 {
+		return false
+	}
+	for index, parameter := range machine.Parameters {
+		if parameter.Id == id {
+			machine.Parameters[index].Value = value
+			return true
+		}
+	}
+	if len(machine.Parameters) >= int(machine.Descriptor.MaxParameters) {
+		return false
+	}
+	machine.Parameters = append(machine.Parameters, ParameterValue{Id: id, Value: value})
+	sortParameters(machine.Parameters)
+	return true
+}
+
+func (machine *Machine) RemoveParameter(id ParameterId) bool {
+	if machine == nil || id == 0 {
+		return false
+	}
+	for index, parameter := range machine.Parameters {
+		if parameter.Id == id {
+			copy(machine.Parameters[index:], machine.Parameters[index+1:])
+			machine.Parameters = machine.Parameters[:len(machine.Parameters)-1]
+			return true
+		}
+	}
+	return false
+}
+
+func (machine *Machine) Parameter(id ParameterId) (int64, bool) {
+	if machine == nil {
+		return 0, false
+	}
+	for _, parameter := range machine.Parameters {
+		if parameter.Id == id {
+			return parameter.Value, true
+		}
+	}
+	return 0, false
+}
+
+func (machine *Machine) Step(tick uint64) (Pose, []GameplayEvent, bool) {
+	if machine == nil || tick == 0 || tick != machine.Tick+1 {
+		return Pose{}, nil, false
+	}
+	current, ok := machine.state(machine.State)
+	if !ok {
+		return Pose{}, nil, false
+	}
+	machine.Events = machine.Events[:0]
+	next, transitioning := machine.selectTransition(machine.State)
+	if transitioning {
+		machine.Previous = machine.State
+		machine.PreviousLocalTick = machine.LocalTick
+		machine.State = next.To
+		machine.LocalTick = 0
+		machine.BlendElapsed = 0
+		machine.BlendDuration = next.DurationTicks
+		current, ok = machine.state(machine.State)
+		if !ok {
+			return Pose{}, nil, false
+		}
+	}
+	speed := current.SpeedMilli
+	if speed <= 0 {
+		speed = 1000
+	}
+	advance := uint64(speed) / 1000
+	if advance == 0 {
+		advance = 1
+	}
+	startTick := machine.LocalTick
+	endTick := startTick + advance
+	if endTick < startTick {
+		return Pose{}, nil, false
+	}
+	if current.DurationTicks != 0 && endTick >= current.DurationTicks {
+		if current.Looping {
+			endTick = endTick % current.DurationTicks
+		} else {
+			endTick = current.DurationTicks
+		}
+	}
+	machine.emitEvents(tick, current, startTick, endTick)
+	machine.LocalTick = endTick
+	if machine.BlendDuration != 0 && machine.BlendElapsed < machine.BlendDuration {
+		machine.BlendElapsed++
+		if machine.BlendElapsed >= machine.BlendDuration {
+			machine.Previous = 0
+			machine.PreviousLocalTick = 0
+			machine.BlendDuration = 0
+			machine.BlendElapsed = 0
+		}
+	}
+	machine.Tick = tick
+	previousClip := ClipRef{}
+	if machine.Previous != 0 {
+		if previous, found := machine.state(machine.Previous); found {
+			previousClip = previous.Clip
+		}
+	}
+	pose := Pose{
+		State: machine.State, Previous: machine.Previous,
+		Clip: current.Clip, PreviousClip: previousClip,
+		LocalTick: machine.LocalTick, BlendElapsed: machine.BlendElapsed,
+		BlendDuration: machine.BlendDuration,
+		RootMotion: current.RootMotionPerTick,
+	}
+	return pose, append([]GameplayEvent{}, machine.Events...), true
+}
+
+func (machine *Machine) Snapshot() (MachineSnapshot, bool) {
+	if machine == nil {
+		return MachineSnapshot{}, false
+	}
+	return MachineSnapshot{
+		Tick: machine.Tick, State: machine.State, Previous: machine.Previous,
+		LocalTick: machine.LocalTick, PreviousLocalTick: machine.PreviousLocalTick,
+		BlendElapsed: machine.BlendElapsed, BlendDuration: machine.BlendDuration,
+		Parameters: append([]ParameterValue{}, machine.Parameters...),
+	}, true
+}
+
+func (machine *Machine) Restore(snapshot MachineSnapshot) bool {
+	if machine == nil || len(snapshot.Parameters) > int(machine.Descriptor.MaxParameters) {
+		return false
+	}
+	if _, ok := machine.state(snapshot.State); !ok {
+		return false
+	}
+	if snapshot.Previous != 0 {
+		if _, ok := machine.state(snapshot.Previous); !ok {
+			return false
+		}
+	}
+	for index, parameter := range snapshot.Parameters {
+		if parameter.Id == 0 ||
+			index > 0 && snapshot.Parameters[index-1].Id >= parameter.Id {
+			return false
+		}
+	}
+	if snapshot.BlendElapsed > snapshot.BlendDuration ||
+		snapshot.BlendDuration == 0 && snapshot.Previous != 0 {
+		return false
+	}
+	machine.Tick = snapshot.Tick
+	machine.State = snapshot.State
+	machine.Previous = snapshot.Previous
+	machine.LocalTick = snapshot.LocalTick
+	machine.PreviousLocalTick = snapshot.PreviousLocalTick
+	machine.BlendElapsed = snapshot.BlendElapsed
+	machine.BlendDuration = snapshot.BlendDuration
+	machine.Parameters = append([]ParameterValue{}, snapshot.Parameters...)
+	machine.Events = nil
+	return true
+}
+
+func (machine *Machine) selectTransition(state StateId) (TransitionDescriptor, bool) {
+	selected := TransitionDescriptor{}
+	found := false
+	for _, transition := range machine.Descriptor.Transitions {
+		if transition.From != state || !machine.conditionsMatch(transition.Conditions) {
+			continue
+		}
+		if !found || transition.Priority > selected.Priority ||
+			transition.Priority == selected.Priority && transition.To < selected.To {
+			selected = transition
+			found = true
+		}
+	}
+	return selected, found
+}
+
+func (machine *Machine) conditionsMatch(conditions []TransitionCondition) bool {
+	for _, condition := range conditions {
+		value, ok := machine.Parameter(condition.Parameter)
+		if !ok || value < condition.Minimum || value > condition.Maximum {
+			return false
+		}
+	}
+	return true
+}
+
+func (machine *Machine) emitEvents(tick uint64, state StateDescriptor,
+	start uint64, end uint64) {
+	for index, eventTick := range state.EventTicks {
+		reached := eventTick > start && eventTick <= end
+		if state.Looping && end < start {
+			reached = eventTick > start || eventTick <= end
+		}
+		if reached && len(machine.Events) < int(machine.Descriptor.MaxEventsPerTick) {
+			machine.Events = append(machine.Events, GameplayEvent{
+				Tick: tick, Kind: state.EventKinds[index],
+				State: state.Id, LocalTick: eventTick,
+			})
+		}
+	}
+}
+
+func (machine *Machine) state(id StateId) (StateDescriptor, bool) {
+	for _, state := range machine.Descriptor.States {
+		if state.Id == id {
+			return state, true
+		}
+	}
+	return StateDescriptor{}, false
+}
+
+func validateDescriptor(descriptor MachineDescriptor) bool {
+	if descriptor.Initial == 0 || len(descriptor.States) == 0 ||
+		len(descriptor.States) > 4096 || len(descriptor.Transitions) > 65536 ||
+		descriptor.MaxParameters == 0 || descriptor.MaxParameters > 4096 ||
+		descriptor.MaxEventsPerTick == 0 || descriptor.MaxEventsPerTick > 65536 {
+		return false
+	}
+	foundInitial := false
+	for index, state := range descriptor.States {
+		if state.Id == 0 || !state.Clip.Valid() || state.DurationTicks == 0 ||
+			len(state.EventTicks) != len(state.EventKinds) {
+			return false
+		}
+		if state.Id == descriptor.Initial {
+			foundInitial = true
+		}
+		for previous := 0; previous < index; previous++ {
+			if descriptor.States[previous].Id == state.Id {
+				return false
+			}
+		}
+		for eventIndex, eventTick := range state.EventTicks {
+			if eventTick > state.DurationTicks || state.EventKinds[eventIndex] == 0 ||
+				eventIndex > 0 && state.EventTicks[eventIndex-1] >= eventTick {
+				return false
+			}
+		}
+	}
+	if !foundInitial {
+		return false
+	}
+	for index, transition := range descriptor.Transitions {
+		if transition.From == 0 || transition.To == 0 ||
+			transition.From == transition.To ||
+			!hasState(descriptor.States, transition.From) ||
+			!hasState(descriptor.States, transition.To) {
+			return false
+		}
+		for conditionIndex, condition := range transition.Conditions {
+			if condition.Parameter == 0 || condition.Minimum > condition.Maximum {
+				return false
+			}
+			for previous := 0; previous < conditionIndex; previous++ {
+				if transition.Conditions[previous].Parameter == condition.Parameter {
+					return false
+				}
+			}
+		}
+		for previous := 0; previous < index; previous++ {
+			other := descriptor.Transitions[previous]
+			if other.From == transition.From && other.To == transition.To &&
+				other.Priority == transition.Priority {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func hasState(states []StateDescriptor, expected StateId) bool {
+	for _, state := range states {
+		if state.Id == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortParameters(parameters []ParameterValue) {
+	for index := 1; index < len(parameters); index++ {
+		value := parameters[index]
+		cursor := index
+		for cursor > 0 && parameters[cursor-1].Id > value.Id {
+			parameters[cursor] = parameters[cursor-1]
+			cursor--
+		}
+		parameters[cursor] = value
+	}
+}

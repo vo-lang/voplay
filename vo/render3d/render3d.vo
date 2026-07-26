@@ -1,0 +1,475 @@
+package render3d
+
+type MeshRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type MaterialRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type MeshAsset struct {
+	Id uint64
+	VertexCount uint32
+	IndexCount uint32
+	Skinned bool
+}
+
+type MeshInstance struct {
+	Mesh MeshRef
+	Material MaterialRef
+	Flags uint32
+}
+
+type CameraProjectionKind uint32
+
+const (
+	CameraPerspective CameraProjectionKind = iota + 1
+	CameraOrthographic
+)
+
+type CameraProjection struct {
+	Kind CameraProjectionKind
+	VerticalFovMillidegrees uint32
+	VerticalHeightMilli uint32
+	NearMilli uint32
+	FarMilli uint32
+}
+
+type Camera3d struct {
+	Projection CameraProjection
+	ExposureMilli int32
+}
+
+type LodMesh struct {
+	MeshAsset uint64
+	MaxDistanceMilli uint64
+}
+
+type RetainedMeshInstance struct {
+	MaterialAsset uint64
+	Layers uint64
+	CastsShadow bool
+	ReceivesShadow bool
+	Lods []LodMesh
+}
+
+type LightKind uint32
+
+const (
+	LightDirectional LightKind = iota + 1
+	LightPoint
+	LightSpot
+)
+
+type RetainedLight struct {
+	Kind LightKind
+	OuterAngleQ16 uint16
+	Color [3]uint16
+	IntensityMilli uint32
+	RangeMilli uint32
+	CastsShadow bool
+}
+
+type AlphaMode uint32
+
+const (
+	AlphaOpaque AlphaMode = iota + 1
+	AlphaMask
+	AlphaBlend
+)
+
+type Material struct {
+	Id uint64
+	BaseMaterial uint64
+	BaseColor [4]uint16
+	Metallic uint16
+	Roughness uint16
+	Emissive [3]uint16
+	Alpha AlphaMode
+	AlphaCutoff uint16
+	DoubleSided bool
+	Unlit bool
+	Textures [5]uint64
+	Revision uint64
+}
+
+type TerrainPatch struct {
+	Id uint64
+	Heightmap uint64
+	Material uint64
+	Origin [3]int64
+	Size [2]uint32
+	HeightScaleMilli uint32
+	Lod uint32
+	Neighbors [4]uint32
+	Layers uint64
+}
+
+type HeightmapArtifact struct {
+	Id uint64
+	Width uint32
+	Height uint32
+	Samples []uint16
+}
+
+type DecalComposition uint32
+
+const (
+	DecalBeforeLighting DecalComposition = iota + 1
+	DecalAfterLighting
+)
+
+type Decal struct {
+	Id uint64
+	Material uint64
+	Transform [16]int64
+	Composition DecalComposition
+	LayerMask uint64
+	FadeStartMilli uint64
+	FadeEndMilli uint64
+}
+
+type ScatterField struct {
+	Id uint64
+	Seed uint64
+	Mesh uint64
+	Material uint64
+	Bounds [4]int64
+	DensityPerMillion uint32
+	MinScaleMilli uint32
+	MaxScaleMilli uint32
+	MaxInstances uint32
+	Layers uint64
+}
+
+type ParticleEmitter3d struct {
+	Id uint64
+	Seed uint64
+	Mesh uint64
+	Material uint64
+	MaxParticles uint32
+	SpawnPerTick uint32
+	LifetimeTicks uint32
+	Position [3]int64
+	VelocityMin [3]int64
+	VelocityMax [3]int64
+	StartScaleMilli uint32
+	EndScaleMilli uint32
+	Layers uint64
+}
+
+type ToneMap uint32
+
+const (
+	ToneMapLinear ToneMap = iota + 1
+	ToneMapReinhard
+	ToneMapAces
+)
+
+type AntiAlias uint32
+
+const (
+	AntiAliasNone AntiAlias = iota + 1
+	AntiAliasFxaa
+	AntiAliasTaa
+	AntiAliasMsaa
+)
+
+type Environment struct {
+	FogColor [3]uint16
+	FogStartMilli uint64
+	FogEndMilli uint64
+	ExposureMilli int32
+	ToneMap ToneMap
+	BloomThreshold uint16
+	BloomStrength uint16
+	AntiAlias AntiAlias
+	MsaaSamples uint32
+}
+
+func EncodeMaterial(material Material) []byte {
+	if material.Id == 0 || material.Revision == 0 ||
+		material.Alpha < AlphaOpaque || material.Alpha > AlphaBlend ||
+		material.Alpha == AlphaMask && material.AlphaCutoff == 0 ||
+		material.Alpha != AlphaMask && material.AlphaCutoff != 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'A', '3', '1'}
+	bytes = appendRender3dU64(bytes, material.Id)
+	bytes = appendRender3dU64(bytes, material.BaseMaterial)
+	bytes = appendRender3dU64(bytes, material.Revision)
+	bytes = append(bytes, byte(material.Alpha))
+	if material.DoubleSided {
+		bytes = append(bytes, 1)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	if material.Unlit {
+		bytes = append(bytes, 1)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	for _, value := range material.BaseColor {
+		bytes = appendRender3dU16(bytes, value)
+	}
+	bytes = appendRender3dU16(bytes, material.Metallic)
+	bytes = appendRender3dU16(bytes, material.Roughness)
+	for _, value := range material.Emissive {
+		bytes = appendRender3dU16(bytes, value)
+	}
+	bytes = appendRender3dU16(bytes, material.AlphaCutoff)
+	for _, texture := range material.Textures {
+		bytes = appendRender3dU64(bytes, texture)
+	}
+	return bytes
+}
+
+func EncodeMeshAsset(mesh MeshAsset) []byte {
+	if mesh.Id == 0 || mesh.VertexCount == 0 || mesh.IndexCount == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'M', 'S', '1'}
+	bytes = appendRender3dU64(bytes, mesh.Id)
+	bytes = appendRender3dU32(bytes, mesh.VertexCount)
+	bytes = appendRender3dU32(bytes, mesh.IndexCount)
+	if mesh.Skinned {
+		return append(bytes, 1)
+	}
+	return append(bytes, 0)
+}
+
+func EncodeTerrain(patch TerrainPatch) []byte {
+	if patch.Id == 0 || patch.Heightmap == 0 || patch.Material == 0 ||
+		patch.Size[0] == 0 || patch.Size[1] == 0 ||
+		patch.HeightScaleMilli == 0 || patch.Lod > 31 || patch.Layers == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'R', '3', '1'}
+	bytes = appendRender3dU64(bytes, patch.Id)
+	bytes = appendRender3dU64(bytes, patch.Heightmap)
+	bytes = appendRender3dU64(bytes, patch.Material)
+	for _, value := range patch.Origin {
+		bytes = appendRender3dU64(bytes, uint64(value))
+	}
+	bytes = appendRender3dU32(bytes, patch.Size[0])
+	bytes = appendRender3dU32(bytes, patch.Size[1])
+	bytes = appendRender3dU32(bytes, patch.HeightScaleMilli)
+	bytes = appendRender3dU32(bytes, patch.Lod)
+	for _, neighbor := range patch.Neighbors {
+		bytes = appendRender3dU32(bytes, neighbor)
+	}
+	return appendRender3dU64(bytes, patch.Layers)
+}
+
+func EncodeHeightmapArtifact(heightmap HeightmapArtifact) []byte {
+	if heightmap.Id == 0 || heightmap.Width < 2 || heightmap.Height < 2 ||
+		heightmap.Width > 16384 || heightmap.Height > 16384 ||
+		uint64(heightmap.Width)*uint64(heightmap.Height) != uint64(len(heightmap.Samples)) {
+		return nil
+	}
+	bytes := []byte{'V', 'H', 'M', '1'}
+	bytes = appendRender3dU64(bytes, heightmap.Id)
+	bytes = appendRender3dU32(bytes, heightmap.Width)
+	bytes = appendRender3dU32(bytes, heightmap.Height)
+	for _, sample := range heightmap.Samples {
+		bytes = appendRender3dU16(bytes, sample)
+	}
+	return bytes
+}
+
+func EncodeDecal(decal Decal) []byte {
+	if decal.Id == 0 || decal.Material == 0 ||
+		decal.Composition < DecalBeforeLighting ||
+		decal.Composition > DecalAfterLighting || decal.LayerMask == 0 ||
+		decal.FadeEndMilli != 0 && decal.FadeEndMilli <= decal.FadeStartMilli {
+		return nil
+	}
+	bytes := []byte{'V', 'D', '3', '1', byte(decal.Composition)}
+	bytes = appendRender3dU64(bytes, decal.Id)
+	bytes = appendRender3dU64(bytes, decal.Material)
+	bytes = appendRender3dU64(bytes, decal.LayerMask)
+	bytes = appendRender3dU64(bytes, decal.FadeStartMilli)
+	bytes = appendRender3dU64(bytes, decal.FadeEndMilli)
+	for _, value := range decal.Transform {
+		bytes = appendRender3dU64(bytes, uint64(value))
+	}
+	return bytes
+}
+
+func EncodeScatter(field ScatterField) []byte {
+	if field.Id == 0 || field.Seed == 0 || field.Mesh == 0 ||
+		field.Material == 0 || field.Bounds[2] <= 0 || field.Bounds[3] <= 0 ||
+		field.DensityPerMillion == 0 || field.DensityPerMillion > 1000000 ||
+		field.MinScaleMilli == 0 ||
+		field.MaxScaleMilli < field.MinScaleMilli ||
+		field.MaxInstances == 0 || field.MaxInstances > 10000000 ||
+		field.Layers == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'S', '3', '1'}
+	bytes = appendRender3dU64(bytes, field.Id)
+	bytes = appendRender3dU64(bytes, field.Seed)
+	bytes = appendRender3dU64(bytes, field.Mesh)
+	bytes = appendRender3dU64(bytes, field.Material)
+	for _, value := range field.Bounds {
+		bytes = appendRender3dU64(bytes, uint64(value))
+	}
+	bytes = appendRender3dU32(bytes, field.DensityPerMillion)
+	bytes = appendRender3dU32(bytes, field.MinScaleMilli)
+	bytes = appendRender3dU32(bytes, field.MaxScaleMilli)
+	bytes = appendRender3dU32(bytes, field.MaxInstances)
+	return appendRender3dU64(bytes, field.Layers)
+}
+
+func EncodeParticleEmitter(emitter ParticleEmitter3d) []byte {
+	if emitter.Id == 0 || emitter.Seed == 0 || emitter.Mesh == 0 ||
+		emitter.Material == 0 || emitter.MaxParticles == 0 ||
+		emitter.MaxParticles > 1000000 || emitter.SpawnPerTick == 0 ||
+		emitter.SpawnPerTick > emitter.MaxParticles ||
+		emitter.LifetimeTicks == 0 || emitter.StartScaleMilli == 0 ||
+		emitter.EndScaleMilli == 0 || emitter.Layers == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'P', '3', '1'}
+	bytes = appendRender3dU64(bytes, emitter.Id)
+	bytes = appendRender3dU64(bytes, emitter.Seed)
+	bytes = appendRender3dU64(bytes, emitter.Mesh)
+	bytes = appendRender3dU64(bytes, emitter.Material)
+	bytes = appendRender3dU32(bytes, emitter.MaxParticles)
+	bytes = appendRender3dU32(bytes, emitter.SpawnPerTick)
+	bytes = appendRender3dU32(bytes, emitter.LifetimeTicks)
+	for _, values := range [][3]int64{
+		emitter.Position, emitter.VelocityMin, emitter.VelocityMax,
+	} {
+		for _, value := range values {
+			bytes = appendRender3dU64(bytes, uint64(value))
+		}
+	}
+	bytes = appendRender3dU32(bytes, emitter.StartScaleMilli)
+	bytes = appendRender3dU32(bytes, emitter.EndScaleMilli)
+	return appendRender3dU64(bytes, emitter.Layers)
+}
+
+func EncodeEnvironment(environment Environment) []byte {
+	if environment.ToneMap < ToneMapLinear || environment.ToneMap > ToneMapAces ||
+		environment.AntiAlias < AntiAliasNone ||
+		environment.AntiAlias > AntiAliasMsaa ||
+		environment.FogEndMilli != 0 &&
+			environment.FogEndMilli <= environment.FogStartMilli ||
+		environment.AntiAlias == AntiAliasMsaa &&
+			environment.MsaaSamples != 2 && environment.MsaaSamples != 4 &&
+				environment.MsaaSamples != 8 ||
+		environment.AntiAlias != AntiAliasMsaa &&
+			environment.MsaaSamples != 1 {
+		return nil
+	}
+	bytes := []byte{'V', 'E', '3', '1', byte(environment.ToneMap),
+		byte(environment.AntiAlias)}
+	for _, color := range environment.FogColor {
+		bytes = appendRender3dU16(bytes, color)
+	}
+	bytes = appendRender3dU64(bytes, environment.FogStartMilli)
+	bytes = appendRender3dU64(bytes, environment.FogEndMilli)
+	bytes = appendRender3dU32(bytes, uint32(environment.ExposureMilli))
+	bytes = appendRender3dU16(bytes, environment.BloomThreshold)
+	bytes = appendRender3dU16(bytes, environment.BloomStrength)
+	return appendRender3dU32(bytes, environment.MsaaSamples)
+}
+
+func EncodeMeshInstance(instance RetainedMeshInstance) []byte {
+	if instance.MaterialAsset == 0 || instance.Layers == 0 || len(instance.Lods) == 0 ||
+		len(instance.Lods) > 16 {
+		return nil
+	}
+	var previous uint64
+	for _, lod := range instance.Lods {
+		if lod.MeshAsset == 0 || lod.MaxDistanceMilli <= previous {
+			return nil
+		}
+		previous = lod.MaxDistanceMilli
+	}
+	bytes := []byte{'V', 'M', '3', '1'}
+	bytes = appendRender3dU64(bytes, instance.MaterialAsset)
+	bytes = appendRender3dU64(bytes, instance.Layers)
+	if instance.CastsShadow {
+		bytes = append(bytes, 1)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	if instance.ReceivesShadow {
+		bytes = append(bytes, 1)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	bytes = appendRender3dU16(bytes, uint16(len(instance.Lods)))
+	for _, lod := range instance.Lods {
+		bytes = appendRender3dU64(bytes, lod.MeshAsset)
+		bytes = appendRender3dU64(bytes, lod.MaxDistanceMilli)
+	}
+	return bytes
+}
+
+func EncodeLight(light RetainedLight) []byte {
+	if light.Kind < LightDirectional || light.Kind > LightSpot || light.IntensityMilli == 0 ||
+		(light.Kind == LightSpot && light.OuterAngleQ16 == 0) ||
+		(light.Kind != LightSpot && light.OuterAngleQ16 != 0) {
+		return nil
+	}
+	bytes := []byte{'V', 'L', '3', '1', byte(light.Kind)}
+	bytes = appendRender3dU16(bytes, light.OuterAngleQ16)
+	if light.CastsShadow {
+		bytes = append(bytes, 1)
+	} else {
+		bytes = append(bytes, 0)
+	}
+	for _, color := range light.Color {
+		bytes = appendRender3dU16(bytes, color)
+	}
+	bytes = appendRender3dU32(bytes, light.IntensityMilli)
+	return appendRender3dU32(bytes, light.RangeMilli)
+}
+
+func EncodeCamera(camera Camera3d) []byte {
+	projection := camera.Projection
+	if projection.Kind < CameraPerspective || projection.Kind > CameraOrthographic ||
+		projection.NearMilli >= projection.FarMilli ||
+		camera.ExposureMilli < -32000 || camera.ExposureMilli > 32000 {
+		return nil
+	}
+	var primary uint32
+	if projection.Kind == CameraPerspective {
+		if projection.VerticalFovMillidegrees < 1000 ||
+			projection.VerticalFovMillidegrees >= 179000 ||
+			projection.NearMilli == 0 || projection.VerticalHeightMilli != 0 {
+			return nil
+		}
+		primary = projection.VerticalFovMillidegrees
+	} else {
+		if projection.VerticalHeightMilli == 0 ||
+			projection.VerticalFovMillidegrees != 0 {
+			return nil
+		}
+		primary = projection.VerticalHeightMilli
+	}
+	bytes := []byte{'V', 'C', '3', '1', byte(projection.Kind)}
+	bytes = appendRender3dU32(bytes, primary)
+	bytes = appendRender3dU32(bytes, projection.NearMilli)
+	bytes = appendRender3dU32(bytes, projection.FarMilli)
+	return appendRender3dU32(bytes, uint32(camera.ExposureMilli))
+}
+
+func appendRender3dU16(bytes []byte, value uint16) []byte {
+	return append(bytes, byte(value), byte(value >> 8))
+}
+
+func appendRender3dU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendRender3dU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}

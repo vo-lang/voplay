@@ -1,0 +1,434 @@
+package render
+
+type PresentationDomain struct {
+	Index uint32
+	Generation uint32
+}
+
+func (domain PresentationDomain) Valid() bool {
+	return domain.Index != 0 && domain.Generation != 0
+}
+
+type SurfaceMetrics struct {
+	Width uint32
+	Height uint32
+	ScaleMilli uint32
+}
+
+type FramePulse struct {
+	Domain PresentationDomain
+	PulseId uint64
+	MonotonicNanos uint64
+	DeadlineNanos uint64
+	Metrics SurfaceMetrics
+	Coalesced uint64
+}
+
+func DecodeFramePulse(bytes []byte) (FramePulse, bool) {
+	if len(bytes) != 58 || string(bytes[:6]) != "VPUL1\x00" {
+		return FramePulse{}, false
+	}
+	pulse := FramePulse{
+		Domain: PresentationDomain{
+			Index: readPresentationU32(bytes, 6),
+			Generation: readPresentationU32(bytes, 10),
+		},
+		PulseId: readPresentationU64(bytes, 14),
+		MonotonicNanos: readPresentationU64(bytes, 22),
+		DeadlineNanos: readPresentationU64(bytes, 30),
+		Coalesced: readPresentationU64(bytes, 38),
+		Metrics: SurfaceMetrics{
+			Width: readPresentationU32(bytes, 46),
+			Height: readPresentationU32(bytes, 50),
+			ScaleMilli: readPresentationU32(bytes, 54),
+		},
+	}
+	if !pulse.Domain.Valid() || pulse.PulseId == 0 ||
+		pulse.DeadlineNanos < pulse.MonotonicNanos ||
+		pulse.Metrics.Width == 0 || pulse.Metrics.Height == 0 ||
+		pulse.Metrics.ScaleMilli == 0 {
+		return FramePulse{}, false
+	}
+	return pulse, true
+}
+
+type PresentationValue struct {
+	Key uint64
+	Value []byte
+	Revision uint64
+}
+
+type DomainState struct {
+	Domain PresentationDomain
+	Revision uint64
+	Values []PresentationValue
+	Pending FramePulse
+	HasPending bool
+	LastConsumedPulse uint64
+	Suspended bool
+}
+
+type PresentationState struct {
+	Domains []DomainState
+	MaxDomains uint32
+	MaxValuesPerDomain uint32
+	MaxValueBytes uint32
+}
+
+func NewPresentationState(maxDomains uint32, maxValuesPerDomain uint32,
+	maxValueBytes uint32) (*PresentationState, bool) {
+	if maxDomains == 0 || maxDomains > 4096 ||
+		maxValuesPerDomain == 0 || maxValuesPerDomain > 65536 ||
+		maxValueBytes == 0 || maxValueBytes > 1048576 {
+		return nil, false
+	}
+	return &PresentationState{
+		MaxDomains: maxDomains, MaxValuesPerDomain: maxValuesPerDomain,
+		MaxValueBytes: maxValueBytes,
+	}, true
+}
+
+func (state *PresentationState) Register(domain PresentationDomain) bool {
+	if state == nil || !domain.Valid() ||
+		len(state.Domains) >= int(state.MaxDomains) ||
+		state.domainIndex(domain) >= 0 {
+		return false
+	}
+	state.Domains = append(state.Domains, DomainState{Domain: domain})
+	sortDomainStates(state.Domains)
+	return true
+}
+
+func (state *PresentationState) Unregister(domain PresentationDomain) bool {
+	index := state.domainIndex(domain)
+	if index < 0 {
+		return false
+	}
+	copy(state.Domains[index:], state.Domains[index+1:])
+	state.Domains = state.Domains[:len(state.Domains)-1]
+	return true
+}
+
+func (state *PresentationState) Set(domain PresentationDomain,
+	key uint64, value []byte) (uint64, bool) {
+	index := state.domainIndex(domain)
+	if index < 0 || key == 0 || len(value) > int(state.MaxValueBytes) ||
+		state.Domains[index].Revision == 18446744073709551615 {
+		return 0, false
+	}
+	for valueIndex, current := range state.Domains[index].Values {
+		if current.Key == key {
+			state.Domains[index].Revision++
+			state.Domains[index].Values[valueIndex].Value =
+				append([]byte{}, value...)
+			state.Domains[index].Values[valueIndex].Revision =
+				state.Domains[index].Revision
+			return state.Domains[index].Revision, true
+		}
+	}
+	if len(state.Domains[index].Values) >= int(state.MaxValuesPerDomain) {
+		return 0, false
+	}
+	state.Domains[index].Revision++
+	state.Domains[index].Values = append(state.Domains[index].Values,
+		PresentationValue{
+			Key: key, Value: append([]byte{}, value...),
+			Revision: state.Domains[index].Revision,
+		})
+	sortPresentationValues(state.Domains[index].Values)
+	return state.Domains[index].Revision, true
+}
+
+func (state *PresentationState) Get(domain PresentationDomain,
+	key uint64) ([]byte, uint64, bool) {
+	index := state.domainIndex(domain)
+	if index < 0 || key == 0 {
+		return nil, 0, false
+	}
+	for _, current := range state.Domains[index].Values {
+		if current.Key == key {
+			return append([]byte{}, current.Value...), current.Revision, true
+		}
+	}
+	return nil, state.Domains[index].Revision, false
+}
+
+func (state *PresentationState) Pulse(pulse FramePulse) bool {
+	index := state.domainIndex(pulse.Domain)
+	if index < 0 || pulse.PulseId == 0 ||
+		pulse.PulseId <= state.Domains[index].LastConsumedPulse ||
+		pulse.Metrics.Width == 0 || pulse.Metrics.Height == 0 ||
+		pulse.Metrics.ScaleMilli == 0 ||
+		pulse.DeadlineNanos < pulse.MonotonicNanos {
+		return false
+	}
+	if state.Domains[index].HasPending &&
+		pulse.PulseId <= state.Domains[index].Pending.PulseId {
+		return false
+	}
+	state.Domains[index].Pending = pulse
+	state.Domains[index].HasPending = true
+	return true
+}
+
+func (state *PresentationState) TakePulse(
+	domain PresentationDomain) (FramePulse, bool) {
+	index := state.domainIndex(domain)
+	if index < 0 || state.Domains[index].Suspended ||
+		!state.Domains[index].HasPending {
+		return FramePulse{}, false
+	}
+	pulse := state.Domains[index].Pending
+	state.Domains[index].HasPending = false
+	state.Domains[index].LastConsumedPulse = pulse.PulseId
+	return pulse, true
+}
+
+func (state *PresentationState) Suspend(domain PresentationDomain) bool {
+	index := state.domainIndex(domain)
+	if index < 0 || state.Domains[index].Suspended {
+		return false
+	}
+	state.Domains[index].Suspended = true
+	state.Domains[index].HasPending = false
+	return true
+}
+
+func (state *PresentationState) Resume(domain PresentationDomain) bool {
+	index := state.domainIndex(domain)
+	if index < 0 || !state.Domains[index].Suspended {
+		return false
+	}
+	state.Domains[index].Suspended = false
+	return true
+}
+
+func (state *PresentationState) domainIndex(domain PresentationDomain) int {
+	if state == nil {
+		return -1
+	}
+	for index, current := range state.Domains {
+		if current.Domain == domain {
+			return index
+		}
+	}
+	return -1
+}
+
+type DurableRenderPacket struct {
+	CommitId uint64
+	BaseRevision uint64
+	NewRevision uint64
+	RequiredControlRevision uint64
+	SourceSimulationRevision uint64
+	Payload []byte
+}
+
+type TransientRenderPacket struct {
+	Domain PresentationDomain
+	PulseId uint64
+	RequiredDurableRevision uint64
+	Payload []byte
+}
+
+type RenderOutbox struct {
+	ChannelEpoch uint64
+	AckedRevision uint64
+	NextRevision uint64
+	NextCommit uint64
+	Durable []DurableRenderPacket
+	Transient []TransientRenderPacket
+	MaxDurable uint32
+	MaxTransient uint32
+	MaxBytes uint64
+	Bytes uint64
+	ResyncRequired bool
+}
+
+func NewRenderOutbox(channelEpoch uint64, maxDurable uint32,
+	maxTransient uint32, maxBytes uint64) (*RenderOutbox, bool) {
+	if channelEpoch == 0 || maxDurable == 0 || maxDurable > 65536 ||
+		maxTransient == 0 || maxTransient > 65536 ||
+		maxBytes == 0 || maxBytes > 1073741824 {
+		return nil, false
+	}
+	return &RenderOutbox{
+		ChannelEpoch: channelEpoch, NextRevision: 1, NextCommit: 1,
+		MaxDurable: maxDurable, MaxTransient: maxTransient,
+		MaxBytes: maxBytes,
+	}, true
+}
+
+func (outbox *RenderOutbox) CommitDurable(payload []byte,
+	requiredControlRevision uint64,
+	sourceSimulationRevision uint64) (uint64, uint64, bool) {
+	if outbox == nil || len(payload) == 0 ||
+		len(outbox.Durable) >= int(outbox.MaxDurable) ||
+		outbox.Bytes+uint64(len(payload)) > outbox.MaxBytes ||
+		outbox.NextRevision == 0 || outbox.NextCommit == 0 ||
+		outbox.NextRevision == 18446744073709551615 ||
+		outbox.NextCommit == 18446744073709551615 {
+		return 0, 0, false
+	}
+	packet := DurableRenderPacket{
+		CommitId: outbox.NextCommit,
+		BaseRevision: outbox.NextRevision - 1,
+		NewRevision: outbox.NextRevision,
+		RequiredControlRevision: requiredControlRevision,
+		SourceSimulationRevision: sourceSimulationRevision,
+		Payload: append([]byte{}, payload...),
+	}
+	outbox.Durable = append(outbox.Durable, packet)
+	outbox.Bytes += uint64(len(payload))
+	outbox.NextRevision++
+	outbox.NextCommit++
+	return packet.CommitId, packet.NewRevision, true
+}
+
+func (outbox *RenderOutbox) StageTransient(packet TransientRenderPacket) bool {
+	if outbox == nil || !packet.Domain.Valid() || packet.PulseId == 0 ||
+		len(packet.Payload) == 0 ||
+		packet.RequiredDurableRevision >= outbox.NextRevision ||
+		outbox.Bytes+uint64(len(packet.Payload)) > outbox.MaxBytes {
+		return false
+	}
+	for index, current := range outbox.Transient {
+		if current.Domain != packet.Domain {
+			continue
+		}
+		if packet.PulseId <= current.PulseId {
+			return false
+		}
+		outbox.Bytes -= uint64(len(current.Payload))
+		packet.Payload = append([]byte{}, packet.Payload...)
+		outbox.Transient[index] = packet
+		outbox.Bytes += uint64(len(packet.Payload))
+		return true
+	}
+	if len(outbox.Transient) >= int(outbox.MaxTransient) {
+		return false
+	}
+	packet.Payload = append([]byte{}, packet.Payload...)
+	outbox.Transient = append(outbox.Transient, packet)
+	outbox.Bytes += uint64(len(packet.Payload))
+	sortTransientPackets(outbox.Transient)
+	return true
+}
+
+func (outbox *RenderOutbox) Acknowledge(channelEpoch uint64,
+	commitId uint64, revision uint64) bool {
+	if outbox == nil || channelEpoch != outbox.ChannelEpoch ||
+		commitId == 0 || revision < outbox.AckedRevision ||
+		revision >= outbox.NextRevision {
+		return false
+	}
+	found := false
+	write := 0
+	for _, packet := range outbox.Durable {
+		if packet.CommitId <= commitId && packet.NewRevision <= revision {
+			outbox.Bytes -= uint64(len(packet.Payload))
+			found = true
+			continue
+		}
+		outbox.Durable[write] = packet
+		write++
+	}
+	if !found {
+		return false
+	}
+	outbox.Durable = outbox.Durable[:write]
+	outbox.AckedRevision = revision
+	outbox.ResyncRequired = false
+	return true
+}
+
+func (outbox *RenderOutbox) RejectBase(channelEpoch uint64,
+	expectedRevision uint64) bool {
+	if outbox == nil || channelEpoch != outbox.ChannelEpoch ||
+		expectedRevision > outbox.AckedRevision {
+		return false
+	}
+	outbox.ResyncRequired = true
+	return true
+}
+
+func (outbox *RenderOutbox) Restart(newChannelEpoch uint64) bool {
+	if outbox == nil || newChannelEpoch == 0 ||
+		newChannelEpoch == outbox.ChannelEpoch {
+		return false
+	}
+	outbox.ChannelEpoch = newChannelEpoch
+	outbox.AckedRevision = 0
+	outbox.ResyncRequired = true
+	for _, packet := range outbox.Transient {
+		outbox.Bytes -= uint64(len(packet.Payload))
+	}
+	outbox.Transient = nil
+	return true
+}
+
+func (outbox *RenderOutbox) TakeTransient(
+	domain PresentationDomain) (TransientRenderPacket, bool) {
+	for index, packet := range outbox.Transient {
+		if packet.Domain == domain &&
+			packet.RequiredDurableRevision <= outbox.AckedRevision {
+			copy(outbox.Transient[index:], outbox.Transient[index+1:])
+			outbox.Transient = outbox.Transient[:len(outbox.Transient)-1]
+			outbox.Bytes -= uint64(len(packet.Payload))
+			return packet, true
+		}
+	}
+	return TransientRenderPacket{}, false
+}
+
+func sortDomainStates(values []DomainState) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && domainKey(values[cursor-1].Domain) > domainKey(value.Domain) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortPresentationValues(values []PresentationValue) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Key > value.Key {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortTransientPackets(values []TransientRenderPacket) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && domainKey(values[cursor-1].Domain) > domainKey(value.Domain) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func domainKey(domain PresentationDomain) uint64 {
+	return uint64(domain.Generation) << 32 | uint64(domain.Index)
+}
+
+func readPresentationU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) |
+		uint32(bytes[offset+1]) << 8 |
+		uint32(bytes[offset+2]) << 16 |
+		uint32(bytes[offset+3]) << 24
+}
+
+func readPresentationU64(bytes []byte, offset int) uint64 {
+	return uint64(readPresentationU32(bytes, offset)) |
+		uint64(readPresentationU32(bytes, offset+4)) << 32
+}

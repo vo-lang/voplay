@@ -1,0 +1,524 @@
+package scene
+
+import "github.com/vo-lang/voplay/vo/world"
+
+type SceneRef struct {
+	Index uint32
+	Generation uint32
+}
+
+func (scene SceneRef) Valid() bool {
+	return scene.Index != 0 && scene.Generation != 0
+}
+
+type Parent struct {
+	Index uint32
+	Generation uint32
+}
+
+func (parent Parent) Entity() world.Entity {
+	return world.Entity{Index: parent.Index, Generation: parent.Generation}
+}
+
+type Transform struct {
+	Translation [3]int64
+	Rotation [4]int64
+	Scale [3]int64
+}
+
+func IdentityTransform() Transform {
+	return Transform{
+		Rotation: [4]int64{0, 0, 0, 1000000},
+		Scale: [3]int64{1000000, 1000000, 1000000},
+	}
+}
+
+type HierarchyNode struct {
+	Entity world.Entity
+	Parent world.Entity
+	Children []world.Entity
+	Local Transform
+	Global Transform
+	Dirty bool
+}
+
+type Hierarchy struct {
+	World *world.World
+	Nodes []HierarchyNode
+	DirtyRoots []world.Entity
+	Revision uint64
+	MaxDepth uint32
+	MaxNodes uint32
+}
+
+func NewHierarchy(value *world.World, maxNodes uint32, maxDepth uint32) (*Hierarchy, bool) {
+	if value == nil || maxNodes == 0 || maxNodes > 1000000 ||
+		maxDepth == 0 || maxDepth > 65536 {
+		return nil, false
+	}
+	return &Hierarchy{World: value, MaxNodes: maxNodes, MaxDepth: maxDepth}, true
+}
+
+func (hierarchy *Hierarchy) Attach(entity world.Entity, local Transform) bool {
+	if hierarchy == nil || hierarchy.World == nil ||
+		!hierarchy.World.Allocator.IsAlive(entity) ||
+		len(hierarchy.Nodes) >= int(hierarchy.MaxNodes) ||
+		hierarchy.nodeIndex(entity) >= 0 {
+		return false
+	}
+	hierarchy.Nodes = append(hierarchy.Nodes, HierarchyNode{
+		Entity: entity, Local: normalizeTransform(local),
+		Global: normalizeTransform(local), Dirty: true,
+	})
+	hierarchy.markDirtyRoot(entity)
+	hierarchy.Revision++
+	return true
+}
+
+func (hierarchy *Hierarchy) Detach(entity world.Entity) bool {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return false
+	}
+	node := hierarchy.Nodes[index]
+	if node.Parent.Valid() {
+		hierarchy.removeChild(node.Parent, entity)
+	}
+	for _, child := range node.Children {
+		childIndex := hierarchy.nodeIndex(child)
+		if childIndex >= 0 {
+			hierarchy.Nodes[childIndex].Parent = world.Entity{}
+			hierarchy.markSubtreeDirty(child)
+		}
+	}
+	copy(hierarchy.Nodes[index:], hierarchy.Nodes[index+1:])
+	hierarchy.Nodes = hierarchy.Nodes[:len(hierarchy.Nodes)-1]
+	hierarchy.removeDirtyRoot(entity)
+	hierarchy.Revision++
+	return true
+}
+
+func (hierarchy *Hierarchy) SetLocal(entity world.Entity, local Transform) bool {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return false
+	}
+	hierarchy.Nodes[index].Local = normalizeTransform(local)
+	hierarchy.markSubtreeDirty(entity)
+	hierarchy.Revision++
+	return true
+}
+
+func (hierarchy *Hierarchy) Reparent(entity world.Entity, parent world.Entity,
+	keepWorld bool) bool {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 || entity == parent {
+		return false
+	}
+	if parent.Valid() && hierarchy.nodeIndex(parent) < 0 {
+		return false
+	}
+	if hierarchy.isDescendant(parent, entity) {
+		return false
+	}
+	oldParent := hierarchy.Nodes[index].Parent
+	oldGlobal := hierarchy.Nodes[index].Global
+	if oldParent == parent {
+		return true
+	}
+	if oldParent.Valid() {
+		hierarchy.removeChild(oldParent, entity)
+	}
+	hierarchy.Nodes[index].Parent = parent
+	if parent.Valid() {
+		parentIndex := hierarchy.nodeIndex(parent)
+		hierarchy.Nodes[parentIndex].Children = append(hierarchy.Nodes[parentIndex].Children, entity)
+		sortEntityHandles(hierarchy.Nodes[parentIndex].Children)
+	}
+	if keepWorld {
+		if parent.Valid() {
+			parentIndex := hierarchy.nodeIndex(parent)
+			local, ok := relativeTransform(hierarchy.Nodes[parentIndex].Global, oldGlobal)
+			if !ok {
+				hierarchy.Nodes[index].Parent = oldParent
+				if parent.Valid() {
+					hierarchy.removeChild(parent, entity)
+				}
+				if oldParent.Valid() {
+					oldIndex := hierarchy.nodeIndex(oldParent)
+					hierarchy.Nodes[oldIndex].Children =
+						append(hierarchy.Nodes[oldIndex].Children, entity)
+					sortEntityHandles(hierarchy.Nodes[oldIndex].Children)
+				}
+				return false
+			}
+			hierarchy.Nodes[index].Local = local
+		} else {
+			hierarchy.Nodes[index].Local = oldGlobal
+		}
+	}
+	hierarchy.markSubtreeDirty(entity)
+	hierarchy.Revision++
+	return true
+}
+
+func (hierarchy *Hierarchy) Propagate() (uint32, bool) {
+	if hierarchy == nil || hierarchy.World == nil {
+		return 0, false
+	}
+	sortEntityHandles(hierarchy.DirtyRoots)
+	var visited uint32
+	for _, root := range hierarchy.DirtyRoots {
+		rootIndex := hierarchy.nodeIndex(root)
+		if rootIndex < 0 {
+			continue
+		}
+		parentGlobal := IdentityTransform()
+		if hierarchy.Nodes[rootIndex].Parent.Valid() {
+			parentIndex := hierarchy.nodeIndex(hierarchy.Nodes[rootIndex].Parent)
+			if parentIndex < 0 {
+				return visited, false
+			}
+			parentGlobal = hierarchy.Nodes[parentIndex].Global
+		}
+		count, ok := hierarchy.propagateNode(root, parentGlobal, 0)
+		visited += count
+		if !ok {
+			return visited, false
+		}
+	}
+	hierarchy.DirtyRoots = nil
+	return visited, true
+}
+
+func (hierarchy *Hierarchy) Global(entity world.Entity) (Transform, bool) {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 || hierarchy.Nodes[index].Dirty {
+		return Transform{}, false
+	}
+	return hierarchy.Nodes[index].Global, true
+}
+
+func (hierarchy *Hierarchy) Children(entity world.Entity) ([]world.Entity, bool) {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return nil, false
+	}
+	return append([]world.Entity{}, hierarchy.Nodes[index].Children...), true
+}
+
+func (hierarchy *Hierarchy) propagateNode(entity world.Entity, parent Transform,
+	depth uint32) (uint32, bool) {
+	if depth >= hierarchy.MaxDepth {
+		return 0, false
+	}
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return 0, false
+	}
+	hierarchy.Nodes[index].Global = combineTransform(parent, hierarchy.Nodes[index].Local)
+	hierarchy.Nodes[index].Dirty = false
+	children := append([]world.Entity{}, hierarchy.Nodes[index].Children...)
+	sortEntityHandles(children)
+	count := uint32(1)
+	for _, child := range children {
+		childCount, ok := hierarchy.propagateNode(
+			child, hierarchy.Nodes[index].Global, depth+1)
+		count += childCount
+		if !ok {
+			return count, false
+		}
+	}
+	return count, true
+}
+
+func (hierarchy *Hierarchy) markSubtreeDirty(entity world.Entity) {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return
+	}
+	hierarchy.Nodes[index].Dirty = true
+	hierarchy.markDirtyRoot(entity)
+	for _, child := range hierarchy.Nodes[index].Children {
+		hierarchy.markNodeDirty(child)
+	}
+}
+
+func (hierarchy *Hierarchy) markNodeDirty(entity world.Entity) {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return
+	}
+	hierarchy.Nodes[index].Dirty = true
+	for _, child := range hierarchy.Nodes[index].Children {
+		hierarchy.markNodeDirty(child)
+	}
+}
+
+func (hierarchy *Hierarchy) markDirtyRoot(entity world.Entity) {
+	index := hierarchy.nodeIndex(entity)
+	if index < 0 {
+		return
+	}
+	parent := hierarchy.Nodes[index].Parent
+	for parent.Valid() {
+		parentIndex := hierarchy.nodeIndex(parent)
+		if parentIndex < 0 {
+			break
+		}
+		if hierarchy.Nodes[parentIndex].Dirty {
+			return
+		}
+		parent = hierarchy.Nodes[parentIndex].Parent
+	}
+	for _, root := range hierarchy.DirtyRoots {
+		if root == entity || hierarchy.isDescendant(entity, root) {
+			return
+		}
+	}
+	write := 0
+	for _, root := range hierarchy.DirtyRoots {
+		if !hierarchy.isDescendant(root, entity) {
+			hierarchy.DirtyRoots[write] = root
+			write++
+		}
+	}
+	hierarchy.DirtyRoots = append(hierarchy.DirtyRoots[:write], entity)
+}
+
+func (hierarchy *Hierarchy) isDescendant(entity world.Entity, ancestor world.Entity) bool {
+	if !entity.Valid() || !ancestor.Valid() {
+		return false
+	}
+	cursor := entity
+	for depth := uint32(0); depth < hierarchy.MaxDepth; depth++ {
+		index := hierarchy.nodeIndex(cursor)
+		if index < 0 || !hierarchy.Nodes[index].Parent.Valid() {
+			return false
+		}
+		cursor = hierarchy.Nodes[index].Parent
+		if cursor == ancestor {
+			return true
+		}
+	}
+	return true
+}
+
+func (hierarchy *Hierarchy) nodeIndex(entity world.Entity) int {
+	for index, node := range hierarchy.Nodes {
+		if node.Entity == entity {
+			return index
+		}
+	}
+	return -1
+}
+
+func (hierarchy *Hierarchy) removeChild(parent world.Entity, child world.Entity) {
+	index := hierarchy.nodeIndex(parent)
+	if index < 0 {
+		return
+	}
+	write := 0
+	for _, candidate := range hierarchy.Nodes[index].Children {
+		if candidate != child {
+			hierarchy.Nodes[index].Children[write] = candidate
+			write++
+		}
+	}
+	hierarchy.Nodes[index].Children = hierarchy.Nodes[index].Children[:write]
+}
+
+func (hierarchy *Hierarchy) removeDirtyRoot(entity world.Entity) {
+	write := 0
+	for _, root := range hierarchy.DirtyRoots {
+		if root != entity {
+			hierarchy.DirtyRoots[write] = root
+			write++
+		}
+	}
+	hierarchy.DirtyRoots = hierarchy.DirtyRoots[:write]
+}
+
+type RuntimeObjectKey struct {
+	Root SceneRef
+	PrefabPath []uint64
+	SourceAsset [16]byte
+	LocalObject uint64
+}
+
+type SceneObject struct {
+	Key RuntimeObjectKey
+	Entity world.Entity
+}
+
+type SceneInstance struct {
+	Ref SceneRef
+	Objects []SceneObject
+	MappingRevision uint64
+	Active bool
+	MaxObjects uint32
+}
+
+func NewSceneInstance(ref SceneRef, maxObjects uint32) (*SceneInstance, bool) {
+	if !ref.Valid() || maxObjects == 0 || maxObjects > 1000000 {
+		return nil, false
+	}
+	return &SceneInstance{Ref: ref, Active: true, MaxObjects: maxObjects}, true
+}
+
+func (scene *SceneInstance) Resolve(key RuntimeObjectKey) (world.Entity, uint64, bool) {
+	if scene == nil || !scene.Active || key.Root != scene.Ref {
+		return world.Entity{}, 0, false
+	}
+	for _, object := range scene.Objects {
+		if sameRuntimeKey(object.Key, key) {
+			return object.Entity, scene.MappingRevision, true
+		}
+	}
+	return world.Entity{}, scene.MappingRevision, false
+}
+
+func (scene *SceneInstance) Bind(key RuntimeObjectKey, entity world.Entity) bool {
+	if scene == nil || !scene.Active || key.Root != scene.Ref || key.LocalObject == 0 ||
+		!entity.Valid() || scene.MappingRevision == 18446744073709551615 {
+		return false
+	}
+	for _, object := range scene.Objects {
+		if sameRuntimeKey(object.Key, key) || object.Entity == entity {
+			return false
+		}
+	}
+	if len(scene.Objects) >= int(scene.MaxObjects) {
+		return false
+	}
+	key.PrefabPath = append([]uint64{}, key.PrefabPath...)
+	scene.Objects = append(scene.Objects, SceneObject{Key: key, Entity: entity})
+	sortSceneObjects(scene.Objects)
+	scene.MappingRevision++
+	return true
+}
+
+func (scene *SceneInstance) Unbind(key RuntimeObjectKey) bool {
+	if scene == nil || !scene.Active || scene.MappingRevision == 18446744073709551615 {
+		return false
+	}
+	for index, object := range scene.Objects {
+		if sameRuntimeKey(object.Key, key) {
+			copy(scene.Objects[index:], scene.Objects[index+1:])
+			scene.Objects = scene.Objects[:len(scene.Objects)-1]
+			scene.MappingRevision++
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeTransform(value Transform) Transform {
+	if value.Scale == [3]int64{} {
+		value.Scale = [3]int64{1000000, 1000000, 1000000}
+	}
+	if value.Rotation == [4]int64{} {
+		value.Rotation = [4]int64{0, 0, 0, 1000000}
+	}
+	return value
+}
+
+func combineTransform(parent Transform, local Transform) Transform {
+	parent = normalizeTransform(parent)
+	local = normalizeTransform(local)
+	return Transform{
+		Translation: [3]int64{
+			parent.Translation[0] + local.Translation[0] * parent.Scale[0] / 1000000,
+			parent.Translation[1] + local.Translation[1] * parent.Scale[1] / 1000000,
+			parent.Translation[2] + local.Translation[2] * parent.Scale[2] / 1000000,
+		},
+		Rotation: multiplyQuaternion(parent.Rotation, local.Rotation),
+		Scale: [3]int64{
+			parent.Scale[0] * local.Scale[0] / 1000000,
+			parent.Scale[1] * local.Scale[1] / 1000000,
+			parent.Scale[2] * local.Scale[2] / 1000000,
+		},
+	}
+}
+
+func relativeTransform(parent Transform, global Transform) (Transform, bool) {
+	parent = normalizeTransform(parent)
+	global = normalizeTransform(global)
+	if parent.Scale[0] == 0 || parent.Scale[1] == 0 || parent.Scale[2] == 0 {
+		return Transform{}, false
+	}
+	return Transform{
+		Translation: [3]int64{
+			(global.Translation[0] - parent.Translation[0]) * 1000000 / parent.Scale[0],
+			(global.Translation[1] - parent.Translation[1]) * 1000000 / parent.Scale[1],
+			(global.Translation[2] - parent.Translation[2]) * 1000000 / parent.Scale[2],
+		},
+		Rotation: global.Rotation,
+		Scale: [3]int64{
+			global.Scale[0] * 1000000 / parent.Scale[0],
+			global.Scale[1] * 1000000 / parent.Scale[1],
+			global.Scale[2] * 1000000 / parent.Scale[2],
+		},
+	}, true
+}
+
+func multiplyQuaternion(left [4]int64, right [4]int64) [4]int64 {
+	return [4]int64{
+		(left[3]*right[0] + left[0]*right[3] + left[1]*right[2] - left[2]*right[1]) / 1000000,
+		(left[3]*right[1] - left[0]*right[2] + left[1]*right[3] + left[2]*right[0]) / 1000000,
+		(left[3]*right[2] + left[0]*right[1] - left[1]*right[0] + left[2]*right[3]) / 1000000,
+		(left[3]*right[3] - left[0]*right[0] - left[1]*right[1] - left[2]*right[2]) / 1000000,
+	}
+}
+
+func sameRuntimeKey(left RuntimeObjectKey, right RuntimeObjectKey) bool {
+	if left.Root != right.Root || left.SourceAsset != right.SourceAsset ||
+		left.LocalObject != right.LocalObject || len(left.PrefabPath) != len(right.PrefabPath) {
+		return false
+	}
+	for index, segment := range left.PrefabPath {
+		if segment != right.PrefabPath[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortEntityHandles(values []world.Entity) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Key() > value.Key() {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortSceneObjects(values []SceneObject) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && sceneObjectLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sceneObjectLess(left SceneObject, right SceneObject) bool {
+	if left.Key.LocalObject != right.Key.LocalObject {
+		return left.Key.LocalObject < right.Key.LocalObject
+	}
+	if len(left.Key.PrefabPath) != len(right.Key.PrefabPath) {
+		return len(left.Key.PrefabPath) < len(right.Key.PrefabPath)
+	}
+	for index, segment := range left.Key.PrefabPath {
+		if segment != right.Key.PrefabPath[index] {
+			return segment < right.Key.PrefabPath[index]
+		}
+	}
+	return left.Entity.Key() < right.Entity.Key()
+}

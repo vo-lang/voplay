@@ -1,0 +1,332 @@
+package scene
+
+import "github.com/vo-lang/voplay/vo/world"
+
+type AuthoringRefKind uint32
+
+const (
+	AuthoringPrefabRelative AuthoringRefKind = iota + 1
+	AuthoringSceneLocal
+	AuthoringExternalBinding
+)
+
+type AuthoringObjectRef struct {
+	Kind AuthoringRefKind
+	RelativePrefabPath []uint64
+	SourceAsset [16]byte
+	LocalObject uint64
+	BindingKey uint64
+	ExpectedType uint64
+	Required bool
+}
+
+type ExternalBinding struct {
+	Key uint64
+	Runtime RuntimeObjectKey
+	Type uint64
+}
+
+type ObjectReference struct {
+	Owner RuntimeObjectKey
+	Field uint64
+	Reference AuthoringObjectRef
+}
+
+type ResolvedReference struct {
+	Owner RuntimeObjectKey
+	Field uint64
+	Target RuntimeObjectKey
+	Entity world.Entity
+	Present bool
+}
+
+type StagedObject struct {
+	Key RuntimeObjectKey
+	StableEntityKey uint64
+	Components []world.ComponentRecord
+}
+
+type ActivationPlan struct {
+	Scene *SceneInstance
+	World *world.World
+	Objects []StagedObject
+	References []ObjectReference
+	Bindings []ExternalBinding
+	MaxObjects uint32
+	MaxReferences uint32
+}
+
+type ActivationResult struct {
+	Created []RuntimeObjectKey
+	Updated []RuntimeObjectKey
+	Removed []RuntimeObjectKey
+	References []ResolvedReference
+	WorldRevision uint64
+	MappingRevision uint64
+}
+
+func NewActivationPlan(scene *SceneInstance, value *world.World,
+	maxObjects uint32, maxReferences uint32) (*ActivationPlan, bool) {
+	if scene == nil || value == nil || !scene.Active ||
+		maxObjects == 0 || maxObjects > scene.MaxObjects ||
+		maxReferences == 0 || maxReferences > 4000000 {
+		return nil, false
+	}
+	return &ActivationPlan{
+		Scene: scene, World: value,
+		MaxObjects: maxObjects, MaxReferences: maxReferences,
+	}, true
+}
+
+func (plan *ActivationPlan) StageObject(object StagedObject) bool {
+	if plan == nil || object.Key.Root != plan.Scene.Ref ||
+		object.Key.LocalObject == 0 || object.StableEntityKey == 0 ||
+		len(plan.Objects) >= int(plan.MaxObjects) {
+		return false
+	}
+	for _, current := range plan.Objects {
+		if sameRuntimeKey(current.Key, object.Key) ||
+			current.StableEntityKey == object.StableEntityKey {
+			return false
+		}
+	}
+	for _, component := range object.Components {
+		if component.Component == 0 ||
+			len(component.Value) > int(plan.World.MaxComponentBytes) {
+			return false
+		}
+	}
+	object.Key.PrefabPath = append([]uint64{}, object.Key.PrefabPath...)
+	components := make([]world.ComponentRecord, len(object.Components))
+	for index, component := range object.Components {
+		components[index] = component
+		components[index].Entity = world.Entity{}
+		components[index].Value = append([]byte{}, component.Value...)
+	}
+	object.Components = components
+	plan.Objects = append(plan.Objects, object)
+	return true
+}
+
+func (plan *ActivationPlan) StageReference(reference ObjectReference) bool {
+	if plan == nil || reference.Owner.Root != plan.Scene.Ref ||
+		reference.Owner.LocalObject == 0 || reference.Field == 0 ||
+		len(plan.References) >= int(plan.MaxReferences) ||
+		!validAuthoringReference(reference.Reference) {
+		return false
+	}
+	for _, current := range plan.References {
+		if sameRuntimeKey(current.Owner, reference.Owner) &&
+			current.Field == reference.Field {
+			return false
+		}
+	}
+	reference.Owner.PrefabPath = append([]uint64{}, reference.Owner.PrefabPath...)
+	reference.Reference.RelativePrefabPath =
+		append([]uint64{}, reference.Reference.RelativePrefabPath...)
+	plan.References = append(plan.References, reference)
+	return true
+}
+
+func (plan *ActivationPlan) BindExternal(binding ExternalBinding) bool {
+	if plan == nil || binding.Key == 0 || binding.Type == 0 ||
+		binding.Runtime.LocalObject == 0 {
+		return false
+	}
+	for _, current := range plan.Bindings {
+		if current.Key == binding.Key {
+			return false
+		}
+	}
+	binding.Runtime.PrefabPath = append([]uint64{}, binding.Runtime.PrefabPath...)
+	plan.Bindings = append(plan.Bindings, binding)
+	return true
+}
+
+func (plan *ActivationPlan) Commit() (ActivationResult, bool) {
+	if plan == nil || plan.Scene == nil || plan.World == nil ||
+		len(plan.Objects) == 0 {
+		return ActivationResult{}, false
+	}
+	sortStagedObjects(plan.Objects)
+	entities := make([]SceneObject, 0, len(plan.Objects))
+	created := make([]RuntimeObjectKey, 0)
+	updated := make([]RuntimeObjectKey, 0)
+	removed := make([]RuntimeObjectKey, 0)
+	commands, ok := plan.World.Begin()
+	if !ok {
+		return ActivationResult{}, false
+	}
+	for _, staged := range plan.Objects {
+		entity, _, exists := plan.Scene.Resolve(staged.Key)
+		if exists {
+			entities = append(entities, SceneObject{Key: staged.Key, Entity: entity})
+			updated = append(updated, staged.Key)
+			for _, component := range staged.Components {
+				if !commands.Set(entity, component.Component, component.Value) {
+					return ActivationResult{}, false
+				}
+			}
+			continue
+		}
+		if !commands.Spawn(staged.StableEntityKey, staged.Components) {
+			return ActivationResult{}, false
+		}
+		created = append(created, staged.Key)
+	}
+	for _, current := range plan.Scene.Objects {
+		if !containsStagedKey(plan.Objects, current.Key) {
+			if !commands.Despawn(current.Entity) {
+				return ActivationResult{}, false
+			}
+			removed = append(removed, current.Key)
+		}
+	}
+	resolved, ok := plan.resolveReferences(entities)
+	if !ok {
+		return ActivationResult{}, false
+	}
+	revision, ok := commands.Commit()
+	if !ok {
+		return ActivationResult{}, false
+	}
+	for index, key := range created {
+		staged := findStaged(plan.Objects, key)
+		entity, found := plan.World.Entity(staged.StableEntityKey)
+		if !found {
+			return ActivationResult{}, false
+		}
+		entities = append(entities, SceneObject{Key: key, Entity: entity})
+		for resolvedIndex := range resolved {
+			if sameRuntimeKey(resolved[resolvedIndex].Target, key) {
+				resolved[resolvedIndex].Entity = entity
+				resolved[resolvedIndex].Present = true
+			}
+		}
+		created[index] = key
+	}
+	sortSceneObjects(entities)
+	plan.Scene.Objects = entities
+	plan.Scene.MappingRevision++
+	return ActivationResult{
+		Created: created, Updated: updated, Removed: removed,
+		References: resolved, WorldRevision: revision,
+		MappingRevision: plan.Scene.MappingRevision,
+	}, true
+}
+
+func (plan *ActivationPlan) resolveReferences(staged []SceneObject) ([]ResolvedReference, bool) {
+	resolved := make([]ResolvedReference, 0, len(plan.References))
+	for _, reference := range plan.References {
+		if !containsStagedKey(plan.Objects, reference.Owner) {
+			return nil, false
+		}
+		target, typeId, ok := plan.resolveAuthoring(reference.Owner, reference.Reference)
+		if !ok {
+			if reference.Reference.Required {
+				return nil, false
+			}
+			resolved = append(resolved, ResolvedReference{
+				Owner: reference.Owner, Field: reference.Field,
+			})
+			continue
+		}
+		if reference.Reference.ExpectedType != 0 && typeId != 0 &&
+			reference.Reference.ExpectedType != typeId {
+			return nil, false
+		}
+		entity, present := lookupSceneObject(staged, target)
+		if !present {
+			entity, _, present = plan.Scene.Resolve(target)
+		}
+		if !present && reference.Reference.Required &&
+			!containsStagedKey(plan.Objects, target) {
+			return nil, false
+		}
+		resolved = append(resolved, ResolvedReference{
+			Owner: reference.Owner, Field: reference.Field,
+			Target: target, Entity: entity, Present: present,
+		})
+	}
+	return resolved, true
+}
+
+func (plan *ActivationPlan) resolveAuthoring(owner RuntimeObjectKey,
+	reference AuthoringObjectRef) (RuntimeObjectKey, uint64, bool) {
+	switch reference.Kind {
+	case AuthoringPrefabRelative:
+		path := append([]uint64{}, owner.PrefabPath...)
+		path = append(path, reference.RelativePrefabPath...)
+		return RuntimeObjectKey{
+			Root: owner.Root, PrefabPath: path,
+			SourceAsset: owner.SourceAsset, LocalObject: reference.LocalObject,
+		}, reference.ExpectedType, true
+	case AuthoringSceneLocal:
+		return RuntimeObjectKey{
+			Root: owner.Root, SourceAsset: reference.SourceAsset,
+			LocalObject: reference.LocalObject,
+		}, reference.ExpectedType, true
+	case AuthoringExternalBinding:
+		for _, binding := range plan.Bindings {
+			if binding.Key == reference.BindingKey {
+				return binding.Runtime, binding.Type, true
+			}
+		}
+	}
+	return RuntimeObjectKey{}, 0, false
+}
+
+func validAuthoringReference(reference AuthoringObjectRef) bool {
+	switch reference.Kind {
+	case AuthoringPrefabRelative:
+		return reference.LocalObject != 0
+	case AuthoringSceneLocal:
+		return reference.LocalObject != 0
+	case AuthoringExternalBinding:
+		return reference.BindingKey != 0
+	}
+	return false
+}
+
+func containsStagedKey(objects []StagedObject, key RuntimeObjectKey) bool {
+	for _, object := range objects {
+		if sameRuntimeKey(object.Key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func findStaged(objects []StagedObject, key RuntimeObjectKey) StagedObject {
+	for _, object := range objects {
+		if sameRuntimeKey(object.Key, key) {
+			return object
+		}
+	}
+	return StagedObject{}
+}
+
+func lookupSceneObject(objects []SceneObject, key RuntimeObjectKey) (world.Entity, bool) {
+	for _, object := range objects {
+		if sameRuntimeKey(object.Key, key) {
+			return object.Entity, true
+		}
+	}
+	return world.Entity{}, false
+}
+
+func sortStagedObjects(values []StagedObject) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && stagedObjectLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func stagedObjectLess(left StagedObject, right StagedObject) bool {
+	return left.StableEntityKey < right.StableEntityKey
+}

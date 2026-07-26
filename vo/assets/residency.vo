@@ -1,0 +1,368 @@
+package assets
+
+type BufferLease struct {
+	Index uint32
+	Generation uint32
+	ProviderGeneration uint32
+	Bytes uint64
+}
+
+func (lease BufferLease) Valid() bool {
+	return lease.Index != 0 && lease.Generation != 0 &&
+		lease.ProviderGeneration != 0 && lease.Bytes != 0
+}
+
+type DeviceRef struct {
+	Index uint32
+	Generation uint32
+}
+
+func (device DeviceRef) Valid() bool {
+	return device.Index != 0 && device.Generation != 0
+}
+
+type ResidencyState uint32
+
+const (
+	ResidencyAbsent ResidencyState = iota + 1
+	ResidencyUploadQueued
+	ResidencyUploading
+	ResidencyResident
+	ResidencyFailed
+)
+
+type LeaseRecord struct {
+	Lease BufferLease
+	Asset AssetRef
+	ArtifactHash [32]byte
+	Released bool
+}
+
+type ResidencyRecord struct {
+	Asset AssetRef
+	Device DeviceRef
+	State ResidencyState
+	Lease BufferLease
+	LocalHandle uint64
+	LastUsedFrame uint64
+	Bytes uint64
+	Failure []byte
+}
+
+type ResidencyManager struct {
+	ProviderGeneration uint32
+	Leases []LeaseRecord
+	Residencies []ResidencyRecord
+	LeaseFree []uint32
+	MaxLeases uint32
+	MaxResidencies uint32
+	MaxBytesPerDevice uint64
+	MaxUploadBytes uint64
+}
+
+func NewResidencyManager(providerGeneration uint32, maxLeases uint32,
+	maxResidencies uint32, maxBytesPerDevice uint64,
+	maxUploadBytes uint64) (*ResidencyManager, bool) {
+	if providerGeneration == 0 || maxLeases == 0 || maxLeases > 1000000 ||
+		maxResidencies == 0 || maxResidencies > 4000000 ||
+		maxBytesPerDevice == 0 || maxBytesPerDevice > 8589934592 ||
+		maxUploadBytes == 0 || maxUploadBytes > maxBytesPerDevice {
+		return nil, false
+	}
+	return &ResidencyManager{
+		ProviderGeneration: providerGeneration, MaxLeases: maxLeases,
+		MaxResidencies: maxResidencies, MaxBytesPerDevice: maxBytesPerDevice,
+		MaxUploadBytes: maxUploadBytes,
+	}, true
+}
+
+func (manager *ResidencyManager) Issue(asset AssetRef,
+	artifactHash [32]byte, bytes uint64) (BufferLease, bool) {
+	if manager == nil || !asset.Valid() || artifactHash == [32]byte{} ||
+		bytes == 0 || bytes > manager.MaxUploadBytes ||
+		len(manager.Leases)-len(manager.LeaseFree) >= int(manager.MaxLeases) {
+		return BufferLease{}, false
+	}
+	if len(manager.LeaseFree) != 0 {
+		last := len(manager.LeaseFree) - 1
+		index := manager.LeaseFree[last]
+		manager.LeaseFree = manager.LeaseFree[:last]
+		previous := manager.Leases[index-1].Lease
+		if previous.Generation == 4294967295 {
+			return BufferLease{}, false
+		}
+		lease := BufferLease{
+			Index: index, Generation: previous.Generation + 1,
+			ProviderGeneration: manager.ProviderGeneration, Bytes: bytes,
+		}
+		manager.Leases[index-1] = LeaseRecord{
+			Lease: lease, Asset: asset, ArtifactHash: artifactHash,
+		}
+		return lease, true
+	}
+	lease := BufferLease{
+		Index: uint32(len(manager.Leases) + 1), Generation: 1,
+		ProviderGeneration: manager.ProviderGeneration, Bytes: bytes,
+	}
+	manager.Leases = append(manager.Leases, LeaseRecord{
+		Lease: lease, Asset: asset, ArtifactHash: artifactHash,
+	})
+	return lease, true
+}
+
+func (manager *ResidencyManager) Queue(asset AssetRef, device DeviceRef,
+	lease BufferLease) bool {
+	leaseIndex, ok := manager.leaseIndex(lease)
+	if !ok || manager.Leases[leaseIndex].Asset != asset || !device.Valid() {
+		return false
+	}
+	for index, residency := range manager.Residencies {
+		if residency.Asset == asset && residency.Device.Index == device.Index {
+			if residency.Device.Generation > device.Generation ||
+				residency.State == ResidencyUploading {
+				return false
+			}
+			manager.Residencies[index] = ResidencyRecord{
+				Asset: asset, Device: device, State: ResidencyUploadQueued,
+				Lease: lease, Bytes: lease.Bytes,
+			}
+			return manager.deviceBytes(device) <= manager.MaxBytesPerDevice
+		}
+	}
+	if len(manager.Residencies) >= int(manager.MaxResidencies) ||
+		manager.deviceBytes(device)+lease.Bytes > manager.MaxBytesPerDevice {
+		return false
+	}
+	manager.Residencies = append(manager.Residencies, ResidencyRecord{
+		Asset: asset, Device: device, State: ResidencyUploadQueued,
+		Lease: lease, Bytes: lease.Bytes,
+	})
+	sortResidencies(manager.Residencies)
+	return true
+}
+
+func (manager *ResidencyManager) TakeUploads(device DeviceRef,
+	maxBytes uint64, maxCount uint32) []ResidencyRecord {
+	if manager == nil || !device.Valid() || maxBytes == 0 ||
+		maxBytes > manager.MaxUploadBytes || maxCount == 0 {
+		return nil
+	}
+	result := make([]ResidencyRecord, 0)
+	var bytes uint64
+	for index, residency := range manager.Residencies {
+		if residency.Device != device ||
+			residency.State != ResidencyUploadQueued ||
+			bytes+residency.Bytes > maxBytes {
+			continue
+		}
+		manager.Residencies[index].State = ResidencyUploading
+		result = append(result, residency)
+		bytes += residency.Bytes
+		if len(result) >= int(maxCount) {
+			break
+		}
+	}
+	return result
+}
+
+func (manager *ResidencyManager) Uploaded(asset AssetRef, device DeviceRef,
+	lease BufferLease, localHandle uint64) bool {
+	index := manager.residencyIndex(asset, device)
+	if index < 0 || manager.Residencies[index].State != ResidencyUploading ||
+		manager.Residencies[index].Lease != lease || localHandle == 0 {
+		return false
+	}
+	manager.Residencies[index].State = ResidencyResident
+	manager.Residencies[index].LocalHandle = localHandle
+	manager.Residencies[index].Failure = nil
+	return true
+}
+
+func (manager *ResidencyManager) UploadFailed(asset AssetRef,
+	device DeviceRef, transient bool, reason []byte) bool {
+	index := manager.residencyIndex(asset, device)
+	if index < 0 || manager.Residencies[index].State != ResidencyUploading ||
+		len(reason) == 0 || len(reason) > 4096 {
+		return false
+	}
+	manager.Residencies[index].Failure = append([]byte{}, reason...)
+	if transient {
+		manager.Residencies[index].State = ResidencyUploadQueued
+	} else {
+		manager.Residencies[index].State = ResidencyFailed
+	}
+	return true
+}
+
+func (manager *ResidencyManager) Touch(asset AssetRef, device DeviceRef,
+	frame uint64) bool {
+	index := manager.residencyIndex(asset, device)
+	if index < 0 || manager.Residencies[index].State != ResidencyResident ||
+		frame < manager.Residencies[index].LastUsedFrame {
+		return false
+	}
+	manager.Residencies[index].LastUsedFrame = frame
+	return true
+}
+
+func (manager *ResidencyManager) DeviceLost(old DeviceRef,
+	replacement DeviceRef) uint32 {
+	if manager == nil || !old.Valid() || !replacement.Valid() ||
+		old.Index != replacement.Index ||
+		replacement.Generation <= old.Generation {
+		return 0
+	}
+	var queued uint32
+	for index, residency := range manager.Residencies {
+		if residency.Device != old {
+			continue
+		}
+		manager.Residencies[index].Device = replacement
+		manager.Residencies[index].State = ResidencyUploadQueued
+		manager.Residencies[index].LocalHandle = 0
+		manager.Residencies[index].Failure = nil
+		queued++
+	}
+	return queued
+}
+
+func (manager *ResidencyManager) Evict(device DeviceRef,
+	bytesRequired uint64) ([]AssetRef, bool) {
+	if manager == nil || !device.Valid() || bytesRequired == 0 ||
+		bytesRequired > manager.MaxBytesPerDevice {
+		return nil, false
+	}
+	candidates := make([]ResidencyRecord, 0)
+	for _, residency := range manager.Residencies {
+		if residency.Device == device &&
+			residency.State == ResidencyResident {
+			candidates = append(candidates, residency)
+		}
+	}
+	sortResidenciesByUse(candidates)
+	evicted := make([]AssetRef, 0)
+	var bytes uint64
+	for _, candidate := range candidates {
+		index := manager.residencyIndex(candidate.Asset, candidate.Device)
+		if index < 0 {
+			continue
+		}
+		manager.Residencies[index].State = ResidencyAbsent
+		manager.Residencies[index].LocalHandle = 0
+		evicted = append(evicted, candidate.Asset)
+		bytes += candidate.Bytes
+		if bytes >= bytesRequired {
+			return evicted, true
+		}
+	}
+	return evicted, false
+}
+
+func (manager *ResidencyManager) Release(lease BufferLease) bool {
+	index, ok := manager.leaseIndex(lease)
+	if !ok {
+		return false
+	}
+	for _, residency := range manager.Residencies {
+		if residency.Lease == lease &&
+			(residency.State == ResidencyUploadQueued ||
+				residency.State == ResidencyUploading) {
+			return false
+		}
+	}
+	manager.Leases[index].Released = true
+	manager.LeaseFree = append(manager.LeaseFree, lease.Index)
+	return true
+}
+
+func (manager *ResidencyManager) RestartProvider(
+	newProviderGeneration uint32) uint32 {
+	if manager == nil || newProviderGeneration == 0 ||
+		newProviderGeneration == manager.ProviderGeneration {
+		return 0
+	}
+	manager.ProviderGeneration = newProviderGeneration
+	var invalidated uint32
+	for index, lease := range manager.Leases {
+		if !lease.Released {
+			manager.Leases[index].Released = true
+			manager.LeaseFree = append(manager.LeaseFree, lease.Lease.Index)
+			invalidated++
+		}
+	}
+	for index := range manager.Residencies {
+		manager.Residencies[index].State = ResidencyAbsent
+		manager.Residencies[index].LocalHandle = 0
+		manager.Residencies[index].Lease = BufferLease{}
+	}
+	return invalidated
+}
+
+func (manager *ResidencyManager) leaseIndex(
+	lease BufferLease) (int, bool) {
+	if manager == nil || !lease.Valid() ||
+		lease.ProviderGeneration != manager.ProviderGeneration ||
+		int(lease.Index) > len(manager.Leases) {
+		return 0, false
+	}
+	index := int(lease.Index - 1)
+	return index, !manager.Leases[index].Released &&
+		manager.Leases[index].Lease == lease
+}
+
+func (manager *ResidencyManager) residencyIndex(
+	asset AssetRef, device DeviceRef) int {
+	for index, residency := range manager.Residencies {
+		if residency.Asset == asset && residency.Device == device {
+			return index
+		}
+	}
+	return -1
+}
+
+func (manager *ResidencyManager) deviceBytes(device DeviceRef) uint64 {
+	var bytes uint64
+	for _, residency := range manager.Residencies {
+		if residency.Device == device &&
+			residency.State != ResidencyAbsent &&
+			residency.State != ResidencyFailed {
+			bytes += residency.Bytes
+		}
+	}
+	return bytes
+}
+
+func sortResidencies(values []ResidencyRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && residencyLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func residencyLess(left ResidencyRecord, right ResidencyRecord) bool {
+	return deviceKey(left.Device) < deviceKey(right.Device) ||
+		left.Device == right.Device && assetKey(left.Asset) < assetKey(right.Asset)
+}
+
+func sortResidenciesByUse(values []ResidencyRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && (values[cursor-1].LastUsedFrame > value.LastUsedFrame ||
+			values[cursor-1].LastUsedFrame == value.LastUsedFrame &&
+				assetKey(values[cursor-1].Asset) > assetKey(value.Asset)) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func deviceKey(device DeviceRef) uint64 {
+	return uint64(device.Generation) << 32 | uint64(device.Index)
+}

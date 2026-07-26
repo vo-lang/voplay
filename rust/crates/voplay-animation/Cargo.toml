@@ -1,0 +1,10 @@
+[package]
+name = "voplay-animation"
+version = "0.1.0"
+edition = "2021"
+description = "Voplay simulation and presentation animation artifact"
+
+[dependencies]
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "animation", "render2d"] }
+voplay-import-gltf = { path = "../voplay-import-gltf" }
+voplay-protocol = { path = "../voplay-protocol" }

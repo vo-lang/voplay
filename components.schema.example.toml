@@ -1,0 +1,48 @@
+format = 1
+canonical_module = "example/game"
+
+[game]
+package = "game"
+type_name = "ExampleGame"
+init_type = "InitConfig"
+configure = "ConfigureGame"
+start = "StartGame"
+execute = "ExecuteSystem"
+max_init_bytes = 65536
+roles = ["logic", "asset", "render"]
+
+[[game.init_field]]
+name = "level"
+type = "string"
+
+[[game.init_field]]
+name = "seed"
+type = "uint64"
+
+[[component]]
+package = "game"
+type_name = "Transform"
+schema_major = 1
+classification = "simulation"
+
+[[component.field]]
+name = "x"
+type = "float32"
+
+[[component.field]]
+name = "y"
+type = "float32"
+
+[[component]]
+package = "game"
+type_name = "Velocity"
+schema_major = 1
+classification = "simulation"
+
+[[component.field]]
+name = "x"
+type = "float32"
+
+[[component.field]]
+name = "y"
+type = "float32"

@@ -1,0 +1,23 @@
+package core
+
+type Handle struct {
+	Index uint32
+	Generation uint32
+}
+
+type EngineId struct {
+	Session Handle
+	Engine Handle
+}
+
+type Revision struct {
+	Value uint64
+}
+
+type TickId struct {
+	Value uint64
+}
+
+type Deadline struct {
+	MonotonicMillis uint64
+}

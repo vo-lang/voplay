@@ -1,0 +1,165 @@
+package main
+
+import (
+	"github.com/vo-lang/voplay"
+	"github.com/vo-lang/voplay/vo/audio"
+	"github.com/vo-lang/voplay/vo/render"
+)
+
+func main() {
+	engine := voplay.EngineRef{
+		Session: voplay.SessionRef{Handle: voplay.Handle{Index: 1, Generation: 1}, Epoch: 1},
+		Engine: voplay.Handle{Index: 1, Generation: 1},
+	}
+	renderState, ok := render.NewRenderControlStore(1, 64, 16, 1048576)
+	if !ok {
+		panic("invalid render control limits")
+	}
+	graphProgram, ok := render.EncodeGraphProgram([]render.GraphResourceDescriptor{
+		{ID: 1, Format: 2, SampleCount: 4, Usage: 8 | 32, Lifetime: 2},
+	}, []render.GraphNodeDescriptor{
+		{
+			ID: 1, StableType: 100, Label: []byte{'m', 'a', 'i', 'n'}, Queue: 1,
+			Writes: []render.GraphResourceWrite{{Resource: 1, BaseVersion: 0, Usage: 8}},
+		},
+		{
+			ID: 2, StableType: 101, Label: []byte{'c', 'o', 'p', 'y'}, Queue: 3, Dependencies: []uint32{1},
+			Reads: []render.GraphResourceRead{{Resource: 1, Version: 1, Usage: 32}},
+		},
+	})
+	if !ok {
+		panic("render graph encoding failed")
+	}
+	leaseRequest, ok := voplay.EncodeControlLeaseRequest(engine, voplay.Handle{Index: 1, Generation: 1}, voplay.Handle{
+		Index: 1, Generation: 1,
+	}, 16, 1, 1)
+	if !ok {
+		panic("control lease request encoding failed")
+	}
+	lease := voplay.ControlAllocatorLease{
+		Engine: engine.Engine, Producer: voplay.Handle{Index: 1, Generation: 1},
+		LogicGeneration: voplay.Handle{Index: 1, Generation: 1},
+		Lease: voplay.Handle{Index: 0, Generation: 1}, Capacity: 16, ChannelEpoch: 1,
+	}
+	authority, ok := voplay.BeginControlCommit(lease, voplay.ControlDomainRender, 1, 0)
+	if !ok {
+		panic("render authority builder failed")
+	}
+	targetBytes, ok := render.EncodeAuthorityTargetDescriptor(engine, render.TargetDescriptor{
+		Width: 1280, Height: 720, Format: 2, DepthFormat: 4, SampleCount: 4, Usage: 1 | 8 | 16 | 32 | 256,
+		Lifetime: 2, Clear: 2, Offscreen: true, Readback: true,
+	})
+	if !ok {
+		panic("authority target encoding failed")
+	}
+	provisionalTarget, ok := authority.Create(voplay.ControlKindRenderTarget, targetBytes, nil)
+	if !ok {
+		panic("authority target create failed")
+	}
+	graphBytes, ok := render.EncodeAuthorityGraphDescriptor(engine, render.GraphDescriptor{
+		Signature: 7, Nodes: graphProgram, RequiredFeatures: []uint64{1001, 1002},
+	})
+	if !ok {
+		panic("authority graph encoding failed")
+	}
+	_, ok = authority.Create(voplay.ControlKindRenderGraph, graphBytes, nil)
+	if !ok {
+		panic("authority graph create failed")
+	}
+	viewBytes, viewDependencies, ok := render.EncodeAuthorityViewForProvisionalTarget(engine, provisionalTarget, render.ViewDescriptor{
+		CameraWorldIndex: 1, CameraWorldGeneration: 1, CameraEntityIndex: 1, CameraEntityGeneration: 1,
+		PresentationDomainIndex: 1, PresentationDomainGeneration: 1, ViewportWidth: 1280,
+		ViewportHeight: 720, LayerMask: 1, GraphTemplate: 7, QualityProfile: 1, Clear: 1, Enabled: true,
+	})
+	if !ok {
+		panic("authority view encoding failed")
+	}
+	_, ok = authority.Create(voplay.ControlKindRenderView, viewBytes, viewDependencies)
+	if !ok {
+		panic("authority view create failed")
+	}
+	authorityPacket, ok := authority.EncodePacket()
+	if !ok {
+		panic("authority commit encoding failed")
+	}
+	renderCommit, ok := renderState.Commit(render.RenderControlTransaction{
+		ExpectedRevision: 0,
+		Operations: []render.RenderControlOperation{
+			{
+				Kind: render.RenderCreateTarget,
+				Target: render.TargetDescriptor{
+					Width: 1280, Height: 720, Format: 2, DepthFormat: 4, SampleCount: 4,
+					Usage: 1 | 8 | 16 | 32 | 256, Lifetime: 2, Clear: 2, Offscreen: true, Readback: true,
+				},
+			},
+			{
+				Kind: render.RenderCreateGraph,
+				Graph: render.GraphDescriptor{
+					Signature: 7, Nodes: graphProgram, RequiredFeatures: []uint64{1001, 1002},
+				},
+			},
+		},
+	})
+	if !ok {
+		panic("render control commit failed")
+	}
+	_, ok = renderState.Commit(render.RenderControlTransaction{
+		ExpectedRevision: renderCommit.Revision,
+		Operations: []render.RenderControlOperation{
+			{
+				Kind: render.RenderCreateView,
+				View: render.ViewDescriptor{
+					Target: renderCommit.Created[0], CameraWorldIndex: 1, CameraWorldGeneration: 1,
+					CameraEntityIndex: 1, CameraEntityGeneration: 1, PresentationDomainIndex: 1,
+					PresentationDomainGeneration: 1, ViewportWidth: 1280, ViewportHeight: 720, LayerMask: 1,
+					GraphTemplate: 7, QualityProfile: 1, Clear: 1, Enabled: true,
+				},
+			},
+		},
+	})
+	if !ok {
+		panic("render view commit failed")
+	}
+	renderPacket, ok := renderState.EncodeSnapshotPacket(engine, 1)
+	if !ok {
+		panic("render control encoding failed")
+	}
+	audioState, ok := audio.NewControlState(64, 1024, 64)
+	if !ok {
+		panic("invalid audio control limits")
+	}
+	audioLease := lease
+	audioLease.Lease = voplay.Handle{Index: 1, Generation: 1}
+	audioAuthority, ok := voplay.BeginControlCommit(audioLease, voplay.ControlDomainAudio, 2, 0)
+	if !ok {
+		panic("audio authority builder failed")
+	}
+	master := audioState.Master()
+	masterDescriptor, masterDependencies, ok := audio.EncodeAuthorityBusDescriptor(engine, audioState, audio.BusRecord{
+		Ref: master, Descriptor: audio.BusDescriptor{GainMilli: 1000}, Alive: true,
+	})
+	if !ok {
+		panic("audio master descriptor encoding failed")
+	}
+	_, ok = audioAuthority.Create(voplay.ControlKindAudioBus, masterDescriptor, masterDependencies)
+	if !ok {
+		panic("audio authority bus create failed")
+	}
+	audioAuthorityPacket, ok := audioAuthority.EncodePacket()
+	if !ok {
+		panic("audio authority commit encoding failed")
+	}
+	audioPacket, ok := audioState.EncodeSnapshotPacket(engine, 1)
+	if !ok {
+		panic("audio control encoding failed")
+	}
+	observedPacket, ok := voplay.EncodeControlObserved(engine, voplay.ControlCommitted{
+		Transaction: 1, Revision: 1, Domain: voplay.ControlDomainRender,
+	}, voplay.ControlRetirementProgress{
+		RenderRevision: 1, DomainFrame: 1, EventSequence: 1,
+	}, 1)
+	if !ok {
+		panic("control observation encoding failed")
+	}
+	println(len(leaseRequest), len(authorityPacket), len(audioAuthorityPacket), len(renderPacket), len(audioPacket), len(observedPacket))
+}

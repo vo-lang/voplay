@@ -1,0 +1,876 @@
+// Public Voplay entrypoints. Run, NewEngine and Install are compiler/generator
+// intrinsics: source Game values are lowered to descriptors and owned init bytes
+// before any target island is created.
+package voplay
+
+import (
+	"github.com/vo-lang/voplay/vo/world"
+)
+
+type Handle struct {
+	Index uint32
+	Generation uint32
+}
+
+func (handle Handle) Valid() bool {
+	return handle.Index != 4294967295 && handle.Generation != 0
+}
+
+type ControlAllocatorLease struct {
+	Engine Handle
+	Producer Handle
+	LogicGeneration Handle
+	Lease Handle
+	Capacity uint32
+	ChannelEpoch uint64
+}
+
+type ControlDomain uint32
+
+const (
+	ControlDomainRender ControlDomain = iota + 1
+	ControlDomainAudio
+)
+
+type ControlKind uint32
+
+const (
+	ControlKindRenderView ControlKind = iota + 1
+	ControlKindRenderTarget
+	ControlKindAudioBus
+	ControlKindPersistentAudioSource
+	ControlKindRenderGraph
+)
+
+type ProvisionalControlRef struct {
+	Token uint32
+	Kind ControlKind
+}
+
+type StableControlRef struct {
+	Handle Handle
+	Kind ControlKind
+}
+
+type ControlDependency struct {
+	Offset uint32
+	Provisional *ProvisionalControlRef
+	Stable *StableControlRef
+}
+
+type ControlRetirementFence struct {
+	LastRenderRevision uint64
+	LastDomainFrame uint64
+	LastEventSequence uint64
+	LastAudioEventSequence uint64
+}
+
+type controlCreateOperation struct {
+	Ref ProvisionalControlRef
+	Descriptor []byte
+	Dependencies []ControlDependency
+}
+
+type controlRetireOperation struct {
+	Ref StableControlRef
+	Fence ControlRetirementFence
+}
+
+type ControlCommitBuilder struct {
+	Lease ControlAllocatorLease
+	Domain ControlDomain
+	Transaction uint64
+	BaseRevision uint64
+	Creates []controlCreateOperation
+	Retires []controlRetireOperation
+}
+
+type ControlPromotion struct {
+	Provisional ProvisionalControlRef
+	Stable StableControlRef
+}
+
+type ControlCommitted struct {
+	Transaction uint64
+	Revision uint64
+	Domain ControlDomain
+	Promotions []ControlPromotion
+}
+
+type ControlObservedAck struct {
+	Transaction uint64
+	Revision uint64
+	Domain ControlDomain
+	Progress ControlRetirementProgress
+}
+
+type ControlRetirementProgress struct {
+	RenderRevision uint64
+	DomainFrame uint64
+	EventSequence uint64
+	AudioEventSequence uint64
+}
+
+type ControlRealizationOutcome uint32
+
+const (
+	ControlRealizationLive ControlRealizationOutcome = iota + 1
+	ControlRealizationTransientFailure
+	ControlRealizationPermanentFailure
+)
+
+type ControlRealization struct {
+	Stable StableControlRef
+	Outcome ControlRealizationOutcome
+}
+
+type ControlRealizationBatch struct {
+	Revision uint64
+	Domain ControlDomain
+	EndpointGeneration Handle
+	Results []ControlRealization
+}
+
+func (lease ControlAllocatorLease) Valid() bool {
+	return lease.Engine.Valid() && lease.Producer.Valid() && lease.LogicGeneration.Valid() &&
+		lease.Lease.Valid() &&
+		lease.Capacity != 0 &&
+		lease.ChannelEpoch != 0
+}
+
+func BeginControlCommit(lease ControlAllocatorLease, domain ControlDomain, transaction uint64, baseRevision uint64) (*ControlCommitBuilder, bool) {
+	if !lease.Valid() || domain < ControlDomainRender || domain > ControlDomainAudio ||
+		transaction == 0 ||
+		baseRevision == 18446744073709551615 {
+		return nil, false
+	}
+	return &ControlCommitBuilder{
+		Lease: lease, Domain: domain, Transaction: transaction, BaseRevision: baseRevision,
+	}, true
+}
+
+func (builder *ControlCommitBuilder) Create(kind ControlKind, descriptor []byte, dependencies []ControlDependency) (ProvisionalControlRef, bool) {
+	if builder == nil || len(descriptor) == 0 ||
+		len(builder.Creates) + len(builder.Retires) >= int(builder.Lease.Capacity) ||
+		!controlKindMatchesDomain(kind, builder.Domain) {
+		return ProvisionalControlRef{}, false
+	}
+	ref := ProvisionalControlRef{Token: uint32(len(builder.Creates)), Kind: kind}
+	for _, dependency := range dependencies {
+		if int(dependency.Offset) + 10 > len(descriptor) ||
+			dependency.Provisional == nil == (dependency.Stable == nil) {
+			return ProvisionalControlRef{}, false
+		}
+		if dependency.Provisional != nil {
+			value := dependency.Provisional
+			if value.Token >= ref.Token || !controlKindMatchesDomain(value.Kind, builder.Domain) {
+				return ProvisionalControlRef{}, false
+			}
+		} else if dependency.Stable == nil || !dependency.Stable.Handle.Valid() ||
+			!controlKindMatchesDomain(dependency.Stable.Kind, builder.Domain) {
+			return ProvisionalControlRef{}, false
+		}
+	}
+	builder.Creates = append(builder.Creates, controlCreateOperation{
+		Ref: ref, Descriptor: append([]byte{}, descriptor...),
+		Dependencies: append([]ControlDependency{}, dependencies...),
+	})
+	return ref, true
+}
+
+func (builder *ControlCommitBuilder) Retire(ref StableControlRef, fence ControlRetirementFence) bool {
+	if builder == nil || !ref.Handle.Valid() || !controlKindMatchesDomain(ref.Kind, builder.Domain) ||
+		len(builder.Creates) + len(builder.Retires) >= int(builder.Lease.Capacity) {
+		return false
+	}
+	builder.Retires = append(builder.Retires, controlRetireOperation{Ref: ref, Fence: fence})
+	return true
+}
+
+func (builder *ControlCommitBuilder) EncodePacket() ([]byte, bool) {
+	if builder == nil || !builder.Lease.Valid() || len(builder.Creates) + len(builder.Retires) == 0 ||
+		builder.BaseRevision == 18446744073709551615 {
+		return nil, false
+	}
+	payload := []byte{'V', 'C', 'T', '1', 1, 0, byte(builder.Domain), 0}
+	payload = appendVoplayHandle(payload, builder.Lease.Producer)
+	payload = appendVoplayHandle(payload, builder.Lease.LogicGeneration)
+	payload = appendVoplayHandle(payload, builder.Lease.Lease)
+	payload = appendVoplayU32(payload, builder.Lease.Capacity)
+	payload = appendVoplayU32(payload, uint32(len(builder.Creates) + len(builder.Retires)))
+	for _, operation := range builder.Creates {
+		payload = append(payload, 1, byte(operation.Ref.Kind), 0, 0)
+		payload = appendVoplayU32(payload, operation.Ref.Token)
+		payload = appendVoplayU32(payload, uint32(len(operation.Descriptor)))
+		payload = appendVoplayU32(payload, uint32(len(operation.Dependencies)))
+		payload = append(payload, operation.Descriptor...)
+		for _, dependency := range operation.Dependencies {
+			payload = appendVoplayU32(payload, dependency.Offset)
+			if dependency.Provisional != nil {
+				payload = append(payload, 1, byte(dependency.Provisional.Kind), 0, 0)
+				payload = appendVoplayU32(payload, dependency.Provisional.Token)
+				payload = appendVoplayU32(payload, 0)
+			} else {
+				payload = append(payload, 2, byte(dependency.Stable.Kind), 0, 0)
+				payload = appendVoplayHandle(payload, dependency.Stable.Handle)
+			}
+		}
+	}
+	for _, operation := range builder.Retires {
+		payload = append(payload, 2, byte(operation.Ref.Kind), 0, 0)
+		payload = appendVoplayHandle(payload, operation.Ref.Handle)
+		payload = appendVoplayU64(payload, operation.Fence.LastRenderRevision)
+		payload = appendVoplayU64(payload, operation.Fence.LastDomainFrame)
+		payload = appendVoplayU64(payload, operation.Fence.LastEventSequence)
+		payload = appendVoplayU64(payload, operation.Fence.LastAudioEventSequence)
+	}
+	if len(payload) + 80 > 67108864 {
+		return nil, false
+	}
+	packet := make([]byte, 80)
+	putVoplayU16(packet, 0, 44)
+	putVoplayU32(packet, 4, builder.Lease.Engine.Index)
+	putVoplayU32(packet, 8, builder.Lease.Engine.Generation)
+	putVoplayU64(packet, 12, builder.Lease.ChannelEpoch)
+	putVoplayU64(packet, 20, builder.Transaction)
+	putVoplayU64(packet, 28, builder.BaseRevision)
+	putVoplayU64(packet, 36, builder.BaseRevision + 1)
+	putVoplayU64(packet, 60, builder.Transaction)
+	putVoplayU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeControlCommitted(engine EngineRef, packet []byte) (ControlCommitted, bool) {
+	if len(packet) < 96 || readVoplayU16(packet, 0) != 45 ||
+		readVoplayU32(packet, 4) != engine.Engine.Index ||
+		readVoplayU32(packet, 8) != engine.Engine.Generation ||
+		readVoplayU64(packet, 12) == 0 ||
+		int(readVoplayU32(packet, 76)) + 80 != len(packet) ||
+		string(packet[80:84]) != "VCC1" ||
+		readVoplayU16(packet, 84) != 1 ||
+		packet[87] != 0 ||
+		readVoplayU32(packet, 92) != 0 {
+		return ControlCommitted{}, false
+	}
+	domain := ControlDomain(packet[86])
+	count := int(readVoplayU32(packet, 88))
+	if domain < ControlDomainRender || domain > ControlDomainAudio || len(packet) != 96 + count * 16 {
+		return ControlCommitted{}, false
+	}
+	result := ControlCommitted{
+		Transaction: readVoplayU64(packet, 20), Revision: readVoplayU64(packet, 36), Domain: domain,
+	}
+	offset := 96
+	for index := 0; index < count; index++ {
+		token := readVoplayU32(packet, offset)
+		kind := ControlKind(packet[offset + 4])
+		handle := readVoplayHandle(packet, offset + 8)
+		if packet[offset + 5] != 0 || packet[offset + 6] != 0 || packet[offset + 7] != 0 ||
+			!handle.Valid() ||
+			!controlKindMatchesDomain(kind, domain) {
+			return ControlCommitted{}, false
+		}
+		result.Promotions = append(result.Promotions, ControlPromotion{
+			Provisional: ProvisionalControlRef{Token: token, Kind: kind},
+			Stable: StableControlRef{Handle: handle, Kind: kind},
+		})
+		offset += 16
+	}
+	return result, result.Transaction != 0 && result.Revision != 0
+}
+
+func EncodeControlObserved(engine EngineRef, committed ControlCommitted, progress ControlRetirementProgress, channelEpoch uint64) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || committed.Transaction == 0 ||
+		committed.Revision == 0 ||
+		committed.Domain < ControlDomainRender ||
+		committed.Domain > ControlDomainAudio {
+		return nil, false
+	}
+	payload := []byte{'V', 'C', 'O', '1', 2, 0, byte(committed.Domain), 0}
+	payload = appendVoplayU64(payload, committed.Transaction)
+	payload = appendVoplayU64(payload, committed.Revision)
+	payload = appendVoplayU64(payload, progress.RenderRevision)
+	payload = appendVoplayU64(payload, progress.DomainFrame)
+	payload = appendVoplayU64(payload, progress.EventSequence)
+	payload = appendVoplayU64(payload, progress.AudioEventSequence)
+	packet := make([]byte, 80)
+	putVoplayU16(packet, 0, 47)
+	putVoplayU32(packet, 4, engine.Engine.Index)
+	putVoplayU32(packet, 8, engine.Engine.Generation)
+	putVoplayU64(packet, 12, channelEpoch)
+	putVoplayU64(packet, 20, committed.Transaction)
+	putVoplayU64(packet, 36, committed.Revision)
+	putVoplayU64(packet, 44, committed.Revision)
+	putVoplayU64(packet, 60, committed.Transaction)
+	putVoplayU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeControlObservedAck(engine EngineRef, packet []byte) (ControlObservedAck, bool) {
+	if len(packet) != 136 || readVoplayU16(packet, 0) != 48 ||
+		readVoplayU32(packet, 4) != engine.Engine.Index ||
+		readVoplayU32(packet, 8) != engine.Engine.Generation ||
+		readVoplayU64(packet, 12) == 0 ||
+		readVoplayU32(packet, 76) != 56 ||
+		string(packet[80:84]) != "VCO1" ||
+		readVoplayU16(packet, 84) != 2 ||
+		packet[87] != 0 {
+		return ControlObservedAck{}, false
+	}
+	result := ControlObservedAck{
+		Domain: ControlDomain(packet[86]), Transaction: readVoplayU64(packet, 88),
+		Revision: readVoplayU64(packet, 96),
+		Progress: ControlRetirementProgress{
+			RenderRevision: readVoplayU64(packet, 104),
+			DomainFrame: readVoplayU64(packet, 112),
+			EventSequence: readVoplayU64(packet, 120),
+			AudioEventSequence: readVoplayU64(packet, 128),
+		},
+	}
+	if result.Domain < ControlDomainRender || result.Domain > ControlDomainAudio ||
+		result.Transaction == 0 ||
+		result.Revision == 0 ||
+		readVoplayU64(packet, 20) != result.Transaction ||
+		readVoplayU64(packet, 36) != result.Revision ||
+		readVoplayU64(packet, 44) != result.Revision {
+		return ControlObservedAck{}, false
+	}
+	return result, true
+}
+
+func DecodeControlRealizationBatch(engine EngineRef, packet []byte) (ControlRealizationBatch, bool) {
+	if len(packet) < 112 || readVoplayU16(packet, 0) != 46 ||
+		readVoplayU32(packet, 4) != engine.Engine.Index ||
+		readVoplayU32(packet, 8) != engine.Engine.Generation ||
+		readVoplayU64(packet, 12) == 0 ||
+		int(readVoplayU32(packet, 76)) + 80 != len(packet) ||
+		string(packet[80:84]) != "VCRR" ||
+		readVoplayU16(packet, 84) != 1 ||
+		packet[87] != 0 ||
+		readVoplayU32(packet, 108) != 0 {
+		return ControlRealizationBatch{}, false
+	}
+	domain := ControlDomain(packet[86])
+	endpointGeneration := readVoplayHandle(packet, 88)
+	revision := readVoplayU64(packet, 96)
+	count := int(readVoplayU32(packet, 104))
+	if domain < ControlDomainRender || domain > ControlDomainAudio || !endpointGeneration.Valid() ||
+		revision == 0 ||
+		len(packet) != 112 + count * 12 {
+		return ControlRealizationBatch{}, false
+	}
+	result := ControlRealizationBatch{
+		Revision: revision, Domain: domain, EndpointGeneration: endpointGeneration,
+	}
+	offset := 112
+	for index := 0; index < count; index++ {
+		kind := ControlKind(packet[offset])
+		outcome := ControlRealizationOutcome(packet[offset + 1])
+		handle := readVoplayHandle(packet, offset + 4)
+		if packet[offset + 2] != 0 || packet[offset + 3] != 0 || !handle.Valid() ||
+			!controlKindMatchesDomain(kind, domain) ||
+			outcome < ControlRealizationLive ||
+			outcome > ControlRealizationPermanentFailure {
+			return ControlRealizationBatch{}, false
+		}
+		result.Results = append(result.Results, ControlRealization{
+			Stable: StableControlRef{Handle: handle, Kind: kind}, Outcome: outcome,
+		})
+		offset += 12
+	}
+	return result, true
+}
+
+func controlKindMatchesDomain(kind ControlKind, domain ControlDomain) bool {
+	if domain == ControlDomainRender {
+		return kind == ControlKindRenderView || kind == ControlKindRenderTarget ||
+			kind == ControlKindRenderGraph
+	}
+	return domain == ControlDomainAudio &&
+		(kind == ControlKindAudioBus || kind == ControlKindPersistentAudioSource)
+}
+
+type SessionRef struct {
+	Handle Handle
+	Epoch uint64
+}
+
+type EngineRef struct {
+	Session SessionRef
+	Engine Handle
+}
+
+type EngineDesc struct {
+	Profile string
+	FixedTickNanos uint64
+	MaxCatchUpTicks uint32
+	MaxWorldEntities uint32
+	Headless bool
+}
+
+func EncodeControlLeaseRequest(engine EngineRef, producer Handle, logicGeneration Handle, capacity uint32, channelEpoch uint64, requestID uint64) ([]byte, bool) {
+	if !engine.Engine.Valid() || !producer.Valid() || !logicGeneration.Valid() || capacity == 0 ||
+		channelEpoch == 0 ||
+		requestID == 0 {
+		return nil, false
+	}
+	payload := []byte{'V', 'C', 'L', 'R', 1, 0, 0, 0}
+	payload = appendVoplayHandle(payload, producer)
+	payload = appendVoplayHandle(payload, logicGeneration)
+	payload = appendVoplayU32(payload, capacity)
+	packet := make([]byte, 80)
+	putVoplayU16(packet, 0, 42)
+	putVoplayU32(packet, 4, engine.Engine.Index)
+	putVoplayU32(packet, 8, engine.Engine.Generation)
+	putVoplayU64(packet, 12, channelEpoch)
+	putVoplayU64(packet, 20, requestID)
+	putVoplayU64(packet, 60, requestID)
+	putVoplayU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeControlLeaseGranted(engine EngineRef, packet []byte) (ControlAllocatorLease, bool) {
+	if len(packet) != 116 || readVoplayU16(packet, 0) != 43 ||
+		readVoplayU32(packet, 4) != engine.Engine.Index ||
+		readVoplayU32(packet, 8) != engine.Engine.Generation ||
+		readVoplayU64(packet, 12) == 0 ||
+		readVoplayU32(packet, 76) != 36 ||
+		string(packet[80:84]) != "VCLG" ||
+		readVoplayU16(packet, 84) != 1 ||
+		readVoplayU16(packet, 86) != 0 {
+		return ControlAllocatorLease{}, false
+	}
+	lease := ControlAllocatorLease{
+		Engine: engine.Engine, Producer: readVoplayHandle(packet, 88),
+		LogicGeneration: readVoplayHandle(packet, 96), Lease: readVoplayHandle(packet, 104),
+		Capacity: readVoplayU32(packet, 112), ChannelEpoch: readVoplayU64(packet, 12),
+	}
+	return lease, lease.Valid()
+}
+
+func appendVoplayHandle(bytes []byte, handle Handle) []byte {
+	bytes = appendVoplayU32(bytes, handle.Index)
+	return appendVoplayU32(bytes, handle.Generation)
+}
+
+func appendVoplayU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendVoplayU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func putVoplayU16(bytes []byte, offset int, value uint16) {
+	bytes[offset] = byte(value)
+	bytes[offset + 1] = byte(value >> 8)
+}
+
+func putVoplayU32(bytes []byte, offset int, value uint32) {
+	for index := 0; index < 4; index++ {
+		bytes[offset + index] = byte(value >> uint32(index * 8))
+	}
+}
+
+func putVoplayU64(bytes []byte, offset int, value uint64) {
+	for index := 0; index < 8; index++ {
+		bytes[offset + index] = byte(value >> uint64(index * 8))
+	}
+}
+
+func readVoplayHandle(bytes []byte, offset int) Handle {
+	return Handle{Index: readVoplayU32(bytes, offset), Generation: readVoplayU32(bytes, offset + 4)}
+}
+
+func readVoplayU16(bytes []byte, offset int) uint16 {
+	return uint16(bytes[offset]) | uint16(bytes[offset + 1]) << 8
+}
+
+func readVoplayU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) | uint32(bytes[offset + 1]) << 8 | uint32(bytes[offset + 2]) << 16 |
+		uint32(bytes[offset + 3]) << 24
+}
+
+func readVoplayU64(bytes []byte, offset int) uint64 {
+	return uint64(bytes[offset]) | uint64(bytes[offset + 1]) << 8 | uint64(bytes[offset + 2]) << 16 |
+		uint64(bytes[offset + 3]) << 24 |
+		uint64(bytes[offset + 4]) << 32 |
+		uint64(bytes[offset + 5]) << 40 |
+		uint64(bytes[offset + 6]) << 48 |
+		uint64(bytes[offset + 7]) << 56
+}
+
+type OwnedInitData struct {
+	Bytes []byte
+}
+
+type Stage uint32
+
+const (
+	StageStartup Stage = iota + 1
+	StagePreTick
+	StageInput
+	StageGameplay
+	StagePrePhysics
+	StagePhysics
+	StagePostPhysics
+	StagePostTick
+	StageExtract
+	StageFrame
+	StageShutdown
+)
+
+func (stage Stage) Valid() bool {
+	return stage >= StageStartup && stage <= StageShutdown
+}
+
+type Builder interface {
+	RegisterComponent(schema []byte) error
+	RegisterSystem(stage Stage, descriptor []byte) error
+	RegisterScheduledSystem(spec SystemSpec) error
+	RegisterPlugin(descriptor []byte) error
+	RegisterAssetLoader(descriptor []byte) error
+	RegisterRenderFeature(descriptor []byte) error
+	SetFixedTick(nanos uint64, maxCatchUp uint32) error
+}
+
+type StartContext interface {
+	Engine() EngineRef
+	World() *world.World
+	Spawn(initialComponents []byte) (Handle, error)
+	RequestAsset(descriptor []byte) (Handle, error)
+	CreateRenderView(descriptor []byte) (Handle, error)
+}
+
+type TickBatch struct {
+	FirstTick uint64
+	Count uint64
+	FixedTickNanos uint64
+	MonotonicNanos uint64
+	InputFrames [][]byte
+	PresentationPulses [][]byte
+	RenderReturns [][]byte
+	AssetReturns [][]byte
+	AudioReturns [][]byte
+	LogicReturns [][]byte
+	InitialEntities []StartupRecord
+	RequestedAssets []StartupRecord
+	RenderViews []StartupRecord
+}
+
+type StartupRecord struct {
+	Handle Handle
+	Descriptor []byte
+}
+
+// TickOutput carries already encoded Voplay protocol packets. The generated
+// target-island codec preserves role ownership while App Runtime only routes
+// the opaque packet bytes to the matching provider outbox.
+type TickOutput struct {
+	RenderPackets [][]byte
+	AssetPackets [][]byte
+	AudioPackets [][]byte
+	LogicPackets [][]byte
+}
+
+type RegisteredSystem struct {
+	Id uint64
+	Stage Stage
+	Descriptor []byte
+	Deterministic bool
+	SimulationReads []uint64
+	SimulationWrites []uint64
+	PresentationReads []uint64
+	PresentationWrites []uint64
+	Before []uint64
+	After []uint64
+}
+
+type SystemSpec struct {
+	Id uint64
+	Stage Stage
+	Descriptor []byte
+	Deterministic bool
+	SimulationReads []uint64
+	SimulationWrites []uint64
+	PresentationReads []uint64
+	PresentationWrites []uint64
+	Before []uint64
+	After []uint64
+}
+
+func FreezeSchedule(systems []RegisteredSystem) ([]RegisteredSystem, uint64, bool) {
+	if len(systems) == 0 || len(systems) > 4096 {
+		return nil, 0, false
+	}
+	for index, system := range systems {
+		if system.Id == 0 || !system.Stage.Valid() || len(system.Descriptor) == 0 ||
+			hasDuplicateU64(system.SimulationReads) ||
+			hasDuplicateU64(system.SimulationWrites) ||
+			hasDuplicateU64(system.PresentationReads) ||
+			hasDuplicateU64(system.PresentationWrites) ||
+			hasDuplicateU64(system.Before) ||
+			hasDuplicateU64(system.After) ||
+			intersectsU64(system.SimulationReads, system.SimulationWrites) ||
+			intersectsU64(system.PresentationReads, system.PresentationWrites) {
+			return nil, 0, false
+		}
+		if (system.Stage == StageExtract || system.Stage == StageFrame) &&
+			len(system.SimulationWrites) != 0 {
+			return nil, 0, false
+		}
+		if system.Deterministic && system.Stage >= StagePreTick && system.Stage <= StagePostTick &&
+			(len(system.PresentationReads) != 0 || len(system.PresentationWrites) != 0) {
+			return nil, 0, false
+		}
+		for previous := 0; previous < index; previous++ {
+			if systems[previous].Id == system.Id {
+				return nil, 0, false
+			}
+		}
+		for _, dependency := range append(append([]uint64{}, system.Before...), system.After...) {
+			target, found := findRegisteredSystem(systems, dependency)
+			if dependency == 0 || dependency == system.Id || !found || target.Stage != system.Stage {
+				return nil, 0, false
+			}
+		}
+	}
+	emitted := make([]bool, len(systems))
+	ordered := make([]RegisteredSystem, 0, len(systems))
+	for len(ordered) < len(systems) {
+		selected := -1
+		for candidate := 0; candidate < len(systems); candidate++ {
+			if emitted[candidate] || pendingPredecessor(systems, candidate, emitted) {
+				continue
+			}
+			if selected < 0 || registeredSystemLess(systems[candidate], systems[selected]) {
+				selected = candidate
+			}
+		}
+		if selected < 0 {
+			return nil, 0, false
+		}
+		emitted[selected] = true
+		ordered = append(ordered, systems[selected])
+	}
+	for left := 0; left < len(ordered); left++ {
+		for right := left + 1; right < len(ordered); right++ {
+			if ordered[left].Stage != ordered[right].Stage || !systemsConflict(ordered[left], ordered[right]) {
+				continue
+			}
+			if !scheduleReachable(systems, ordered[left].Id, ordered[right].Id) &&
+				!scheduleReachable(systems, ordered[right].Id, ordered[left].Id) {
+				return nil, 0, false
+			}
+		}
+	}
+	hash := uint64(14695981039346656037)
+	for _, system := range ordered {
+		hash = scheduleHashU64(hash, system.Id)
+		hash = scheduleHashU64(hash, uint64(system.Stage))
+		if system.Deterministic {
+			hash = (hash ^ 1) * 1099511628211
+		} else {
+			hash = hash * 1099511628211
+		}
+		for _, values := range [][]uint64{
+			system.SimulationReads, system.SimulationWrites, system.PresentationReads,
+			system.PresentationWrites,
+		} {
+			copyValues := append([]uint64{}, values...)
+			sortScheduleIds(copyValues)
+			for _, value := range copyValues {
+				hash = scheduleHashU64(hash, value)
+			}
+			hash = (hash ^ 255) * 1099511628211
+		}
+	}
+	if hash == 0 {
+		hash = 1
+	}
+	return ordered, hash, true
+}
+
+func pendingPredecessor(systems []RegisteredSystem, candidate int, emitted []bool) bool {
+	target := systems[candidate]
+	for source := 0; source < len(systems); source++ {
+		if source == candidate || emitted[source] {
+			continue
+		}
+		if systems[source].Stage < target.Stage || containsU64(systems[source].Before, target.Id) ||
+			containsU64(target.After, systems[source].Id) {
+			return true
+		}
+	}
+	return false
+}
+
+func registeredSystemLess(left RegisteredSystem, right RegisteredSystem) bool {
+	return left.Stage < right.Stage || left.Stage == right.Stage && left.Id < right.Id
+}
+
+func systemsConflict(left RegisteredSystem, right RegisteredSystem) bool {
+	return intersectsU64(left.SimulationWrites, right.SimulationReads) ||
+		intersectsU64(left.SimulationWrites, right.SimulationWrites) ||
+		intersectsU64(left.SimulationReads, right.SimulationWrites) ||
+		intersectsU64(left.PresentationWrites, right.PresentationReads) ||
+		intersectsU64(left.PresentationWrites, right.PresentationWrites) ||
+		intersectsU64(left.PresentationReads, right.PresentationWrites)
+}
+
+func scheduleReachable(systems []RegisteredSystem, source uint64, target uint64) bool {
+	pending := []uint64{source}
+	visited := make([]uint64, 0)
+	for len(pending) != 0 {
+		last := len(pending) - 1
+		current := pending[last]
+		pending = pending[:last]
+		if containsU64(visited, current) {
+			continue
+		}
+		visited = append(visited, current)
+		system, found := findRegisteredSystem(systems, current)
+		if !found {
+			return false
+		}
+		for _, next := range system.Before {
+			if next == target {
+				return true
+			}
+			pending = append(pending, next)
+		}
+		for _, candidate := range systems {
+			if containsU64(candidate.After, current) {
+				if candidate.Id == target {
+					return true
+				}
+				pending = append(pending, candidate.Id)
+			}
+		}
+	}
+	return false
+}
+
+func findRegisteredSystem(systems []RegisteredSystem, id uint64) (RegisteredSystem, bool) {
+	for _, system := range systems {
+		if system.Id == id {
+			return system, true
+		}
+	}
+	return RegisteredSystem{}, false
+}
+
+func hasDuplicateU64(values []uint64) bool {
+	for index, value := range values {
+		if value == 0 {
+			return true
+		}
+		for previous := 0; previous < index; previous++ {
+			if values[previous] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func intersectsU64(left []uint64, right []uint64) bool {
+	for _, value := range left {
+		if containsU64(right, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsU64(values []uint64, expected uint64) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortScheduleIds(values []uint64) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor - 1] > value {
+			values[cursor] = values[cursor - 1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func scheduleHashU64(hash uint64, value uint64) uint64 {
+	for shift := uint32(0); shift < 64; shift += 8 {
+		hash = (hash ^ uint64(byte(value >> shift))) * 1099511628211
+	}
+	return hash
+}
+
+type SystemInvocation struct {
+	System RegisteredSystem
+	Tick TickBatch
+	World *world.World
+	PresentationPulse []byte
+}
+
+type Game interface {
+	Configure(builder Builder)
+	Start(context StartContext) error
+	Execute(invocation SystemInvocation) (TickOutput, error)
+}
+
+type GameEntryDescriptor struct {
+	ArtifactId [32]byte
+	FactoryId uint64
+	SchemaFingerprint [32]byte
+	RoleArtifactSetFingerprint [32]byte
+}
+
+// Run is lowered to a generated GameEntryDescriptor plus owned init bytes.
+func Run(game Game) error
+
+// RunEntry is the descriptor-only target of compiler-generated Run lowering.
+func RunEntry(descriptor []byte, init []byte) error
+
+// TargetEngine returns the immutable App Runtime caller identity projected as
+// the current target-island engine reference.
+func TargetEngine() EngineRef
+
+// TargetStart transfers the deterministic Configure/Start record stream to
+// the game.logic provider that owns the current target island.
+func TargetStart(configuration []byte) error
+
+// TargetNextTicks waits for the next bounded fixed-tick batch assigned to this
+// game.logic target island.
+func TargetNextTicks() ([]byte, error)
+
+// TargetCommitTicks confirms the current fixed-tick batch at the logic safe
+// point and publishes its bounded, role-qualified subsystem outbox payload.
+func TargetCommitTicks(firstTick uint64, count uint64, result []byte) error
+
+// NewEngine consumes the module-resolved profile and role artifact set.
+func CurrentSession() SessionRef
+
+func NewEngine(session SessionRef, desc EngineDesc) (EngineRef, error)
+
+// Install is lowered before runtime and never transfers a live Game object.
+func Install(engine EngineRef, game Game, init OwnedInitData) (GameEntryDescriptor, error)
+
+// InstallEntry is the descriptor-only target of compiler-generated Install lowering.
+func InstallEntry(engine EngineRef, descriptor []byte, init []byte) error
+
+func Start(engine EngineRef) error
+
+func StepTicks(engine EngineRef, count uint64) error
+
+func Pause(engine EngineRef) error
+
+func Resume(engine EngineRef) error
+
+func Shutdown(engine EngineRef) error

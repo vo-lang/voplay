@@ -1,0 +1,219 @@
+package world
+
+type WorldSnapshot struct {
+	Ref WorldRef
+	Revision uint64
+	Generations []uint32
+	Alive []bool
+	Free []uint32
+	Next uint32
+	Components []ComponentRecord
+	StableEntities []StableEntityRecord
+	Hash uint64
+}
+
+func (world *World) Snapshot() (WorldSnapshot, bool) {
+	if world == nil || world.Allocator == nil {
+		return WorldSnapshot{}, false
+	}
+	components := make([]ComponentRecord, len(world.Components))
+	for index, component := range world.Components {
+		components[index] = component
+		components[index].Value = append([]byte{}, component.Value...)
+	}
+	stable := append([]StableEntityRecord{}, world.StableEntities...)
+	sortComponentRecords(components)
+	sortStableRecords(stable)
+	snapshot := WorldSnapshot{
+		Ref: world.Ref, Revision: world.Revision,
+		Generations: append([]uint32{}, world.Allocator.Generations...),
+		Alive: append([]bool{}, world.Allocator.Alive...),
+		Free: append([]uint32{}, world.Allocator.Free...),
+		Next: world.Allocator.Next,
+		Components: components, StableEntities: stable,
+	}
+	snapshot.Hash = hashSnapshot(snapshot)
+	return snapshot, true
+}
+
+func (world *World) Restore(snapshot WorldSnapshot) bool {
+	if world == nil || world.Allocator == nil || snapshot.Ref != world.Ref ||
+		snapshot.Hash == 0 || hashSnapshotWithoutHash(snapshot) != snapshot.Hash ||
+		len(snapshot.Generations) != len(world.Allocator.Generations) ||
+		len(snapshot.Alive) != len(world.Allocator.Alive) ||
+		snapshot.Next == 0 || snapshot.Next > world.Allocator.Max+1 ||
+		len(snapshot.Components) > int(world.MaxComponents) {
+		return false
+	}
+	seenStable := make([]uint64, 0, len(snapshot.StableEntities))
+	for _, record := range snapshot.StableEntities {
+		if record.StableKey == 0 || !snapshotEntityAlive(snapshot, record.Entity) ||
+			containsStableKey(seenStable, record.StableKey) {
+			return false
+		}
+		seenStable = append(seenStable, record.StableKey)
+	}
+	for index, component := range snapshot.Components {
+		if component.Component == 0 || !snapshotEntityAlive(snapshot, component.Entity) ||
+			len(component.Value) > int(world.MaxComponentBytes) {
+			return false
+		}
+		if index > 0 {
+			previous := snapshot.Components[index-1]
+			if previous.Entity == component.Entity && previous.Component == component.Component {
+				return false
+			}
+		}
+	}
+	seenFree := make([]bool, len(snapshot.Alive))
+	for _, index := range snapshot.Free {
+		if index == 0 || int(index) >= len(snapshot.Alive) ||
+			snapshot.Alive[index] || seenFree[index] {
+			return false
+		}
+		seenFree[index] = true
+	}
+	world.Allocator.Generations = append(world.Allocator.Generations[:0], snapshot.Generations...)
+	world.Allocator.Alive = append(world.Allocator.Alive[:0], snapshot.Alive...)
+	world.Allocator.Free = append(world.Allocator.Free[:0], snapshot.Free...)
+	world.Allocator.Next = snapshot.Next
+	world.Components = make([]ComponentRecord, len(snapshot.Components))
+	for index, component := range snapshot.Components {
+		world.Components[index] = component
+		world.Components[index].Value = append([]byte{}, component.Value...)
+	}
+	world.StableEntities = append(world.StableEntities[:0], snapshot.StableEntities...)
+	world.Revision = snapshot.Revision
+	world.Changes = nil
+	return true
+}
+
+func (world *World) DeterministicHash() (uint64, bool) {
+	snapshot, ok := world.Snapshot()
+	if !ok {
+		return 0, false
+	}
+	return snapshot.Hash, true
+}
+
+func (world *World) ChangesSince(revision uint64, maxChanges uint32) ([]Change, uint64, bool) {
+	if world == nil || revision > world.Revision || maxChanges == 0 {
+		return nil, 0, false
+	}
+	changes := make([]Change, 0)
+	for _, change := range world.Changes {
+		if change.Revision <= revision {
+			continue
+		}
+		if len(changes) >= int(maxChanges) {
+			return changes, world.Revision, false
+		}
+		changes = append(changes, change)
+	}
+	return changes, world.Revision, true
+}
+
+func hashSnapshot(snapshot WorldSnapshot) uint64 {
+	snapshot.Hash = 0
+	return hashSnapshotWithoutHash(snapshot)
+}
+
+func hashSnapshotWithoutHash(snapshot WorldSnapshot) uint64 {
+	hash := uint64(14695981039346656037)
+	hash = hashWorldU32(hash, snapshot.Ref.EngineIndex)
+	hash = hashWorldU32(hash, snapshot.Ref.EngineGeneration)
+	hash = hashWorldU32(hash, snapshot.Ref.WorldIndex)
+	hash = hashWorldU32(hash, snapshot.Ref.WorldGeneration)
+	hash = hashWorldU64(hash, snapshot.Revision)
+	hash = hashWorldU32(hash, snapshot.Next)
+	for index := 1; index < len(snapshot.Generations); index++ {
+		hash = hashWorldU32(hash, uint32(index))
+		hash = hashWorldU32(hash, snapshot.Generations[index])
+		if snapshot.Alive[index] {
+			hash = hashWorldByte(hash, 1)
+		} else {
+			hash = hashWorldByte(hash, 0)
+		}
+	}
+	components := make([]ComponentRecord, len(snapshot.Components))
+	copy(components, snapshot.Components)
+	sortComponentRecords(components)
+	for _, component := range components {
+		hash = hashWorldU64(hash, component.Entity.Key())
+		hash = hashWorldU64(hash, component.Component)
+		hash = hashWorldU64(hash, uint64(len(component.Value)))
+		for _, value := range component.Value {
+			hash = hashWorldByte(hash, value)
+		}
+	}
+	stable := append([]StableEntityRecord{}, snapshot.StableEntities...)
+	sortStableRecords(stable)
+	for _, record := range stable {
+		hash = hashWorldU64(hash, record.StableKey)
+		hash = hashWorldU64(hash, record.Entity.Key())
+	}
+	if hash == 0 {
+		return 1
+	}
+	return hash
+}
+
+func snapshotEntityAlive(snapshot WorldSnapshot, entity Entity) bool {
+	return entity.Valid() && int(entity.Index) < len(snapshot.Alive) &&
+		snapshot.Alive[entity.Index] &&
+		snapshot.Generations[entity.Index] == entity.Generation
+}
+
+func containsStableKey(values []uint64, expected uint64) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortComponentRecords(values []ComponentRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && componentRecordLess(value, values[cursor-1]) {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func componentRecordLess(left ComponentRecord, right ComponentRecord) bool {
+	return left.Entity.Key() < right.Entity.Key() ||
+		left.Entity == right.Entity && left.Component < right.Component
+}
+
+func sortStableRecords(values []StableEntityRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].StableKey > value.StableKey {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func hashWorldByte(hash uint64, value byte) uint64 {
+	return (hash ^ uint64(value)) * 1099511628211
+}
+
+func hashWorldU32(hash uint64, value uint32) uint64 {
+	hash = hashWorldByte(hash, byte(value))
+	hash = hashWorldByte(hash, byte(value >> 8))
+	hash = hashWorldByte(hash, byte(value >> 16))
+	return hashWorldByte(hash, byte(value >> 24))
+}
+
+func hashWorldU64(hash uint64, value uint64) uint64 {
+	hash = hashWorldU32(hash, uint32(value))
+	return hashWorldU32(hash, uint32(value >> 32))
+}

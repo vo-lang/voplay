@@ -1,0 +1,19 @@
+[package]
+name = "voplay-audio"
+version = "0.1.0"
+edition = "2021"
+description = "Realtime audio device ownership boundary for Voplay"
+
+[dependencies]
+vo-app-protocol = { path = "../../../../volang/lang/crates/vo-app-protocol", default-features = false }
+voplay-protocol = { path = "../voplay-protocol" }
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "audio"] }
+cpal = { version = "=0.15.3", optional = true }
+
+[features]
+default = []
+native-cpal = ["dep:cpal"]
+
+[[example]]
+name = "cpal_smoke"
+required-features = ["native-cpal"]

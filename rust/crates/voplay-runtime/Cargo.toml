@@ -1,0 +1,42 @@
+[package]
+name = "voplay-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Instance-owned Voplay Engine and RenderState core"
+
+[dependencies]
+voplay-protocol = { path = "../voplay-protocol" }
+vo-app-protocol = { path = "../../../../volang/lang/crates/vo-app-protocol", default-features = false }
+vo-app-runtime = { path = "../../../../volang/lang/crates/vo-app-runtime", features = ["std"], optional = true }
+vo-runtime = { path = "../../../../volang/lang/crates/vo-runtime", features = ["std"], optional = true }
+naga = { version = "=24.0.0", features = ["wgsl-in"], optional = true }
+
+[features]
+default = ["full"]
+core = []
+render = []
+render2d = ["render"]
+render3d = ["render", "render2d", "animation", "dep:naga"]
+physics2d = ["physics"]
+physics3d = ["physics"]
+physics = []
+animation = ["render"]
+audio = []
+pack = []
+inspection = ["render"]
+editor = ["full", "inspection"]
+full = [
+    "core",
+    "render2d",
+    "render3d",
+    "physics2d",
+    "physics3d",
+    "animation",
+    "audio",
+    "pack",
+]
+app-session = ["dep:vo-app-runtime", "dep:vo-runtime"]
+
+[[bench]]
+name = "stable_scene"
+harness = false

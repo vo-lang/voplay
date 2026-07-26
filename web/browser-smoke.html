@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voplay browser platform smoke</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111827;
+        color: #e5e7eb;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+      main {
+        display: grid;
+        gap: 16px;
+        max-width: 840px;
+      }
+      canvas {
+        border: 1px solid #475569;
+        image-rendering: pixelated;
+      }
+      pre {
+        margin: 0;
+        padding: 16px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #0f172a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Voplay browser platform smoke</h1>
+      <canvas id="surface" aria-label="Voplay smoke surface"></canvas>
+      <canvas id="peer-surface" aria-label="Voplay peer session smoke surface"></canvas>
+      <button id="audio-gesture" type="button" disabled>Activate audio smoke</button>
+      <pre id="results" aria-live="polite">running</pre>
+    </main>
+    <script type="module" src="/src/browser_smoke.ts"></script>
+  </body>
+</html>

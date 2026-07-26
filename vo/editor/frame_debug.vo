@@ -1,0 +1,306 @@
+package editor
+
+import (
+	"github.com/vo-lang/voplay/vo/core"
+)
+
+type FrameDebugCaptureRequest struct {
+	RequestId uint64
+	EndpointGeneration core.Handle
+	FrameId uint64
+	ExpectedGraphSignature uint64
+	IncludeAttachments bool
+	IncludeShaderDiagnostics bool
+	DeadlineMillis uint64
+	MaxBytes uint64
+}
+
+type FrameDebugCaptureOutcome uint32
+
+const (
+	FrameDebugCompleted FrameDebugCaptureOutcome = iota + 1
+	FrameDebugCancelled
+	FrameDebugDeadlineExceeded
+	FrameDebugGraphChanged
+	FrameDebugEndpointRestartedBeforeCapture
+	FrameDebugOutcomeUnknownOnEndpointRestart
+	FrameDebugFailed
+)
+
+type FrameDebugNode struct {
+	Node uint32
+	Queue uint32
+	StartedNanos uint64
+	FinishedNanos uint64
+	PipelineHash uint64
+	DrawCalls uint32
+	DispatchCalls uint32
+	Label []byte
+}
+
+type FrameDebugAttachmentLease struct {
+	Engine core.Handle
+	ProviderGeneration core.Handle
+	Consumer core.Handle
+	Lease core.Handle
+	Artifact [16]byte
+	Bytes uint64
+	DeadlineMillis uint64
+}
+
+type FrameDebugAttachment struct {
+	Resource uint32
+	Version uint32
+	Width uint32
+	Height uint32
+	Format uint32
+	RowBytes uint32
+	Lease FrameDebugAttachmentLease
+}
+
+type FrameDebugShaderDiagnostic struct {
+	PipelineHash uint64
+	Severity uint32
+	SourceStart uint32
+	SourceEnd uint32
+	GraphNode uint32
+	Message []byte
+}
+
+type FrameDebugCaptureResult struct {
+	Request FrameDebugCaptureRequest
+	GraphSignature uint64
+	Outcome FrameDebugCaptureOutcome
+	Nodes []FrameDebugNode
+	Attachments []FrameDebugAttachment
+	ShaderDiagnostics []FrameDebugShaderDiagnostic
+	Diagnostic []byte
+}
+
+func EncodeFrameDebugCaptureRequest(request FrameDebugCaptureRequest) []byte {
+	if request.RequestId == 0 || !frameDebugHandleValid(request.EndpointGeneration) ||
+		request.FrameId == 0 ||
+		request.ExpectedGraphSignature == 0 ||
+		request.DeadlineMillis == 0 ||
+		request.MaxBytes == 0 ||
+		request.MaxBytes > 67108864 {
+		return nil
+	}
+	flags := byte(0)
+	if request.IncludeAttachments {
+		flags |= 1
+	}
+	if request.IncludeShaderDiagnostics {
+		flags |= 2
+	}
+	bytes := []byte{'V', 'F', 'C', '1', 1, flags, 0, 0}
+	bytes = appendFrameDebugU64(bytes, request.RequestId)
+	bytes = appendFrameDebugHandle(bytes, request.EndpointGeneration)
+	bytes = appendFrameDebugU64(bytes, request.FrameId)
+	bytes = appendFrameDebugU64(bytes, request.ExpectedGraphSignature)
+	bytes = appendFrameDebugU64(bytes, request.DeadlineMillis)
+	return appendFrameDebugU64(bytes, request.MaxBytes)
+}
+
+func EncodeFrameDebugCaptureCancel(requestId uint64) []byte {
+	if requestId == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'F', 'C', '1', 2, 0, 0, 0}
+	return appendFrameDebugU64(bytes, requestId)
+}
+
+func DecodeFrameDebugCaptureResult(bytes []byte, maxBytes uint32) (FrameDebugCaptureResult, bool) {
+	if len(bytes) < 80 || maxBytes == 0 || maxBytes > 67108864 || uint64(len(bytes)) > uint64(maxBytes) ||
+		bytes[0] != 'V' ||
+		bytes[1] != 'F' ||
+		bytes[2] != 'C' ||
+		bytes[3] != '2' ||
+		bytes[4] != 2 ||
+		bytes[5] < byte(FrameDebugCompleted) ||
+		bytes[5] > byte(FrameDebugFailed) ||
+		bytes[6] & 252 != 0 ||
+		bytes[7] != 0 {
+		return FrameDebugCaptureResult{}, false
+	}
+	requestId, ok := readFrameDebugU64(bytes, 8)
+	frameId, okFrame := readFrameDebugU64(bytes, 16)
+	graphSignature, okGraph := readFrameDebugU64(bytes, 24)
+	expectedGraphSignature, okExpected := readFrameDebugU64(bytes, 32)
+	endpointGeneration, okEndpoint := readFrameDebugHandle(bytes, 40)
+	deadlineMillis, okDeadline := readFrameDebugU64(bytes, 48)
+	requestMaxBytes, okMax := readFrameDebugU64(bytes, 56)
+	nodeCount, okNodes := readFrameDebugU32(bytes, 64)
+	attachmentCount, okAttachments := readFrameDebugU32(bytes, 68)
+	diagnosticCount, okDiagnostics := readFrameDebugU32(bytes, 72)
+	diagnosticLength, okDiagnosticLength := readFrameDebugU32(bytes, 76)
+	if !ok || !okFrame || !okGraph || !okExpected || !okEndpoint || !okDeadline || !okMax || !okNodes ||
+		!okAttachments ||
+		!okDiagnostics ||
+		!okDiagnosticLength ||
+		requestId == 0 ||
+		frameId == 0 ||
+		graphSignature == 0 ||
+		expectedGraphSignature == 0 ||
+		deadlineMillis == 0 ||
+		requestMaxBytes == 0 ||
+		nodeCount > 4096 ||
+		attachmentCount > 128 ||
+		diagnosticCount > 1024 {
+		return FrameDebugCaptureResult{}, false
+	}
+	cursor := 80
+	diagnostic, next, ok := readFrameDebugBlob(bytes, cursor, diagnosticLength)
+	if !ok {
+		return FrameDebugCaptureResult{}, false
+	}
+	cursor = next
+	result := FrameDebugCaptureResult{
+		Request: FrameDebugCaptureRequest{
+			RequestId: requestId, EndpointGeneration: endpointGeneration, FrameId: frameId,
+			ExpectedGraphSignature: expectedGraphSignature, IncludeAttachments: bytes[6] & 1 != 0,
+			IncludeShaderDiagnostics: bytes[6] & 2 != 0, DeadlineMillis: deadlineMillis,
+			MaxBytes: requestMaxBytes,
+		},
+		GraphSignature: graphSignature, Outcome: FrameDebugCaptureOutcome(bytes[5]),
+		Diagnostic: diagnostic,
+	}
+	for index := uint32(0); index < nodeCount; index++ {
+		if cursor + 44 > len(bytes) {
+			return FrameDebugCaptureResult{}, false
+		}
+		node, _ := readFrameDebugU32(bytes, cursor)
+		queue := uint32(bytes[cursor + 4])
+		started, _ := readFrameDebugU64(bytes, cursor + 8)
+		finished, _ := readFrameDebugU64(bytes, cursor + 16)
+		pipeline, _ := readFrameDebugU64(bytes, cursor + 24)
+		draws, _ := readFrameDebugU32(bytes, cursor + 32)
+		dispatches, _ := readFrameDebugU32(bytes, cursor + 36)
+		labelLength, _ := readFrameDebugU32(bytes, cursor + 40)
+		label, next, ok := readFrameDebugBlob(bytes, cursor + 44, labelLength)
+		if !ok || node == 0 || queue == 0 || finished < started || pipeline == 0 || len(label) == 0 {
+			return FrameDebugCaptureResult{}, false
+		}
+		result.Nodes = append(result.Nodes, FrameDebugNode{
+			Node: node, Queue: queue, StartedNanos: started, FinishedNanos: finished, PipelineHash: pipeline,
+			DrawCalls: draws, DispatchCalls: dispatches, Label: label,
+		})
+		cursor = next
+	}
+	for index := uint32(0); index < attachmentCount; index++ {
+		if cursor + 88 > len(bytes) {
+			return FrameDebugCaptureResult{}, false
+		}
+		resource, _ := readFrameDebugU32(bytes, cursor)
+		version, _ := readFrameDebugU32(bytes, cursor + 4)
+		width, _ := readFrameDebugU32(bytes, cursor + 8)
+		height, _ := readFrameDebugU32(bytes, cursor + 12)
+		format, _ := readFrameDebugU32(bytes, cursor + 16)
+		rowBytes, _ := readFrameDebugU32(bytes, cursor + 20)
+		engine, okEngine := readFrameDebugHandle(bytes, cursor + 24)
+		provider, okProvider := readFrameDebugHandle(bytes, cursor + 32)
+		consumer, okConsumer := readFrameDebugHandle(bytes, cursor + 40)
+		lease, okLease := readFrameDebugHandle(bytes, cursor + 48)
+		var artifact [16]byte
+		copy(artifact[:], bytes[cursor + 56:cursor + 72])
+		leaseBytes, _ := readFrameDebugU64(bytes, cursor + 72)
+		leaseDeadline, _ := readFrameDebugU64(bytes, cursor + 80)
+		if resource == 0 || version == 0 || width == 0 || height == 0 || format == 0 || rowBytes == 0 ||
+			!okEngine ||
+			!okProvider ||
+			!okConsumer ||
+			!okLease ||
+			artifact == [16]byte{} ||
+			leaseBytes == 0 ||
+			leaseDeadline == 0 {
+			return FrameDebugCaptureResult{}, false
+		}
+		result.Attachments = append(result.Attachments, FrameDebugAttachment{
+			Resource: resource, Version: version, Width: width, Height: height, Format: format,
+			RowBytes: rowBytes,
+			Lease: FrameDebugAttachmentLease{
+				Engine: engine, ProviderGeneration: provider, Consumer: consumer, Lease: lease,
+				Artifact: artifact, Bytes: leaseBytes, DeadlineMillis: leaseDeadline,
+			},
+		})
+		cursor += 88
+	}
+	for index := uint32(0); index < diagnosticCount; index++ {
+		if cursor + 28 > len(bytes) {
+			return FrameDebugCaptureResult{}, false
+		}
+		pipeline, _ := readFrameDebugU64(bytes, cursor)
+		severity := uint32(bytes[cursor + 8])
+		sourceStart, _ := readFrameDebugU32(bytes, cursor + 12)
+		sourceEnd, _ := readFrameDebugU32(bytes, cursor + 16)
+		graphNode, _ := readFrameDebugU32(bytes, cursor + 20)
+		messageLength, _ := readFrameDebugU32(bytes, cursor + 24)
+		message, next, ok := readFrameDebugBlob(bytes, cursor + 28, messageLength)
+		if !ok || pipeline == 0 || severity == 0 || sourceEnd < sourceStart || graphNode == 0 ||
+			len(message) == 0 {
+			return FrameDebugCaptureResult{}, false
+		}
+		result.ShaderDiagnostics = append(result.ShaderDiagnostics, FrameDebugShaderDiagnostic{
+			PipelineHash: pipeline, Severity: severity, SourceStart: sourceStart, SourceEnd: sourceEnd,
+			GraphNode: graphNode, Message: message,
+		})
+		cursor = next
+	}
+	if cursor != len(bytes) {
+		return FrameDebugCaptureResult{}, false
+	}
+	return result, true
+}
+
+func appendFrameDebugHandle(bytes []byte, handle core.Handle) []byte {
+	bytes = appendFrameDebugU32(bytes, handle.Index)
+	return appendFrameDebugU32(bytes, handle.Generation)
+}
+
+func appendFrameDebugU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendFrameDebugU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func readFrameDebugU32(bytes []byte, offset int) (uint32, bool) {
+	if offset < 0 || offset + 4 > len(bytes) {
+		return 0, false
+	}
+	return uint32(bytes[offset]) | uint32(bytes[offset + 1]) << 8 | uint32(bytes[offset + 2]) << 16 |
+		uint32(bytes[offset + 3]) << 24, true
+}
+
+func readFrameDebugU64(bytes []byte, offset int) (uint64, bool) {
+	if offset < 0 || offset + 8 > len(bytes) {
+		return 0, false
+	}
+	return uint64(bytes[offset]) | uint64(bytes[offset + 1]) << 8 | uint64(bytes[offset + 2]) << 16 |
+		uint64(bytes[offset + 3]) << 24 |
+		uint64(bytes[offset + 4]) << 32 |
+		uint64(bytes[offset + 5]) << 40 |
+		uint64(bytes[offset + 6]) << 48 |
+		uint64(bytes[offset + 7]) << 56, true
+}
+
+func readFrameDebugHandle(bytes []byte, offset int) (core.Handle, bool) {
+	index, okIndex := readFrameDebugU32(bytes, offset)
+	generation, okGeneration := readFrameDebugU32(bytes, offset + 4)
+	handle := core.Handle{Index: index, Generation: generation}
+	return handle, okIndex && okGeneration && frameDebugHandleValid(handle)
+}
+
+func readFrameDebugBlob(bytes []byte, offset int, length uint32) ([]byte, int, bool) {
+	if offset < 0 || uint64(offset) + uint64(length) > uint64(len(bytes)) {
+		return nil, offset, false
+	}
+	end := offset + int(length)
+	return append([]byte{}, bytes[offset:end]...), end, true
+}
+
+func frameDebugHandleValid(handle core.Handle) bool {
+	return handle.Index != 0 && handle.Generation != 0
+}

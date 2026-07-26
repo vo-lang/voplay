@@ -1,0 +1,15 @@
+[package]
+name = "voplay-codegen"
+version = "0.1.0"
+edition = "2021"
+description = "Governed Voplay component/store/query generator"
+
+[[bin]]
+name = "voplay-generator-provider"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+toml = "0.8"
+vo-schema-compiler = { path = "../../../../volang/lang/crates/vo-schema-compiler" }

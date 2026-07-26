@@ -1,0 +1,206 @@
+package schedule
+
+type StageId struct {
+	Value uint32
+}
+
+const (
+	StageStartup uint32 = iota + 1
+	StagePreTick
+	StageInput
+	StageGameplay
+	StagePrePhysics
+	StagePhysics
+	StagePostPhysics
+	StagePostTick
+	StageExtract
+	StageFrame
+	StageShutdown
+)
+
+func (stage StageId) Valid() bool {
+	return stage.Value >= StageStartup && stage.Value <= StageShutdown
+}
+
+type SystemId struct {
+	Value uint64
+}
+
+type SystemDescriptor struct {
+	Id SystemId
+	Stage StageId
+	Before []SystemId
+	After []SystemId
+	Reads []uint64
+	Writes []uint64
+}
+
+type FixedTickPolicy struct {
+	TickNanos uint64
+	MaxCatchUpTicks uint32
+}
+
+type Schedule struct {
+	Systems []SystemDescriptor
+	Ordered []SystemId
+	MaxSystems uint32
+	MaxDependencies uint32
+	DependencyCount uint32
+	Frozen bool
+}
+
+func NewSchedule(maxSystems uint32, maxDependencies uint32) (*Schedule, bool) {
+	if maxSystems == 0 || maxSystems > 4096 || maxDependencies == 0 || maxDependencies > 65536 {
+		return nil, false
+	}
+	return &Schedule{MaxSystems: maxSystems, MaxDependencies: maxDependencies}, true
+}
+
+func (schedule *Schedule) AddSystem(system SystemDescriptor) bool {
+	if schedule.Frozen || system.Id.Value == 0 || !system.Stage.Valid() ||
+		len(schedule.Systems) >= int(schedule.MaxSystems) ||
+		int(schedule.DependencyCount) + len(system.Before) + len(system.After) >
+			int(schedule.MaxDependencies) {
+		return false
+	}
+	for _, existing := range schedule.Systems {
+		if existing.Id == system.Id {
+			return false
+		}
+	}
+	if hasDuplicateSystemId(system.Before) || hasDuplicateSystemId(system.After) {
+		return false
+	}
+	for _, dependency := range system.Before {
+		if dependency.Value == 0 || dependency == system.Id || containsSystemId(system.After, dependency) {
+			return false
+		}
+	}
+	for _, dependency := range system.After {
+		if dependency.Value == 0 || dependency == system.Id {
+			return false
+		}
+	}
+	schedule.Systems = append(schedule.Systems, system)
+	schedule.DependencyCount += uint32(len(system.Before) + len(system.After))
+	return true
+}
+
+func (schedule *Schedule) Freeze() bool {
+	if schedule.Frozen || len(schedule.Systems) == 0 {
+		return false
+	}
+	for _, system := range schedule.Systems {
+		for _, target := range system.Before {
+			targetSystem, ok := schedule.find(target)
+			if !ok || system.Stage.Value > targetSystem.Stage.Value {
+				return false
+			}
+		}
+		for _, source := range system.After {
+			sourceSystem, ok := schedule.find(source)
+			if !ok || sourceSystem.Stage.Value > system.Stage.Value {
+				return false
+			}
+		}
+	}
+	emitted := make([]bool, len(schedule.Systems))
+	ordered := make([]SystemId, 0, len(schedule.Systems))
+	for len(ordered) < len(schedule.Systems) {
+		selected := -1
+		for candidate := 0; candidate < len(schedule.Systems); candidate++ {
+			if emitted[candidate] || schedule.hasPendingPredecessor(candidate, emitted) {
+				continue
+			}
+			if selected == -1 || systemLess(schedule.Systems[candidate], schedule.Systems[selected]) {
+				selected = candidate
+			}
+		}
+		if selected == -1 {
+			return false
+		}
+		emitted[selected] = true
+		ordered = append(ordered, schedule.Systems[selected].Id)
+	}
+	schedule.Ordered = ordered
+	schedule.Frozen = true
+	return true
+}
+
+func (schedule *Schedule) SystemsForStage(stage StageId) ([]SystemId, bool) {
+	if !schedule.Frozen || !stage.Valid() {
+		return nil, false
+	}
+	systems := make([]SystemId, 0)
+	for _, id := range schedule.Ordered {
+		system, ok := schedule.find(id)
+		if !ok {
+			return nil, false
+		}
+		if system.Stage == stage {
+			systems = append(systems, id)
+		}
+	}
+	return systems, true
+}
+
+func (schedule *Schedule) find(id SystemId) (SystemDescriptor, bool) {
+	for _, system := range schedule.Systems {
+		if system.Id == id {
+			return system, true
+		}
+	}
+	return SystemDescriptor{}, false
+}
+
+func (schedule *Schedule) hasPendingPredecessor(candidate int, emitted []bool) bool {
+	target := schedule.Systems[candidate]
+	for source := 0; source < len(schedule.Systems); source++ {
+		if source == candidate || emitted[source] {
+			continue
+		}
+		if scheduleEdge(schedule.Systems[source], target) {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduleEdge(source SystemDescriptor, target SystemDescriptor) bool {
+	for _, id := range source.Before {
+		if id == target.Id {
+			return true
+		}
+	}
+	for _, id := range target.After {
+		if id == source.Id {
+			return true
+		}
+	}
+	return false
+}
+
+func systemLess(left SystemDescriptor, right SystemDescriptor) bool {
+	return left.Stage.Value < right.Stage.Value ||
+		left.Stage == right.Stage && left.Id.Value < right.Id.Value
+}
+
+func hasDuplicateSystemId(ids []SystemId) bool {
+	for left := 0; left < len(ids); left++ {
+		for right := left + 1; right < len(ids); right++ {
+			if ids[left] == ids[right] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsSystemId(ids []SystemId, expected SystemId) bool {
+	for _, id := range ids {
+		if id == expected {
+			return true
+		}
+	}
+	return false
+}

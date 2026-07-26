@@ -1,0 +1,8 @@
+[package]
+name = "voplay-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Generated Voplay engine protocol"
+
+[build-dependencies]
+vo-schema-compiler = { path = "../../../../volang/lang/crates/vo-schema-compiler" }

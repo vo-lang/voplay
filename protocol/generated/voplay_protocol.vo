@@ -1,0 +1,244 @@
+// Code generated from framework schema. DO NOT EDIT.
+package voplayprotocol
+
+const (
+	SchemaID = "voplay.engine"
+	ProtocolMajor = 1
+	ProtocolMinor = 1
+	MaxEventPayloadBytes = 262144
+	MaxPacketBytes = 67108864
+	MaxSnapshotObjects = 1000000
+	MaxStagedEventBytes = 4194304
+	MaxStagedEvents = 4096
+	MaxTransactionOps = 131072
+	MessageKindRenderStateTransaction uint16 = 1
+	MessageKindRenderStateAck uint16 = 2
+	MessageKindRenderStateSnapshot uint16 = 3
+	MessageKindRenderEvent uint16 = 4
+	MessageKindRenderEventResult uint16 = 5
+	MessageKindRenderControlTransaction uint16 = 6
+	MessageKindRenderControlAck uint16 = 7
+	MessageKindAudioControlTransaction uint16 = 8
+	MessageKindAudioEvent uint16 = 9
+	MessageKindAudioEventResult uint16 = 10
+	MessageKindAudioControlAck uint16 = 11
+	MessageKindEngineStart uint16 = 12
+	MessageKindEngineReady uint16 = 13
+	MessageKindEngineSuspend uint16 = 14
+	MessageKindEngineResume uint16 = 15
+	MessageKindEngineClose uint16 = 16
+	MessageKindEngineClosed uint16 = 17
+	MessageKindTickInput uint16 = 18
+	MessageKindTickResult uint16 = 19
+	MessageKindFramePulse uint16 = 20
+	MessageKindAssetRequest uint16 = 21
+	MessageKindAssetCompletion uint16 = 22
+	MessageKindAssetControl uint16 = 23
+	MessageKindPhysicsBatch uint16 = 24
+	MessageKindPhysicsResult uint16 = 25
+	MessageKindDiagnostics uint16 = 26
+	MessageKindInspectionRequest uint16 = 27
+	MessageKindInspectionResponse uint16 = 28
+	MessageKindRenderTransient uint16 = 29
+	MessageKindSurfaceControl uint16 = 30
+	MessageKindDeviceEvent uint16 = 31
+	MessageKindWorkerWake uint16 = 32
+	MessageKindPlatformInput uint16 = 33
+	MessageKindHapticsCommand uint16 = 34
+	MessageKindHapticsResult uint16 = 35
+	MessageKindAudioAssetData uint16 = 36
+	MessageKindRenderAssetData uint16 = 37
+	MessageKindRenderAssetAck uint16 = 38
+	MessageKindAudioAssetAck uint16 = 39
+	MessageKindRenderReadbackRequest uint16 = 40
+	MessageKindRenderReadbackResult uint16 = 41
+	MessageKindControlLeaseRequest uint16 = 42
+	MessageKindControlLeaseGranted uint16 = 43
+	MessageKindControlCommit uint16 = 44
+	MessageKindControlCommitted uint16 = 45
+	MessageKindControlRealizationResult uint16 = 46
+	MessageKindControlObserved uint16 = 47
+	MessageKindControlObservedAck uint16 = 48
+	MessageKindControlStateAdopt uint16 = 49
+	MessageKindControlStateAdopted uint16 = 50
+	HeaderBytes = 80
+)
+
+func SchemaIdentity() [16]byte {
+	return [16]byte{206, 245, 237, 231, 88, 77, 170, 113, 29, 84, 60, 189, 166, 204, 202, 241}
+}
+
+func MajorCompatFingerprint() [32]byte {
+	return [32]byte{144, 249, 88, 53, 204, 13, 79, 236, 201, 174, 144, 69, 245, 109, 57, 183, 29, 57, 151, 61, 115, 177, 74, 89, 244, 251, 123, 68, 212, 103, 28, 188}
+}
+
+func ExactSchemaFingerprint() [32]byte {
+	return [32]byte{254, 141, 190, 190, 145, 134, 236, 92, 49, 20, 233, 54, 105, 125, 113, 77, 59, 191, 22, 106, 121, 226, 94, 198, 251, 202, 144, 105, 197, 44, 191, 161}
+}
+
+type GenerationalHandle struct {
+	Index uint32
+	Generation uint32
+}
+
+type FrameworkPacketHeader struct {
+	Kind uint16
+	Engine GenerationalHandle
+	ChannelEpoch uint64
+	CommitId uint64
+	BaseRevision uint64
+	NewRevision uint64
+	RequiredControlRevision uint64
+	SourceSimulationRevision uint64
+	Sequence uint64
+	PayloadLen uint32
+}
+
+type FrameworkPacketResult struct {
+	OK bool
+	Header FrameworkPacketHeader
+	Payload []byte
+}
+
+func IsMessageKind(value uint16) bool {
+	if value == MessageKindRenderStateTransaction { return true }
+	if value == MessageKindRenderStateAck { return true }
+	if value == MessageKindRenderStateSnapshot { return true }
+	if value == MessageKindRenderEvent { return true }
+	if value == MessageKindRenderEventResult { return true }
+	if value == MessageKindRenderControlTransaction { return true }
+	if value == MessageKindRenderControlAck { return true }
+	if value == MessageKindAudioControlTransaction { return true }
+	if value == MessageKindAudioEvent { return true }
+	if value == MessageKindAudioEventResult { return true }
+	if value == MessageKindAudioControlAck { return true }
+	if value == MessageKindEngineStart { return true }
+	if value == MessageKindEngineReady { return true }
+	if value == MessageKindEngineSuspend { return true }
+	if value == MessageKindEngineResume { return true }
+	if value == MessageKindEngineClose { return true }
+	if value == MessageKindEngineClosed { return true }
+	if value == MessageKindTickInput { return true }
+	if value == MessageKindTickResult { return true }
+	if value == MessageKindFramePulse { return true }
+	if value == MessageKindAssetRequest { return true }
+	if value == MessageKindAssetCompletion { return true }
+	if value == MessageKindAssetControl { return true }
+	if value == MessageKindPhysicsBatch { return true }
+	if value == MessageKindPhysicsResult { return true }
+	if value == MessageKindDiagnostics { return true }
+	if value == MessageKindInspectionRequest { return true }
+	if value == MessageKindInspectionResponse { return true }
+	if value == MessageKindRenderTransient { return true }
+	if value == MessageKindSurfaceControl { return true }
+	if value == MessageKindDeviceEvent { return true }
+	if value == MessageKindWorkerWake { return true }
+	if value == MessageKindPlatformInput { return true }
+	if value == MessageKindHapticsCommand { return true }
+	if value == MessageKindHapticsResult { return true }
+	if value == MessageKindAudioAssetData { return true }
+	if value == MessageKindRenderAssetData { return true }
+	if value == MessageKindRenderAssetAck { return true }
+	if value == MessageKindAudioAssetAck { return true }
+	if value == MessageKindRenderReadbackRequest { return true }
+	if value == MessageKindRenderReadbackResult { return true }
+	if value == MessageKindControlLeaseRequest { return true }
+	if value == MessageKindControlLeaseGranted { return true }
+	if value == MessageKindControlCommit { return true }
+	if value == MessageKindControlCommitted { return true }
+	if value == MessageKindControlRealizationResult { return true }
+	if value == MessageKindControlObserved { return true }
+	if value == MessageKindControlObservedAck { return true }
+	if value == MessageKindControlStateAdopt { return true }
+	if value == MessageKindControlStateAdopted { return true }
+	return false
+}
+
+func IsGenerationalHandleValid(value GenerationalHandle) bool {
+	return value.Index != 4294967295 && value.Generation != 0
+}
+
+func DecodeFrameworkPacket(input []byte) FrameworkPacketResult {
+	if len(input) < HeaderBytes || len(input) > MaxPacketBytes {
+		return FrameworkPacketResult{}
+	}
+	header := FrameworkPacketHeader{}
+	header.Kind = readFrameworkU16(input, 0)
+	if !IsMessageKind(header.Kind) { return FrameworkPacketResult{} }
+	header.Engine = GenerationalHandle{Index: readFrameworkU32(input, 4), Generation: readFrameworkU32(input, 8)}
+	if !IsGenerationalHandleValid(header.Engine) { return FrameworkPacketResult{} }
+	header.ChannelEpoch = readFrameworkU64(input, 12)
+	header.CommitId = readFrameworkU64(input, 20)
+	header.BaseRevision = readFrameworkU64(input, 28)
+	header.NewRevision = readFrameworkU64(input, 36)
+	header.RequiredControlRevision = readFrameworkU64(input, 44)
+	header.SourceSimulationRevision = readFrameworkU64(input, 52)
+	header.Sequence = readFrameworkU64(input, 60)
+	header.PayloadLen = readFrameworkU32(input, 76)
+	if int(header.PayloadLen) > MaxPacketBytes - HeaderBytes || len(input) != HeaderBytes + int(header.PayloadLen) {
+		return FrameworkPacketResult{}
+	}
+	return FrameworkPacketResult{OK: true, Header: header, Payload: input[HeaderBytes:]}
+}
+
+func EncodeFrameworkPacket(header FrameworkPacketHeader, payload []byte) ([]byte, bool) {
+	if len(payload) > MaxPacketBytes - HeaderBytes {
+		return nil, false
+	}
+	if header.PayloadLen != uint32(len(payload)) { return nil, false }
+	if !IsGenerationalHandleValid(header.Engine) { return nil, false }
+	result := make([]byte, HeaderBytes + len(payload))
+	if !IsMessageKind(header.Kind) { return nil, false }
+	putFrameworkU16(result, 0, header.Kind)
+	putFrameworkU32(result, 4, header.Engine.Index)
+	putFrameworkU32(result, 8, header.Engine.Generation)
+	putFrameworkU64(result, 12, header.ChannelEpoch)
+	putFrameworkU64(result, 20, header.CommitId)
+	putFrameworkU64(result, 28, header.BaseRevision)
+	putFrameworkU64(result, 36, header.NewRevision)
+	putFrameworkU64(result, 44, header.RequiredControlRevision)
+	putFrameworkU64(result, 52, header.SourceSimulationRevision)
+	putFrameworkU64(result, 60, header.Sequence)
+	putFrameworkU32(result, 76, header.PayloadLen)
+	copy(result[HeaderBytes:], payload)
+	return result, true
+}
+
+func readFrameworkU16(input []byte, offset int) uint16 {
+	return uint16(input[offset]) | uint16(input[offset + 1]) << 8
+}
+
+func readFrameworkU32(input []byte, offset int) uint32 {
+	return uint32(input[offset]) | uint32(input[offset + 1]) << 8 |
+		uint32(input[offset + 2]) << 16 | uint32(input[offset + 3]) << 24
+}
+
+func readFrameworkU64(input []byte, offset int) uint64 {
+	return uint64(input[offset]) | uint64(input[offset + 1]) << 8 |
+		uint64(input[offset + 2]) << 16 | uint64(input[offset + 3]) << 24 |
+		uint64(input[offset + 4]) << 32 | uint64(input[offset + 5]) << 40 |
+		uint64(input[offset + 6]) << 48 | uint64(input[offset + 7]) << 56
+}
+
+func putFrameworkU16(output []byte, offset int, value uint16) {
+	output[offset] = byte(value)
+	output[offset + 1] = byte(value >> 8)
+}
+
+func putFrameworkU32(output []byte, offset int, value uint32) {
+	output[offset] = byte(value)
+	output[offset + 1] = byte(value >> 8)
+	output[offset + 2] = byte(value >> 16)
+	output[offset + 3] = byte(value >> 24)
+}
+
+func putFrameworkU64(output []byte, offset int, value uint64) {
+	output[offset] = byte(value)
+	output[offset + 1] = byte(value >> 8)
+	output[offset + 2] = byte(value >> 16)
+	output[offset + 3] = byte(value >> 24)
+	output[offset + 4] = byte(value >> 32)
+	output[offset + 5] = byte(value >> 40)
+	output[offset + 6] = byte(value >> 48)
+	output[offset + 7] = byte(value >> 56)
+}

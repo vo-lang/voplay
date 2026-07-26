@@ -1,0 +1,458 @@
+package render
+
+type GraphResourceId uint32
+
+type GraphNodeId uint32
+
+type ResourceKind uint32
+
+const (
+	ResourceTexture ResourceKind = iota + 1
+	ResourceBuffer
+)
+
+type AccessKind uint32
+
+const (
+	AccessRead AccessKind = iota + 1
+	AccessWrite
+	AccessReadWrite
+)
+
+type ResourceDescriptor struct {
+	Id GraphResourceId
+	Kind ResourceKind
+	Width uint32
+	Height uint32
+	Bytes uint64
+	Format uint32
+	Transient bool
+	External bool
+}
+
+type ResourceAccess struct {
+	Resource GraphResourceId
+	Access AccessKind
+	Version uint32
+}
+
+type NodeDescriptor struct {
+	Id GraphNodeId
+	Name string
+	Feature uint64
+	Reads []ResourceAccess
+	Writes []ResourceAccess
+	Before []GraphNodeId
+	After []GraphNodeId
+}
+
+type ResourceLifetime struct {
+	Resource GraphResourceId
+	FirstNode uint32
+	LastNode uint32
+	Allocation uint32
+}
+
+type ResourceBarrier struct {
+	Resource GraphResourceId
+	BeforeNode GraphNodeId
+	AfterNode GraphNodeId
+	From AccessKind
+	To AccessKind
+}
+
+type CompiledGraph struct {
+	Signature uint64
+	Nodes []NodeDescriptor
+	Resources []ResourceDescriptor
+	Lifetimes []ResourceLifetime
+	Barriers []ResourceBarrier
+	AllocationBytes uint64
+}
+
+type GraphBuilder struct {
+	Resources []ResourceDescriptor
+	Nodes []NodeDescriptor
+	MaxResources uint32
+	MaxNodes uint32
+	MaxAccesses uint32
+	MaxAllocationBytes uint64
+	AccessCount uint32
+}
+
+func NewGraphBuilder(maxResources uint32, maxNodes uint32,
+	maxAccesses uint32, maxAllocationBytes uint64) (*GraphBuilder, bool) {
+	if maxResources == 0 || maxResources > 65536 ||
+		maxNodes == 0 || maxNodes > 65536 ||
+		maxAccesses == 0 || maxAccesses > 1000000 ||
+		maxAllocationBytes == 0 || maxAllocationBytes > 17179869184 {
+		return nil, false
+	}
+	return &GraphBuilder{
+		MaxResources: maxResources, MaxNodes: maxNodes,
+		MaxAccesses: maxAccesses, MaxAllocationBytes: maxAllocationBytes,
+	}, true
+}
+
+func (builder *GraphBuilder) AddResource(
+	resource ResourceDescriptor) bool {
+	if builder == nil || resource.Id == 0 ||
+		resource.Kind < ResourceTexture || resource.Kind > ResourceBuffer ||
+		resource.Bytes == 0 || resource.Bytes > builder.MaxAllocationBytes ||
+		len(builder.Resources) >= int(builder.MaxResources) {
+		return false
+	}
+	if resource.Kind == ResourceTexture &&
+		(resource.Width == 0 || resource.Height == 0 || resource.Format == 0) {
+		return false
+	}
+	for _, existing := range builder.Resources {
+		if existing.Id == resource.Id {
+			return false
+		}
+	}
+	builder.Resources = append(builder.Resources, resource)
+	return true
+}
+
+func (builder *GraphBuilder) AddNode(node NodeDescriptor) bool {
+	accesses := len(node.Reads) + len(node.Writes)
+	if builder == nil || node.Id == 0 || node.Name == "" ||
+		len(node.Name) > 256 || node.Feature == 0 || accesses == 0 ||
+		len(builder.Nodes) >= int(builder.MaxNodes) ||
+		int(builder.AccessCount)+accesses > int(builder.MaxAccesses) ||
+		hasDuplicateGraphNodes(node.Before) ||
+		hasDuplicateGraphNodes(node.After) ||
+		containsGraphNode(node.Before, node.Id) ||
+		containsGraphNode(node.After, node.Id) {
+		return false
+	}
+	for _, existing := range builder.Nodes {
+		if existing.Id == node.Id || existing.Name == node.Name {
+			return false
+		}
+	}
+	seen := make([]GraphResourceId, 0)
+	for _, access := range append(
+		append([]ResourceAccess{}, node.Reads...), node.Writes...) {
+		if access.Resource == 0 ||
+			access.Access < AccessRead || access.Access > AccessReadWrite ||
+			builder.resourceIndex(access.Resource) < 0 ||
+			containsGraphResource(seen, access.Resource) {
+			return false
+		}
+		seen = append(seen, access.Resource)
+	}
+	for _, access := range node.Reads {
+		if access.Access == AccessWrite {
+			return false
+		}
+	}
+	for _, access := range node.Writes {
+		if access.Access == AccessRead {
+			return false
+		}
+	}
+	node.Reads = append([]ResourceAccess{}, node.Reads...)
+	node.Writes = append([]ResourceAccess{}, node.Writes...)
+	node.Before = append([]GraphNodeId{}, node.Before...)
+	node.After = append([]GraphNodeId{}, node.After...)
+	builder.Nodes = append(builder.Nodes, node)
+	builder.AccessCount += uint32(accesses)
+	return true
+}
+
+func (builder *GraphBuilder) Compile() (CompiledGraph, bool) {
+	if builder == nil || len(builder.Resources) == 0 || len(builder.Nodes) == 0 {
+		return CompiledGraph{}, false
+	}
+	for _, node := range builder.Nodes {
+		for _, dependency := range append(
+			append([]GraphNodeId{}, node.Before...), node.After...) {
+			if builder.nodeIndex(dependency) < 0 {
+				return CompiledGraph{}, false
+			}
+		}
+	}
+	emitted := make([]bool, len(builder.Nodes))
+	ordered := make([]NodeDescriptor, 0, len(builder.Nodes))
+	for len(ordered) < len(builder.Nodes) {
+		selected := -1
+		for candidate := 0; candidate < len(builder.Nodes); candidate++ {
+			if emitted[candidate] ||
+				builder.pendingNode(candidate, emitted) {
+				continue
+			}
+			if selected < 0 || builder.Nodes[candidate].Id <
+				builder.Nodes[selected].Id {
+				selected = candidate
+			}
+		}
+		if selected < 0 {
+			return CompiledGraph{}, false
+		}
+		emitted[selected] = true
+		ordered = append(ordered, builder.Nodes[selected])
+	}
+	versions := make([]uint32, len(builder.Resources))
+	lastAccess := make([]ResourceAccess, len(builder.Resources))
+	lastNode := make([]GraphNodeId, len(builder.Resources))
+	barriers := make([]ResourceBarrier, 0)
+	lifetimes := make([]ResourceLifetime, len(builder.Resources))
+	for index, resource := range builder.Resources {
+		lifetimes[index] = ResourceLifetime{
+			Resource: resource.Id, FirstNode: 4294967295,
+		}
+	}
+	for order, node := range ordered {
+		accesses := append(append([]ResourceAccess{}, node.Reads...), node.Writes...)
+		for _, access := range accesses {
+			resourceIndex := builder.resourceIndex(access.Resource)
+			if resourceIndex < 0 {
+				return CompiledGraph{}, false
+			}
+			isWrite := access.Access == AccessWrite ||
+				access.Access == AccessReadWrite
+			if isWrite {
+				versions[resourceIndex]++
+				if access.Version != 0 && access.Version != versions[resourceIndex] {
+					return CompiledGraph{}, false
+				}
+			} else if access.Version != versions[resourceIndex] {
+				return CompiledGraph{}, false
+			}
+			if lastNode[resourceIndex] != 0 &&
+				(lastAccess[resourceIndex].Access != AccessRead ||
+					access.Access != AccessRead) {
+				barriers = append(barriers, ResourceBarrier{
+					Resource: access.Resource,
+					BeforeNode: lastNode[resourceIndex], AfterNode: node.Id,
+					From: lastAccess[resourceIndex].Access, To: access.Access,
+				})
+			}
+			lastAccess[resourceIndex] = access
+			lastNode[resourceIndex] = node.Id
+			if lifetimes[resourceIndex].FirstNode == 4294967295 {
+				lifetimes[resourceIndex].FirstNode = uint32(order)
+			}
+			lifetimes[resourceIndex].LastNode = uint32(order)
+		}
+	}
+	for index, lifetime := range lifetimes {
+		if lifetime.FirstNode == 4294967295 &&
+			!builder.Resources[index].External {
+			return CompiledGraph{}, false
+		}
+	}
+	allocationBytes, ok := assignAllocations(
+		builder.Resources, lifetimes, builder.MaxAllocationBytes)
+	if !ok {
+		return CompiledGraph{}, false
+	}
+	hash := graphSignature(ordered, builder.Resources, lifetimes)
+	return CompiledGraph{
+		Signature: hash, Nodes: cloneNodes(ordered),
+		Resources: append([]ResourceDescriptor{}, builder.Resources...),
+		Lifetimes: lifetimes, Barriers: barriers,
+		AllocationBytes: allocationBytes,
+	}, true
+}
+
+func (builder *GraphBuilder) pendingNode(candidate int,
+	emitted []bool) bool {
+	target := builder.Nodes[candidate]
+	for source, node := range builder.Nodes {
+		if source == candidate || emitted[source] {
+			continue
+		}
+		if containsGraphNode(node.Before, target.Id) ||
+			containsGraphNode(target.After, node.Id) ||
+			resourceDependency(node, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *GraphBuilder) resourceIndex(
+	id GraphResourceId) int {
+	for index, resource := range builder.Resources {
+		if resource.Id == id {
+			return index
+		}
+	}
+	return -1
+}
+
+func (builder *GraphBuilder) nodeIndex(id GraphNodeId) int {
+	for index, node := range builder.Nodes {
+		if node.Id == id {
+			return index
+		}
+	}
+	return -1
+}
+
+func resourceDependency(source NodeDescriptor,
+	target NodeDescriptor) bool {
+	for _, write := range source.Writes {
+		for _, read := range target.Reads {
+			if write.Resource == read.Resource &&
+				write.Version <= read.Version {
+				return true
+			}
+		}
+		for _, nextWrite := range target.Writes {
+			if write.Resource == nextWrite.Resource &&
+				write.Version < nextWrite.Version {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func assignAllocations(resources []ResourceDescriptor,
+	lifetimes []ResourceLifetime, maxBytes uint64) (uint64, bool) {
+	type allocation struct {
+		Id uint32
+		Kind ResourceKind
+		Format uint32
+		Bytes uint64
+		LastNode uint32
+	}
+	allocations := make([]allocation, 0)
+	var total uint64
+	nextId := uint32(1)
+	order := make([]int, len(resources))
+	for index := range resources {
+		order[index] = index
+	}
+	for index := 1; index < len(order); index++ {
+		value := order[index]
+		cursor := index
+		for cursor > 0 && lifetimes[order[cursor-1]].FirstNode >
+			lifetimes[value].FirstNode {
+			order[cursor] = order[cursor-1]
+			cursor--
+		}
+		order[cursor] = value
+	}
+	for _, resourceIndex := range order {
+		resource := resources[resourceIndex]
+		lifetime := lifetimes[resourceIndex]
+		if resource.External {
+			lifetimes[resourceIndex].Allocation = 0
+			continue
+		}
+		selected := -1
+		if resource.Transient {
+			for index, allocation := range allocations {
+				if allocation.LastNode < lifetime.FirstNode &&
+					allocation.Kind == resource.Kind &&
+					allocation.Format == resource.Format &&
+					allocation.Bytes >= resource.Bytes {
+					selected = index
+					break
+				}
+			}
+		}
+		if selected >= 0 {
+			allocations[selected].LastNode = lifetime.LastNode
+			lifetimes[resourceIndex].Allocation = allocations[selected].Id
+			continue
+		}
+		if total+resource.Bytes > maxBytes {
+			return 0, false
+		}
+		allocations = append(allocations, allocation{
+			Id: nextId, Kind: resource.Kind, Format: resource.Format,
+			Bytes: resource.Bytes, LastNode: lifetime.LastNode,
+		})
+		lifetimes[resourceIndex].Allocation = nextId
+		nextId++
+		total += resource.Bytes
+	}
+	return total, true
+}
+
+func graphSignature(nodes []NodeDescriptor,
+	resources []ResourceDescriptor, lifetimes []ResourceLifetime) uint64 {
+	hash := uint64(14695981039346656037)
+	for _, resource := range resources {
+		hash = graphHashU64(hash, uint64(resource.Id))
+		hash = graphHashU64(hash, uint64(resource.Kind))
+		hash = graphHashU64(hash, resource.Bytes)
+		hash = graphHashU64(hash, uint64(resource.Format))
+	}
+	for _, node := range nodes {
+		hash = graphHashU64(hash, uint64(node.Id))
+		hash = graphHashU64(hash, node.Feature)
+		for _, access := range append(
+			append([]ResourceAccess{}, node.Reads...), node.Writes...) {
+			hash = graphHashU64(hash, uint64(access.Resource))
+			hash = graphHashU64(hash, uint64(access.Access))
+			hash = graphHashU64(hash, uint64(access.Version))
+		}
+	}
+	for _, lifetime := range lifetimes {
+		hash = graphHashU64(hash, uint64(lifetime.Resource))
+		hash = graphHashU64(hash, uint64(lifetime.Allocation))
+	}
+	if hash == 0 {
+		return 1
+	}
+	return hash
+}
+
+func cloneNodes(values []NodeDescriptor) []NodeDescriptor {
+	result := make([]NodeDescriptor, len(values))
+	for index, value := range values {
+		result[index] = value
+		result[index].Reads = append([]ResourceAccess{}, value.Reads...)
+		result[index].Writes = append([]ResourceAccess{}, value.Writes...)
+		result[index].Before = append([]GraphNodeId{}, value.Before...)
+		result[index].After = append([]GraphNodeId{}, value.After...)
+	}
+	return result
+}
+
+func hasDuplicateGraphNodes(values []GraphNodeId) bool {
+	for index, value := range values {
+		if value == 0 {
+			return true
+		}
+		for previous := 0; previous < index; previous++ {
+			if values[previous] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsGraphNode(values []GraphNodeId, expected GraphNodeId) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsGraphResource(values []GraphResourceId,
+	expected GraphResourceId) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func graphHashU64(hash uint64, value uint64) uint64 {
+	for shift := uint32(0); shift < 64; shift += 8 {
+		hash = (hash ^ uint64(byte(value >> shift))) * 1099511628211
+	}
+	return hash
+}

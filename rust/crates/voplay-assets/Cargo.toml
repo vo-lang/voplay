@@ -1,0 +1,9 @@
+[package]
+name = "voplay-assets"
+version = "0.1.0"
+edition = "2021"
+description = "Native asset worker ownership boundary for Voplay"
+
+[dependencies]
+voplay-protocol = { path = "../voplay-protocol" }
+voplay-runtime = { path = "../voplay-runtime", default-features = false, features = ["core", "pack"] }

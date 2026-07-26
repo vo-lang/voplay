@@ -1,0 +1,221 @@
+package diagnostics
+
+type Diagnostic struct {
+	Sequence uint64
+	Domain string
+	Code uint32
+	Message string
+	EngineIndex uint32
+	EngineGeneration uint32
+}
+
+type PerformanceSample struct {
+	Sequence uint64
+	Label string
+	ValueNanos uint64
+}
+
+type Severity uint32
+
+const (
+	SeverityInfo Severity = iota + 1
+	SeverityWarning
+	SeverityError
+	SeverityFatal
+)
+
+type DiagnosticRecord struct {
+	Diagnostic Diagnostic
+	Severity Severity
+	Tick uint64
+	Metadata []byte
+}
+
+type PerformanceRecord struct {
+	Sample PerformanceSample
+	Tick uint64
+	Count uint64
+	MinimumNanos uint64
+	MaximumNanos uint64
+}
+
+type Page struct {
+	Diagnostics []DiagnosticRecord
+	Performance []PerformanceRecord
+	NextCursor uint64
+	DroppedBeforeCursor uint64
+}
+
+type Hub struct {
+	Diagnostics []DiagnosticRecord
+	Performance []PerformanceRecord
+	NextSequence uint64
+	DroppedBefore uint64
+	MaxDiagnostics uint32
+	MaxPerformance uint32
+	MaxMetadataBytes uint32
+}
+
+func NewHub(maxDiagnostics uint32, maxPerformance uint32,
+	maxMetadataBytes uint32) (*Hub, bool) {
+	if maxDiagnostics == 0 || maxDiagnostics > 1048576 ||
+		maxPerformance == 0 || maxPerformance > 1048576 ||
+		maxMetadataBytes == 0 || maxMetadataBytes > 1048576 {
+		return nil, false
+	}
+	return &Hub{
+		MaxDiagnostics: maxDiagnostics, MaxPerformance: maxPerformance,
+		MaxMetadataBytes: maxMetadataBytes, NextSequence: 1,
+	}, true
+}
+
+func (hub *Hub) Emit(domain string, code uint32, message string,
+	severity Severity, tick uint64, engineIndex uint32,
+	engineGeneration uint32, metadata []byte) (uint64, bool) {
+	if hub == nil || domain == "" || len(domain) > 256 ||
+		code == 0 || message == "" || len(message) > 16384 ||
+		severity < SeverityInfo || severity > SeverityFatal ||
+		engineIndex == 0 || engineGeneration == 0 ||
+		len(metadata) > int(hub.MaxMetadataBytes) ||
+		hub.NextSequence == 0 || hub.NextSequence == 18446744073709551615 {
+		return 0, false
+	}
+	sequence := hub.NextSequence
+	hub.NextSequence++
+	hub.Diagnostics = append(hub.Diagnostics, DiagnosticRecord{
+		Diagnostic: Diagnostic{
+			Sequence: sequence, Domain: domain, Code: code, Message: message,
+			EngineIndex: engineIndex, EngineGeneration: engineGeneration,
+		},
+		Severity: severity, Tick: tick, Metadata: append([]byte{}, metadata...),
+	})
+	if len(hub.Diagnostics) > int(hub.MaxDiagnostics) {
+		dropped := hub.Diagnostics[0].Diagnostic.Sequence
+		copy(hub.Diagnostics, hub.Diagnostics[1:])
+		hub.Diagnostics = hub.Diagnostics[:len(hub.Diagnostics)-1]
+		if dropped >= hub.DroppedBefore {
+			hub.DroppedBefore = dropped + 1
+		}
+	}
+	return sequence, true
+}
+
+func (hub *Hub) Sample(label string, valueNanos uint64,
+	tick uint64) (uint64, bool) {
+	if hub == nil || label == "" || len(label) > 256 ||
+		hub.NextSequence == 0 || hub.NextSequence == 18446744073709551615 {
+		return 0, false
+	}
+	for index, record := range hub.Performance {
+		if record.Sample.Label == label && record.Tick == tick {
+			count := record.Count + 1
+			average := (record.Sample.ValueNanos*record.Count + valueNanos) / count
+			hub.Performance[index].Sample.ValueNanos = average
+			hub.Performance[index].Count = count
+			if valueNanos < record.MinimumNanos {
+				hub.Performance[index].MinimumNanos = valueNanos
+			}
+			if valueNanos > record.MaximumNanos {
+				hub.Performance[index].MaximumNanos = valueNanos
+			}
+			return record.Sample.Sequence, true
+		}
+	}
+	sequence := hub.NextSequence
+	hub.NextSequence++
+	hub.Performance = append(hub.Performance, PerformanceRecord{
+		Sample: PerformanceSample{
+			Sequence: sequence, Label: label, ValueNanos: valueNanos,
+		},
+		Tick: tick, Count: 1,
+		MinimumNanos: valueNanos, MaximumNanos: valueNanos,
+	})
+	if len(hub.Performance) > int(hub.MaxPerformance) {
+		dropped := hub.Performance[0].Sample.Sequence
+		copy(hub.Performance, hub.Performance[1:])
+		hub.Performance = hub.Performance[:len(hub.Performance)-1]
+		if dropped >= hub.DroppedBefore {
+			hub.DroppedBefore = dropped + 1
+		}
+	}
+	return sequence, true
+}
+
+func (hub *Hub) Read(cursor uint64, maxEntries uint32,
+	maxBytes uint32) (Page, bool) {
+	if hub == nil || maxEntries == 0 || maxEntries > 65536 ||
+		maxBytes == 0 || maxBytes > 16777216 ||
+		cursor > hub.NextSequence {
+		return Page{}, false
+	}
+	start := cursor
+	if start == 0 {
+		start = hub.DroppedBefore
+		if start == 0 {
+			start = 1
+		}
+	}
+	page := Page{NextCursor: start, DroppedBeforeCursor: hub.DroppedBefore}
+	var encoded uint32
+	for sequence := start; sequence < hub.NextSequence; sequence++ {
+		if uint32(len(page.Diagnostics)+len(page.Performance)) >= maxEntries {
+			break
+		}
+		found := false
+		for _, record := range hub.Diagnostics {
+			if record.Diagnostic.Sequence != sequence {
+				continue
+			}
+			size := uint32(len(record.Diagnostic.Domain) + len(record.Diagnostic.Message) +
+				len(record.Metadata) + 48)
+			if encoded+size > maxBytes {
+				return page, true
+			}
+			page.Diagnostics = append(page.Diagnostics, record)
+			encoded += size
+			found = true
+			break
+		}
+		if !found {
+			for _, record := range hub.Performance {
+				if record.Sample.Sequence != sequence {
+					continue
+				}
+				size := uint32(len(record.Sample.Label) + 56)
+				if encoded+size > maxBytes {
+					return page, true
+				}
+				page.Performance = append(page.Performance, record)
+				encoded += size
+				found = true
+				break
+			}
+		}
+		page.NextCursor = sequence + 1
+	}
+	return page, true
+}
+
+func (hub *Hub) ClearBefore(cursor uint64) bool {
+	if hub == nil || cursor < hub.DroppedBefore || cursor > hub.NextSequence {
+		return false
+	}
+	diagnosticWrite := 0
+	for _, record := range hub.Diagnostics {
+		if record.Diagnostic.Sequence >= cursor {
+			hub.Diagnostics[diagnosticWrite] = record
+			diagnosticWrite++
+		}
+	}
+	hub.Diagnostics = hub.Diagnostics[:diagnosticWrite]
+	performanceWrite := 0
+	for _, record := range hub.Performance {
+		if record.Sample.Sequence >= cursor {
+			hub.Performance[performanceWrite] = record
+			performanceWrite++
+		}
+	}
+	hub.Performance = hub.Performance[:performanceWrite]
+	hub.DroppedBefore = cursor
+	return true
+}

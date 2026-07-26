@@ -1,0 +1,307 @@
+package plugin
+
+type RegistrationKind uint32
+
+const (
+	RegistrationComponent RegistrationKind = iota + 1
+	RegistrationSystem
+	RegistrationResource
+	RegistrationEvent
+	RegistrationAssetPipeline
+	RegistrationRenderFeature
+	RegistrationMaterial
+	RegistrationDiagnostic
+	RegistrationInspector
+)
+
+type Registration struct {
+	TypeId uint64
+	Name string
+	Kind RegistrationKind
+	Descriptor []byte
+	RequiredCapabilities []uint64
+}
+
+type Descriptor struct {
+	Id uint64
+	Name string
+	Version uint32
+	Dependencies []uint64
+	RequiredCapabilities []uint64
+	Registrations []Registration
+}
+
+type Registry struct {
+	AvailableCapabilities []uint64
+	Plugins []Descriptor
+	Ordered []uint64
+	MaxPlugins uint32
+	MaxRegistrations uint32
+	MaxDescriptorBytes uint32
+	RegistrationCount uint32
+	Fingerprint uint64
+	Frozen bool
+}
+
+func NewRegistry(capabilities []uint64, maxPlugins uint32,
+	maxRegistrations uint32, maxDescriptorBytes uint32) (*Registry, bool) {
+	if maxPlugins == 0 || maxPlugins > 4096 ||
+		maxRegistrations == 0 || maxRegistrations > 65536 ||
+		maxDescriptorBytes == 0 || maxDescriptorBytes > 16777216 ||
+		hasDuplicate(capabilities) {
+		return nil, false
+	}
+	copyCapabilities := append([]uint64{}, capabilities...)
+	sortIds(copyCapabilities)
+	return &Registry{
+		AvailableCapabilities: copyCapabilities,
+		MaxPlugins: maxPlugins, MaxRegistrations: maxRegistrations,
+		MaxDescriptorBytes: maxDescriptorBytes,
+	}, true
+}
+
+func (registry *Registry) Register(descriptor Descriptor) bool {
+	if registry == nil || registry.Frozen || descriptor.Id == 0 ||
+		descriptor.Name == "" || len(descriptor.Name) > 256 ||
+		descriptor.Version == 0 {
+		return false
+	}
+	if len(registry.Plugins) >= int(registry.MaxPlugins) ||
+		int(registry.RegistrationCount)+len(descriptor.Registrations) >
+			int(registry.MaxRegistrations) ||
+		hasDuplicate(descriptor.Dependencies) ||
+		hasDuplicate(descriptor.RequiredCapabilities) ||
+		contains(descriptor.Dependencies, descriptor.Id) ||
+		!registry.capabilitiesAvailable(descriptor.RequiredCapabilities) {
+		return false
+	}
+	for _, existing := range registry.Plugins {
+		if existing.Id == descriptor.Id || existing.Name == descriptor.Name {
+			return false
+		}
+	}
+	var bytes uint32
+	seenTypes := make([]uint64, 0)
+	seenNames := make([]string, 0)
+	for _, registration := range descriptor.Registrations {
+		if registration.TypeId == 0 || registration.Name == "" ||
+			len(registration.Name) > 256 ||
+			registration.Kind < RegistrationComponent ||
+			registration.Kind > RegistrationInspector ||
+			len(registration.Descriptor) == 0 ||
+			hasDuplicate(registration.RequiredCapabilities) ||
+			!registry.capabilitiesAvailable(registration.RequiredCapabilities) ||
+			contains(seenTypes, registration.TypeId) ||
+			containsString(seenNames, registration.Name) {
+			return false
+		}
+		bytes += uint32(len(registration.Name) + len(registration.Descriptor) + 32)
+		if bytes > registry.MaxDescriptorBytes {
+			return false
+		}
+		seenTypes = append(seenTypes, registration.TypeId)
+		seenNames = append(seenNames, registration.Name)
+	}
+	copyDescriptor := cloneDescriptor(descriptor)
+	registry.Plugins = append(registry.Plugins, copyDescriptor)
+	registry.RegistrationCount += uint32(len(descriptor.Registrations))
+	return true
+}
+
+func (registry *Registry) Freeze() (uint64, bool) {
+	if registry == nil {
+		return 0, false
+	}
+	if registry.Frozen {
+		return registry.Fingerprint, true
+	}
+	if len(registry.Plugins) == 0 {
+		return 0, false
+	}
+	for _, descriptor := range registry.Plugins {
+		for _, dependency := range descriptor.Dependencies {
+			if _, ok := registry.Plugin(dependency); !ok {
+				return 0, false
+			}
+		}
+	}
+	emitted := make([]bool, len(registry.Plugins))
+	ordered := make([]uint64, 0, len(registry.Plugins))
+	for len(ordered) < len(registry.Plugins) {
+		selected := -1
+		for candidate, descriptor := range registry.Plugins {
+			if emitted[candidate] ||
+				registry.pendingDependency(descriptor, emitted) {
+				continue
+			}
+			if selected < 0 || descriptor.Id < registry.Plugins[selected].Id {
+				selected = candidate
+			}
+		}
+		if selected < 0 {
+			return 0, false
+		}
+		emitted[selected] = true
+		ordered = append(ordered, registry.Plugins[selected].Id)
+	}
+	allTypes := make([]uint64, 0)
+	allNames := make([]string, 0)
+	hash := uint64(14695981039346656037)
+	for _, id := range ordered {
+		descriptor, _ := registry.Plugin(id)
+		hash = hashU64(hash, descriptor.Id)
+		hash = hashU64(hash, uint64(descriptor.Version))
+		hash = hashBytes(hash, []byte(descriptor.Name))
+		registrations := append([]Registration{}, descriptor.Registrations...)
+		sortRegistrations(registrations)
+		for _, registration := range registrations {
+			if contains(allTypes, registration.TypeId) ||
+				containsString(allNames, registration.Name) {
+				return 0, false
+			}
+			allTypes = append(allTypes, registration.TypeId)
+			allNames = append(allNames, registration.Name)
+			hash = hashU64(hash, registration.TypeId)
+			hash = hashU64(hash, uint64(registration.Kind))
+			hash = hashBytes(hash, []byte(registration.Name))
+			hash = hashBytes(hash, registration.Descriptor)
+		}
+	}
+	if hash == 0 {
+		hash = 1
+	}
+	registry.Ordered = ordered
+	registry.Fingerprint = hash
+	registry.Frozen = true
+	return hash, true
+}
+
+func (registry *Registry) Plugin(id uint64) (Descriptor, bool) {
+	for _, descriptor := range registry.Plugins {
+		if descriptor.Id == id {
+			return descriptor, true
+		}
+	}
+	return Descriptor{}, false
+}
+
+func (registry *Registry) Registration(typeId uint64) (Registration, bool) {
+	if registry == nil || !registry.Frozen || typeId == 0 {
+		return Registration{}, false
+	}
+	for _, pluginId := range registry.Ordered {
+		descriptor, _ := registry.Plugin(pluginId)
+		for _, registration := range descriptor.Registrations {
+			if registration.TypeId == typeId {
+				return registration, true
+			}
+		}
+	}
+	return Registration{}, false
+}
+
+func (registry *Registry) pendingDependency(descriptor Descriptor,
+	emitted []bool) bool {
+	for _, dependency := range descriptor.Dependencies {
+		for index, candidate := range registry.Plugins {
+			if candidate.Id == dependency && !emitted[index] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (registry *Registry) capabilitiesAvailable(required []uint64) bool {
+	for _, capability := range required {
+		if !contains(registry.AvailableCapabilities, capability) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneDescriptor(value Descriptor) Descriptor {
+	result := value
+	result.Dependencies = append([]uint64{}, value.Dependencies...)
+	result.RequiredCapabilities = append([]uint64{}, value.RequiredCapabilities...)
+	result.Registrations = make([]Registration, len(value.Registrations))
+	for index, registration := range value.Registrations {
+		result.Registrations[index] = registration
+		result.Registrations[index].Descriptor =
+			append([]byte{}, registration.Descriptor...)
+		result.Registrations[index].RequiredCapabilities =
+			append([]uint64{}, registration.RequiredCapabilities...)
+	}
+	return result
+}
+
+func hasDuplicate(values []uint64) bool {
+	for index, value := range values {
+		if value == 0 {
+			return true
+		}
+		for previous := 0; previous < index; previous++ {
+			if values[previous] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func contains(values []uint64, expected uint64) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortIds(values []uint64) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1] > value {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortRegistrations(values []Registration) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].TypeId > value.TypeId {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func hashBytes(hash uint64, values []byte) uint64 {
+	for _, value := range values {
+		hash = (hash ^ uint64(value)) * 1099511628211
+	}
+	return (hash ^ 255) * 1099511628211
+}
+
+func hashU64(hash uint64, value uint64) uint64 {
+	for shift := uint32(0); shift < 64; shift += 8 {
+		hash = (hash ^ uint64(byte(value >> shift))) * 1099511628211
+	}
+	return hash
+}

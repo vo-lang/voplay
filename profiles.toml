@@ -1,0 +1,46 @@
+format = 1
+default = "full"
+
+[profiles.core]
+capabilities = ["core"]
+roles = ["logic", "asset"]
+
+[profiles.2d]
+capabilities = ["core", "render2d", "text", "image", "physics2d", "readback"]
+roles = ["logic", "asset", "render"]
+
+[profiles.3d]
+capabilities = ["core", "render2d", "text", "image", "render3d", "gltf", "animation", "physics3d", "readback"]
+roles = ["logic", "asset", "render"]
+
+[profiles.full]
+capabilities = ["core", "render2d", "text", "image", "render3d", "gltf", "physics2d", "physics3d", "animation", "audio", "pack", "readback"]
+roles = ["logic", "asset", "render", "audio"]
+
+[profiles.editor]
+extends = "full"
+capabilities = ["inspection", "frame-debug-capture", "shader-diagnostics"]
+roles = ["logic", "asset", "render", "audio"]
+
+[test_artifacts.ci-minimal-render]
+published = false
+capabilities = ["core", "render2d"]
+roles = ["logic", "asset", "render"]
+vo_packages = ["voplay/assets", "voplay/core", "voplay/input", "voplay/render2d", "voplay/schedule", "voplay/world"]
+rust_crates = ["voplay-assets", "voplay-protocol", "voplay-render-2d", "voplay-render-core", "voplay-runtime"]
+web_chunks = ["voplay-render-worker"]
+
+[rules.core]
+forbid = ["wgpu", "image", "font", "gltf", "physics2d-backend", "physics3d-backend", "audio-backend", "vogui", "racing"]
+
+[rules.2d]
+forbid = ["render3d", "gltf", "physics3d", "terrain", "audio", "vogui", "racing", "editor"]
+
+[rules.3d]
+forbid = ["physics2d", "audio", "vogui", "racing", "editor"]
+
+[rules.full]
+forbid = ["vogui", "racing", "editor"]
+
+[rules.editor]
+forbid = ["racing"]

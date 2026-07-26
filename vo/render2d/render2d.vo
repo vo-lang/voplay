@@ -1,0 +1,421 @@
+package render2d
+
+import (
+	"github.com/vo-lang/voplay/vo/render"
+)
+
+type Sprite struct {
+	ImageIndex uint32
+	ImageGeneration uint32
+	Color uint32
+	Layer int32
+	Flags uint32
+}
+
+type Camera2d struct {
+	XMilli int64
+	YMilli int64
+	ZoomMilli int32
+}
+
+type AtlasRegion struct {
+	Page uint32
+	X uint32
+	Y uint32
+	Width uint32
+	Height uint32
+	Revision uint64
+}
+
+type RetainedSprite struct {
+	Id uint64
+	Image uint64
+	Atlas AtlasRegion
+	Position [2]int64
+	Size [2]uint32
+	Anchor [2]int32
+	Color [4]byte
+	Z int64
+	Layers uint64
+	Visible bool
+}
+
+type ShapeKind uint32
+
+const (
+	ShapeRect ShapeKind = iota + 1
+	ShapeRoundedRect
+	ShapeCircle
+	ShapeLine
+	ShapePath
+)
+
+type Shape struct {
+	Id uint64
+	Kind ShapeKind
+	Bounds [4]int64
+	RadiusMilli uint32
+	StrokeMilli uint32
+	Fill [4]byte
+	Stroke [4]byte
+	Path []int64
+	Z int64
+	Layers uint64
+}
+
+type TextRun struct {
+	Id uint64
+	Font uint64
+	Text []byte
+	Position [2]int64
+	SizeMilli uint32
+	Color [4]byte
+	MaxWidthMilli uint32
+	Alignment uint32
+	Z int64
+	Layers uint64
+}
+
+type TileCell struct {
+	X uint32
+	Y uint32
+	Tile uint32
+	Flags uint16
+	Tint [4]byte
+}
+
+type TileChunkUpdate struct {
+	Chunk uint64
+	Revision uint64
+	Origin [2]int64
+	CellSize [2]uint32
+	Width uint32
+	Height uint32
+	Cells []TileCell
+	Removed []uint64
+	Layers uint64
+	Z int64
+}
+
+type ParticleEmitter struct {
+	Id uint64
+	Seed uint64
+	Image uint64
+	MaxParticles uint32
+	SpawnPerTick uint32
+	LifetimeTicks uint32
+	Position [2]int64
+	VelocityMin [2]int64
+	VelocityMax [2]int64
+	StartColor [4]byte
+	EndColor [4]byte
+	StartSizeMilli uint32
+	EndSizeMilli uint32
+	Layers uint64
+	Z int64
+}
+
+type View2d struct {
+	Id uint64
+	Target uint64
+	Camera Camera2d
+	Viewport [4]uint32
+	Layers uint64
+	ClearColor [4]byte
+	PostEffects []uint64
+}
+
+func EncodeView(view View2d) []byte {
+	if view.Id == 0 || view.Target == 0 || view.Camera.ZoomMilli <= 0 || view.Viewport[2] == 0 ||
+		view.Viewport[3] == 0 ||
+		view.Layers == 0 ||
+		len(view.PostEffects) > 256 {
+		return nil
+	}
+	for index, effect := range view.PostEffects {
+		if effect == 0 {
+			return nil
+		}
+		for previous := 0; previous < index; previous++ {
+			if view.PostEffects[previous] == effect {
+				return nil
+			}
+		}
+	}
+	bytes := []byte{'V', 'V', '2', '1'}
+	bytes = appendRender2dU64(bytes, view.Id)
+	bytes = appendRender2dU64(bytes, view.Target)
+	bytes = appendRender2dU64(bytes, uint64(view.Camera.XMilli))
+	bytes = appendRender2dU64(bytes, uint64(view.Camera.YMilli))
+	bytes = appendRender2dU32(bytes, uint32(view.Camera.ZoomMilli))
+	for _, value := range view.Viewport {
+		bytes = appendRender2dU32(bytes, value)
+	}
+	bytes = appendRender2dU64(bytes, view.Layers)
+	bytes = append(bytes, view.ClearColor[0], view.ClearColor[1], view.ClearColor[2], view.ClearColor[3])
+	bytes = appendRender2dU32(bytes, uint32(len(view.PostEffects)))
+	for _, effect := range view.PostEffects {
+		bytes = appendRender2dU64(bytes, effect)
+	}
+	return bytes
+}
+
+func EncodeSprite(sprite RetainedSprite) []byte {
+	if sprite.Id == 0 || sprite.Image == 0 || sprite.Size[0] == 0 || sprite.Size[1] == 0 ||
+		sprite.Layers == 0 ||
+		sprite.Atlas.Revision == 0 ||
+		(sprite.Atlas.Page != 0 && (sprite.Atlas.Width == 0 || sprite.Atlas.Height == 0)) {
+		return nil
+	}
+	bytes := []byte{'V', 'S', '2', '1'}
+	bytes = appendRender2dU64(bytes, sprite.Id)
+	bytes = appendRender2dU64(bytes, sprite.Image)
+	bytes = appendRender2dU32(bytes, sprite.Atlas.Page)
+	bytes = appendRender2dU32(bytes, sprite.Atlas.X)
+	bytes = appendRender2dU32(bytes, sprite.Atlas.Y)
+	bytes = appendRender2dU32(bytes, sprite.Atlas.Width)
+	bytes = appendRender2dU32(bytes, sprite.Atlas.Height)
+	bytes = appendRender2dU64(bytes, sprite.Atlas.Revision)
+	bytes = appendRender2dU64(bytes, uint64(sprite.Position[0]))
+	bytes = appendRender2dU64(bytes, uint64(sprite.Position[1]))
+	bytes = appendRender2dU32(bytes, sprite.Size[0])
+	bytes = appendRender2dU32(bytes, sprite.Size[1])
+	bytes = appendRender2dU32(bytes, uint32(sprite.Anchor[0]))
+	bytes = appendRender2dU32(bytes, uint32(sprite.Anchor[1]))
+	bytes = append(bytes, sprite.Color[0], sprite.Color[1], sprite.Color[2], sprite.Color[3])
+	bytes = appendRender2dU64(bytes, uint64(sprite.Z))
+	bytes = appendRender2dU64(bytes, sprite.Layers)
+	if sprite.Visible {
+		return append(bytes, 1)
+	}
+	return append(bytes, 0)
+}
+
+func EncodeShape(shape Shape) []byte {
+	if shape.Id == 0 || shape.Kind < ShapeRect || shape.Kind > ShapePath || shape.Bounds[2] <= 0 ||
+		shape.Bounds[3] <= 0 ||
+		shape.Layers == 0 ||
+		len(shape.Path) > 131072 ||
+		len(shape.Path) % 2 != 0 ||
+		shape.Kind == ShapePath && len(shape.Path) < 4 {
+		return nil
+	}
+	bytes := []byte{'V', 'H', '2', '1', byte(shape.Kind)}
+	bytes = appendRender2dU64(bytes, shape.Id)
+	for _, value := range shape.Bounds {
+		bytes = appendRender2dU64(bytes, uint64(value))
+	}
+	bytes = appendRender2dU32(bytes, shape.RadiusMilli)
+	bytes = appendRender2dU32(bytes, shape.StrokeMilli)
+	bytes = append(bytes, shape.Fill[0], shape.Fill[1], shape.Fill[2], shape.Fill[3])
+	bytes = append(bytes, shape.Stroke[0], shape.Stroke[1], shape.Stroke[2], shape.Stroke[3])
+	bytes = appendRender2dU64(bytes, uint64(shape.Z))
+	bytes = appendRender2dU64(bytes, shape.Layers)
+	bytes = appendRender2dU32(bytes, uint32(len(shape.Path)))
+	for _, value := range shape.Path {
+		bytes = appendRender2dU64(bytes, uint64(value))
+	}
+	return bytes
+}
+
+func EncodeText(run TextRun) []byte {
+	if run.Id == 0 || run.Font == 0 || len(run.Text) == 0 || len(run.Text) > 1048576 ||
+		run.SizeMilli == 0 ||
+		run.Layers == 0 ||
+		run.Alignment > 3 {
+		return nil
+	}
+	bytes := []byte{'V', 'T', '2', '1'}
+	bytes = appendRender2dU64(bytes, run.Id)
+	bytes = appendRender2dU64(bytes, run.Font)
+	bytes = appendRender2dU64(bytes, uint64(run.Position[0]))
+	bytes = appendRender2dU64(bytes, uint64(run.Position[1]))
+	bytes = appendRender2dU32(bytes, run.SizeMilli)
+	bytes = appendRender2dU32(bytes, run.MaxWidthMilli)
+	bytes = appendRender2dU32(bytes, run.Alignment)
+	bytes = appendRender2dU64(bytes, uint64(run.Z))
+	bytes = appendRender2dU64(bytes, run.Layers)
+	bytes = append(bytes, run.Color[0], run.Color[1], run.Color[2], run.Color[3])
+	bytes = appendRender2dU32(bytes, uint32(len(run.Text)))
+	return append(bytes, run.Text...)
+}
+
+func EncodeTileChunk(update TileChunkUpdate) []byte {
+	if update.Chunk == 0 || update.Revision == 0 || update.CellSize[0] == 0 || update.CellSize[1] == 0 ||
+		update.Width == 0 ||
+		update.Height == 0 ||
+		update.Layers == 0 ||
+		len(update.Cells) > 1048576 ||
+		len(update.Removed) > 1048576 {
+		return nil
+	}
+	bytes := []byte{'V', 'C', '2', '1'}
+	bytes = appendRender2dU64(bytes, update.Chunk)
+	bytes = appendRender2dU64(bytes, update.Revision)
+	bytes = appendRender2dU64(bytes, uint64(update.Origin[0]))
+	bytes = appendRender2dU64(bytes, uint64(update.Origin[1]))
+	bytes = appendRender2dU32(bytes, update.CellSize[0])
+	bytes = appendRender2dU32(bytes, update.CellSize[1])
+	bytes = appendRender2dU32(bytes, update.Width)
+	bytes = appendRender2dU32(bytes, update.Height)
+	bytes = appendRender2dU64(bytes, update.Layers)
+	bytes = appendRender2dU64(bytes, uint64(update.Z))
+	bytes = appendRender2dU32(bytes, uint32(len(update.Cells)))
+	for _, cell := range update.Cells {
+		if cell.X >= update.Width || cell.Y >= update.Height || cell.Tile == 0 {
+			return nil
+		}
+		bytes = appendRender2dU32(bytes, cell.X)
+		bytes = appendRender2dU32(bytes, cell.Y)
+		bytes = appendRender2dU32(bytes, cell.Tile)
+		bytes = append(bytes, byte(cell.Flags), byte(cell.Flags >> 8))
+		bytes = append(bytes, cell.Tint[0], cell.Tint[1], cell.Tint[2], cell.Tint[3])
+	}
+	bytes = appendRender2dU32(bytes, uint32(len(update.Removed)))
+	for _, cell := range update.Removed {
+		bytes = appendRender2dU64(bytes, cell)
+	}
+	return bytes
+}
+
+func EncodeParticleEmitter(emitter ParticleEmitter) []byte {
+	if emitter.Id == 0 || emitter.Seed == 0 || emitter.Image == 0 || emitter.MaxParticles == 0 ||
+		emitter.MaxParticles > 1000000 ||
+		emitter.SpawnPerTick == 0 ||
+		emitter.SpawnPerTick > emitter.MaxParticles ||
+		emitter.LifetimeTicks == 0 ||
+		emitter.Layers == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'P', '2', '1'}
+	bytes = appendRender2dU64(bytes, emitter.Id)
+	bytes = appendRender2dU64(bytes, emitter.Seed)
+	bytes = appendRender2dU64(bytes, emitter.Image)
+	bytes = appendRender2dU32(bytes, emitter.MaxParticles)
+	bytes = appendRender2dU32(bytes, emitter.SpawnPerTick)
+	bytes = appendRender2dU32(bytes, emitter.LifetimeTicks)
+	for _, value := range emitter.Position {
+		bytes = appendRender2dU64(bytes, uint64(value))
+	}
+	for _, value := range emitter.VelocityMin {
+		bytes = appendRender2dU64(bytes, uint64(value))
+	}
+	for _, value := range emitter.VelocityMax {
+		bytes = appendRender2dU64(bytes, uint64(value))
+	}
+	bytes = append(bytes, emitter.StartColor[0], emitter.StartColor[1], emitter.StartColor[2], emitter.StartColor[3])
+	bytes = append(bytes, emitter.EndColor[0], emitter.EndColor[1], emitter.EndColor[2], emitter.EndColor[3])
+	bytes = appendRender2dU32(bytes, emitter.StartSizeMilli)
+	bytes = appendRender2dU32(bytes, emitter.EndSizeMilli)
+	bytes = appendRender2dU64(bytes, emitter.Layers)
+	return appendRender2dU64(bytes, uint64(emitter.Z))
+}
+
+type SolidRect struct {
+	X uint32
+	Y uint32
+	Width uint32
+	Height uint32
+	Color [4]byte
+}
+
+type TexturedRect struct {
+	Texture uint64
+	X uint32
+	Y uint32
+	Width uint32
+	Height uint32
+	SourceX uint32
+	SourceY uint32
+	SourceWidth uint32
+	SourceHeight uint32
+	Tint [4]byte
+}
+
+type SampledTargetRect struct {
+	Target render.RenderTargetRef
+	X uint32
+	Y uint32
+	Width uint32
+	Height uint32
+	SourceX uint32
+	SourceY uint32
+	SourceWidth uint32
+	SourceHeight uint32
+	Tint [4]byte
+}
+
+func EncodePortableDraw(clear [4]byte, includeClear bool, rects []SolidRect, textured []TexturedRect) []byte {
+	return EncodePortableDrawWithTargets(clear, includeClear, rects, textured, nil)
+}
+
+func EncodePortableDrawWithTargets(clear [4]byte, includeClear bool, rects []SolidRect, textured []TexturedRect, sampled []SampledTargetRect) []byte {
+	commandCount := len(rects) + len(textured) + len(sampled)
+	if includeClear {
+		commandCount++
+	}
+	if commandCount > 1000000 {
+		return nil
+	}
+	bytes := []byte{'V', 'D', 'R', '1'}
+	bytes = appendRender2dU32(bytes, uint32(commandCount))
+	if includeClear {
+		bytes = append(bytes, 1, clear[0], clear[1], clear[2], clear[3])
+	}
+	for _, rect := range rects {
+		if rect.Width == 0 || rect.Height == 0 {
+			return nil
+		}
+		bytes = append(bytes, 2)
+		bytes = appendRender2dU32(bytes, rect.X)
+		bytes = appendRender2dU32(bytes, rect.Y)
+		bytes = appendRender2dU32(bytes, rect.Width)
+		bytes = appendRender2dU32(bytes, rect.Height)
+		bytes = append(bytes, rect.Color[0], rect.Color[1], rect.Color[2], rect.Color[3])
+	}
+	for _, rect := range textured {
+		if rect.Texture == 0 || rect.Width == 0 || rect.Height == 0 || rect.SourceWidth == 0 ||
+			rect.SourceHeight == 0 {
+			return nil
+		}
+		bytes = append(bytes, 3)
+		bytes = appendRender2dU64(bytes, rect.Texture)
+		bytes = appendRender2dU32(bytes, rect.X)
+		bytes = appendRender2dU32(bytes, rect.Y)
+		bytes = appendRender2dU32(bytes, rect.Width)
+		bytes = appendRender2dU32(bytes, rect.Height)
+		bytes = appendRender2dU32(bytes, rect.SourceX)
+		bytes = appendRender2dU32(bytes, rect.SourceY)
+		bytes = appendRender2dU32(bytes, rect.SourceWidth)
+		bytes = appendRender2dU32(bytes, rect.SourceHeight)
+		bytes = append(bytes, rect.Tint[0], rect.Tint[1], rect.Tint[2], rect.Tint[3])
+	}
+	for _, rect := range sampled {
+		if !rect.Target.Valid() || rect.Width == 0 || rect.Height == 0 || rect.SourceWidth == 0 ||
+			rect.SourceHeight == 0 {
+			return nil
+		}
+		bytes = append(bytes, 5)
+		bytes = appendRender2dU32(bytes, rect.Target.Index)
+		bytes = appendRender2dU32(bytes, rect.Target.Generation)
+		bytes = appendRender2dU32(bytes, rect.X)
+		bytes = appendRender2dU32(bytes, rect.Y)
+		bytes = appendRender2dU32(bytes, rect.Width)
+		bytes = appendRender2dU32(bytes, rect.Height)
+		bytes = appendRender2dU32(bytes, rect.SourceX)
+		bytes = appendRender2dU32(bytes, rect.SourceY)
+		bytes = appendRender2dU32(bytes, rect.SourceWidth)
+		bytes = appendRender2dU32(bytes, rect.SourceHeight)
+		bytes = append(bytes, rect.Tint[0], rect.Tint[1], rect.Tint[2], rect.Tint[3])
+	}
+	return bytes
+}
+
+func appendRender2dU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendRender2dU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}

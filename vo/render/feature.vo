@@ -1,0 +1,252 @@
+package render
+
+type FeatureAttachment uint32
+
+const (
+	FeatureBeforeDepth FeatureAttachment = iota + 1
+	FeatureAfterOpaque
+	FeatureBeforeTransparent
+	FeatureBeforePost
+	FeatureAfterPost
+	FeatureOverlay
+)
+
+type ShaderBindingKind uint32
+
+const (
+	ShaderUniform ShaderBindingKind = iota + 1
+	ShaderStorageRead
+	ShaderStorageReadWrite
+	ShaderTexture
+	ShaderSampler
+)
+
+type ShaderBinding struct {
+	Group uint32
+	Binding uint32
+	Kind ShaderBindingKind
+	MinSize uint64
+}
+
+type ShaderABI struct {
+	Version uint32
+	FrameGroup uint32
+	ViewGroup uint32
+	MaterialGroup uint32
+	ObjectGroup uint32
+	LayoutHash uint64
+	Bindings []ShaderBinding
+}
+
+type FeatureDescriptor struct {
+	Id uint64
+	Version uint32
+	ExtractorSchema uint64
+	DescriptorSchema uint64
+	MaterialSchema uint64
+	Attachment FeatureAttachment
+	RequiredCapabilities []uint64
+	RequiredResources []uint64
+	Shader ShaderABI
+	ShaderHash [32]byte
+	DiagnosticLabel string
+}
+
+type CompiledFeatureClosure struct {
+	FactoryId uint64
+	FactoryVersion uint32
+	LogicExtractorDigest [32]byte
+	LogicArtifactDigest [32]byte
+	RenderArtifactDigest [32]byte
+}
+
+type DataFeatureSource struct {
+	WGSL string
+	MaterialDefaults []byte
+}
+
+const (
+	BuiltinOverlayFeatureId uint64 = 0x766f706c61793001
+	BuiltinOverlayFactoryId uint64 = 0x766f706c6179f001
+	BuiltinOverlayFactoryVersion uint32 = 1
+)
+
+func BuiltinOverlayDescriptor(attachment FeatureAttachment) FeatureDescriptor {
+	return FeatureDescriptor{
+		Id: BuiltinOverlayFeatureId,
+		Version: 1,
+		ExtractorSchema: 0x766f706c61790101,
+		DescriptorSchema: 0x766f706c61790102,
+		MaterialSchema: 0x766f706c61790103,
+		Attachment: attachment,
+		Shader: ShaderABI{
+			Version: 1,
+			FrameGroup: 0,
+			ViewGroup: 1,
+			MaterialGroup: 2,
+			ObjectGroup: 3,
+			LayoutHash: 0x766f706c61790104,
+		},
+		ShaderHash: [32]byte{
+			0xbb, 0x8f, 0x4c, 0xa4, 0xfb, 0x29, 0x81, 0x1c,
+			0x8c, 0x27, 0xe9, 0xd6, 0xf8, 0xf4, 0x2a, 0x2e,
+			0x4e, 0xb8, 0x5f, 0x83, 0x99, 0x91, 0x45, 0x98,
+			0x4b, 0x0c, 0xec, 0x21, 0xe3, 0x5f, 0x08, 0x41,
+		},
+		DiagnosticLabel: "voplay.builtin.overlay-grid",
+	}
+}
+
+func BuiltinOverlayClosure(extractorDigest [32]byte, logicArtifactDigest [32]byte,
+	renderArtifactDigest [32]byte) CompiledFeatureClosure {
+	return CompiledFeatureClosure{
+		FactoryId: BuiltinOverlayFactoryId,
+		FactoryVersion: BuiltinOverlayFactoryVersion,
+		LogicExtractorDigest: extractorDigest,
+		LogicArtifactDigest: logicArtifactDigest,
+		RenderArtifactDigest: renderArtifactDigest,
+	}
+}
+
+func EncodeCompiledFeature(descriptor FeatureDescriptor,
+	closure CompiledFeatureClosure) []byte {
+	if !validFeatureDescriptor(descriptor) || closure.FactoryId == 0 ||
+		closure.FactoryVersion == 0 ||
+		zeroDigest(closure.LogicExtractorDigest) ||
+		zeroDigest(closure.LogicArtifactDigest) ||
+		zeroDigest(closure.RenderArtifactDigest) {
+		return nil
+	}
+	return encodeFeature(descriptor, 1, closure.FactoryId, closure.FactoryVersion,
+		closure.LogicExtractorDigest, closure.LogicArtifactDigest,
+		closure.RenderArtifactDigest, "", nil)
+}
+
+func EncodeDataFeature(descriptor FeatureDescriptor, source DataFeatureSource) []byte {
+	if !validFeatureDescriptor(descriptor) || len(source.WGSL) == 0 ||
+		len(source.WGSL) > 4194304 || len(source.MaterialDefaults) > 4194304 {
+		return nil
+	}
+	return encodeFeature(descriptor, 2, 0, 0, [32]byte{}, [32]byte{},
+		[32]byte{}, source.WGSL, source.MaterialDefaults)
+}
+
+func encodeFeature(descriptor FeatureDescriptor, implementation byte,
+	factoryId uint64, factoryVersion uint32, extractorDigest [32]byte,
+	logicDigest [32]byte, renderDigest [32]byte, wgsl string,
+	defaults []byte) []byte {
+	bytes := []byte{'V', 'R', 'F', '1', 1, implementation,
+		byte(descriptor.Attachment), 0}
+	bytes = appendRenderU64(bytes, descriptor.Id)
+	bytes = appendRenderU32(bytes, descriptor.Version)
+	bytes = appendRenderU32(bytes, descriptor.Shader.Version)
+	bytes = appendRenderU64(bytes, descriptor.ExtractorSchema)
+	bytes = appendRenderU64(bytes, descriptor.DescriptorSchema)
+	bytes = appendRenderU64(bytes, descriptor.MaterialSchema)
+	bytes = appendRenderU64(bytes, descriptor.Shader.LayoutHash)
+	bytes = appendRenderU64(bytes, factoryId)
+	bytes = appendRenderU32(bytes, factoryVersion)
+	bytes = appendFeatureU16(bytes, uint16(len(descriptor.RequiredCapabilities)))
+	bytes = appendFeatureU16(bytes, uint16(len(descriptor.RequiredResources)))
+	bytes = appendFeatureU16(bytes, uint16(len(descriptor.Shader.Bindings)))
+	bytes = append(bytes, 0, 0)
+	bytes = appendRenderU32(bytes, uint32(len(wgsl)))
+	bytes = appendRenderU32(bytes, uint32(len(defaults)))
+	bytes = appendFeatureU16(bytes, uint16(len(descriptor.DiagnosticLabel)))
+	bytes = append(bytes, 0, 0)
+	for _, value := range descriptor.ShaderHash {
+		bytes = append(bytes, value)
+	}
+	bytes = append(bytes, byte(descriptor.Shader.FrameGroup),
+		byte(descriptor.Shader.ViewGroup), byte(descriptor.Shader.MaterialGroup),
+		byte(descriptor.Shader.ObjectGroup))
+	for _, digest := range [3][32]byte{extractorDigest, logicDigest, renderDigest} {
+		for _, value := range digest {
+			bytes = append(bytes, value)
+		}
+	}
+	for len(bytes) < 248 {
+		bytes = append(bytes, 0)
+	}
+	for _, capability := range descriptor.RequiredCapabilities {
+		bytes = appendRenderU64(bytes, capability)
+	}
+	for _, resource := range descriptor.RequiredResources {
+		bytes = appendRenderU64(bytes, resource)
+	}
+	for _, binding := range descriptor.Shader.Bindings {
+		bytes = appendRenderU32(bytes, binding.Group)
+		bytes = appendRenderU32(bytes, binding.Binding)
+		bytes = append(bytes, byte(binding.Kind), 0, 0, 0, 0, 0, 0, 0)
+		bytes = appendRenderU64(bytes, binding.MinSize)
+	}
+	bytes = append(bytes, []byte(descriptor.DiagnosticLabel)...)
+	bytes = append(bytes, []byte(wgsl)...)
+	return append(bytes, defaults...)
+}
+
+func validFeatureDescriptor(descriptor FeatureDescriptor) bool {
+	if descriptor.Id == 0 || descriptor.Version == 0 ||
+		descriptor.ExtractorSchema == 0 || descriptor.DescriptorSchema == 0 ||
+		descriptor.MaterialSchema == 0 || descriptor.Attachment < FeatureBeforeDepth ||
+		descriptor.Attachment > FeatureOverlay || zeroDigest(descriptor.ShaderHash) ||
+		len(descriptor.DiagnosticLabel) == 0 || len(descriptor.DiagnosticLabel) > 256 ||
+		len(descriptor.RequiredCapabilities) > 65535 ||
+		len(descriptor.RequiredResources) > 65535 ||
+		!strictFeatureIds(descriptor.RequiredCapabilities) ||
+		!strictFeatureIds(descriptor.RequiredResources) ||
+		!validShaderABI(descriptor.Shader) {
+		return false
+	}
+	return true
+}
+
+func validShaderABI(shader ShaderABI) bool {
+	if shader.Version == 0 || shader.LayoutHash == 0 || len(shader.Bindings) > 256 ||
+		shader.FrameGroup > 255 || shader.ViewGroup > 255 ||
+		shader.MaterialGroup > 255 || shader.ObjectGroup > 255 ||
+		shader.FrameGroup == shader.ViewGroup ||
+		shader.FrameGroup == shader.MaterialGroup ||
+		shader.FrameGroup == shader.ObjectGroup ||
+		shader.ViewGroup == shader.MaterialGroup ||
+		shader.ViewGroup == shader.ObjectGroup ||
+		shader.MaterialGroup == shader.ObjectGroup {
+		return false
+	}
+	for index, binding := range shader.Bindings {
+		if binding.Kind < ShaderUniform || binding.Kind > ShaderSampler ||
+			binding.MinSize == 0 ||
+			binding.Group != shader.FrameGroup &&
+				binding.Group != shader.ViewGroup &&
+				binding.Group != shader.MaterialGroup &&
+				binding.Group != shader.ObjectGroup {
+			return false
+		}
+		for previous := 0; previous < index; previous++ {
+			if shader.Bindings[previous].Group == binding.Group &&
+				shader.Bindings[previous].Binding == binding.Binding {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func strictFeatureIds(values []uint64) bool {
+	var previous uint64
+	for _, value := range values {
+		if value == 0 || value <= previous {
+			return false
+		}
+		previous = value
+	}
+	return true
+}
+
+func zeroDigest(value [32]byte) bool {
+	return value == [32]byte{}
+}
+
+func appendFeatureU16(bytes []byte, value uint16) []byte {
+	return append(bytes, byte(value), byte(value >> 8))
+}

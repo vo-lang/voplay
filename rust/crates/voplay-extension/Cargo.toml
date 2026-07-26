@@ -1,0 +1,87 @@
+[package]
+name = "voplay-extension"
+version = "0.1.0"
+edition = "2021"
+description = "Exact Voplay profile and role artifact materialization"
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+voplay-protocol = { path = "../voplay-protocol" }
+voplay-runtime = { path = "../voplay-runtime", default-features = false }
+voplay-assets = { path = "../voplay-assets", optional = true }
+voplay-animation = { path = "../voplay-animation", optional = true }
+voplay-audio = { path = "../voplay-audio", optional = true }
+voplay-import-gltf = { path = "../voplay-import-gltf", optional = true }
+voplay-physics-2d = { path = "../voplay-physics-2d", optional = true }
+voplay-physics-3d = { path = "../voplay-physics-3d", optional = true }
+voplay-render-2d = { path = "../voplay-render-2d", optional = true }
+voplay-render-3d = { path = "../voplay-render-3d", optional = true }
+voplay-render-core = { path = "../voplay-render-core", optional = true }
+voplay-vogui-editor = { path = "../voplay-vogui-editor", optional = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vo-app-runtime = { path = "../../../../volang/lang/crates/vo-app-runtime", features = ["std"] }
+vo-ext = { path = "../../../../volang/lang/crates/vo-ext", features = ["native"] }
+vo-runtime = { path = "../../../../volang/lang/crates/vo-runtime", features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+vo-app-runtime = { path = "../../../../volang/lang/crates/vo-app-runtime", default-features = false }
+vo-ext = { path = "../../../../volang/lang/crates/vo-ext", default-features = false, features = ["wasm"] }
+vo-runtime = { path = "../../../../volang/lang/crates/vo-runtime", default-features = false }
+
+[build-dependencies]
+vo-module = { path = "../../../../volang/lang/crates/vo-module" }
+
+[features]
+default = ["profile-full"]
+native-audio = ["dep:voplay-audio", "voplay-audio/native-cpal"]
+profile-core = ["voplay-runtime/core", "dep:voplay-assets"]
+profile-2d = [
+    "voplay-runtime/render2d",
+    "voplay-runtime/physics2d",
+    "dep:voplay-assets",
+    "dep:voplay-physics-2d",
+    "dep:voplay-render-2d",
+    "dep:voplay-render-core",
+]
+profile-3d = [
+    "voplay-runtime/render3d",
+    "voplay-runtime/physics3d",
+    "dep:voplay-assets",
+    "dep:voplay-animation",
+    "dep:voplay-import-gltf",
+    "dep:voplay-physics-3d",
+    "dep:voplay-render-2d",
+    "dep:voplay-render-3d",
+    "dep:voplay-render-core",
+]
+profile-full = [
+    "voplay-runtime/full",
+    "dep:voplay-assets",
+    "dep:voplay-animation",
+    "dep:voplay-audio",
+    "dep:voplay-import-gltf",
+    "dep:voplay-physics-2d",
+    "dep:voplay-physics-3d",
+    "dep:voplay-render-2d",
+    "dep:voplay-render-3d",
+    "dep:voplay-render-core",
+]
+profile-editor = [
+    "voplay-runtime/editor",
+    "dep:voplay-assets",
+    "dep:voplay-animation",
+    "dep:voplay-audio",
+    "dep:voplay-import-gltf",
+    "dep:voplay-physics-2d",
+    "dep:voplay-physics-3d",
+    "dep:voplay-render-2d",
+    "dep:voplay-render-3d",
+    "dep:voplay-render-core",
+    "dep:voplay-vogui-editor",
+]
+
+[package.metadata.vo]
+vomod = "../../../vo.mod"

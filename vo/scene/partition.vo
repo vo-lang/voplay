@@ -1,0 +1,521 @@
+package scene
+
+type PartitionId uint64
+
+type PartitionBounds struct {
+	Minimum [3]int64
+	Maximum [3]int64
+}
+
+func (bounds PartitionBounds) Valid() bool {
+	return bounds.Minimum[0] <= bounds.Maximum[0] &&
+		bounds.Minimum[1] <= bounds.Maximum[1] &&
+		bounds.Minimum[2] <= bounds.Maximum[2]
+}
+
+type InterestVolume struct {
+	Bounds PartitionBounds
+	Priority int32
+}
+
+type PartitionState uint32
+
+const (
+	PartitionUnloaded PartitionState = iota + 1
+	PartitionLoading
+	PartitionReady
+	PartitionActive
+	PartitionFailed
+)
+
+type PartitionManifest struct {
+	Id PartitionId
+	Bounds PartitionBounds
+	Priority int32
+	Dependencies []PartitionId
+	EstimatedObjects uint32
+	EstimatedBytes uint64
+}
+
+type PartitionChunk struct {
+	Id PartitionId
+	SourceRevision uint64
+	Objects []StagedObject
+	References []ObjectReference
+}
+
+type PartitionRecord struct {
+	Manifest PartitionManifest
+	State PartitionState
+	Chunk PartitionChunk
+	HasChunk bool
+	Failure []byte
+}
+
+type StreamingPlan struct {
+	Desired []PartitionId
+	BeginLoad []PartitionId
+	DeferredLoad []PartitionId
+	Unload []PartitionId
+	BudgetExcluded []PartitionId
+	BlockedByFailure []PartitionId
+}
+
+type WorldPartition struct {
+	Records []PartitionRecord
+	MaxPartitions uint32
+	MaxActivePartitions uint32
+	MaxActiveObjects uint32
+	MaxActiveBytes uint64
+	MaxConcurrentLoads uint32
+	LoadMargin uint64
+	UnloadMargin uint64
+	SourceRevision uint64
+}
+
+func NewWorldPartition(maxPartitions uint32, maxActivePartitions uint32,
+	maxActiveObjects uint32, maxActiveBytes uint64, maxConcurrentLoads uint32,
+	loadMargin uint64, unloadMargin uint64) (*WorldPartition, bool) {
+	if maxPartitions == 0 || maxPartitions > 65536 ||
+		maxActivePartitions == 0 || maxActivePartitions > maxPartitions ||
+		maxActiveObjects == 0 || maxActiveObjects > 1000000 ||
+		maxActiveBytes == 0 || maxActiveBytes > 1073741824 ||
+		maxConcurrentLoads == 0 || maxConcurrentLoads > 1024 ||
+		loadMargin > unloadMargin {
+		return nil, false
+	}
+	return &WorldPartition{
+		MaxPartitions: maxPartitions, MaxActivePartitions: maxActivePartitions,
+		MaxActiveObjects: maxActiveObjects, MaxActiveBytes: maxActiveBytes,
+		MaxConcurrentLoads: maxConcurrentLoads,
+		LoadMargin: loadMargin, UnloadMargin: unloadMargin,
+	}, true
+}
+
+func (partition *WorldPartition) Register(manifests []PartitionManifest) bool {
+	if partition == nil || len(manifests) == 0 ||
+		len(partition.Records)+len(manifests) > int(partition.MaxPartitions) {
+		return false
+	}
+	staged := append([]PartitionRecord{}, partition.Records...)
+	for _, manifest := range manifests {
+		if manifest.Id == 0 || !manifest.Bounds.Valid() ||
+			manifest.EstimatedObjects == 0 || manifest.EstimatedBytes == 0 ||
+			hasDuplicatePartitions(manifest.Dependencies) ||
+			containsPartition(manifest.Dependencies, manifest.Id) ||
+			findPartition(staged, manifest.Id) >= 0 {
+			return false
+		}
+		staged = append(staged, PartitionRecord{
+			Manifest: manifest, State: PartitionUnloaded,
+		})
+	}
+	for _, record := range staged {
+		for _, dependency := range record.Manifest.Dependencies {
+			if findPartition(staged, dependency) < 0 {
+				return false
+			}
+		}
+		if partitionCycle(staged, record.Manifest.Id, record.Manifest.Id, nil) {
+			return false
+		}
+	}
+	sortPartitionRecords(staged)
+	partition.Records = staged
+	return true
+}
+
+func (partition *WorldPartition) Plan(interests []InterestVolume) (StreamingPlan, bool) {
+	if partition == nil {
+		return StreamingPlan{}, false
+	}
+	for _, interest := range interests {
+		if !interest.Bounds.Valid() {
+			return StreamingPlan{}, false
+		}
+	}
+	type candidate struct {
+		Id PartitionId
+		Priority int64
+		Distance uint64
+		Resident bool
+	}
+	candidates := make([]candidate, 0)
+	for _, record := range partition.Records {
+		if record.State == PartitionFailed {
+			continue
+		}
+		resident := record.State == PartitionLoading ||
+			record.State == PartitionReady || record.State == PartitionActive
+		margin := partition.LoadMargin
+		if resident {
+			margin = partition.UnloadMargin
+		}
+		found := false
+		bestPriority := int64(-9223372036854775807)
+		bestDistance := uint64(18446744073709551615)
+		for _, interest := range interests {
+			if !partitionBoundsIntersect(record.Manifest.Bounds, interest.Bounds, margin) {
+				continue
+			}
+			priority := int64(record.Manifest.Priority) + int64(interest.Priority)
+			distance := partitionDistance(record.Manifest.Bounds, interest.Bounds)
+			if !found || priority > bestPriority ||
+				priority == bestPriority && distance < bestDistance {
+				found = true
+				bestPriority = priority
+				bestDistance = distance
+			}
+		}
+		if found {
+			candidates = append(candidates, candidate{
+				Id: record.Manifest.Id, Priority: bestPriority,
+				Distance: bestDistance, Resident: resident,
+			})
+		}
+	}
+	for index := 1; index < len(candidates); index++ {
+		value := candidates[index]
+		cursor := index
+		for cursor > 0 && candidateLess(value.Priority, value.Distance, value.Id,
+			candidates[cursor-1].Priority, candidates[cursor-1].Distance,
+			candidates[cursor-1].Id) {
+			candidates[cursor] = candidates[cursor-1]
+			cursor--
+		}
+		candidates[cursor] = value
+	}
+	plan := StreamingPlan{}
+	var objects uint32
+	var bytes uint64
+	for _, candidate := range candidates {
+		closure, ok := partition.dependencyClosure(candidate.Id)
+		if !ok {
+			plan.BlockedByFailure = append(plan.BlockedByFailure, candidate.Id)
+			continue
+		}
+		next := append([]PartitionId{}, plan.Desired...)
+		for _, id := range closure {
+			if !containsPartition(next, id) {
+				next = append(next, id)
+			}
+		}
+		nextObjects, nextBytes := partition.measure(next)
+		if len(next) > int(partition.MaxActivePartitions) ||
+			nextObjects > partition.MaxActiveObjects ||
+			nextBytes > partition.MaxActiveBytes {
+			plan.BudgetExcluded = append(plan.BudgetExcluded, candidate.Id)
+			continue
+		}
+		plan.Desired = next
+		objects = nextObjects
+		bytes = nextBytes
+	}
+	_ = objects
+	_ = bytes
+	sortPartitionIds(plan.Desired)
+	loading := uint32(0)
+	for _, record := range partition.Records {
+		if record.State == PartitionLoading {
+			loading++
+		}
+		if containsPartition(plan.Desired, record.Manifest.Id) {
+			if record.State == PartitionUnloaded {
+				if loading < partition.MaxConcurrentLoads &&
+					partition.dependenciesAtLeastReady(record.Manifest.Id) {
+					plan.BeginLoad = append(plan.BeginLoad, record.Manifest.Id)
+					loading++
+				} else {
+					plan.DeferredLoad = append(plan.DeferredLoad, record.Manifest.Id)
+				}
+			}
+		} else if record.State == PartitionActive || record.State == PartitionReady {
+			plan.Unload = append(plan.Unload, record.Manifest.Id)
+		}
+	}
+	sortPartitionIds(plan.BeginLoad)
+	sortPartitionIds(plan.DeferredLoad)
+	sortPartitionIds(plan.Unload)
+	return plan, true
+}
+
+func (partition *WorldPartition) BeginLoad(id PartitionId) bool {
+	index := findPartition(partition.Records, id)
+	if index < 0 || partition.Records[index].State != PartitionUnloaded ||
+		!partition.dependenciesAtLeastReady(id) {
+		return false
+	}
+	loading := 0
+	for _, record := range partition.Records {
+		if record.State == PartitionLoading {
+			loading++
+		}
+	}
+	if loading >= int(partition.MaxConcurrentLoads) {
+		return false
+	}
+	partition.Records[index].State = PartitionLoading
+	return true
+}
+
+func (partition *WorldPartition) InstallChunk(chunk PartitionChunk) bool {
+	index := findPartition(partition.Records, chunk.Id)
+	if index < 0 || partition.Records[index].State != PartitionLoading ||
+		chunk.SourceRevision <= partition.SourceRevision ||
+		len(chunk.Objects) != int(partition.Records[index].Manifest.EstimatedObjects) {
+		return false
+	}
+	for _, object := range chunk.Objects {
+		if object.Key.LocalObject == 0 {
+			return false
+		}
+	}
+	partition.Records[index].Chunk = chunk
+	partition.Records[index].HasChunk = true
+	partition.Records[index].State = PartitionReady
+	partition.SourceRevision = chunk.SourceRevision
+	return true
+}
+
+func (partition *WorldPartition) Activate(id PartitionId,
+	activation *ActivationPlan) (ActivationResult, bool) {
+	index := findPartition(partition.Records, id)
+	if index < 0 || partition.Records[index].State != PartitionReady ||
+		!partition.Records[index].HasChunk || activation == nil {
+		return ActivationResult{}, false
+	}
+	for _, dependency := range partition.Records[index].Manifest.Dependencies {
+		dependencyIndex := findPartition(partition.Records, dependency)
+		if dependencyIndex < 0 || partition.Records[dependencyIndex].State != PartitionActive {
+			return ActivationResult{}, false
+		}
+	}
+	for _, object := range partition.Records[index].Chunk.Objects {
+		if !activation.StageObject(object) {
+			return ActivationResult{}, false
+		}
+	}
+	for _, reference := range partition.Records[index].Chunk.References {
+		if !activation.StageReference(reference) {
+			return ActivationResult{}, false
+		}
+	}
+	result, ok := activation.Commit()
+	if !ok {
+		return ActivationResult{}, false
+	}
+	partition.Records[index].State = PartitionActive
+	return result, true
+}
+
+func (partition *WorldPartition) Unload(id PartitionId,
+	activation *ActivationPlan) (ActivationResult, bool) {
+	index := findPartition(partition.Records, id)
+	if index < 0 || partition.Records[index].State != PartitionActive ||
+		activation == nil {
+		return ActivationResult{}, false
+	}
+	for _, record := range partition.Records {
+		if record.State == PartitionActive &&
+			containsPartition(record.Manifest.Dependencies, id) {
+			return ActivationResult{}, false
+		}
+	}
+	for _, record := range partition.Records {
+		if record.State != PartitionActive || record.Manifest.Id == id ||
+			!record.HasChunk {
+			continue
+		}
+		for _, object := range record.Chunk.Objects {
+			if !activation.StageObject(object) {
+				return ActivationResult{}, false
+			}
+		}
+		for _, reference := range record.Chunk.References {
+			if !activation.StageReference(reference) {
+				return ActivationResult{}, false
+			}
+		}
+	}
+	result, ok := activation.Commit()
+	if !ok {
+		return ActivationResult{}, false
+	}
+	partition.Records[index].State = PartitionUnloaded
+	partition.Records[index].HasChunk = false
+	partition.Records[index].Chunk = PartitionChunk{}
+	return result, true
+}
+
+func (partition *WorldPartition) Fail(id PartitionId, reason []byte) bool {
+	index := findPartition(partition.Records, id)
+	if index < 0 || len(reason) == 0 || len(reason) > 4096 ||
+		partition.Records[index].State == PartitionActive {
+		return false
+	}
+	partition.Records[index].State = PartitionFailed
+	partition.Records[index].Failure = append([]byte{}, reason...)
+	return true
+}
+
+func (partition *WorldPartition) dependencyClosure(id PartitionId) ([]PartitionId, bool) {
+	index := findPartition(partition.Records, id)
+	if index < 0 || partition.Records[index].State == PartitionFailed {
+		return nil, false
+	}
+	values := make([]PartitionId, 0)
+	pending := []PartitionId{id}
+	for len(pending) != 0 {
+		last := len(pending) - 1
+		current := pending[last]
+		pending = pending[:last]
+		if containsPartition(values, current) {
+			continue
+		}
+		currentIndex := findPartition(partition.Records, current)
+		if currentIndex < 0 || partition.Records[currentIndex].State == PartitionFailed {
+			return nil, false
+		}
+		values = append(values, current)
+		pending = append(pending, partition.Records[currentIndex].Manifest.Dependencies...)
+	}
+	sortPartitionIds(values)
+	return values, true
+}
+
+func (partition *WorldPartition) dependenciesAtLeastReady(id PartitionId) bool {
+	index := findPartition(partition.Records, id)
+	if index < 0 {
+		return false
+	}
+	for _, dependency := range partition.Records[index].Manifest.Dependencies {
+		dependencyIndex := findPartition(partition.Records, dependency)
+		if dependencyIndex < 0 ||
+			(partition.Records[dependencyIndex].State != PartitionReady &&
+				partition.Records[dependencyIndex].State != PartitionActive) {
+			return false
+		}
+	}
+	return true
+}
+
+func (partition *WorldPartition) measure(ids []PartitionId) (uint32, uint64) {
+	var objects uint32
+	var bytes uint64
+	for _, id := range ids {
+		index := findPartition(partition.Records, id)
+		if index >= 0 {
+			objects += partition.Records[index].Manifest.EstimatedObjects
+			bytes += partition.Records[index].Manifest.EstimatedBytes
+		}
+	}
+	return objects, bytes
+}
+
+func partitionCycle(records []PartitionRecord, origin PartitionId,
+	current PartitionId, visited []PartitionId) bool {
+	index := findPartition(records, current)
+	if index < 0 {
+		return false
+	}
+	for _, dependency := range records[index].Manifest.Dependencies {
+		if dependency == origin {
+			return true
+		}
+		if !containsPartition(visited, dependency) &&
+			partitionCycle(records, origin, dependency,
+				append(visited, dependency)) {
+			return true
+		}
+	}
+	return false
+}
+
+func partitionBoundsIntersect(left PartitionBounds, right PartitionBounds,
+	margin uint64) bool {
+	padding := int64(margin)
+	for axis := 0; axis < 3; axis++ {
+		if left.Maximum[axis]+padding < right.Minimum[axis] ||
+			right.Maximum[axis]+padding < left.Minimum[axis] {
+			return false
+		}
+	}
+	return true
+}
+
+func partitionDistance(left PartitionBounds, right PartitionBounds) uint64 {
+	var total uint64
+	for axis := 0; axis < 3; axis++ {
+		var distance int64
+		if left.Maximum[axis] < right.Minimum[axis] {
+			distance = right.Minimum[axis] - left.Maximum[axis]
+		} else if right.Maximum[axis] < left.Minimum[axis] {
+			distance = left.Minimum[axis] - right.Maximum[axis]
+		}
+		total += uint64(distance * distance)
+	}
+	return total
+}
+
+func candidateLess(leftPriority int64, leftDistance uint64, leftId PartitionId,
+	rightPriority int64, rightDistance uint64, rightId PartitionId) bool {
+	return leftPriority > rightPriority ||
+		leftPriority == rightPriority && leftDistance < rightDistance ||
+		leftPriority == rightPriority && leftDistance == rightDistance && leftId < rightId
+}
+
+func findPartition(records []PartitionRecord, id PartitionId) int {
+	for index, record := range records {
+		if record.Manifest.Id == id {
+			return index
+		}
+	}
+	return -1
+}
+
+func hasDuplicatePartitions(values []PartitionId) bool {
+	for index, value := range values {
+		if value == 0 {
+			return true
+		}
+		for previous := 0; previous < index; previous++ {
+			if values[previous] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsPartition(values []PartitionId, expected PartitionId) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func sortPartitionIds(values []PartitionId) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1] > value {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}
+
+func sortPartitionRecords(values []PartitionRecord) {
+	for index := 1; index < len(values); index++ {
+		value := values[index]
+		cursor := index
+		for cursor > 0 && values[cursor-1].Manifest.Id > value.Manifest.Id {
+			values[cursor] = values[cursor-1]
+			cursor--
+		}
+		values[cursor] = value
+	}
+}

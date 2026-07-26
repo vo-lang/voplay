@@ -1,0 +1,30 @@
+format = 1
+canonical_module = "github.com/vo-lang/voplay/examples/control-authority"
+
+[[component]]
+package = "main"
+type_name = "Transform"
+schema_major = 1
+classification = "simulation"
+
+[[component.field]]
+name = "x"
+type = "int64"
+default = "0"
+editor = "distance"
+
+[game]
+package = "main"
+type_name = "ControlAuthority"
+init_type = "ControlAuthorityInit"
+configure = "ConfigureControlAuthority"
+start = "StartControlAuthority"
+execute = "ExecuteControlAuthority"
+max_init_bytes = 4096
+roles = ["logic", "asset", "render", "audio"]
+
+[[game.init_field]]
+name = "seed"
+type = "uint64"
+default = "1"
+editor = ""

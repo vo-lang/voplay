@@ -1,0 +1,920 @@
+package render
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type ControlLifecycle uint32
+
+const (
+	ControlDesired ControlLifecycle = iota + 1
+	ControlRealizing
+	ControlLive
+	ControlTombstone
+)
+
+type ControlKind uint32
+
+const (
+	ControlTarget ControlKind = iota + 1
+	ControlView
+	ControlGraph
+)
+
+type StableControlRef struct {
+	Index uint32
+	Generation uint32
+	Kind ControlKind
+}
+
+func (ref StableControlRef) Valid() bool {
+	return ref.Index != 0 && ref.Generation != 0 && ref.Kind >= ControlTarget &&
+		ref.Kind <= ControlGraph
+}
+
+type TargetDescriptor struct {
+	Width uint32
+	Height uint32
+	Format uint32
+	DepthFormat uint32
+	SampleCount uint32
+	Usage uint32
+	Lifetime uint32
+	Clear uint32
+	ClearColor [4]uint16
+	ClearDepth uint16
+	Offscreen bool
+	Readback bool
+	SurfaceIndex uint32
+	SurfaceGeneration uint32
+}
+
+type ViewDescriptor struct {
+	Target StableControlRef
+	CameraWorldIndex uint32
+	CameraWorldGeneration uint32
+	CameraEntityIndex uint32
+	CameraEntityGeneration uint32
+	PresentationDomainIndex uint32
+	PresentationDomainGeneration uint32
+	ViewportX uint32
+	ViewportY uint32
+	ViewportWidth uint32
+	ViewportHeight uint32
+	LayerMask uint64
+	GraphTemplate uint64
+	QualityProfile uint32
+	Clear uint32
+	ClearColor [4]uint16
+	ClearDepth uint16
+	Camera []byte
+	Enabled bool
+}
+
+type GraphDescriptor struct {
+	Signature uint64
+	Nodes []byte
+	RequiredFeatures []uint64
+}
+
+type GraphResourceDescriptor struct {
+	ID uint32
+	Format uint32
+	SampleCount uint32
+	Usage uint32
+	Lifetime uint32
+}
+
+type GraphResourceRead struct {
+	Resource uint32
+	Version uint32
+	Usage uint32
+}
+
+type GraphResourceWrite struct {
+	Resource uint32
+	BaseVersion uint32
+	Usage uint32
+}
+
+type GraphNodeDescriptor struct {
+	ID uint32
+	StableType uint64
+	Label []byte
+	Queue uint32
+	Dependencies []uint32
+	Reads []GraphResourceRead
+	Writes []GraphResourceWrite
+}
+
+type ControlRecord struct {
+	Ref StableControlRef
+	Lifecycle ControlLifecycle
+	Target TargetDescriptor
+	View ViewDescriptor
+	Graph GraphDescriptor
+	DesiredRevision uint64
+	ObservedRevision uint64
+	EndpointGeneration uint32
+	LocalHandle uint64
+	Failure []byte
+	Alive bool
+}
+
+type RenderControlOperationKind uint32
+
+const (
+	RenderCreateTarget RenderControlOperationKind = iota + 1
+	RenderUpdateTarget
+	RenderDestroyTarget
+	RenderCreateView
+	RenderUpdateView
+	RenderDestroyView
+	RenderCreateGraph
+	RenderUpdateGraph
+	RenderDestroyGraph
+)
+
+type RenderControlOperation struct {
+	Kind RenderControlOperationKind
+	Ref StableControlRef
+	Target TargetDescriptor
+	View ViewDescriptor
+	Graph GraphDescriptor
+}
+
+type RenderControlTransaction struct {
+	ExpectedRevision uint64
+	Operations []RenderControlOperation
+}
+
+type RenderControlCommit struct {
+	Revision uint64
+	Created []StableControlRef
+	Retired []StableControlRef
+}
+
+type ControlAuthorityAck struct {
+	Transaction uint64
+	Revision uint64
+}
+
+type ControlRealizationAck struct {
+	Transaction uint64
+	Revision uint64
+	ChannelEpoch uint64
+}
+
+type RealizationCommand struct {
+	Ref StableControlRef
+	Revision uint64
+	EndpointGeneration uint32
+	Target TargetDescriptor
+	View ViewDescriptor
+	Graph GraphDescriptor
+}
+
+type RenderControlStore struct {
+	Revision uint64
+	ObservedRevision uint64
+	EndpointGeneration uint32
+	Records []ControlRecord
+	Free []uint32
+	MaxRecords uint32
+	MaxOperations uint32
+	MaxDescriptorBytes uint32
+}
+
+func NewRenderControlStore(endpointGeneration uint32, maxRecords uint32, maxOperations uint32, maxDescriptorBytes uint32) (*RenderControlStore, bool) {
+	if endpointGeneration == 0 || maxRecords == 0 || maxRecords > 1000000 || maxOperations == 0 ||
+		maxOperations > 65536 ||
+		maxDescriptorBytes == 0 ||
+		maxDescriptorBytes > 16777216 {
+		return nil, false
+	}
+	return &RenderControlStore{
+		EndpointGeneration: endpointGeneration, MaxRecords: maxRecords, MaxOperations: maxOperations,
+		MaxDescriptorBytes: maxDescriptorBytes,
+	}, true
+}
+
+func (store *RenderControlStore) Commit(transaction RenderControlTransaction) (RenderControlCommit, bool) {
+	if store == nil || transaction.ExpectedRevision != store.Revision ||
+		len(transaction.Operations) == 0 ||
+		len(transaction.Operations) > int(store.MaxOperations) ||
+		store.Revision == 18446744073709551615 {
+		return RenderControlCommit{}, false
+	}
+	staged := store.clone()
+	result := RenderControlCommit{}
+	for _, operation := range transaction.Operations {
+		switch operation.Kind {
+			case RenderCreateTarget:
+				ref, ok := staged.create(ControlTarget)
+				if !ok || !validTarget(operation.Target) {
+					return RenderControlCommit{}, false
+				}
+				index, _ := staged.recordIndex(ref)
+				staged.Records[index].Target = operation.Target
+				result.Created = append(result.Created, ref)
+			case RenderUpdateTarget:
+				index, ok := staged.recordIndex(operation.Ref)
+				if !ok || operation.Ref.Kind != ControlTarget || !validTarget(operation.Target) {
+					return RenderControlCommit{}, false
+				}
+				staged.Records[index].Target = operation.Target
+				staged.Records[index].Lifecycle = ControlDesired
+			case RenderDestroyTarget:
+				if staged.targetReferenced(operation.Ref) || !staged.retire(operation.Ref) {
+					return RenderControlCommit{}, false
+				}
+				result.Retired = append(result.Retired, operation.Ref)
+			case RenderCreateView:
+				if !validView(operation.View) || !staged.liveOrDesired(operation.View.Target) {
+					return RenderControlCommit{}, false
+				}
+				ref, ok := staged.create(ControlView)
+				if !ok {
+					return RenderControlCommit{}, false
+				}
+				index, _ := staged.recordIndex(ref)
+				staged.Records[index].View = cloneView(operation.View)
+				result.Created = append(result.Created, ref)
+			case RenderUpdateView:
+				index, ok := staged.recordIndex(operation.Ref)
+				if !ok || operation.Ref.Kind != ControlView || !validView(operation.View) ||
+					!staged.liveOrDesired(operation.View.Target) {
+					return RenderControlCommit{}, false
+				}
+				staged.Records[index].View = cloneView(operation.View)
+				staged.Records[index].Lifecycle = ControlDesired
+			case RenderDestroyView:
+				if !staged.retire(operation.Ref) {
+					return RenderControlCommit{}, false
+				}
+				result.Retired = append(result.Retired, operation.Ref)
+			case RenderCreateGraph:
+				if !validGraph(operation.Graph, staged.MaxDescriptorBytes) {
+					return RenderControlCommit{}, false
+				}
+				if staged.graphSignatureUsed(operation.Graph.Signature, StableControlRef{}) {
+					return RenderControlCommit{}, false
+				}
+				ref, ok := staged.create(ControlGraph)
+				if !ok {
+					return RenderControlCommit{}, false
+				}
+				index, _ := staged.recordIndex(ref)
+				staged.Records[index].Graph = cloneGraph(operation.Graph)
+				result.Created = append(result.Created, ref)
+			case RenderUpdateGraph:
+				index, ok := staged.recordIndex(operation.Ref)
+				if !ok || operation.Ref.Kind != ControlGraph ||
+					!validGraph(operation.Graph, staged.MaxDescriptorBytes) ||
+					staged.graphSignatureUsed(operation.Graph.Signature, operation.Ref) {
+					return RenderControlCommit{}, false
+				}
+				staged.Records[index].Graph = cloneGraph(operation.Graph)
+				staged.Records[index].Lifecycle = ControlDesired
+			case RenderDestroyGraph:
+				if staged.graphReferenced(operation.Ref) || !staged.retire(operation.Ref) {
+					return RenderControlCommit{}, false
+				}
+				result.Retired = append(result.Retired, operation.Ref)
+			default:
+				return RenderControlCommit{}, false
+		}
+	}
+	staged.Revision++
+	for index := range staged.Records {
+		if staged.Records[index].Alive && staged.Records[index].Lifecycle == ControlDesired {
+			staged.Records[index].DesiredRevision = staged.Revision
+		}
+	}
+	*store = staged
+	result.Revision = store.Revision
+	return result, true
+}
+
+func (store *RenderControlStore) TakeRealization(maxCommands uint32) ([]RealizationCommand, bool) {
+	if store == nil || maxCommands == 0 || maxCommands > store.MaxOperations {
+		return nil, false
+	}
+	commands := make([]RealizationCommand, 0)
+	for index, record := range store.Records {
+		if !record.Alive || record.Lifecycle != ControlDesired {
+			continue
+		}
+		if record.Ref.Kind == ControlView {
+			targetIndex, ok := store.recordIndex(record.View.Target)
+			if !ok || store.Records[targetIndex].Lifecycle != ControlLive {
+				continue
+			}
+		}
+		store.Records[index].Lifecycle = ControlRealizing
+		commands = append(commands, RealizationCommand{
+			Ref: record.Ref, Revision: record.DesiredRevision, EndpointGeneration: store.EndpointGeneration,
+			Target: record.Target, View: cloneView(record.View), Graph: cloneGraph(record.Graph),
+		})
+		if len(commands) >= int(maxCommands) {
+			break
+		}
+	}
+	return commands, true
+}
+
+func (store *RenderControlStore) Realized(ref StableControlRef, revision uint64, endpointGeneration uint32, localHandle uint64) bool {
+	index, ok := store.recordIndex(ref)
+	if !ok || store.Records[index].Lifecycle != ControlRealizing ||
+		revision != store.Records[index].DesiredRevision ||
+		endpointGeneration != store.EndpointGeneration ||
+		localHandle == 0 {
+		return false
+	}
+	store.Records[index].Lifecycle = ControlLive
+	store.Records[index].ObservedRevision = revision
+	store.Records[index].EndpointGeneration = endpointGeneration
+	store.Records[index].LocalHandle = localHandle
+	store.Records[index].Failure = nil
+	if revision > store.ObservedRevision {
+		store.ObservedRevision = revision
+	}
+	return true
+}
+
+func (store *RenderControlStore) RealizationFailed(ref StableControlRef, revision uint64, endpointGeneration uint32, permanent bool, reason []byte) bool {
+	index, ok := store.recordIndex(ref)
+	if !ok || store.Records[index].Lifecycle != ControlRealizing ||
+		revision != store.Records[index].DesiredRevision ||
+		endpointGeneration != store.EndpointGeneration ||
+		len(reason) == 0 ||
+		len(reason) > 4096 {
+		return false
+	}
+	store.Records[index].Failure = append([]byte{}, reason...)
+	store.Records[index].LocalHandle = 0
+	if permanent {
+		store.Records[index].Lifecycle = ControlTombstone
+	} else {
+		store.Records[index].Lifecycle = ControlDesired
+	}
+	return true
+}
+
+func (store *RenderControlStore) Restart(newEndpointGeneration uint32) bool {
+	if store == nil || newEndpointGeneration == 0 || newEndpointGeneration == store.EndpointGeneration {
+		return false
+	}
+	store.EndpointGeneration = newEndpointGeneration
+	store.ObservedRevision = 0
+	for index, record := range store.Records {
+		if !record.Alive || record.Lifecycle == ControlTombstone {
+			continue
+		}
+		store.Records[index].Lifecycle = ControlDesired
+		store.Records[index].EndpointGeneration = 0
+		store.Records[index].LocalHandle = 0
+		store.Records[index].Failure = nil
+	}
+	return true
+}
+
+func (store *RenderControlStore) Record(ref StableControlRef) (ControlRecord, bool) {
+	index, ok := store.recordIndex(ref)
+	if !ok {
+		return ControlRecord{}, false
+	}
+	record := store.Records[index]
+	record.View = cloneView(record.View)
+	record.Graph = cloneGraph(record.Graph)
+	record.Failure = append([]byte{}, record.Failure...)
+	return record, true
+}
+
+func (store *RenderControlStore) create(kind ControlKind) (StableControlRef, bool) {
+	if kind < ControlTarget || kind > ControlGraph ||
+		len(store.Records) - len(store.Free) >= int(store.MaxRecords) {
+		return StableControlRef{}, false
+	}
+	if len(store.Free) != 0 {
+		last := len(store.Free) - 1
+		index := store.Free[last]
+		store.Free = store.Free[:last]
+		previous := store.Records[index - 1].Ref
+		if previous.Generation == 4294967295 {
+			return StableControlRef{}, false
+		}
+		ref := StableControlRef{Index: index, Generation: previous.Generation + 1, Kind: kind}
+		store.Records[index - 1] = ControlRecord{Ref: ref, Lifecycle: ControlDesired, Alive: true}
+		return ref, true
+	}
+	ref := StableControlRef{Index: uint32(len(store.Records) + 1), Generation: 1, Kind: kind}
+	store.Records = append(store.Records, ControlRecord{
+		Ref: ref, Lifecycle: ControlDesired, Alive: true,
+	})
+	return ref, true
+}
+
+func (store *RenderControlStore) retire(ref StableControlRef) bool {
+	index, ok := store.recordIndex(ref)
+	if !ok {
+		return false
+	}
+	store.Records[index].Lifecycle = ControlTombstone
+	store.Records[index].LocalHandle = 0
+	store.Records[index].Alive = false
+	store.Free = append(store.Free, ref.Index)
+	return true
+}
+
+func (store *RenderControlStore) liveOrDesired(ref StableControlRef) bool {
+	index, ok := store.recordIndex(ref)
+	return ok && store.Records[index].Lifecycle != ControlTombstone
+}
+
+func (store *RenderControlStore) targetReferenced(ref StableControlRef) bool {
+	if !ref.Valid() || ref.Kind != ControlTarget {
+		return false
+	}
+	for _, record := range store.Records {
+		if record.Alive && record.Ref.Kind == ControlView && record.View.Target == ref {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *RenderControlStore) graphReferenced(ref StableControlRef) bool {
+	index, ok := store.recordIndex(ref)
+	if !ok || ref.Kind != ControlGraph {
+		return false
+	}
+	signature := store.Records[index].Graph.Signature
+	for _, record := range store.Records {
+		if record.Alive && record.Ref.Kind == ControlView && record.View.GraphTemplate == signature {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *RenderControlStore) graphSignatureUsed(signature uint64, except StableControlRef) bool {
+	for _, record := range store.Records {
+		if record.Alive && record.Ref.Kind == ControlGraph && record.Ref != except &&
+			record.Graph.Signature == signature {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *RenderControlStore) recordIndex(ref StableControlRef) (int, bool) {
+	if store == nil || !ref.Valid() || int(ref.Index) > len(store.Records) {
+		return 0, false
+	}
+	index := int(ref.Index - 1)
+	return index, store.Records[index].Alive && store.Records[index].Ref == ref
+}
+
+func (store *RenderControlStore) clone() RenderControlStore {
+	result := *store
+	result.Records = make([]ControlRecord, len(store.Records))
+	for index, record := range store.Records {
+		result.Records[index] = record
+		result.Records[index].View = cloneView(record.View)
+		result.Records[index].Graph = cloneGraph(record.Graph)
+		result.Records[index].Failure = append([]byte{}, record.Failure...)
+	}
+	result.Free = append([]uint32{}, store.Free...)
+	return result
+}
+
+func validTarget(value TargetDescriptor) bool {
+	sampleCount := value.SampleCount
+	if sampleCount == 0 {
+		sampleCount = 1
+	}
+	return value.Width != 0 && value.Height != 0 && value.Width <= 32768 && value.Height <= 32768 &&
+		(value.Format == 1 || value.Format == 2) &&
+		(value.DepthFormat == 0 || value.DepthFormat == 3 || value.DepthFormat == 4) &&
+		(sampleCount == 1 || sampleCount == 2 || sampleCount == 4 || sampleCount == 8) &&
+		(value.Offscreen || value.SurfaceIndex != 0 && value.SurfaceGeneration != 0)
+}
+
+func validView(value ViewDescriptor) bool {
+	return value.Target.Valid() && value.Target.Kind == ControlTarget &&
+		value.CameraWorldGeneration != 0 &&
+		value.CameraEntityGeneration != 0 &&
+		value.PresentationDomainGeneration != 0 &&
+		value.ViewportWidth != 0 &&
+		value.ViewportHeight != 0 &&
+		value.LayerMask != 0 &&
+		value.GraphTemplate != 0 &&
+		value.QualityProfile != 0
+}
+
+func validGraph(value GraphDescriptor, maxBytes uint32) bool {
+	if value.Signature == 0 || len(value.Nodes) == 0 || len(value.Nodes) > int(maxBytes) {
+		return false
+	}
+	for index, feature := range value.RequiredFeatures {
+		if feature == 0 {
+			return false
+		}
+		for previous := 0; previous < index; previous++ {
+			if value.RequiredFeatures[previous] == feature {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func EncodeGraphProgram(resources []GraphResourceDescriptor, nodes []GraphNodeDescriptor) ([]byte, bool) {
+	if len(resources) == 0 || len(resources) > 2048 || len(nodes) == 0 || len(nodes) > 1024 {
+		return nil, false
+	}
+	bytes := []byte{'V', 'G', 'R', '1', 1, 0, 0, 0}
+	bytes = appendControlU32(bytes, uint32(len(resources)))
+	bytes = appendControlU32(bytes, uint32(len(nodes)))
+	for _, resource := range resources {
+		if resource.ID == 0 || resource.Format < 1 || resource.Format > 4 || resource.SampleCount == 0 ||
+			resource.SampleCount > 255 ||
+			resource.Usage == 0 ||
+			resource.Lifetime < 1 ||
+			resource.Lifetime > 3 {
+			return nil, false
+		}
+		bytes = appendControlU32(bytes, resource.ID)
+		bytes = append(bytes, byte(resource.Format), byte(resource.SampleCount), byte(resource.Lifetime), 0)
+		bytes = appendControlU32(bytes, resource.Usage)
+	}
+	accesses := 0
+	for _, node := range nodes {
+		accesses += len(node.Reads) + len(node.Writes)
+		if node.ID == 0 || node.StableType == 0 || len(node.Label) == 0 || len(node.Label) > 256 ||
+			node.Queue < 1 ||
+			node.Queue > 3 ||
+			accesses > 16384 {
+			return nil, false
+		}
+		bytes = appendControlU32(bytes, node.ID)
+		bytes = appendControlU64(bytes, node.StableType)
+		bytes = append(bytes, byte(node.Queue), 0, 0, 0)
+		bytes = appendControlU32(bytes, uint32(len(node.Label)))
+		bytes = appendControlU32(bytes, uint32(len(node.Dependencies)))
+		bytes = appendControlU32(bytes, uint32(len(node.Reads)))
+		bytes = appendControlU32(bytes, uint32(len(node.Writes)))
+		bytes = append(bytes, node.Label...)
+		for _, dependency := range node.Dependencies {
+			if dependency == 0 {
+				return nil, false
+			}
+			bytes = appendControlU32(bytes, dependency)
+		}
+		for _, read := range node.Reads {
+			if read.Resource == 0 || read.Usage == 0 {
+				return nil, false
+			}
+			bytes = appendControlU32(bytes, read.Resource)
+			bytes = appendControlU32(bytes, read.Version)
+			bytes = appendControlU32(bytes, read.Usage)
+		}
+		for _, write := range node.Writes {
+			if write.Resource == 0 || write.Usage == 0 {
+				return nil, false
+			}
+			bytes = appendControlU32(bytes, write.Resource)
+			bytes = appendControlU32(bytes, write.BaseVersion)
+			bytes = appendControlU32(bytes, write.Usage)
+		}
+	}
+	if len(bytes) > 16777216 {
+		return nil, false
+	}
+	return bytes, true
+}
+
+func cloneView(value ViewDescriptor) ViewDescriptor {
+	value.Camera = append([]byte{}, value.Camera...)
+	return value
+}
+
+func cloneGraph(value GraphDescriptor) GraphDescriptor {
+	value.Nodes = append([]byte{}, value.Nodes...)
+	value.RequiredFeatures = append([]uint64{}, value.RequiredFeatures...)
+	return value
+}
+
+// EncodeSnapshotPacket serializes desired render control for the GameLogic
+// authority lane. The authority validates and forwards accepted state.
+func (store *RenderControlStore) EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64) ([]byte, bool) {
+	if store == nil || store.Revision == 0 || channelEpoch == 0 || engine.Engine.Generation == 0 ||
+		engine.Engine.Index == 4294967295 {
+		return nil, false
+	}
+	entries := make([][]byte, 0)
+	descriptorBytes := 0
+	for _, record := range store.Records {
+		if !record.Alive || record.Lifecycle == ControlTombstone {
+			continue
+		}
+		var descriptor []byte
+		var ok bool
+		switch record.Ref.Kind {
+			case ControlTarget:
+				descriptor, ok = encodeTargetDescriptor(engine, record.Target)
+			case ControlView:
+				descriptor, ok = encodeViewDescriptor(engine, record.View)
+			case ControlGraph:
+				descriptor, ok = encodeGraphDescriptor(engine, record.Graph)
+			default:
+				return nil, false
+		}
+		if !ok || descriptorBytes + len(descriptor) > int(store.MaxDescriptorBytes) {
+			return nil, false
+		}
+		descriptorBytes += len(descriptor)
+		entry := make([]byte, 0, 48 + len(descriptor))
+		switch record.Ref.Kind {
+			case ControlTarget:
+				entry = append(entry, 2)
+			case ControlView:
+				entry = append(entry, 1)
+			case ControlGraph:
+				entry = append(entry, 5)
+		}
+		entry = append(entry, 1, 0, 0)
+		entry = appendControlU32(entry, record.Ref.Index)
+		entry = appendControlU32(entry, record.Ref.Generation)
+		entry = appendControlU32(entry, uint32(len(descriptor)))
+		for index := 0; index < 4; index++ {
+			entry = appendControlU64(entry, 0)
+		}
+		entry = append(entry, descriptor...)
+		entries = append(entries, entry)
+	}
+	payload := []byte{'V', 'R', 'C', 'S', 1, 0, 0, 0}
+	payload = appendControlU64(payload, store.Revision)
+	payload = appendControlU32(payload, uint32(len(entries)))
+	for _, entry := range entries {
+		payload = append(payload, entry...)
+	}
+	if len(payload) + 80 > 16777216 {
+		return nil, false
+	}
+	packet := make([]byte, 80)
+	putControlU16(packet, 0, 6)
+	putControlU32(packet, 4, engine.Engine.Index)
+	putControlU32(packet, 8, engine.Engine.Generation)
+	putControlU64(packet, 12, channelEpoch)
+	putControlU64(packet, 20, store.Revision)
+	putControlU64(packet, 28, store.Revision - 1)
+	putControlU64(packet, 36, store.Revision)
+	putControlU64(packet, 60, store.Revision)
+	putControlU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeAuthorityAck(engine voplay.EngineRef, packet []byte) (ControlAuthorityAck, bool) {
+	if len(packet) != 80 || readControlU16(packet, 0) != 7 ||
+		readControlU32(packet, 4) != engine.Engine.Index ||
+		readControlU32(packet, 8) != engine.Engine.Generation ||
+		readControlU64(packet, 12) == 0 ||
+		readControlU32(packet, 76) != 0 {
+		return ControlAuthorityAck{}, false
+	}
+	ack := ControlAuthorityAck{
+		Transaction: readControlU64(packet, 20), Revision: readControlU64(packet, 36),
+	}
+	return ack, ack.Transaction != 0 && ack.Revision != 0
+}
+
+func DecodeRealizationAck(engine voplay.EngineRef, packet []byte) (ControlRealizationAck, bool) {
+	if len(packet) != 80 || readControlU16(packet, 0) != 7 ||
+		readControlU32(packet, 4) != engine.Engine.Index ||
+		readControlU32(packet, 8) != engine.Engine.Generation ||
+		readControlU64(packet, 12) == 0 ||
+		readControlU32(packet, 76) != 0 {
+		return ControlRealizationAck{}, false
+	}
+	ack := ControlRealizationAck{
+		Transaction: readControlU64(packet, 20), Revision: readControlU64(packet, 36),
+		ChannelEpoch: readControlU64(packet, 12),
+	}
+	return ack, ack.Transaction != 0 && ack.Revision != 0
+}
+
+func (store *RenderControlStore) ApplyRealizationAck(ack ControlRealizationAck, endpointGeneration uint32) bool {
+	if store == nil || ack.Transaction == 0 || ack.Revision != store.Revision || ack.ChannelEpoch == 0 ||
+		endpointGeneration == 0 {
+		return false
+	}
+	store.ObservedRevision = ack.Revision
+	store.EndpointGeneration = endpointGeneration
+	for index, record := range store.Records {
+		if !record.Alive || record.Lifecycle == ControlTombstone {
+			continue
+		}
+		store.Records[index].Lifecycle = ControlLive
+		store.Records[index].ObservedRevision = ack.Revision
+		store.Records[index].EndpointGeneration = endpointGeneration
+		store.Records[index].LocalHandle = 0
+		store.Records[index].Failure = nil
+	}
+	return true
+}
+
+func encodeTargetDescriptor(engine voplay.EngineRef, value TargetDescriptor) ([]byte, bool) {
+	if !validTarget(value) {
+		return nil, false
+	}
+	sampleCount := value.SampleCount
+	if sampleCount == 0 {
+		sampleCount = 1
+	}
+	usage := value.Usage
+	if usage == 0 {
+		usage = 8
+		if value.Offscreen {
+			usage |= 1
+		} else {
+			usage |= 128
+		}
+		if value.Readback {
+			usage |= 32 | 256
+		}
+		if value.DepthFormat != 0 {
+			usage |= 16
+		}
+	}
+	lifetime := value.Lifetime
+	if lifetime == 0 {
+		if value.Offscreen {
+			lifetime = 2
+		} else {
+			lifetime = 3
+		}
+	}
+	if lifetime < 1 || lifetime > 3 {
+		return nil, false
+	}
+	bytes := appendControlU32(nil, engine.Engine.Index)
+	bytes = appendControlU32(bytes, engine.Engine.Generation)
+	bytes = append(bytes, 1)
+	bytes = appendControlU32(bytes, value.Width)
+	bytes = appendControlU32(bytes, value.Height)
+	bytes = append(bytes, byte(value.Format))
+	if value.DepthFormat == 0 {
+		bytes = append(bytes, 255)
+	} else {
+		bytes = append(bytes, byte(value.DepthFormat))
+	}
+	bytes = append(bytes, byte(sampleCount))
+	bytes = appendControlU32(bytes, usage)
+	bytes = append(bytes, byte(lifetime))
+	return appendControlClear(bytes, value.Clear, value.ClearColor, value.ClearDepth)
+}
+
+func EncodeAuthorityTargetDescriptor(engine voplay.EngineRef, value TargetDescriptor) ([]byte, bool) {
+	return encodeTargetDescriptor(engine, value)
+}
+
+func encodeViewDescriptor(engine voplay.EngineRef, value ViewDescriptor) ([]byte, bool) {
+	if !validView(value) {
+		return nil, false
+	}
+	bytes := appendControlU32(nil, engine.Engine.Index)
+	bytes = appendControlU32(bytes, engine.Engine.Generation)
+	bytes = append(bytes, 2, 2)
+	bytes = appendControlU32(bytes, value.Target.Index)
+	bytes = appendControlU32(bytes, value.Target.Generation)
+	for _, item := range []uint32{
+		value.CameraWorldIndex, value.CameraWorldGeneration, value.CameraEntityIndex,
+		value.CameraEntityGeneration, value.PresentationDomainIndex, value.PresentationDomainGeneration,
+		value.ViewportX, value.ViewportY, value.ViewportWidth, value.ViewportHeight,
+	} {
+		bytes = appendControlU32(bytes, item)
+	}
+	bytes = appendControlU64(bytes, value.LayerMask)
+	bytes = appendControlU64(bytes, value.GraphTemplate)
+	bytes = appendControlU32(bytes, value.QualityProfile)
+	return appendControlClear(bytes, value.Clear, value.ClearColor, value.ClearDepth)
+}
+
+func EncodeAuthorityViewDescriptor(engine voplay.EngineRef, value ViewDescriptor) ([]byte, []voplay.ControlDependency, bool) {
+	bytes, ok := encodeViewDescriptor(engine, value)
+	if !ok {
+		return nil, nil, false
+	}
+	stable := voplay.StableControlRef{
+		Handle: voplay.Handle{Index: value.Target.Index, Generation: value.Target.Generation},
+		Kind: voplay.ControlKindRenderTarget,
+	}
+	return bytes, []voplay.ControlDependency{{Offset: 8, Stable: &stable}}, true
+}
+
+func EncodeAuthorityViewForProvisionalTarget(engine voplay.EngineRef, target voplay.ProvisionalControlRef, value ViewDescriptor) ([]byte, []voplay.ControlDependency, bool) {
+	if target.Kind != voplay.ControlKindRenderTarget {
+		return nil, nil, false
+	}
+	value.Target = StableControlRef{Index: 1, Generation: 1, Kind: ControlTarget}
+	bytes, ok := encodeViewDescriptor(engine, value)
+	if !ok {
+		return nil, nil, false
+	}
+	bytes[8] = 1
+	bytes[9] = byte(voplay.ControlKindRenderTarget)
+	putControlU32(bytes, 10, target.Token)
+	putControlU32(bytes, 14, 0)
+	return bytes, []voplay.ControlDependency{{Offset: 8, Provisional: &target}}, true
+}
+
+func encodeGraphDescriptor(engine voplay.EngineRef, value GraphDescriptor) ([]byte, bool) {
+	if !validGraph(value, 16777216) || len(value.RequiredFeatures) > 4096 {
+		return nil, false
+	}
+	bytes := appendControlU32(nil, engine.Engine.Index)
+	bytes = appendControlU32(bytes, engine.Engine.Generation)
+	bytes = append(bytes, 3)
+	bytes = appendControlU64(bytes, value.Signature)
+	bytes = appendControlU32(bytes, uint32(len(value.Nodes)))
+	bytes = appendControlU32(bytes, uint32(len(value.RequiredFeatures)))
+	bytes = append(bytes, value.Nodes...)
+	for _, feature := range value.RequiredFeatures {
+		bytes = appendControlU64(bytes, feature)
+	}
+	return bytes, true
+}
+
+func EncodeAuthorityGraphDescriptor(engine voplay.EngineRef, value GraphDescriptor) ([]byte, bool) {
+	return encodeGraphDescriptor(engine, value)
+}
+
+func appendControlClear(bytes []byte, clear uint32, color [4]uint16, depth uint16) ([]byte, bool) {
+	if clear == 0 {
+		clear = 1
+	}
+	switch clear {
+		case 1, 4:
+			return append(bytes, byte(clear)), true
+		case 2:
+			bytes = append(bytes, 2)
+			for _, channel := range color {
+				bytes = appendControlU16(bytes, channel)
+			}
+			return bytes, true
+		case 3:
+			return appendControlU16(append(bytes, 3), depth), true
+		default:
+			return nil, false
+	}
+}
+
+func appendControlU16(bytes []byte, value uint16) []byte {
+	return append(bytes, byte(value), byte(value >> 8))
+}
+
+func appendControlU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendControlU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func putControlU16(bytes []byte, offset int, value uint16) {
+	bytes[offset] = byte(value)
+	bytes[offset + 1] = byte(value >> 8)
+}
+
+func putControlU32(bytes []byte, offset int, value uint32) {
+	for index := 0; index < 4; index++ {
+		bytes[offset + index] = byte(value >> uint32(index * 8))
+	}
+}
+
+func putControlU64(bytes []byte, offset int, value uint64) {
+	for index := 0; index < 8; index++ {
+		bytes[offset + index] = byte(value >> uint64(index * 8))
+	}
+}
+
+func readControlU16(bytes []byte, offset int) uint16 {
+	return uint16(bytes[offset]) | uint16(bytes[offset + 1]) << 8
+}
+
+func readControlU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) | uint32(bytes[offset + 1]) << 8 | uint32(bytes[offset + 2]) << 16 |
+		uint32(bytes[offset + 3]) << 24
+}
+
+func readControlU64(bytes []byte, offset int) uint64 {
+	return uint64(bytes[offset]) | uint64(bytes[offset + 1]) << 8 | uint64(bytes[offset + 2]) << 16 |
+		uint64(bytes[offset + 3]) << 24 |
+		uint64(bytes[offset + 4]) << 32 |
+		uint64(bytes[offset + 5]) << 40 |
+		uint64(bytes[offset + 6]) << 48 |
+		uint64(bytes[offset + 7]) << 56
+}

@@ -1,0 +1,32 @@
+[package]
+name = "voplay-vogui"
+version = "0.1.0"
+edition = "2021"
+description = "Optional Vogui and Voplay composition helpers"
+
+[dependencies]
+vo-app-protocol = { path = "../../../../volang/lang/crates/vo-app-protocol", default-features = false }
+vo-app-runtime = { path = "../../../../volang/lang/crates/vo-app-runtime", default-features = false }
+vo-app-host-native = { path = "../../../../volang/lang/crates/vo-app-host-native", optional = true, features = ["macos-gpu"] }
+vogui-native-accessibility = { path = "../../../../vogui/rust/native-accessibility", optional = true, features = ["macos-appkit"] }
+vogui-native-renderer = { path = "../../../../vogui/rust/native-renderer" }
+vogui-runtime = { path = "../../../../vogui/rust/runtime", optional = true }
+voplay-render-core = { path = "../voplay-render-core" }
+voplay-render-3d = { path = "../voplay-render-3d", optional = true, features = ["native-wgpu"] }
+voplay-runtime = { path = "../voplay-runtime", optional = true }
+voplay-protocol = { path = "../voplay-protocol", optional = true }
+wgpu = { version = "=24.0.5", optional = true, default-features = false, features = ["metal", "wgsl"] }
+
+[features]
+default = []
+macos-gpu-host = [
+  "dep:vo-app-host-native",
+  "dep:vogui-native-accessibility",
+  "dep:vogui-runtime",
+  "dep:wgpu",
+  "dep:voplay-render-3d",
+  "dep:voplay-runtime",
+  "dep:voplay-protocol",
+  "vogui-native-renderer/native-wgpu",
+  "vo-app-runtime/std",
+]

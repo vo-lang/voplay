@@ -1,0 +1,259 @@
+package render
+
+type RenderViewRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type RenderTargetRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type RenderGraphRef struct {
+	Index uint32
+	Generation uint32
+}
+
+type RenderViewDesc struct {
+	Width uint32
+	Height uint32
+	Camera []byte
+	Target RenderTargetRef
+}
+
+type ReadbackRequest struct {
+	RequestId uint64
+	Target RenderTargetRef
+	ExpectedRevision uint64
+	RequiredControlRevision uint64
+	EndpointGeneration RenderTargetRef
+	X uint32
+	Y uint32
+	Width uint32
+	Height uint32
+	Format ReadbackFormat
+	DeadlineMillis uint64
+}
+
+type ReadbackFormat uint32
+
+const (
+	ReadbackRgba8 ReadbackFormat = iota + 1
+	ReadbackBgra8
+	ReadbackRgba16Float
+	ReadbackDepth32Float
+)
+
+type ReadbackOutcome uint32
+
+const (
+	ReadbackCompleted ReadbackOutcome = iota + 1
+	ReadbackCancelledBeforeDispatch
+	ReadbackDeadlineExceeded
+	ReadbackTargetRevisionChanged
+	ReadbackEndpointRestartedBeforeDispatch
+	ReadbackOutcomeUnknownOnEndpointRestart
+	ReadbackFailed
+)
+
+type ReadbackResult struct {
+	RequestId uint64
+	Target RenderTargetRef
+	Outcome ReadbackOutcome
+	TargetRevision uint64
+	RowBytes uint32
+	Bytes []byte
+	Diagnostic []byte
+}
+
+func EncodeReadbackRequest(request ReadbackRequest) []byte {
+	if request.RequestId == 0 || !request.Target.Valid() ||
+		request.ExpectedRevision == 0 || request.RequiredControlRevision == 0 ||
+		!request.EndpointGeneration.Valid() || request.Width == 0 || request.Height == 0 ||
+		request.Format < ReadbackRgba8 || request.Format > ReadbackDepth32Float ||
+		request.DeadlineMillis == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'R', 'Q', '1', 1, 0, 0, 0}
+	bytes = appendRenderU64(bytes, request.RequestId)
+	bytes = appendRenderU32(bytes, request.Target.Index)
+	bytes = appendRenderU32(bytes, request.Target.Generation)
+	bytes = appendRenderU64(bytes, request.ExpectedRevision)
+	bytes = appendRenderU32(bytes, request.EndpointGeneration.Index)
+	bytes = appendRenderU32(bytes, request.EndpointGeneration.Generation)
+	bytes = appendRenderU32(bytes, request.X)
+	bytes = appendRenderU32(bytes, request.Y)
+	bytes = appendRenderU32(bytes, request.Width)
+	bytes = appendRenderU32(bytes, request.Height)
+	bytes = append(bytes, byte(request.Format), 0, 0, 0)
+	return appendRenderU64(bytes, request.DeadlineMillis)
+}
+
+func EncodeReadbackCancel(requestId uint64) []byte {
+	if requestId == 0 {
+		return nil
+	}
+	bytes := []byte{'V', 'R', 'Q', '1', 2, 0, 0, 0}
+	return appendRenderU64(bytes, requestId)
+}
+
+func DecodeReadbackResult(bytes []byte, maxBytes uint32) (ReadbackResult, bool) {
+	if len(bytes) < 44 || maxBytes == 0 || maxBytes > 62914560 ||
+		bytes[0] != 'V' || bytes[1] != 'R' || bytes[2] != 'C' || bytes[3] != '1' ||
+		bytes[4] < byte(ReadbackCompleted) || bytes[4] > byte(ReadbackFailed) ||
+		bytes[5] != 0 || bytes[6] != 0 || bytes[7] != 0 {
+		return ReadbackResult{}, false
+	}
+	requestId, ok := readRenderU64(bytes, 8)
+	if !ok || requestId == 0 {
+		return ReadbackResult{}, false
+	}
+	targetIndex, ok := readRenderU32(bytes, 16)
+	if !ok {
+		return ReadbackResult{}, false
+	}
+	targetGeneration, ok := readRenderU32(bytes, 20)
+	target := RenderTargetRef{Index: targetIndex, Generation: targetGeneration}
+	if !ok || !target.Valid() {
+		return ReadbackResult{}, false
+	}
+	targetRevision, ok := readRenderU64(bytes, 24)
+	if !ok {
+		return ReadbackResult{}, false
+	}
+	rowBytes, ok := readRenderU32(bytes, 32)
+	if !ok {
+		return ReadbackResult{}, false
+	}
+	byteLength, ok := readRenderU32(bytes, 36)
+	if !ok || byteLength > maxBytes {
+		return ReadbackResult{}, false
+	}
+	diagnosticLength, ok := readRenderU32(bytes, 40)
+	if !ok || diagnosticLength > 4096 ||
+		uint64(44)+uint64(byteLength)+uint64(diagnosticLength) != uint64(len(bytes)) {
+		return ReadbackResult{}, false
+	}
+	outcome := ReadbackOutcome(bytes[4])
+	if outcome == ReadbackCompleted &&
+		(targetRevision == 0 || rowBytes == 0 || byteLength == 0 || diagnosticLength != 0) ||
+		outcome != ReadbackCompleted && byteLength != 0 {
+		return ReadbackResult{}, false
+	}
+	dataEnd := 44 + int(byteLength)
+	return ReadbackResult{
+		RequestId: requestId,
+		Target: target,
+		Outcome: outcome,
+		TargetRevision: targetRevision,
+		RowBytes: rowBytes,
+		Bytes: append([]byte{}, bytes[44:dataEnd]...),
+		Diagnostic: append([]byte{}, bytes[dataEnd:]...),
+	}, true
+}
+
+func (target RenderTargetRef) Valid() bool {
+	return target.Index != 0 && target.Generation != 0
+}
+
+type TransformSample struct {
+	PreviousTick uint64
+	CurrentTick uint64
+	Previous [12]int64
+	Current [12]int64
+}
+
+type Bounds3 struct {
+	Min [3]int64
+	Max [3]int64
+}
+
+type RenderComponent struct {
+	Kind uint32
+	SchemaHash uint64
+	Bytes []byte
+}
+
+type RetainedObject struct {
+	Layers uint64
+	Transform TransformSample
+	Bounds Bounds3
+	Components []RenderComponent
+}
+
+func EncodeRetainedObject(object RetainedObject) []byte {
+	if object.Layers == 0 || object.Transform.CurrentTick < object.Transform.PreviousTick ||
+		len(object.Components) > 64 {
+		return nil
+	}
+	for axis := 0; axis < 3; axis++ {
+		if object.Bounds.Min[axis] > object.Bounds.Max[axis] {
+			return nil
+		}
+	}
+	var previousKind uint32
+	totalBytes := 0
+	for _, component := range object.Components {
+		if component.Kind == 0 || component.SchemaHash == 0 || component.Kind <= previousKind ||
+			len(component.Bytes) > 4194304 {
+			return nil
+		}
+		totalBytes += len(component.Bytes)
+		if totalBytes > 268435456 {
+			return nil
+		}
+		previousKind = component.Kind
+	}
+	bytes := []byte{'V', 'R', 'W', '1'}
+	bytes = appendRenderU64(bytes, object.Layers)
+	bytes = appendRenderU64(bytes, object.Transform.PreviousTick)
+	bytes = appendRenderU64(bytes, object.Transform.CurrentTick)
+	for _, value := range object.Transform.Previous {
+		bytes = appendRenderU64(bytes, uint64(value))
+	}
+	for _, value := range object.Transform.Current {
+		bytes = appendRenderU64(bytes, uint64(value))
+	}
+	for _, value := range object.Bounds.Min {
+		bytes = appendRenderU64(bytes, uint64(value))
+	}
+	for _, value := range object.Bounds.Max {
+		bytes = appendRenderU64(bytes, uint64(value))
+	}
+	bytes = appendRenderU32(bytes, uint32(len(object.Components)))
+	for _, component := range object.Components {
+		bytes = appendRenderU32(bytes, component.Kind)
+		bytes = appendRenderU64(bytes, component.SchemaHash)
+		bytes = appendRenderU32(bytes, uint32(len(component.Bytes)))
+		bytes = append(bytes, component.Bytes...)
+	}
+	return bytes
+}
+
+func appendRenderU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendRenderU64(bytes []byte, value uint64) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24), byte(value >>
+		32), byte(value >> 40), byte(value >> 48), byte(value >> 56))
+}
+
+func readRenderU32(bytes []byte, offset int) (uint32, bool) {
+	if offset < 0 || offset+4 > len(bytes) {
+		return 0, false
+	}
+	return uint32(bytes[offset]) | uint32(bytes[offset+1]) << 8 |
+		uint32(bytes[offset+2]) << 16 | uint32(bytes[offset+3]) << 24, true
+}
+
+func readRenderU64(bytes []byte, offset int) (uint64, bool) {
+	if offset < 0 || offset+8 > len(bytes) {
+		return 0, false
+	}
+	return uint64(bytes[offset]) | uint64(bytes[offset+1]) << 8 |
+		uint64(bytes[offset+2]) << 16 | uint64(bytes[offset+3]) << 24 |
+		uint64(bytes[offset+4]) << 32 | uint64(bytes[offset+5]) << 40 |
+		uint64(bytes[offset+6]) << 48 | uint64(bytes[offset+7]) << 56, true
+}

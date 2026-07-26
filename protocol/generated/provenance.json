@@ -1,0 +1,39 @@
+{
+  "artifact": "voplay-protocol.generated",
+  "generator": {
+    "command": [
+      "cargo",
+      "run",
+      "-q",
+      "-p",
+      "vo-dev",
+      "--locked",
+      "--",
+      "generate",
+      "voplay-protocol",
+      "--write"
+    ],
+    "version": 1
+  },
+  "outputs": [
+    {
+      "digest": "sha256:03cae8ebb8984beac70dc4596d06d61d7d04cb584db3a8ec0319236e17f56d18",
+      "path": "voplay_protocol.ts",
+      "size": 9692
+    },
+    {
+      "digest": "sha256:985bc27bd71adf28469d2b79e7f3392bc9e133011661a65634ee142c9605b6f7",
+      "path": "voplay_protocol.vo",
+      "size": 9830
+    }
+  ],
+  "path": "protocol/generated",
+  "schemaVersion": 2,
+  "sourceDigests": {
+    "external:volang/lang/crates/vo-schema-compiler/src/lib.rs": "sha256:a5be3cf508b567f6735c12da6a12d581efd12226106379b836f641fe14726331",
+    "protocol/voplay.schema.toml": "sha256:de31a937094c172854291868c93c90a157460e15b33499f03b1552aca7f23f52"
+  },
+  "toolchain": {
+    "rust": "workspace-1.94.0"
+  }
+}

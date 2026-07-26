@@ -1286,6 +1286,213 @@ pub const fn compiled_profile_name() -> &'static str {
     provider_export::PROFILE_NAME
 }
 
+#[cfg(target_arch = "wasm32")]
+mod browser_v3 {
+    const TAG_SUSPEND_HOST_REQUEST: u8 = 0x04;
+    const TAG_CALLER_ENDPOINT: u8 = 0x05;
+    const TAG_NIL_ERROR: u8 = 0xE0;
+    const TAG_ERROR_STR: u8 = 0xE1;
+    const TAG_BYTES: u8 = 0xE3;
+
+    fn read_input(input_ptr: u32, input_len: u32) -> &'static [u8] {
+        if input_len == 0 {
+            return &[];
+        }
+        // The browser host owns this input allocation for the duration of the
+        // synchronous wrapper call.
+        unsafe { core::slice::from_raw_parts(input_ptr as *const u8, input_len as usize) }
+    }
+
+    fn publish_output(output: Vec<u8>, out_len_ptr: u32) -> u32 {
+        let Ok(length) = u32::try_from(output.len()) else {
+            return 0;
+        };
+        // The host allocated this four-byte length slot in this module.
+        unsafe {
+            (out_len_ptr as *mut u32).write_unaligned(length);
+        }
+        if output.is_empty() {
+            return 0;
+        }
+        let boxed = output.into_boxed_slice();
+        Box::into_raw(boxed) as *mut u8 as u32
+    }
+
+    fn error_output(message: &[u8]) -> Vec<u8> {
+        let bounded = &message[..message.len().min(u16::MAX as usize)];
+        let mut output = Vec::with_capacity(3 + bounded.len());
+        output.push(TAG_ERROR_STR);
+        output.extend_from_slice(&(bounded.len() as u16).to_le_bytes());
+        output.extend_from_slice(bounded);
+        output
+    }
+
+    fn error_result(response: &[u8]) -> Vec<u8> {
+        if response.first() == Some(&0) {
+            vec![TAG_NIL_ERROR]
+        } else {
+            error_output(response.get(1..).unwrap_or(b"empty provider response"))
+        }
+    }
+
+    fn bytes_result(response: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        if response.first() == Some(&0) {
+            let payload = &response[1..];
+            output.reserve(6 + payload.len());
+            output.push(TAG_BYTES);
+            output.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            output.extend_from_slice(payload);
+            output.push(TAG_NIL_ERROR);
+        } else {
+            output.extend_from_slice(&[TAG_BYTES, 0, 0, 0, 0]);
+            output.extend_from_slice(&error_output(
+                response.get(1..).unwrap_or(b"empty provider response"),
+            ));
+        }
+        output
+    }
+
+    fn host_request(capability: &str, payload: &[u8]) -> Vec<u8> {
+        let capability = capability.as_bytes();
+        let mut output = Vec::with_capacity(7 + capability.len() + payload.len());
+        output.push(TAG_SUSPEND_HOST_REQUEST);
+        output.extend_from_slice(&(capability.len() as u16).to_le_bytes());
+        output.extend_from_slice(capability);
+        output.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        output.extend_from_slice(payload);
+        output
+    }
+
+    fn read_bytes(input: &[u8], position: &mut usize) -> Option<Vec<u8>> {
+        let length =
+            u32::from_le_bytes(input.get(*position..*position + 4)?.try_into().ok()?) as usize;
+        *position += 4;
+        let end = position.checked_add(length)?;
+        let value = input.get(*position..end)?.to_vec();
+        *position = end;
+        Some(value)
+    }
+
+    fn decode_run_entry(input: &[u8]) -> Option<Vec<u8>> {
+        let mut position = 0;
+        let descriptor = read_bytes(input, &mut position)?;
+        let init = read_bytes(input, &mut position)?;
+        if position != input.len() || descriptor.len() != 104 || init.len() > 16 * 1024 * 1024 {
+            return None;
+        }
+        let mut payload = Vec::with_capacity(27 + descriptor.len() + init.len());
+        payload.extend_from_slice(b"vo-entry-launch-v1\0");
+        payload.extend_from_slice(&(descriptor.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&(init.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&descriptor);
+        payload.extend_from_slice(&init);
+        Some(payload)
+    }
+
+    fn decode_single_bytes(input: &[u8], magic: &[u8]) -> Option<Vec<u8>> {
+        let mut position = 0;
+        let payload = read_bytes(input, &mut position)?;
+        (position == input.len() && payload.len() <= 16 * 1024 * 1024 && payload.starts_with(magic))
+            .then_some(payload)
+    }
+
+    fn decode_tick_commit(input: &[u8]) -> Option<Vec<u8>> {
+        let first_tick = u64::from_le_bytes(input.get(..8)?.try_into().ok()?);
+        let count = u64::from_le_bytes(input.get(8..16)?.try_into().ok()?);
+        let mut position = 16;
+        let result = read_bytes(input, &mut position)?;
+        if position != input.len()
+            || first_tick == 0
+            || count == 0
+            || result.len() > 16 * 1024 * 1024
+        {
+            return None;
+        }
+        let mut payload = Vec::with_capacity(49 + result.len());
+        payload.extend_from_slice(b"voplay-target-commit-ticks-v1\0");
+        payload.extend_from_slice(&first_tick.to_le_bytes());
+        payload.extend_from_slice(&count.to_le_bytes());
+        payload.extend_from_slice(&(result.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&result);
+        Some(payload)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn vo_alloc(size: u32) -> u32 {
+        if size == 0 {
+            return 0;
+        }
+        let boxed = vec![0u8; size as usize].into_boxed_slice();
+        Box::into_raw(boxed) as *mut u8 as u32
+    }
+
+    #[no_mangle]
+    pub extern "C" fn vo_dealloc(ptr: u32, size: u32) {
+        if ptr == 0 || size == 0 {
+            return;
+        }
+        unsafe {
+            drop(Box::from_raw(core::ptr::slice_from_raw_parts_mut(
+                ptr as *mut u8,
+                size as usize,
+            )));
+        }
+    }
+
+    #[vo_ext::vo_wasm_export("voplay", "TargetEngine")]
+    pub extern "C" fn target_engine(input_ptr: u32, input_len: u32, out_len_ptr: u32) -> u32 {
+        let input = read_input(input_ptr, input_len);
+        let output = if input.is_empty() {
+            vec![TAG_CALLER_ENDPOINT]
+        } else {
+            error_output(b"TargetEngine takes no input")
+        };
+        publish_output(output, out_len_ptr)
+    }
+
+    #[vo_ext::vo_wasm_export("voplay", "RunEntry")]
+    pub extern "C" fn run_entry(input_ptr: u32, input_len: u32, out_len_ptr: u32) -> u32 {
+        let input = read_input(input_ptr, input_len);
+        let output = match decode_run_entry(input) {
+            Some(payload) => host_request("voplay.run-entry", &payload),
+            None => error_result(input),
+        };
+        publish_output(output, out_len_ptr)
+    }
+
+    #[vo_ext::vo_wasm_export("voplay", "TargetStart")]
+    pub extern "C" fn target_start(input_ptr: u32, input_len: u32, out_len_ptr: u32) -> u32 {
+        let input = read_input(input_ptr, input_len);
+        let output = match decode_single_bytes(input, b"voplay-target-start-v3\0") {
+            Some(payload) => host_request("voplay.target-start", &payload),
+            None => error_result(input),
+        };
+        publish_output(output, out_len_ptr)
+    }
+
+    #[vo_ext::vo_wasm_export("voplay", "TargetNextTicks")]
+    pub extern "C" fn target_next_ticks(input_ptr: u32, input_len: u32, out_len_ptr: u32) -> u32 {
+        let input = read_input(input_ptr, input_len);
+        let output = if input.is_empty() {
+            host_request("voplay.target-next-ticks", &[])
+        } else {
+            bytes_result(input)
+        };
+        publish_output(output, out_len_ptr)
+    }
+
+    #[vo_ext::vo_wasm_export("voplay", "TargetCommitTicks")]
+    pub extern "C" fn target_commit_ticks(input_ptr: u32, input_len: u32, out_len_ptr: u32) -> u32 {
+        let input = read_input(input_ptr, input_len);
+        let output = match decode_tick_commit(input) {
+            Some(payload) => host_request("voplay.target-commit-ticks", &payload),
+            None => error_result(input),
+        };
+        publish_output(output, out_len_ptr)
+    }
+}
+
 vo_ext::export_extensions!(vo_ext::vo_extension_entry!("voplay", "RunEntry"));
 vo_ext::export_wasm_extension_protocol!();
 

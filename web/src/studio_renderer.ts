@@ -785,7 +785,11 @@ class VoplayStudioRenderer {
           await delay(8);
           continue;
         }
-        await this.#acceptPacket(packet);
+        if (isHostRenderCommand(packet)) {
+          await this.acceptHostRenderCommand(packet);
+        } else {
+          await this.#acceptPacket(packet);
+        }
       } catch (error) {
         if (!this.#polling || this.#host !== host || this.#lane !== lane) return;
         host.reportError(`Voplay framework lane failed: ${errorMessage(error)}`);
@@ -1869,6 +1873,14 @@ function encodeHostRenderFrameTrace(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isHostRenderCommand(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 4
+    && bytes[0] === 0x56
+    && bytes[1] === 0x48
+    && bytes[2] === 0x52
+    && (bytes[3] === 0x31 || bytes[3] === 0x33);
 }
 
 function hapticsOutcomeTag(outcome: BrowserHapticsResult["outcome"]): number {

@@ -84,10 +84,10 @@ provider_roles = ["game-logic", "game-asset", "game-renderer", "game-audio"]
 capabilities = ["app_surface", "asset_buffer", "framework_lane", "voplay.engine-pause", "voplay.engine-resume", "voplay.engine-shutdown", "voplay.engine-start", "voplay.engine-step", "voplay.install-entry", "voplay.new-engine", "voplay.run-entry", "voplay.target-commit-ticks", "voplay.target-next-ticks", "voplay.target-start"]
 
 [extension.web.js]
-asset = "web/src/asset_provider.ts"
-audio = "web/src/audio_provider.ts"
-protocol = "protocol/generated/voplay_protocol.ts"
-renderer = "web/src/studio_renderer.ts"
+asset = "js/dist/web/src/asset_provider.js"
+audio = "js/dist/web/src/audio_provider.js"
+protocol = "js/dist/protocol/generated/voplay_protocol.js"
+renderer = "js/dist/web/src/studio_renderer.js"
 
 [[extension.source_recipes]]
 derive = true

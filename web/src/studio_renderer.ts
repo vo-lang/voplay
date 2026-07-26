@@ -785,10 +785,17 @@ class VoplayStudioRenderer {
           await delay(8);
           continue;
         }
-        if (isHostRenderCommand(packet)) {
-          await this.acceptHostRenderCommand(packet);
-        } else {
-          await this.#acceptPacket(packet);
+        try {
+          if (isHostRenderCommand(packet)) {
+            await this.acceptHostRenderCommand(packet);
+          } else {
+            await this.#acceptPacket(packet);
+          }
+        } catch (error) {
+          throw new Error(
+            `${errorMessage(error)}; lane-bytes=${packet.byteLength}; `
+            + `prefix=${hexPrefix(packet, 16)}`,
+          );
         }
       } catch (error) {
         if (!this.#polling || this.#host !== host || this.#lane !== lane) return;
@@ -1881,6 +1888,12 @@ function isHostRenderCommand(bytes: Uint8Array): boolean {
     && bytes[1] === 0x48
     && bytes[2] === 0x52
     && (bytes[3] === 0x31 || bytes[3] === 0x33);
+}
+
+function hexPrefix(bytes: Uint8Array, limit: number): string {
+  return Array.from(bytes.subarray(0, limit))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function hapticsOutcomeTag(outcome: BrowserHapticsResult["outcome"]): number {

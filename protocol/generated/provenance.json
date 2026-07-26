@@ -25,6 +25,11 @@
       "digest": "sha256:985bc27bd71adf28469d2b79e7f3392bc9e133011661a65634ee142c9605b6f7",
       "path": "voplay_protocol.vo",
       "size": 9830
+    },
+    {
+      "digest": "sha256:dc766d6a24b15edd9ac6b1ea26363ff628d7bafd8fd6a542345e5bab6b9484f7",
+      "path": "rust/crates/voplay-protocol/src/generated.rs",
+      "size": 9396
     }
   ],
   "path": "protocol/generated",

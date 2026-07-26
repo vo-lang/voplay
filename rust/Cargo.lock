@@ -2588,9 +2588,6 @@ dependencies = [
 [[package]]
 name = "vogui-protocol"
 version = "0.1.0"
-dependencies = [
- "vo-schema-compiler",
-]
 
 [[package]]
 name = "vogui-runtime"
@@ -2690,9 +2687,6 @@ dependencies = [
 [[package]]
 name = "voplay-protocol"
 version = "0.1.0"
-dependencies = [
- "vo-schema-compiler",
-]
 
 [[package]]
 name = "voplay-render-2d"

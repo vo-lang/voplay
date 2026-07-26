@@ -1,6 +1,4 @@
-pub mod generated {
-    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
-}
+pub mod generated;
 
 pub use generated::{
     FrameworkPacketHeader as PacketHeader, GenerationalHandle as Handle, MessageKind, HEADER_BYTES,

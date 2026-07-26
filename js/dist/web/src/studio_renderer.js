@@ -47,6 +47,7 @@ class VoplayStudioRenderer {
     #frameTraces = new Map();
     #renderTargets = new Map();
     #renderFeatures = new Map();
+    #engineStates = new Map();
     async init(host) {
         if (this.#host !== null)
             throw new Error("Voplay renderer already initialized");
@@ -405,6 +406,7 @@ class VoplayStudioRenderer {
             this.#frameTraces.clear();
             this.#renderTargets.clear();
             this.#renderFeatures.clear();
+            this.#engineStates.clear();
             this.#coalescedInputs.clear();
             this.#drainingCoalesced.clear();
             this.#surfaceCapability = null;
@@ -651,18 +653,36 @@ class VoplayStudioRenderer {
     }
     async #acceptPacket(bytes) {
         const lane = this.#requireLane();
-        const header = decodeFrameworkPacket(bytes).header;
+        const decoded = decodeFrameworkPacket(bytes);
+        const header = decoded.header;
         if (header.channelEpoch !== BigInt(lane.binding.channelEpoch)) {
             throw new Error("Voplay packet channel epoch mismatch");
         }
+        const lifecyclePacket = header.kind === 12 /* MessageKind.EngineStart */
+            || header.kind === 14 /* MessageKind.EngineSuspend */
+            || header.kind === 15 /* MessageKind.EngineResume */
+            || header.kind === 16 /* MessageKind.EngineClose */
+            || header.kind === 32 /* MessageKind.WorkerWake */;
         if (header.kind !== 37 /* MessageKind.RenderAssetData */
+            && !lifecyclePacket
             && header.sequence <= this.#lastInboundSequence) {
             throw new Error("Voplay packet sequence regression");
         }
-        if (header.kind !== 37 /* MessageKind.RenderAssetData */) {
+        if (header.kind !== 37 /* MessageKind.RenderAssetData */ && !lifecyclePacket) {
             this.#lastInboundSequence = header.sequence;
         }
         switch (header.kind) {
+            case 12 /* MessageKind.EngineStart */:
+            case 14 /* MessageKind.EngineSuspend */:
+            case 15 /* MessageKind.EngineResume */:
+            case 16 /* MessageKind.EngineClose */:
+                await this.#applyEngineLifecycle(decoded);
+                break;
+            case 32 /* MessageKind.WorkerWake */:
+                if (decoded.payload.byteLength !== 0) {
+                    throw new Error("Voplay renderer wake payload must be empty");
+                }
+                break;
             case 30 /* MessageKind.SurfaceControl */:
                 await this.#applySurfaceControl(decodeSurfaceControl(bytes));
                 break;
@@ -679,6 +699,52 @@ class VoplayStudioRenderer {
             default:
                 throw new Error(`unsupported Voplay browser packet ${header.kind}`);
         }
+    }
+    async #applyEngineLifecycle(packet) {
+        const { header, payload } = packet;
+        if (payload.byteLength !== 0) {
+            throw new Error("Voplay renderer lifecycle payload must be empty");
+        }
+        const key = `${header.engine.index}:${header.engine.generation}`;
+        const current = this.#engineStates.get(key);
+        switch (header.kind) {
+            case 12 /* MessageKind.EngineStart */:
+                if (current !== undefined) {
+                    throw new Error("duplicate Voplay renderer EngineStart");
+                }
+                this.#engineStates.set(key, "running");
+                await this.#replyLifecycle(packet, 13 /* MessageKind.EngineReady */);
+                return;
+            case 14 /* MessageKind.EngineSuspend */:
+                if (current !== "running") {
+                    throw new Error("invalid Voplay renderer EngineSuspend");
+                }
+                this.#engineStates.set(key, "suspended");
+                return;
+            case 15 /* MessageKind.EngineResume */:
+                if (current !== "suspended") {
+                    throw new Error("invalid Voplay renderer EngineResume");
+                }
+                this.#engineStates.set(key, "running");
+                return;
+            case 16 /* MessageKind.EngineClose */:
+                if (current === undefined) {
+                    throw new Error("invalid Voplay renderer EngineClose");
+                }
+                this.#engineStates.delete(key);
+                this.#renderFeatures.delete(key);
+                await this.#replyLifecycle(packet, 17 /* MessageKind.EngineClosed */);
+                return;
+            default:
+                throw new Error("unsupported Voplay renderer lifecycle packet");
+        }
+    }
+    async #replyLifecycle(packet, kind) {
+        const lane = this.#requireLane();
+        await lane.submit(encodeFrameworkPacket({
+            ...packet.header,
+            kind,
+        }, new Uint8Array()), packet.header.sequence);
     }
     async #applySurfaceControl(control) {
         this.#validateSession(control.session);

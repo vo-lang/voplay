@@ -1,0 +1,324 @@
+package assets
+
+import (
+	"github.com/vo-lang/voplay"
+)
+
+type Registration struct {
+	AssetId [16]byte
+	TypeId uint64
+	SourceRevision uint64
+	ArtifactId [16]byte
+	Dependencies [][16]byte
+}
+
+type Work struct {
+	Ticket AssetTicket
+	Asset AssetRef
+	AssetId [16]byte
+	SourceRevision uint64
+	ArtifactId [16]byte
+	EndpointGeneration voplay.Handle
+}
+
+type CompletionKind uint32
+
+const (
+	CompletionScope CompletionKind = iota + 1
+	CompletionTicket
+	CompletionWork
+	CompletionOutcome
+	CompletionRegistration
+	CompletionControlAck
+)
+
+type TicketOutcome uint32
+
+const (
+	OutcomeReady TicketOutcome = iota + 1
+	OutcomeCancelled
+	OutcomeTimedOut
+	OutcomeClosed
+	OutcomeFailed
+)
+
+type Completion struct {
+	Kind CompletionKind
+	Sequence uint64
+	Revision uint64
+	Scope AssetScope
+	ScopeKind ScopeKind
+	Ticket AssetTicket
+	Asset AssetRef
+	Work Work
+	Outcome TicketOutcome
+	Registered []AssetRef
+	Command uint32
+}
+
+func EncodeRegisterPacket(engine voplay.EngineRef, channelEpoch uint64,
+	sequence uint64, sourceSimulationRevision uint64,
+	registrations []Registration) ([]byte, bool) {
+	if len(registrations) == 0 || len(registrations) > 4096 {
+		return nil, false
+	}
+	payload := []byte{1}
+	payload = appendAssetU32(payload, uint32(len(registrations)))
+	dependencyCount := 0
+	for _, registration := range registrations {
+		if registration.AssetId == [16]byte{} || registration.TypeId == 0 ||
+			registration.SourceRevision == 0 || registration.ArtifactId == [16]byte{} {
+			return nil, false
+		}
+		dependencyCount += len(registration.Dependencies)
+		if dependencyCount > 65536 {
+			return nil, false
+		}
+		payload = append(payload, registration.AssetId[:]...)
+		payload = appendAssetU64(payload, registration.TypeId)
+		payload = appendAssetU64(payload, registration.SourceRevision)
+		payload = append(payload, registration.ArtifactId[:]...)
+		payload = appendAssetU32(payload, uint32(len(registration.Dependencies)))
+		for _, dependency := range registration.Dependencies {
+			if dependency == [16]byte{} {
+				return nil, false
+			}
+			payload = append(payload, dependency[:]...)
+		}
+	}
+	return encodeAssetFrameworkPacket(23, engine, channelEpoch, sequence,
+		sourceSimulationRevision, sequence, payload)
+}
+
+func EncodeCreateScopePacket(engine voplay.EngineRef, channelEpoch uint64,
+	sequence uint64, sourceSimulationRevision uint64, kind ScopeKind) ([]byte, bool) {
+	if kind < ScopeEngine || kind > ScopeTemporary {
+		return nil, false
+	}
+	return encodeAssetFrameworkPacket(23, engine, channelEpoch, sequence,
+		sourceSimulationRevision, sequence, []byte{3, byte(kind)})
+}
+
+func EncodeRequestPacket(engine voplay.EngineRef, channelEpoch uint64,
+	sequence uint64, sourceSimulationRevision uint64, scope AssetScope,
+	asset AssetRef, deadlineMillis uint64) ([]byte, bool) {
+	if scope.Index == 0 || scope.Generation == 0 || !asset.Valid() || deadlineMillis == 0 {
+		return nil, false
+	}
+	payload := appendAssetHandle(nil, scope.Index, scope.Generation)
+	payload = appendAssetHandle(payload, asset.Index, asset.Generation)
+	payload = appendAssetU64(payload, deadlineMillis)
+	return encodeAssetFrameworkPacket(21, engine, channelEpoch, 0,
+		sourceSimulationRevision, sequence, payload)
+}
+
+func EncodeCompletePacket(engine voplay.EngineRef, channelEpoch uint64,
+	sequence uint64, sourceSimulationRevision uint64, work Work) ([]byte, bool) {
+	payload, ok := encodeAssetWork(work)
+	if !ok {
+		return nil, false
+	}
+	payload = append([]byte{9}, payload...)
+	return encodeAssetFrameworkPacket(23, engine, channelEpoch, sequence,
+		sourceSimulationRevision, sequence, payload)
+}
+
+func EncodeFailPacket(engine voplay.EngineRef, channelEpoch uint64,
+	sequence uint64, sourceSimulationRevision uint64, work Work) ([]byte, bool) {
+	payload, ok := encodeAssetWork(work)
+	if !ok {
+		return nil, false
+	}
+	payload = append([]byte{11}, payload...)
+	return encodeAssetFrameworkPacket(23, engine, channelEpoch, sequence,
+		sourceSimulationRevision, sequence, payload)
+}
+
+func DecodeCompletionPacket(engine voplay.EngineRef, packet []byte) (Completion, bool) {
+	payload, sequence, revision, ok := decodeAssetFrameworkPacket(engine, packet, 22)
+	if !ok || len(payload) == 0 {
+		return Completion{}, false
+	}
+	result := Completion{
+		Kind: CompletionKind(payload[0]), Sequence: sequence, Revision: revision,
+	}
+	switch result.Kind {
+	case CompletionScope:
+		if len(payload) != 10 || payload[9] < byte(ScopeEngine) ||
+			payload[9] > byte(ScopeTemporary) {
+			return Completion{}, false
+		}
+		result.Scope = AssetScope{
+			Index: readAssetU32(payload, 1), Generation: readAssetU32(payload, 5),
+		}
+		result.ScopeKind = ScopeKind(payload[9])
+		return result, result.Scope.Index != 0 && result.Scope.Generation != 0
+	case CompletionTicket:
+		if len(payload) != 17 {
+			return Completion{}, false
+		}
+		result.Ticket = AssetTicket{
+			Index: readAssetU32(payload, 1), Generation: readAssetU32(payload, 5),
+		}
+		result.Asset = AssetRef{
+			Index: readAssetU32(payload, 9), Generation: readAssetU32(payload, 13),
+		}
+		return result, result.Ticket.Valid() && result.Asset.Valid()
+	case CompletionWork:
+		if len(payload) != 65 {
+			return Completion{}, false
+		}
+		work, decoded := decodeAssetWork(payload[1:])
+		result.Work = work
+		return result, decoded
+	case CompletionOutcome:
+		if len(payload) != 18 {
+			return Completion{}, false
+		}
+		result.Ticket = AssetTicket{
+			Index: readAssetU32(payload, 1), Generation: readAssetU32(payload, 5),
+		}
+		result.Asset = AssetRef{
+			Index: readAssetU32(payload, 9), Generation: readAssetU32(payload, 13),
+		}
+		result.Outcome = TicketOutcome(payload[17])
+		return result, result.Ticket.Valid() && result.Asset.Valid() &&
+			result.Outcome >= OutcomeReady && result.Outcome <= OutcomeFailed
+	case CompletionRegistration:
+		if len(payload) < 5 {
+			return Completion{}, false
+		}
+		count := int(readAssetU32(payload, 1))
+		if count == 0 || len(payload) != 5+count*8 {
+			return Completion{}, false
+		}
+		result.Registered = make([]AssetRef, 0, count)
+		for offset := 5; offset < len(payload); offset += 8 {
+			ref := AssetRef{
+				Index: readAssetU32(payload, offset),
+				Generation: readAssetU32(payload, offset+4),
+			}
+			if !ref.Valid() {
+				return Completion{}, false
+			}
+			result.Registered = append(result.Registered, ref)
+		}
+		return result, true
+	case CompletionControlAck:
+		if len(payload) != 2 {
+			return Completion{}, false
+		}
+		result.Command = uint32(payload[1])
+		return result, result.Command != 0
+	default:
+		return Completion{}, false
+	}
+}
+
+func encodeAssetWork(work Work) ([]byte, bool) {
+	if !work.Ticket.Valid() || !work.Asset.Valid() || work.AssetId == [16]byte{} ||
+		work.SourceRevision == 0 || work.ArtifactId == [16]byte{} ||
+		!work.EndpointGeneration.Valid() {
+		return nil, false
+	}
+	payload := appendAssetHandle(nil, work.Ticket.Index, work.Ticket.Generation)
+	payload = appendAssetHandle(payload, work.Asset.Index, work.Asset.Generation)
+	payload = append(payload, work.AssetId[:]...)
+	payload = appendAssetU64(payload, work.SourceRevision)
+	payload = append(payload, work.ArtifactId[:]...)
+	payload = appendAssetHandle(payload,
+		work.EndpointGeneration.Index, work.EndpointGeneration.Generation)
+	return payload, true
+}
+
+func decodeAssetWork(payload []byte) (Work, bool) {
+	if len(payload) != 64 {
+		return Work{}, false
+	}
+	work := Work{
+		Ticket: AssetTicket{
+			Index: readAssetU32(payload, 0), Generation: readAssetU32(payload, 4),
+		},
+		Asset: AssetRef{
+			Index: readAssetU32(payload, 8), Generation: readAssetU32(payload, 12),
+		},
+		SourceRevision: readAssetU64(payload, 32),
+		EndpointGeneration: voplay.Handle{
+			Index: readAssetU32(payload, 56), Generation: readAssetU32(payload, 60),
+		},
+	}
+	copy(work.AssetId[:], payload[16:32])
+	copy(work.ArtifactId[:], payload[40:56])
+	return work, work.Ticket.Valid() && work.Asset.Valid() &&
+		work.AssetId != [16]byte{} && work.SourceRevision != 0 &&
+		work.ArtifactId != [16]byte{} && work.EndpointGeneration.Valid()
+}
+
+func encodeAssetFrameworkPacket(kind uint16, engine voplay.EngineRef,
+	channelEpoch uint64, commitId uint64, sourceSimulationRevision uint64,
+	sequence uint64, payload []byte) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || sequence == 0 ||
+		sourceSimulationRevision == 0 || len(payload) == 0 ||
+		len(payload)+80 > 67108864 {
+		return nil, false
+	}
+	packet := make([]byte, 80)
+	packet[0] = byte(kind)
+	packet[1] = byte(kind >> 8)
+	putAssetU32(packet, 4, engine.Engine.Index)
+	putAssetU32(packet, 8, engine.Engine.Generation)
+	putAssetU64(packet, 12, channelEpoch)
+	putAssetU64(packet, 20, commitId)
+	putAssetU64(packet, 52, sourceSimulationRevision)
+	putAssetU64(packet, 60, sequence)
+	putAssetU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func decodeAssetFrameworkPacket(engine voplay.EngineRef, packet []byte,
+	kind uint16) ([]byte, uint64, uint64, bool) {
+	if len(packet) < 81 || uint16(packet[0])|uint16(packet[1])<<8 != kind ||
+		readAssetU32(packet, 4) != engine.Engine.Index ||
+		readAssetU32(packet, 8) != engine.Engine.Generation ||
+		readAssetU64(packet, 12) == 0 || readAssetU64(packet, 60) == 0 ||
+		int(readAssetU32(packet, 76))+80 != len(packet) {
+		return nil, 0, 0, false
+	}
+	return packet[80:], readAssetU64(packet, 60), readAssetU64(packet, 36), true
+}
+
+func appendAssetHandle(bytes []byte, index uint32, generation uint32) []byte {
+	bytes = appendAssetU32(bytes, index)
+	return appendAssetU32(bytes, generation)
+}
+
+func appendAssetU32(bytes []byte, value uint32) []byte {
+	return append(bytes, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func appendAssetU64(bytes []byte, value uint64) []byte {
+	bytes = appendAssetU32(bytes, uint32(value))
+	return appendAssetU32(bytes, uint32(value >> 32))
+}
+
+func readAssetU32(bytes []byte, offset int) uint32 {
+	return uint32(bytes[offset]) | uint32(bytes[offset+1]) << 8 |
+		uint32(bytes[offset+2]) << 16 | uint32(bytes[offset+3]) << 24
+}
+
+func readAssetU64(bytes []byte, offset int) uint64 {
+	return uint64(readAssetU32(bytes, offset)) |
+		uint64(readAssetU32(bytes, offset+4)) << 32
+}
+
+func putAssetU32(bytes []byte, offset int, value uint32) {
+	bytes[offset] = byte(value)
+	bytes[offset+1] = byte(value >> 8)
+	bytes[offset+2] = byte(value >> 16)
+	bytes[offset+3] = byte(value >> 24)
+}
+
+func putAssetU64(bytes []byte, offset int, value uint64) {
+	putAssetU32(bytes, offset, uint32(value))
+	putAssetU32(bytes, offset+4, uint32(value >> 32))
+}

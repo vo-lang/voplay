@@ -256,7 +256,7 @@ role_outputs = [
 
 [[extension.generator]]
 name = "voplay.component-store"
-version = "12"
+version = "13"
 schema_kind = "voplay.components"
 
 [extension.generator.artifacts]

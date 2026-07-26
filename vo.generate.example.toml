@@ -2,7 +2,7 @@ format = 1
 
 [[generation]]
 provider = "voplay.component-store"
-version = "12"
+version = "13"
 schema_kind = "voplay.components"
 executable = "rust/target/debug/voplay-generator-provider"
 schema = "components.schema.example.toml"

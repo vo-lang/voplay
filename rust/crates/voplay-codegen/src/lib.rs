@@ -11,7 +11,7 @@ use vo_schema_compiler::{
 };
 
 pub const GENERATOR_NAME: &str = "voplay.component-store";
-pub const GENERATOR_VERSION: &str = "12";
+pub const GENERATOR_VERSION: &str = "13";
 pub const SCHEMA_KIND: &str = "voplay.components";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -659,7 +659,7 @@ fn upgrade_generated_tick_input_v4(mut source: String, game: &SourceGame) -> Str
         ),
     );
     source = source.replace(
-        "stage == voplay.StageStartup || stage == voplay.StageFrame || stage == voplay.StageShutdown",
+        "stage == voplay.StageStartup || stage == voplay.StageShutdown",
         "stage == voplay.StageStartup || stage == voplay.StageShutdown",
     );
     let commit_marker = format!(
@@ -732,7 +732,7 @@ fn render_target_bootstrap(source: &mut String, game: &SourceGame) {
     .unwrap();
     writeln!(
         source,
-        "func (builder *{}GeneratedBuilder) RegisterSystem(stage voplay.Stage, descriptor []byte) error {{\n\treturn builder.RegisterScheduledSystem(voplay.SystemSpec{{Stage: stage, Descriptor: descriptor, Deterministic: true}})\n}}\n\nfunc (builder *{}GeneratedBuilder) RegisterScheduledSystem(spec voplay.SystemSpec) error {{\n\tif !spec.Stage.Valid() || spec.Stage == voplay.StageStartup || spec.Stage == voplay.StageFrame || spec.Stage == voplay.StageShutdown || len(spec.Descriptor) == 0 {{ return errors.New(\"generated Voplay system stage is not driven by fixed ticks\") }}\n\tid := spec.Id\n\tif id == 0 {{\n\t\tid = uint64(14695981039346656037)\n\t\tfor _, value := range spec.Descriptor {{ id = (id ^ uint64(value)) * 1099511628211 }}\n\t\tid = (id ^ uint64(spec.Stage)) * 1099511628211\n\t\tif id == 0 {{ id = 1 }}\n\t}}\n\tfor _, system := range builder.Systems {{ if system.Id == id {{ return errors.New(\"generated Voplay system identity is duplicated\") }} }}\n\tcopyDescriptor := append([]byte{{}}, spec.Descriptor...)\n\tfirst := {}AppendU32(nil, uint32(spec.Stage))\n\tfirst = {}AppendU64(first, id)\n\tif err := builder.appendOperation(2, first, copyDescriptor); err != nil {{ return err }}\n\tbuilder.Systems = append(builder.Systems, voplay.RegisteredSystem{{Id: id, Stage: spec.Stage, Descriptor: copyDescriptor, Deterministic: spec.Deterministic, SimulationReads: append([]uint64{{}}, spec.SimulationReads...), SimulationWrites: append([]uint64{{}}, spec.SimulationWrites...), PresentationReads: append([]uint64{{}}, spec.PresentationReads...), PresentationWrites: append([]uint64{{}}, spec.PresentationWrites...), Before: append([]uint64{{}}, spec.Before...), After: append([]uint64{{}}, spec.After...)}})\n\treturn nil\n}}\n",
+        "func (builder *{}GeneratedBuilder) RegisterSystem(stage voplay.Stage, descriptor []byte) error {{\n\treturn builder.RegisterScheduledSystem(voplay.SystemSpec{{Stage: stage, Descriptor: descriptor, Deterministic: true}})\n}}\n\nfunc (builder *{}GeneratedBuilder) RegisterScheduledSystem(spec voplay.SystemSpec) error {{\n\tif !spec.Stage.Valid() || spec.Stage == voplay.StageStartup || spec.Stage == voplay.StageShutdown || len(spec.Descriptor) == 0 {{ return errors.New(\"generated Voplay system stage is not driven by the target loop\") }}\n\tid := spec.Id\n\tif id == 0 {{\n\t\tid = uint64(14695981039346656037)\n\t\tfor _, value := range spec.Descriptor {{ id = (id ^ uint64(value)) * 1099511628211 }}\n\t\tid = (id ^ uint64(spec.Stage)) * 1099511628211\n\t\tif id == 0 {{ id = 1 }}\n\t}}\n\tfor _, system := range builder.Systems {{ if system.Id == id {{ return errors.New(\"generated Voplay system identity is duplicated\") }} }}\n\tcopyDescriptor := append([]byte{{}}, spec.Descriptor...)\n\tfirst := {}AppendU32(nil, uint32(spec.Stage))\n\tfirst = {}AppendU64(first, id)\n\tif err := builder.appendOperation(2, first, copyDescriptor); err != nil {{ return err }}\n\tbuilder.Systems = append(builder.Systems, voplay.RegisteredSystem{{Id: id, Stage: spec.Stage, Descriptor: copyDescriptor, Deterministic: spec.Deterministic, SimulationReads: append([]uint64{{}}, spec.SimulationReads...), SimulationWrites: append([]uint64{{}}, spec.SimulationWrites...), PresentationReads: append([]uint64{{}}, spec.PresentationReads...), PresentationWrites: append([]uint64{{}}, spec.PresentationWrites...), Before: append([]uint64{{}}, spec.Before...), After: append([]uint64{{}}, spec.After...)}})\n\treturn nil\n}}\n",
         game.type_name, game.type_name, game.type_name, game.type_name
     )
     .unwrap();

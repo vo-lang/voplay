@@ -380,6 +380,49 @@ type PlatformEvent struct {
 	Payload []byte
 }
 
+const (
+	PlatformPointerDown uint16 = iota + 1
+	PlatformPointerMove
+	PlatformPointerUp
+	PlatformPointerCancel
+	PlatformWheel
+	PlatformKeyDown
+	PlatformKeyUp
+	PlatformShortcut
+	PlatformText
+	PlatformComposition
+	PlatformVisibility
+	PlatformFocus
+	PlatformGamepadConnect
+	PlatformGamepadDisconnect
+	PlatformGamepadButton
+	PlatformGamepadAxis
+)
+
+type PointerPosition struct {
+	Contact uint32
+	XMilli int32
+	YMilli int32
+	DeltaXMilli int32
+	DeltaYMilli int32
+}
+
+// DecodePointerPosition decodes the canonical pointer payload carried by
+// pointer down/move/up/cancel events.
+func DecodePointerPosition(event PlatformEvent) (PointerPosition, bool) {
+	if event.Kind < PlatformPointerDown || event.Kind > PlatformPointerCancel ||
+		len(event.Payload) < 16 {
+		return PointerPosition{}, false
+	}
+	return PointerPosition{
+		Contact: event.Code,
+		XMilli: int32(readInputU32(event.Payload, 0)),
+		YMilli: int32(readInputU32(event.Payload, 4)),
+		DeltaXMilli: int32(readInputU32(event.Payload, 8)),
+		DeltaYMilli: int32(readInputU32(event.Payload, 12)),
+	}, true
+}
+
 func DecodePlatformEvent(bytes []byte) (PlatformEvent, bool) {
 	if len(bytes) < 73 ||
 		bytes[0] != 'v' || bytes[1] != 'o' || bytes[2] != 'p' || bytes[3] != 'l' ||

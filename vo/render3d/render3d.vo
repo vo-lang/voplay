@@ -1,5 +1,7 @@
 package render3d
 
+import "math"
+
 type MeshRef struct {
 	Index uint32
 	Generation uint32
@@ -15,6 +17,14 @@ type MeshAsset struct {
 	VertexCount uint32
 	IndexCount uint32
 	Skinned bool
+}
+
+type MeshArtifact struct {
+	Id uint64
+	Positions [][3]float32
+	Normals [][3]float32
+	Texcoords [][2]float32
+	Indices []uint32
 }
 
 type MeshInstance struct {
@@ -239,6 +249,43 @@ func EncodeMeshAsset(mesh MeshAsset) []byte {
 		return append(bytes, 1)
 	}
 	return append(bytes, 0)
+}
+
+// EncodeMeshArtifact publishes complete non-skinned geometry for native and
+// browser GPU residency. Coordinates use renderer world units.
+func EncodeMeshArtifact(mesh MeshArtifact) []byte {
+	if mesh.Id == 0 || len(mesh.Positions) == 0 ||
+		len(mesh.Positions) != len(mesh.Normals) ||
+		len(mesh.Positions) != len(mesh.Texcoords) ||
+		len(mesh.Positions) > 16777216 || len(mesh.Indices) == 0 ||
+		len(mesh.Indices) > 50331648 {
+		return nil
+	}
+	for _, index := range mesh.Indices {
+		if int(index) >= len(mesh.Positions) {
+			return nil
+		}
+	}
+	bytes := []byte{'V', 'M', 'G', '1'}
+	bytes = appendRender3dU64(bytes, mesh.Id)
+	bytes = appendRender3dU32(bytes, uint32(len(mesh.Positions)))
+	bytes = appendRender3dU32(bytes, uint32(len(mesh.Indices)))
+	bytes = append(bytes, 0)
+	for index := range mesh.Positions {
+		for _, value := range mesh.Positions[index] {
+			bytes = appendRender3dU32(bytes, math.Float32bits(value))
+		}
+		for _, value := range mesh.Normals[index] {
+			bytes = appendRender3dU32(bytes, math.Float32bits(value))
+		}
+		for _, value := range mesh.Texcoords[index] {
+			bytes = appendRender3dU32(bytes, math.Float32bits(value))
+		}
+	}
+	for _, index := range mesh.Indices {
+		bytes = appendRender3dU32(bytes, index)
+	}
+	return bytes
 }
 
 func EncodeTerrain(patch TerrainPatch) []byte {

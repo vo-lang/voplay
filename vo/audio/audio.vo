@@ -14,6 +14,13 @@ type PersistentSourceRef struct {
 	Generation uint32
 }
 
+type AssetAck struct {
+	Asset voplay.Handle
+	Revision uint64
+	RequiredControlRevision uint64
+	SourceSimulationRevision uint64
+}
+
 type OneShot struct {
 	AssetIndex uint32
 	AssetGeneration uint32
@@ -57,6 +64,77 @@ func EncodeOneShot(oneShot OneShot) []byte {
 	}
 	bytes = appendAudioU32(bytes, spatial.MinDistanceMilli)
 	return appendAudioU32(bytes, spatial.MaxDistanceMilli)
+}
+
+// EncodeEventPacket wraps an encoded one-shot or other audio event in the
+// framework envelope consumed by the audio role endpoint.
+func EncodeEventPacket(engine voplay.EngineRef, channelEpoch uint64, sequence uint64,
+	eventId uint64, tick uint64, requiredControlRevision uint64,
+	deadlineMillis uint64, payload []byte) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || sequence == 0 || eventId == 0 ||
+		tick == 0 || deadlineMillis == 0 || len(payload) == 0 ||
+		len(payload)+80 > 67108864 {
+		return nil, false
+	}
+	packet := make([]byte, 80)
+	putAudioU16(packet, 0, 9)
+	putAudioU32(packet, 4, engine.Engine.Index)
+	putAudioU32(packet, 8, engine.Engine.Generation)
+	putAudioU64(packet, 12, channelEpoch)
+	putAudioU64(packet, 20, eventId)
+	putAudioU64(packet, 36, deadlineMillis)
+	putAudioU64(packet, 44, requiredControlRevision)
+	putAudioU64(packet, 52, tick)
+	putAudioU64(packet, 60, sequence)
+	putAudioU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+// EncodeAssetPacket stages encoded audio file bytes in the audio endpoint.
+// The endpoint decodes the format asynchronously and ACKs the revision.
+func EncodeAssetPacket(engine voplay.EngineRef, channelEpoch uint64,
+	asset voplay.Handle, revision uint64, requiredControlRevision uint64,
+	sourceSimulationRevision uint64, bytes []byte) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || !asset.Valid() || revision == 0 ||
+		sourceSimulationRevision == 0 || len(bytes) == 0 ||
+		len(bytes)+105 > 67108864 {
+		return nil, false
+	}
+	payload := []byte{'V', 'P', 'A', '2', 1}
+	payload = appendAudioU32(payload, asset.Index)
+	payload = appendAudioU32(payload, asset.Generation)
+	payload = appendAudioU64(payload, revision)
+	payload = appendAudioU32(payload, uint32(len(bytes)))
+	payload = append(payload, bytes...)
+	packet := make([]byte, 80)
+	putAudioU16(packet, 0, 36)
+	putAudioU32(packet, 4, engine.Engine.Index)
+	putAudioU32(packet, 8, engine.Engine.Generation)
+	putAudioU64(packet, 12, channelEpoch)
+	putAudioU64(packet, 20, uint64(asset.Index)|uint64(asset.Generation)<<32)
+	putAudioU64(packet, 36, revision)
+	putAudioU64(packet, 44, requiredControlRevision)
+	putAudioU64(packet, 52, sourceSimulationRevision)
+	putAudioU32(packet, 76, uint32(len(payload)))
+	return append(packet, payload...), true
+}
+
+func DecodeAssetAck(engine voplay.EngineRef, packet []byte) (AssetAck, bool) {
+	if len(packet) != 80 || readAudioU16(packet, 0) != 39 ||
+		readAudioU32(packet, 4) != engine.Engine.Index ||
+		readAudioU32(packet, 8) != engine.Engine.Generation ||
+		readAudioU64(packet, 12) == 0 || readAudioU64(packet, 20) == 0 ||
+		readAudioU64(packet, 36) == 0 || readAudioU32(packet, 76) != 0 {
+		return AssetAck{}, false
+	}
+	key := readAudioU64(packet, 20)
+	ack := AssetAck{
+		Asset: voplay.Handle{Index: uint32(key), Generation: uint32(key >> 32)},
+		Revision: readAudioU64(packet, 36),
+		RequiredControlRevision: readAudioU64(packet, 44),
+		SourceSimulationRevision: readAudioU64(packet, 52),
+	}
+	return ack, ack.Asset.Valid()
 }
 
 func appendAudioU16(bytes []byte, value uint16) []byte {

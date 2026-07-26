@@ -168,6 +168,7 @@ class VoplayStudioRenderer {
       readonly generation: number;
     }[];
   }>>();
+  #renderFeatures = new Map<string, Uint8Array[]>();
 
   async init(host: StudioRendererHost): Promise<void> {
     if (this.#host !== null) throw new Error("Voplay renderer already initialized");
@@ -551,6 +552,7 @@ class VoplayStudioRenderer {
       this.#cancelledReadbacks.clear();
       this.#frameTraces.clear();
       this.#renderTargets.clear();
+      this.#renderFeatures.clear();
       this.#coalescedInputs.clear();
       this.#drainingCoalesced.clear();
       this.#surfaceCapability = null;
@@ -786,7 +788,9 @@ class VoplayStudioRenderer {
           continue;
         }
         try {
-          if (isHostRenderCommand(packet)) {
+          if (isRenderFeatureBootstrap(packet)) {
+            this.#acceptRenderFeatureBootstrap(packet);
+          } else if (isHostRenderCommand(packet)) {
             await this.acceptHostRenderCommand(packet);
           } else {
             await this.#acceptPacket(packet);
@@ -803,6 +807,43 @@ class VoplayStudioRenderer {
         this.#polling = false;
       }
     }
+  }
+
+  #acceptRenderFeatureBootstrap(bytes: Uint8Array): void {
+    if (bytes.byteLength < 20 || !isRenderFeatureBootstrap(bytes)) {
+      throw new Error("invalid Voplay RenderFeature bootstrap");
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const engine = {
+      index: view.getUint32(8, true),
+      generation: view.getUint32(12, true),
+    };
+    const count = view.getUint32(16, true);
+    if (engine.index === 0xffff_ffff || engine.generation === 0 || count > 4096) {
+      throw new Error("invalid Voplay RenderFeature bootstrap owner");
+    }
+    let offset = 20;
+    const features: Uint8Array[] = [];
+    for (let index = 0; index < count; index += 1) {
+      if (offset + 4 > bytes.byteLength) {
+        throw new Error("truncated Voplay RenderFeature bootstrap");
+      }
+      const length = view.getUint32(offset, true);
+      offset += 4;
+      if (length === 0 || offset + length > bytes.byteLength) {
+        throw new Error("invalid Voplay RenderFeature descriptor");
+      }
+      features.push(bytes.slice(offset, offset + length));
+      offset += length;
+    }
+    if (offset !== bytes.byteLength) {
+      throw new Error("Voplay RenderFeature bootstrap has trailing bytes");
+    }
+    const key = `${engine.index}:${engine.generation}`;
+    if (this.#renderFeatures.has(key)) {
+      throw new Error("duplicate Voplay RenderFeature bootstrap");
+    }
+    this.#renderFeatures.set(key, features);
   }
 
   async #acceptPacket(bytes: Uint8Array): Promise<void> {
@@ -1888,6 +1929,18 @@ function isHostRenderCommand(bytes: Uint8Array): boolean {
     && bytes[1] === 0x48
     && bytes[2] === 0x52
     && (bytes[3] === 0x31 || bytes[3] === 0x33);
+}
+
+function isRenderFeatureBootstrap(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 8
+    && bytes[0] === 0x56
+    && bytes[1] === 0x46
+    && bytes[2] === 0x52
+    && bytes[3] === 0x42
+    && bytes[4] === 0x32
+    && bytes[5] === 0
+    && bytes[6] === 0
+    && bytes[7] === 0;
 }
 
 function hexPrefix(bytes: Uint8Array, limit: number): string {

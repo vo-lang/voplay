@@ -131,7 +131,11 @@ export class VoplayBrowserAssetProvider {
     this.#lane = lane;
     this.#assetBuffers = assetBuffers;
     this.#polling = true;
-    void this.#poll(host, lane);
+    setTimeout(() => {
+      if (this.#polling && this.#host === host && this.#lane === lane) {
+        void this.#poll(host, lane);
+      }
+    }, 0);
     host.log(`Voplay browser asset provider ready for ${host.framework.name}`);
   }
 

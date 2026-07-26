@@ -248,7 +248,11 @@ export class VoplayBrowserAudioProvider {
       }
     }) ?? null;
     this.#polling = true;
-    void this.#poll(host, lane);
+    setTimeout(() => {
+      if (this.#polling && this.#host === host && this.#lane === lane) {
+        void this.#poll(host, lane);
+      }
+    }, 0);
     host.log(`Voplay browser audio provider ready-locked for ${host.framework.name}`);
   }
 

@@ -198,7 +198,11 @@ class VoplayStudioRenderer {
       this.#acceptPlatformInput(event);
     });
     this.#polling = true;
-    void this.#poll(host, lane);
+    setTimeout(() => {
+      if (this.#polling && this.#host === host && this.#lane === lane) {
+        void this.#poll(host, lane);
+      }
+    }, 0);
     host.log(`Voplay browser renderer ready for ${host.framework.name}`);
   }
 

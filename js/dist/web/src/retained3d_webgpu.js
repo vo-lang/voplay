@@ -412,6 +412,7 @@ export class WebGpuRetainedRenderer {
             }
             pass.end();
             this.#device.queue.submit([encoder.finish()]);
+            await this.#device.queue.onSubmittedWorkDone();
         }
         catch (error) {
             if (validate)

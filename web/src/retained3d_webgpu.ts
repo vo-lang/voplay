@@ -7,6 +7,7 @@ export interface RetainedGpuAsset {
 
 interface GpuQueueLike {
   submit(commands: readonly unknown[]): void;
+  onSubmittedWorkDone(): Promise<void>;
   writeBuffer(buffer: unknown, offset: number, data: ArrayBufferView): void;
   writeTexture(destination: unknown, data: ArrayBufferView, layout: unknown, size: unknown): void;
   copyExternalImageToTexture(source: unknown, destination: unknown, size: unknown): void;
@@ -603,6 +604,7 @@ export class WebGpuRetainedRenderer {
       }
       pass.end();
       this.#device.queue.submit([encoder.finish()]);
+      await this.#device.queue.onSubmittedWorkDone();
     } catch (error) {
       if (validate) await this.#device.popErrorScope();
       throw error;

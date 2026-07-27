@@ -801,6 +801,7 @@ class VoplayStudioRenderer {
           } else {
             await this.#acceptPacket(packet);
           }
+          await delay(0);
         } catch (error) {
           throw new Error(
             `${errorMessage(error)}; lane-bytes=${packet.byteLength}; `

@@ -351,6 +351,7 @@ export class VoplayBrowserAudioProvider {
           continue;
         }
         await this.#dispatch(decodeFrameworkPacket(bytes));
+        await delay(0);
       } catch (error) {
         if (!this.#polling || this.#host !== host || this.#lane !== lane) return;
         this.#polling = false;

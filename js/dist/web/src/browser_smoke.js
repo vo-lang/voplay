@@ -273,6 +273,7 @@ async function smokeAssetProviderLifecycle() {
     const registered = (await takeProviderReplies(lane, errors, 1))[0];
     assert(registered.payload[0] === 5, "asset registered");
     const assetRef = smokeHandle(registered.payload, 5);
+    assert(assetRef.index !== 0 && assetRef.generation !== 0, "asset ref is Vo-valid");
     const artifact2 = Uint8Array.from({ length: 16 }, (_, index) => 0x40 + index);
     pushProviderPacket(lane, 23 /* MessageKind.AssetControl */, 3n, concatSmokeBytes(Uint8Array.of(2), assetRegistration(assetId, 2n, artifact2, false)));
     const reloaded = (await takeProviderReplies(lane, errors, 1))[0];
@@ -282,6 +283,7 @@ async function smokeAssetProviderLifecycle() {
     const scopeReply = (await takeProviderReplies(lane, errors, 1))[0];
     assert(scopeReply.payload[0] === 1, "asset scope opened");
     const scope = smokeHandle(scopeReply.payload, 1);
+    assert(scope.index !== 0 && scope.generation !== 0, "asset scope is Vo-valid");
     const request = new Uint8Array(24);
     writeSmokeHandle(request, 0, scope);
     writeSmokeHandle(request, 8, assetRef);
@@ -292,6 +294,7 @@ async function smokeAssetProviderLifecycle() {
     const work = requestReplies.find((packet) => packet.payload[0] === 3);
     assert(accepted !== undefined && work !== undefined, "asset request admission and work");
     const ticket = smokeHandle(accepted.payload, 1);
+    assert(ticket.index !== 0 && ticket.generation !== 0, "asset ticket is Vo-valid");
     assert(sameSmokeHandle(assetRef, smokeHandle(work.payload, 9)), "asset work identity");
     pushProviderPacket(lane, 23 /* MessageKind.AssetControl */, 6n, concatSmokeBytes(Uint8Array.of(9), work.payload.subarray(1)));
     const terminal = (await takeProviderReplies(lane, errors, 1))[0];

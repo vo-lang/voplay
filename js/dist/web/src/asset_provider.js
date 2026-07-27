@@ -19,9 +19,9 @@ export class VoplayBrowserAssetProvider {
     #assetsByRef = new Map();
     #scopes = new Map();
     #tickets = new Map();
-    #nextAsset = 0;
-    #nextScope = 0;
-    #nextTicket = 0;
+    #nextAsset = 1;
+    #nextScope = 1;
+    #nextTicket = 1;
     #freeScopes = [];
     #scopeGenerations = [];
     #freeTickets = [];
@@ -33,9 +33,9 @@ export class VoplayBrowserAssetProvider {
             this.#state = "created";
             this.#lastSequence = 0n;
             this.#revision = 1n;
-            this.#nextAsset = 0;
-            this.#nextScope = 0;
-            this.#nextTicket = 0;
+            this.#nextAsset = 1;
+            this.#nextScope = 1;
+            this.#nextTicket = 1;
             this.#freeScopes = [];
             this.#scopeGenerations = [];
             this.#freeTickets = [];

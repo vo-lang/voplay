@@ -87,13 +87,13 @@ export class WebGpuRetainedRenderer {
         this.#shadowTexture = device.createTexture({
             label: "Voplay retained 3D sun shadow",
             size: [2048, 2048, 1],
-            format: "depth32float",
+            format: "depth24plus",
             usage: TEXTURE_BINDING | TEXTURE_RENDER_ATTACHMENT,
         });
         this.#shadowSampler = device.createSampler({
             compare: "less",
-            magFilter: "linear",
-            minFilter: "linear",
+            magFilter: "nearest",
+            minFilter: "nearest",
         });
         this.#uniformBindGroup = device.createBindGroup({
             label: "Voplay retained 3D scene bind group",
@@ -883,7 +883,7 @@ struct VertexIn {
         },
         primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
         depthStencil: {
-            format: "depth32float",
+            format: "depth24plus",
             depthWriteEnabled: true,
             depthCompare: "less",
             depthBias: 2,

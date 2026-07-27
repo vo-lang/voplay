@@ -1939,6 +1939,9 @@ function fallbackSnapshotCamera(kart) {
 function appendProjectedPrimitiveFaces(output, primitive, camera, width, height, baseColor) {
     const centerProjection = projectRetainedPoint([primitive.matrix[3], primitive.matrix[7], primitive.matrix[11]], camera, width, height);
     if ((primitive.material === 101n && centerProjection === null)
+        || (centerProjection !== null
+            && (primitive.material === 101n || primitive.material === 105n || primitive.material === 110n)
+            && centerProjection.depth > 260_000)
         || (centerProjection !== null && centerProjection.depth > 520_000)) {
         return;
     }

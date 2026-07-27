@@ -2421,6 +2421,11 @@ function appendProjectedPrimitiveFaces(
   );
   if (
     (primitive.material === 101n && centerProjection === null)
+    || (
+      centerProjection !== null
+      && (primitive.material === 101n || primitive.material === 105n || primitive.material === 110n)
+      && centerProjection.depth > 260_000
+    )
     || (centerProjection !== null && centerProjection.depth > 520_000)
   ) {
     return;

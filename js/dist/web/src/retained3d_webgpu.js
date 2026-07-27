@@ -5,6 +5,8 @@ const BUFFER_UNIFORM = 0x40;
 const TEXTURE_COPY_DST = 0x02;
 const TEXTURE_BINDING = 0x04;
 const TEXTURE_RENDER_ATTACHMENT = 0x10;
+const SHADER_STAGE_VERTEX = 0x01;
+const SHADER_STAGE_FRAGMENT = 0x02;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 4;
@@ -13,7 +15,13 @@ export class WebGpuRetainedRenderer {
     #device;
     #context;
     #format;
+    #renderScale;
+    #logicalWidth;
+    #logicalHeight;
+    #materialBindGroupLayout;
     #scenePipeline;
+    #doubleSidedPipeline;
+    #blendPipeline;
     #shadowPipeline;
     #skyPipeline;
     #overlayPipeline;
@@ -82,7 +90,16 @@ export class WebGpuRetainedRenderer {
         this.#device = device;
         this.#context = context;
         this.#format = format;
-        this.#scenePipeline = createScenePipeline(device, format);
+        this.#renderScale = retainedRenderScale();
+        this.#logicalWidth = Math.max(1, canvas.width);
+        this.#logicalHeight = Math.max(1, canvas.height);
+        canvas.style.width = `${this.#logicalWidth}px`;
+        canvas.style.height = `${this.#logicalHeight}px`;
+        const sceneLayouts = createScenePipelineLayouts(device);
+        this.#materialBindGroupLayout = sceneLayouts.material;
+        this.#scenePipeline = createScenePipeline(device, format, sceneLayouts.pipeline, "Voplay retained 3D opaque pipeline", "back", false, true);
+        this.#doubleSidedPipeline = createScenePipeline(device, format, sceneLayouts.pipeline, "Voplay retained 3D double-sided pipeline", "none", false, true);
+        this.#blendPipeline = createScenePipeline(device, format, sceneLayouts.pipeline, "Voplay retained 3D blend pipeline", "none", true, false);
         this.#shadowPipeline = createShadowPipeline(device);
         this.#skyPipeline = createSkyPipeline(device, format);
         this.#overlayPipeline = createOverlayPipeline(device, format);
@@ -104,7 +121,7 @@ export class WebGpuRetainedRenderer {
         });
         this.#uniformBindGroup = device.createBindGroup({
             label: "Voplay retained 3D scene bind group",
-            layout: this.#scenePipeline.getBindGroupLayout(0),
+            layout: sceneLayouts.scene,
             entries: [
                 { binding: 0, resource: { buffer: this.#uniform } },
                 { binding: 1, resource: this.#shadowTexture.createView() },
@@ -140,7 +157,7 @@ export class WebGpuRetainedRenderer {
         device.queue.writeBuffer(this.#fallbackMaterialParameters, 0, new Float32Array([0, 1, 0, 0, 0, 0.8, 0, 0, 0, 0, 0, 0]));
         this.#fallbackMaterialBindGroup = device.createBindGroup({
             label: "Voplay retained 3D fallback material",
-            layout: this.#scenePipeline.getBindGroupLayout(1),
+            layout: this.#materialBindGroupLayout,
             entries: [
                 { binding: 0, resource: this.#whiteTextureView },
                 { binding: 1, resource: this.#whiteTextureView },
@@ -225,8 +242,8 @@ export class WebGpuRetainedRenderer {
         this.#updateOverlay();
     }
     #updateOverlay() {
-        const width = Math.max(1, this.#canvas.width);
-        const height = Math.max(1, this.#canvas.height);
+        const width = this.#logicalWidth;
+        const height = this.#logicalHeight;
         const values = decodeOverlays(this.#overlayScene, width, height);
         if (values.length / 6 > MAX_OVERLAY_VERTICES) {
             throw new Error("Voplay retained 3D overlay capacity exceeded");
@@ -246,7 +263,7 @@ export class WebGpuRetainedRenderer {
             this.#resize();
             const width = Math.max(1, this.#canvas.width);
             const height = Math.max(1, this.#canvas.height);
-            if (width !== this.#overlayWidth || height !== this.#overlayHeight) {
+            if (this.#logicalWidth !== this.#overlayWidth || this.#logicalHeight !== this.#overlayHeight) {
                 this.#updateOverlay();
             }
             if (this.#scene === null || this.#previousScene === null) {
@@ -444,7 +461,7 @@ export class WebGpuRetainedRenderer {
         }
         material.bindGroup = this.#device.createBindGroup({
             label: "Voplay retained 3D material",
-            layout: this.#scenePipeline.getBindGroupLayout(1),
+            layout: this.#materialBindGroupLayout,
             entries: [
                 ...textures.map((texture, binding) => ({
                     binding,
@@ -458,6 +475,10 @@ export class WebGpuRetainedRenderer {
         return material.bindGroup;
     }
     #materialPipeline(material) {
+        if (material?.alphaMode === 3)
+            return this.#blendPipeline;
+        if (material?.doubleSided === true)
+            return this.#doubleSidedPipeline;
         return this.#scenePipeline;
     }
     async #syncAssets(assets) {
@@ -549,8 +570,12 @@ export class WebGpuRetainedRenderer {
         }
     }
     #resize() {
-        const width = Math.max(1, this.#canvas.width);
-        const height = Math.max(1, this.#canvas.height);
+        const width = Math.max(1, Math.round(this.#logicalWidth * this.#renderScale));
+        const height = Math.max(1, Math.round(this.#logicalHeight * this.#renderScale));
+        if (this.#canvas.width !== width)
+            this.#canvas.width = width;
+        if (this.#canvas.height !== height)
+            this.#canvas.height = height;
         if (width === this.#width && height === this.#height)
             return;
         this.#width = width;
@@ -608,7 +633,63 @@ export class WebGpuRetainedRenderer {
         this.#overlayCapacity = capacity;
     }
 }
-function createScenePipeline(device, format) {
+function retainedRenderScale() {
+    const requested = Number(new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "0.75");
+    if (!Number.isFinite(requested))
+        return 0.75;
+    return Math.max(0.5, Math.min(1, requested));
+}
+function createScenePipelineLayouts(device) {
+    const scene = device.createBindGroupLayout({
+        label: "Voplay retained 3D shared scene layout",
+        entries: [
+            {
+                binding: 0,
+                visibility: SHADER_STAGE_VERTEX | SHADER_STAGE_FRAGMENT,
+                buffer: { type: "uniform" },
+            },
+            {
+                binding: 1,
+                visibility: SHADER_STAGE_FRAGMENT,
+                texture: { sampleType: "depth", viewDimension: "2d", multisampled: false },
+            },
+            {
+                binding: 2,
+                visibility: SHADER_STAGE_FRAGMENT,
+                sampler: { type: "comparison" },
+            },
+        ],
+    });
+    const material = device.createBindGroupLayout({
+        label: "Voplay retained 3D shared material layout",
+        entries: [
+            ...Array.from({ length: 5 }, (_, binding) => ({
+                binding,
+                visibility: SHADER_STAGE_FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d", multisampled: false },
+            })),
+            {
+                binding: 5,
+                visibility: SHADER_STAGE_FRAGMENT,
+                sampler: { type: "filtering" },
+            },
+            {
+                binding: 6,
+                visibility: SHADER_STAGE_FRAGMENT,
+                buffer: { type: "uniform" },
+            },
+        ],
+    });
+    return {
+        scene,
+        material,
+        pipeline: device.createPipelineLayout({
+            label: "Voplay retained 3D shared pipeline layout",
+            bindGroupLayouts: [scene, material],
+        }),
+    };
+}
+function createScenePipeline(device, format, pipelineLayout, label, cullMode, blend, depthWriteEnabled) {
     const module = device.createShaderModule({
         label: "Voplay retained 3D shader",
         code: `
@@ -728,8 +809,8 @@ struct VertexOut {
 }`,
     });
     return device.createRenderPipeline({
-        label: "Voplay retained 3D pipeline",
-        layout: "auto",
+        label,
+        layout: pipelineLayout,
         vertex: {
             module,
             entryPoint: "vertex_main",
@@ -760,20 +841,22 @@ struct VertexOut {
             entryPoint: "fragment_main",
             targets: [{
                     format,
-                    blend: {
-                        color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
-                        alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
-                    },
+                    ...(blend ? {
+                        blend: {
+                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+                            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+                        },
+                    } : {}),
                 }],
         },
         primitive: {
             topology: "triangle-list",
-            cullMode: "none",
+            cullMode,
             frontFace: "ccw",
         },
         depthStencil: {
             format: "depth24plus",
-            depthWriteEnabled: true,
+            depthWriteEnabled,
             depthCompare: "less",
         },
         multisample: { count: PRESENT_SAMPLE_COUNT },

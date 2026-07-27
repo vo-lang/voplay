@@ -193,9 +193,12 @@ func EncodeRetainedObject(object RetainedObject) []byte {
 		}
 	}
 	var previousKind uint32
+	var previousSchema uint64
 	totalBytes := 0
 	for _, component := range object.Components {
-		if component.Kind == 0 || component.SchemaHash == 0 || component.Kind <= previousKind ||
+		if component.Kind == 0 || component.SchemaHash == 0 ||
+			component.Kind < previousKind ||
+			component.Kind == previousKind && component.SchemaHash <= previousSchema ||
 			len(component.Bytes) > 4194304 {
 			return nil
 		}
@@ -204,6 +207,7 @@ func EncodeRetainedObject(object RetainedObject) []byte {
 			return nil
 		}
 		previousKind = component.Kind
+		previousSchema = component.SchemaHash
 	}
 	bytes := []byte{'V', 'R', 'W', '1'}
 	bytes = appendRenderU64(bytes, object.Layers)

@@ -371,7 +371,7 @@ export class WebGpuRetainedRenderer {
                         label: `Voplay retained texture ${asset.asset}`,
                         size: [bitmap.width, bitmap.height, 1],
                         format: "rgba8unorm",
-                        usage: TEXTURE_BINDING | TEXTURE_COPY_DST,
+                        usage: TEXTURE_BINDING | TEXTURE_COPY_DST | TEXTURE_RENDER_ATTACHMENT,
                     });
                     this.#device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height, 1]);
                     current?.texture.destroy();

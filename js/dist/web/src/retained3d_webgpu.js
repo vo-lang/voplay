@@ -293,7 +293,7 @@ export class WebGpuRetainedRenderer {
             shadowPass.setBindGroup(0, this.#shadowUniformBindGroup);
             for (const batch of this.#preparedBatches) {
                 const material = this.#materials.get(batch.material);
-                if (material?.alphaMode === 3)
+                if (material !== undefined && material.alphaMode !== 1)
                     continue;
                 const mesh = this.#meshes.get(batch.mesh);
                 shadowPass.setVertexBuffer(0, mesh.vertex);

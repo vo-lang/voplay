@@ -1167,7 +1167,11 @@ class VoplayStudioRenderer {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new Error("Voplay render transaction has no canvas surface");
     }
-    const nextObjects = applyRetainedObjectTransaction(this.#retainedObjects, payload);
+    const noOp = payload.byteLength === 4
+      && new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true) === 0;
+    const nextObjects = noOp
+      ? this.#retainedObjects
+      : applyRetainedObjectTransaction(this.#retainedObjects, payload);
     const assets: RetainedGpuAsset[] = [];
     for (const asset of this.#profileAssets.values()) {
       if (
@@ -1178,7 +1182,9 @@ class VoplayStudioRenderer {
       }
     }
     const renderStarted = performance.now();
-    await this.#retainedRenderer.render(nextObjects.values(), assets);
+    if (!noOp) {
+      await this.#retainedRenderer.render(nextObjects.values(), assets);
+    }
     this.#retainedObjects = nextObjects;
     this.#retainedRevision = header.newRevision;
     await this.#finishRetainedFrame(packet, renderStarted);

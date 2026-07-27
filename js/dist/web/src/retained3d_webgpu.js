@@ -699,16 +699,13 @@ struct VertexOut {
     && all(shadow_uv <= vec2<f32>(0.998))
     && shadow_ndc.z >= 0.0
     && shadow_ndc.z <= 1.0;
-  var sun_visibility = 1.0;
-  if (shadow_inside) {
-    let sampled = textureSampleCompare(
-      sun_shadow,
-      sun_shadow_sampler,
-      shadow_uv,
-      shadow_ndc.z - 0.0018
-    );
-    sun_visibility = mix(0.38, 1.0, sampled);
-  }
+  let sampled = textureSampleCompare(
+    sun_shadow,
+    sun_shadow_sampler,
+    clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018
+  );
+  let sun_visibility = select(1.0, mix(0.38, 1.0, sampled), shadow_inside);
   let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
   let hemi = normal.y * 0.18 + 0.18;
   let metallic = material.factors.x;

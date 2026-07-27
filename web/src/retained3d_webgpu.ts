@@ -98,6 +98,11 @@ interface ResidentTexture {
   readonly view: unknown;
 }
 
+interface ResidentInstanceBatch {
+  buffer: GpuBufferLike;
+  capacity: number;
+}
+
 interface SceneInstance {
   readonly key: string;
   readonly mesh: bigint;
@@ -145,6 +150,7 @@ export class WebGpuRetainedRenderer {
   readonly #meshes = new Map<bigint, ResidentMesh>();
   readonly #materials = new Map<bigint, ResidentMaterial>();
   readonly #textures = new Map<bigint, ResidentTexture>();
+  readonly #instanceBatches = new Map<string, ResidentInstanceBatch>();
   #overlayBuffer: GpuBufferLike;
   #overlayCapacity = 6;
   #depth: GpuTextureLike | null = null;
@@ -327,16 +333,16 @@ export class WebGpuRetainedRenderer {
       });
       pass.setPipeline(this.#scenePipeline);
       pass.setBindGroup(0, this.#uniformBindGroup);
-      for (const batch of batches.values()) {
+      for (const [batchKey, batch] of batches) {
         const mesh = this.#meshes.get(batch.mesh)!;
         const count = batch.values.length / 20;
         if (count === 0) continue;
         if (count > MAX_INSTANCES) throw new Error("Voplay retained 3D instance capacity exceeded");
-        this.#ensureInstanceCapacity(mesh, count);
-        this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(batch.values));
+        const instanceBuffer = this.#instanceBuffer(batchKey, count);
+        this.#device.queue.writeBuffer(instanceBuffer, 0, new Float32Array(batch.values));
         pass.setBindGroup(1, this.#materialBindGroup(this.#materials.get(batch.material)));
         pass.setVertexBuffer(0, mesh.vertex);
-        pass.setVertexBuffer(1, mesh.instance);
+        pass.setVertexBuffer(1, instanceBuffer);
         pass.setIndexBuffer(mesh.index, "uint32");
         pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
       }
@@ -416,6 +422,8 @@ export class WebGpuRetainedRenderer {
     }
     this.#meshes.clear();
     this.#materials.clear();
+    for (const batch of this.#instanceBatches.values()) batch.buffer.destroy();
+    this.#instanceBatches.clear();
     for (const texture of this.#textures.values()) texture.texture.destroy();
     this.#textures.clear();
     this.#whiteTexture.destroy();
@@ -545,17 +553,19 @@ export class WebGpuRetainedRenderer {
     });
   }
 
-  #ensureInstanceCapacity(mesh: ResidentMesh, count: number): void {
-    if (mesh.instanceCapacity >= count) return;
-    let capacity = mesh.instanceCapacity;
+  #instanceBuffer(key: string, count: number): GpuBufferLike {
+    const current = this.#instanceBatches.get(key);
+    if (current !== undefined && current.capacity >= count) return current.buffer;
+    let capacity = current?.capacity ?? 1;
     while (capacity < count) capacity *= 2;
-    mesh.instance.destroy();
-    mesh.instance = this.#device.createBuffer({
-      label: "Voplay retained 3D instances",
+    current?.buffer.destroy();
+    const buffer = this.#device.createBuffer({
+      label: `Voplay retained 3D instances ${key}`,
       size: capacity * 20 * 4,
       usage: BUFFER_VERTEX | BUFFER_COPY_DST,
     });
-    mesh.instanceCapacity = capacity;
+    this.#instanceBatches.set(key, { buffer, capacity });
+    return buffer;
   }
 
   #ensureOverlayCapacity(count: number): void {

@@ -9,7 +9,8 @@ const SHADER_STAGE_VERTEX = 0x01;
 const SHADER_STAGE_FRAGMENT = 0x02;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
-const PRESENT_SAMPLE_COUNT = 4;
+const PRESENT_SAMPLE_COUNT = 1;
+const SHADOW_INTERVAL_MILLIS = 66;
 export class WebGpuRetainedRenderer {
     #canvas;
     #device;
@@ -48,7 +49,6 @@ export class WebGpuRetainedRenderer {
     #overlayBuffer;
     #overlayCapacity = 6;
     #depth = null;
-    #colorMsaa = null;
     #width = 0;
     #height = 0;
     #validationFrames = 8;
@@ -64,6 +64,7 @@ export class WebGpuRetainedRenderer {
     #presentStatsStarted = 0;
     #lastPresentAt = 0;
     #shadowDirty = true;
+    #lastShadowAt = Number.NEGATIVE_INFINITY;
     #shadowViewProjection = null;
     #closed = false;
     static async create(canvas) {
@@ -316,7 +317,10 @@ export class WebGpuRetainedRenderer {
                 camera.matrix[7] / 1000,
                 camera.matrix[11] / 1000,
             ];
-            if (this.#shadowDirty || this.#shadowViewProjection === null) {
+            const now = performance.now();
+            const redrawShadow = this.#shadowViewProjection === null
+                || (this.#shadowDirty && now - this.#lastShadowAt >= SHADOW_INTERVAL_MILLIS);
+            if (redrawShadow) {
                 this.#shadowViewProjection = sceneLightViewProjection(cameraPosition);
             }
             const lightViewProjection = this.#shadowViewProjection;
@@ -344,7 +348,7 @@ export class WebGpuRetainedRenderer {
             const encoder = this.#device.createCommandEncoder({
                 label: "Voplay retained 3D frame",
             });
-            if (this.#shadowDirty) {
+            if (redrawShadow) {
                 const shadowUniform = new Float32Array(uniform);
                 this.#device.queue.writeBuffer(this.#shadowUniform, 0, shadowUniform);
                 const shadowPass = encoder.beginRenderPass({
@@ -371,12 +375,12 @@ export class WebGpuRetainedRenderer {
                 }
                 shadowPass.end();
                 this.#shadowDirty = false;
+                this.#lastShadowAt = now;
             }
             const pass = encoder.beginRenderPass({
                 label: "Voplay retained 3D render pass",
                 colorAttachments: [{
-                        view: this.#colorMsaa.createView(),
-                        resolveTarget: this.#context.getCurrentTexture().createView(),
+                        view: this.#context.getCurrentTexture().createView(),
                         clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
                         loadOp: "clear",
                         storeOp: "store",
@@ -499,7 +503,6 @@ export class WebGpuRetainedRenderer {
         this.#uniform.destroy();
         this.#shadowUniform.destroy();
         this.#depth?.destroy();
-        this.#colorMsaa?.destroy();
         this.#context.unconfigure();
         this.#device.destroy();
     }
@@ -639,14 +642,6 @@ export class WebGpuRetainedRenderer {
             alphaMode: "opaque",
         });
         this.#depth?.destroy();
-        this.#colorMsaa?.destroy();
-        this.#colorMsaa = this.#device.createTexture({
-            label: "Voplay retained 3D multisampled color",
-            size: [width, height, 1],
-            sampleCount: PRESENT_SAMPLE_COUNT,
-            format: this.#format,
-            usage: TEXTURE_RENDER_ATTACHMENT,
-        });
         this.#depth = this.#device.createTexture({
             label: "Voplay retained 3D depth",
             size: [width, height, 1],

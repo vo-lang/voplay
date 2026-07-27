@@ -7,7 +7,7 @@ const TEXTURE_BINDING = 0x04;
 const TEXTURE_RENDER_ATTACHMENT = 0x10;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
-const PRESENT_SAMPLE_COUNT = 4;
+const PRESENT_SAMPLE_COUNT = 1;
 export class WebGpuRetainedRenderer {
     #canvas;
     #device;
@@ -39,7 +39,6 @@ export class WebGpuRetainedRenderer {
     #overlayBuffer;
     #overlayCapacity = 6;
     #depth = null;
-    #colorMsaa = null;
     #width = 0;
     #height = 0;
     #validationFrames = 8;
@@ -305,8 +304,7 @@ export class WebGpuRetainedRenderer {
             const pass = encoder.beginRenderPass({
                 label: "Voplay retained 3D render pass",
                 colorAttachments: [{
-                        view: this.#colorMsaa.createView(),
-                        resolveTarget: this.#context.getCurrentTexture().createView(),
+                        view: this.#context.getCurrentTexture().createView(),
                         clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
                         loadOp: "clear",
                         storeOp: "store",
@@ -426,7 +424,6 @@ export class WebGpuRetainedRenderer {
         this.#overlayBuffer.destroy();
         this.#uniform.destroy();
         this.#depth?.destroy();
-        this.#colorMsaa?.destroy();
         this.#context.unconfigure();
         this.#device.destroy();
     }
@@ -558,14 +555,6 @@ export class WebGpuRetainedRenderer {
             alphaMode: "opaque",
         });
         this.#depth?.destroy();
-        this.#colorMsaa?.destroy();
-        this.#colorMsaa = this.#device.createTexture({
-            label: "Voplay retained 3D multisampled color",
-            size: [width, height, 1],
-            sampleCount: PRESENT_SAMPLE_COUNT,
-            format: this.#format,
-            usage: TEXTURE_RENDER_ATTACHMENT,
-        });
         this.#depth = this.#device.createTexture({
             label: "Voplay retained 3D depth",
             size: [width, height, 1],

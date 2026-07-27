@@ -103,6 +103,20 @@ interface ResidentInstanceBatch {
   capacity: number;
 }
 
+interface PreparedInstance {
+  readonly previousMatrix: readonly number[];
+  readonly currentMatrix: readonly number[];
+  readonly color: readonly [number, number, number, number];
+}
+
+interface PreparedBatch {
+  readonly mesh: bigint;
+  readonly material: bigint;
+  readonly buffer: GpuBufferLike;
+  readonly values: Float32Array;
+  readonly instances: PreparedInstance[];
+}
+
 interface SceneInstance {
   readonly key: string;
   readonly mesh: bigint;
@@ -151,6 +165,11 @@ export class WebGpuRetainedRenderer {
   readonly #materials = new Map<bigint, ResidentMaterial>();
   readonly #textures = new Map<bigint, ResidentTexture>();
   readonly #instanceBatches = new Map<string, ResidentInstanceBatch>();
+  #preparedBatches: PreparedBatch[] = [];
+  #overlayVertexCount = 0;
+  #overlayScene: readonly Uint8Array[] = [];
+  #overlayWidth = 0;
+  #overlayHeight = 0;
   #overlayBuffer: GpuBufferLike;
   #overlayCapacity = 6;
   #depth: GpuTextureLike | null = null;
@@ -262,56 +281,112 @@ export class WebGpuRetainedRenderer {
     }
     this.#scene = scene;
     this.#sceneReceivedAt = now;
+    this.#prepareScene();
     const validate = this.#validationFrames > 0;
-    await this.#draw(scene, validate);
+    await this.#draw(1, validate);
     this.#schedulePresent();
   }
 
-  async #draw(scene: DecodedScene, validate: boolean): Promise<void> {
+  #prepareScene(): void {
+    if (this.#scene === null || this.#previousScene === null) {
+      throw new Error("Voplay retained 3D renderer has no scene");
+    }
+    const previousInstances = new Map(
+      this.#previousScene.instances.map((instance) => [instance.key, instance]),
+    );
+    const grouped = new Map<string, {
+      readonly mesh: bigint;
+      readonly material: bigint;
+      readonly instances: PreparedInstance[];
+    }>();
+    for (const instance of this.#scene.instances) {
+      if (!this.#meshes.has(instance.mesh)) continue;
+      const key = `${instance.mesh}:${instance.material}`;
+      const group = grouped.get(key) ?? {
+        mesh: instance.mesh,
+        material: instance.material,
+        instances: [],
+      };
+      const previous = previousInstances.get(instance.key);
+      group.instances.push({
+        previousMatrix: previous?.matrix ?? instance.matrix,
+        currentMatrix: instance.matrix,
+        color: this.#materials.get(instance.material)?.color ?? [0.72, 0.72, 0.76, 1],
+      });
+      grouped.set(key, group);
+    }
+    this.#preparedBatches = [];
+    for (const [key, group] of grouped) {
+      if (group.instances.length > MAX_INSTANCES) {
+        throw new Error("Voplay retained 3D instance capacity exceeded");
+      }
+      this.#preparedBatches.push({
+        mesh: group.mesh,
+        material: group.material,
+        buffer: this.#instanceBuffer(key, group.instances.length),
+        values: new Float32Array(group.instances.length * 20),
+        instances: group.instances,
+      });
+    }
+    this.#overlayScene = this.#scene.overlays;
+    this.#updateOverlay();
+  }
+
+  #updateOverlay(): void {
+    const width = Math.max(1, this.#canvas.width);
+    const height = Math.max(1, this.#canvas.height);
+    const values = decodeOverlays(this.#overlayScene, width, height);
+    if (values.length / 6 > MAX_OVERLAY_VERTICES) {
+      throw new Error("Voplay retained 3D overlay capacity exceeded");
+    }
+    const overlay = new Float32Array(values);
+    this.#ensureOverlayCapacity(overlay.length / 6);
+    if (overlay.length > 0) this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
+    this.#overlayVertexCount = overlay.length / 6;
+    this.#overlayWidth = width;
+    this.#overlayHeight = height;
+  }
+
+  async #draw(alpha: number, validate: boolean): Promise<void> {
     if (validate) this.#device.pushErrorScope("validation");
     try {
       this.#resize();
       const width = Math.max(1, this.#canvas.width);
       const height = Math.max(1, this.#canvas.height);
-      const viewProjection = sceneViewProjection(scene.camera, width / height);
+      if (width !== this.#overlayWidth || height !== this.#overlayHeight) {
+        this.#updateOverlay();
+      }
+      if (this.#scene === null || this.#previousScene === null) {
+        throw new Error("Voplay retained 3D renderer has no scene");
+      }
+      const camera = {
+        ...this.#scene.camera,
+        matrix: interpolateMatrix(
+          this.#previousScene.camera.matrix,
+          this.#scene.camera.matrix,
+          alpha,
+        ),
+      };
+      const viewProjection = sceneViewProjection(camera, width / height);
       const cameraPosition = [
-        scene.camera.matrix[3]! / 1000,
-        scene.camera.matrix[7]! / 1000,
-        scene.camera.matrix[11]! / 1000,
+        camera.matrix[3]! / 1000,
+        camera.matrix[7]! / 1000,
+        camera.matrix[11]! / 1000,
       ] as const;
       const uniform = new Float32Array(32);
       uniform.set(viewProjection, 0);
       uniform.set([-0.36, -0.84, -0.41, 0], 16);
       uniform.set([...cameraPosition, 1], 20);
-      uniform.set([...scene.fogColor, 1], 24);
-      uniform.set([scene.fogStart, scene.fogEnd, 0, 0], 28);
+      uniform.set([...this.#scene.fogColor, 1], 24);
+      uniform.set([this.#scene.fogStart, this.#scene.fogEnd, 0, 0], 28);
       this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
 
-      const batches = new Map<string, {
-        readonly mesh: bigint;
-        readonly material: bigint;
-        readonly values: number[];
-      }>();
-      for (const instance of scene.instances) {
-        const mesh = this.#meshes.get(instance.mesh);
-        if (mesh === undefined) continue;
-        const material = this.#materials.get(instance.material);
-        const key = `${instance.mesh}:${instance.material}`;
-        const batch = batches.get(key) ?? {
-          mesh: instance.mesh,
-          material: instance.material,
-          values: [],
-        };
-        pushInstance(batch.values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
-        batches.set(key, batch);
+      for (const batch of this.#preparedBatches) {
+        for (let index = 0; index < batch.instances.length; index += 1) {
+          writePreparedInstance(batch.values, index * 20, batch.instances[index]!, alpha);
+        }
+        this.#device.queue.writeBuffer(batch.buffer, 0, batch.values);
       }
-      const overlayValues = decodeOverlays(scene.overlays, width, height);
-      if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
-        throw new Error("Voplay retained 3D overlay capacity exceeded");
-      }
-      const overlay = new Float32Array(overlayValues);
-      this.#ensureOverlayCapacity(overlay.length / 6);
-      if (overlay.length > 0) this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
 
       const encoder = this.#device.createCommandEncoder({
         label: "Voplay retained 3D frame",
@@ -333,23 +408,18 @@ export class WebGpuRetainedRenderer {
       });
       pass.setPipeline(this.#scenePipeline);
       pass.setBindGroup(0, this.#uniformBindGroup);
-      for (const [batchKey, batch] of batches) {
+      for (const batch of this.#preparedBatches) {
         const mesh = this.#meshes.get(batch.mesh)!;
-        const count = batch.values.length / 20;
-        if (count === 0) continue;
-        if (count > MAX_INSTANCES) throw new Error("Voplay retained 3D instance capacity exceeded");
-        const instanceBuffer = this.#instanceBuffer(batchKey, count);
-        this.#device.queue.writeBuffer(instanceBuffer, 0, new Float32Array(batch.values));
         pass.setBindGroup(1, this.#materialBindGroup(this.#materials.get(batch.material)));
         pass.setVertexBuffer(0, mesh.vertex);
-        pass.setVertexBuffer(1, instanceBuffer);
+        pass.setVertexBuffer(1, batch.buffer);
         pass.setIndexBuffer(mesh.index, "uint32");
-        pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
+        pass.drawIndexed(mesh.indexCount, batch.instances.length, 0, 0, 0);
       }
-      if (overlay.length > 0) {
+      if (this.#overlayVertexCount > 0) {
         pass.setPipeline(this.#overlayPipeline);
         pass.setVertexBuffer(0, this.#overlayBuffer);
-        pass.draw(overlay.length / 6, 1, 0);
+        pass.draw(this.#overlayVertexCount, 1, 0);
       }
       pass.end();
       this.#device.queue.submit([encoder.finish()]);
@@ -366,12 +436,12 @@ export class WebGpuRetainedRenderer {
     }
   }
 
-  #sampleScene(now: number): DecodedScene {
+  #sampleAlpha(now: number): number {
     if (this.#scene === null || this.#previousScene === null) {
       throw new Error("Voplay retained 3D renderer has no scene");
     }
     const lead = Math.max(0, Math.min(1, (now - this.#sceneReceivedAt) / this.#sceneIntervalMillis));
-    return interpolateScene(this.#previousScene, this.#scene, 1 + lead);
+    return 1 + lead;
   }
 
   #schedulePresent(): void {
@@ -387,7 +457,7 @@ export class WebGpuRetainedRenderer {
     if (this.#lastPresentAt !== 0 && now - this.#lastPresentAt < 15) return;
     this.#lastPresentAt = now;
     this.#drawing = true;
-    void this.#draw(this.#sampleScene(now), false).then(() => {
+    void this.#draw(this.#sampleAlpha(now), false).then(() => {
       this.#presentFrames++;
       if (this.#presentStatsStarted === 0) this.#presentStatsStarted = now;
       const elapsed = now - this.#presentStatsStarted;
@@ -847,33 +917,6 @@ function decodeScene(payload: Uint8Array): DecodedScene {
   return { instances, camera, overlays, fogColor, fogStart, fogEnd };
 }
 
-function interpolateScene(
-  previous: DecodedScene,
-  current: DecodedScene,
-  alpha: number,
-): DecodedScene {
-  const previousInstances = new Map(previous.instances.map((instance) => [instance.key, instance]));
-  return {
-    instances: current.instances.map((instance) => {
-      const prior = previousInstances.get(instance.key);
-      return prior === undefined
-        ? instance
-        : {
-          ...instance,
-          matrix: interpolateMatrix(prior.matrix, instance.matrix, alpha),
-        };
-    }),
-    camera: {
-      ...current.camera,
-      matrix: interpolateMatrix(previous.camera.matrix, current.camera.matrix, alpha),
-    },
-    overlays: current.overlays,
-    fogColor: current.fogColor,
-    fogStart: current.fogStart,
-    fogEnd: current.fogEnd,
-  };
-}
-
 function interpolateMatrix(
   previous: readonly number[],
   current: readonly number[],
@@ -956,18 +999,34 @@ function decodeMaterial(
   };
 }
 
-function pushInstance(
-  output: number[],
-  matrix: readonly number[],
-  color: readonly [number, number, number, number],
+function writePreparedInstance(
+  output: Float32Array,
+  offset: number,
+  instance: PreparedInstance,
+  alpha: number,
 ): void {
-  output.push(
-    matrix[0]! / 1000, matrix[4]! / 1000, matrix[8]! / 1000, 0,
-    matrix[1]! / 1000, matrix[5]! / 1000, matrix[9]! / 1000, 0,
-    matrix[2]! / 1000, matrix[6]! / 1000, matrix[10]! / 1000, 0,
-    matrix[3]! / 1000, matrix[7]! / 1000, matrix[11]! / 1000, 1,
-    ...color,
-  );
+  const previous = instance.previousMatrix;
+  const current = instance.currentMatrix;
+  output[offset] = (previous[0]! + (current[0]! - previous[0]!) * alpha) / 1000;
+  output[offset + 1] = (previous[4]! + (current[4]! - previous[4]!) * alpha) / 1000;
+  output[offset + 2] = (previous[8]! + (current[8]! - previous[8]!) * alpha) / 1000;
+  output[offset + 3] = 0;
+  output[offset + 4] = (previous[1]! + (current[1]! - previous[1]!) * alpha) / 1000;
+  output[offset + 5] = (previous[5]! + (current[5]! - previous[5]!) * alpha) / 1000;
+  output[offset + 6] = (previous[9]! + (current[9]! - previous[9]!) * alpha) / 1000;
+  output[offset + 7] = 0;
+  output[offset + 8] = (previous[2]! + (current[2]! - previous[2]!) * alpha) / 1000;
+  output[offset + 9] = (previous[6]! + (current[6]! - previous[6]!) * alpha) / 1000;
+  output[offset + 10] = (previous[10]! + (current[10]! - previous[10]!) * alpha) / 1000;
+  output[offset + 11] = 0;
+  output[offset + 12] = (previous[3]! + (current[3]! - previous[3]!) * alpha) / 1000;
+  output[offset + 13] = (previous[7]! + (current[7]! - previous[7]!) * alpha) / 1000;
+  output[offset + 14] = (previous[11]! + (current[11]! - previous[11]!) * alpha) / 1000;
+  output[offset + 15] = 1;
+  output[offset + 16] = instance.color[0];
+  output[offset + 17] = instance.color[1];
+  output[offset + 18] = instance.color[2];
+  output[offset + 19] = instance.color[3];
 }
 
 function sceneViewProjection(camera: SceneCamera, aspect: number): Float32Array {

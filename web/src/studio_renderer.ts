@@ -1202,10 +1202,16 @@ class VoplayStudioRenderer {
       this.#retainedFrameCount++;
       const elapsed = now - this.#retainedStatsStart;
       if (elapsed >= 1000) {
-        this.#host?.log(
+        const message =
           `Voplay retained WebGPU fps=${Math.round(this.#retainedFrameCount * 1000 / elapsed)} `
-          + `cpu_ms=${Math.round(this.#retainedCpuMillis / this.#retainedFrameCount * 10) / 10}`,
-        );
+          + `cpu_ms=${Math.round(this.#retainedCpuMillis / this.#retainedFrameCount * 10) / 10}`;
+        this.#host?.log(message);
+        if (
+          new URLSearchParams(window.location.search).has("rendererDebug")
+          || new URLSearchParams(window.location.search).has("voplayPresentDebug")
+        ) {
+          console.debug(message);
+        }
         this.#retainedStatsStart = now;
         this.#retainedFrameCount = 0;
         this.#retainedCpuMillis = 0;

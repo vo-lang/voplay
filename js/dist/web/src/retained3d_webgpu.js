@@ -21,6 +21,7 @@ export class WebGpuRetainedRenderer {
     #depth = null;
     #width = 0;
     #height = 0;
+    #validationFrames = 8;
     #closed = false;
     static async create(canvas) {
         const gpu = navigator.gpu;
@@ -63,7 +64,9 @@ export class WebGpuRetainedRenderer {
     async render(payload, assets) {
         if (this.#closed)
             throw new Error("Voplay retained 3D renderer is closed");
-        this.#device.pushErrorScope("validation");
+        const validate = this.#validationFrames > 0;
+        if (validate)
+            this.#device.pushErrorScope("validation");
         try {
             this.#syncAssets(assets);
             const scene = decodeScene(payload);
@@ -144,12 +147,16 @@ export class WebGpuRetainedRenderer {
             this.#device.queue.submit([encoder.finish()]);
         }
         catch (error) {
-            await this.#device.popErrorScope();
+            if (validate)
+                await this.#device.popErrorScope();
             throw error;
         }
-        const validation = await this.#device.popErrorScope();
-        if (validation !== null) {
-            throw new Error(`Voplay retained WebGPU validation failed: ${validation.message ?? "unknown"}`);
+        if (validate) {
+            this.#validationFrames--;
+            const validation = await this.#device.popErrorScope();
+            if (validation !== null) {
+                throw new Error(`Voplay retained WebGPU validation failed: ${validation.message ?? "unknown"}`);
+            }
         }
     }
     close() {

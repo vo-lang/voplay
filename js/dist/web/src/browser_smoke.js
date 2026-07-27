@@ -16,6 +16,7 @@ async function main() {
     await runCase("browser haptics terminal outcomes", smokeHaptics);
     await runCase("browser provider stop and restart", smokeProviderRestart);
     await runCase("browser asset provider lifecycle", smokeAssetProviderLifecycle);
+    await runCase("browser audio provider lifecycle replay", smokeAudioProviderLifecycleReplay);
     await runCase("browser audio user-gesture activation", smokeAudioGesture);
     const report = {
         complete: true,
@@ -362,6 +363,39 @@ async function smokeAudioGesture() {
         button.disabled = false;
         button.dataset.smokeReady = "true";
     });
+    provider.stop();
+}
+async function smokeAudioProviderLifecycleReplay() {
+    const provider = new VoplayBrowserAudioProvider();
+    const lane = new MemoryLane(41);
+    const errors = [];
+    const host = {
+        framework: { name: "browser-audio-lifecycle-smoke", providerRoles: ["game-audio"] },
+        log: () => { },
+        reportError: (message) => errors.push(message),
+        getCapability: (name) => {
+            if (name === "framework_lane")
+                return { open: async () => lane };
+            if (name === "asset_buffer")
+                return { read: async () => new ArrayBuffer(0) };
+            if (name === "app_surface") {
+                return {
+                    isInteractive: () => true,
+                    subscribeInput: () => () => { },
+                };
+            }
+            return null;
+        },
+    };
+    pushProviderPacket(lane, 12 /* MessageKind.EngineStart */, 1n, new Uint8Array());
+    await provider.init(host);
+    assert((await takeProviderReplies(lane, errors, 1))[0].header.kind === 13 /* MessageKind.EngineReady */, "audio lifecycle EngineReady");
+    pushProviderPacket(lane, 31 /* MessageKind.DeviceEvent */, 9n, Uint8Array.of(3));
+    pushProviderPacket(lane, 14 /* MessageKind.EngineSuspend */, 1n, new Uint8Array());
+    pushProviderPacket(lane, 15 /* MessageKind.EngineResume */, 1n, new Uint8Array());
+    pushProviderPacket(lane, 32 /* MessageKind.WorkerWake */, 1n, new Uint8Array());
+    pushProviderPacket(lane, 16 /* MessageKind.EngineClose */, 1n, new Uint8Array());
+    assert((await takeProviderReplies(lane, errors, 1))[0].header.kind === 17 /* MessageKind.EngineClosed */, "audio lifecycle replay EngineClosed");
     provider.stop();
 }
 async function restartProvider(provider, role) {

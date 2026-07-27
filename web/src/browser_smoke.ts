@@ -48,6 +48,7 @@ async function main(): Promise<void> {
   await runCase("browser haptics terminal outcomes", smokeHaptics);
   await runCase("browser provider stop and restart", smokeProviderRestart);
   await runCase("browser asset provider lifecycle", smokeAssetProviderLifecycle);
+  await runCase("browser audio provider lifecycle replay", smokeAudioProviderLifecycleReplay);
   await runCase("browser audio user-gesture activation", smokeAudioGesture);
 
   const report: SmokeReport = {
@@ -588,6 +589,44 @@ async function smokeAudioGesture(): Promise<void> {
     button.disabled = false;
     button.dataset.smokeReady = "true";
   });
+  provider.stop();
+}
+
+async function smokeAudioProviderLifecycleReplay(): Promise<void> {
+  const provider = new VoplayBrowserAudioProvider();
+  const lane = new MemoryLane(41);
+  const errors: string[] = [];
+  const host = {
+    framework: { name: "browser-audio-lifecycle-smoke", providerRoles: ["game-audio"] },
+    log: () => {},
+    reportError: (message: string) => errors.push(message),
+    getCapability: (name: string) => {
+      if (name === "framework_lane") return { open: async () => lane };
+      if (name === "asset_buffer") return { read: async () => new ArrayBuffer(0) };
+      if (name === "app_surface") {
+        return {
+          isInteractive: () => true,
+          subscribeInput: () => () => {},
+        };
+      }
+      return null;
+    },
+  };
+  pushProviderPacket(lane, MessageKind.EngineStart, 1n, new Uint8Array());
+  await provider.init(host as never);
+  assert(
+    (await takeProviderReplies(lane, errors, 1))[0]!.header.kind === MessageKind.EngineReady,
+    "audio lifecycle EngineReady",
+  );
+  pushProviderPacket(lane, MessageKind.DeviceEvent, 9n, Uint8Array.of(3));
+  pushProviderPacket(lane, MessageKind.EngineSuspend, 1n, new Uint8Array());
+  pushProviderPacket(lane, MessageKind.EngineResume, 1n, new Uint8Array());
+  pushProviderPacket(lane, MessageKind.WorkerWake, 1n, new Uint8Array());
+  pushProviderPacket(lane, MessageKind.EngineClose, 1n, new Uint8Array());
+  assert(
+    (await takeProviderReplies(lane, errors, 1))[0]!.header.kind === MessageKind.EngineClosed,
+    "audio lifecycle replay EngineClosed",
+  );
   provider.stop();
 }
 

@@ -1250,17 +1250,24 @@ export class VoplayBrowserAudioProvider {
         if (packet.header.channelEpoch !== BigInt(lane.binding.channelEpoch)) {
             throw new Error("Voplay audio packet channel epoch mismatch");
         }
+        const lifecyclePacket = packet.header.kind === 12 /* MessageKind.EngineStart */
+            || packet.header.kind === 14 /* MessageKind.EngineSuspend */
+            || packet.header.kind === 15 /* MessageKind.EngineResume */
+            || packet.header.kind === 16 /* MessageKind.EngineClose */
+            || packet.header.kind === 32 /* MessageKind.WorkerWake */;
         const sameRevisionControl = packet.header.kind === 8 /* MessageKind.AudioControlTransaction */
             && this.#controlRevision !== 0n
             && packet.header.newRevision === this.#controlRevision;
         if (packet.header.kind !== 36 /* MessageKind.AudioAssetData */
             && packet.header.kind !== 48 /* MessageKind.ControlObservedAck */
+            && !lifecyclePacket
             && !sameRevisionControl
             && packet.header.sequence <= this.#lastSequence) {
             throw new Error("Voplay audio packet sequence regression");
         }
         if (packet.header.kind !== 36 /* MessageKind.AudioAssetData */
             && packet.header.kind !== 48 /* MessageKind.ControlObservedAck */
+            && !lifecyclePacket
             && !sameRevisionControl) {
             this.#lastSequence = packet.header.sequence;
         }

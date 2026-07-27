@@ -2413,6 +2413,18 @@ function appendProjectedPrimitiveFaces(
   height: number,
   baseColor: string,
 ): void {
+  const centerProjection = projectRetainedPoint(
+    [primitive.matrix[3]!, primitive.matrix[7]!, primitive.matrix[11]!],
+    camera,
+    width,
+    height,
+  );
+  if (
+    (primitive.material === 101n && centerProjection === null)
+    || (centerProjection !== null && centerProjection.depth > 520_000)
+  ) {
+    return;
+  }
   const localCorners = [
     [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
     [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
@@ -2445,7 +2457,7 @@ function appendProjectedPrimitiveFaces(
       stroke: shadeCssColor(baseColor, 0.62),
     });
   }
-  if (primitive.material === 101n) {
+  if (primitive.material === 101n && centerProjection !== null) {
     for (let dash = 0; dash < 12; dash += 1) {
       const start = -0.47 + dash / 12;
       const end = start + 0.045;

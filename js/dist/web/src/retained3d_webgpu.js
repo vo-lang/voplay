@@ -11,6 +11,7 @@ const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 1;
 const SHADOW_INTERVAL_MILLIS = 66;
+const SHADOWS_ENABLED = false;
 export class WebGpuRetainedRenderer {
     #canvas;
     #device;
@@ -318,11 +319,12 @@ export class WebGpuRetainedRenderer {
                 camera.matrix[11] / 1000,
             ];
             const now = performance.now();
-            const redrawShadow = this.#shadowViewProjection === null
-                || (this.#shadowDirty && now - this.#lastShadowAt >= SHADOW_INTERVAL_MILLIS);
-            if (redrawShadow) {
+            if (this.#shadowViewProjection === null) {
                 this.#shadowViewProjection = sceneLightViewProjection(cameraPosition);
             }
+            const redrawShadow = SHADOWS_ENABLED
+                && this.#shadowDirty
+                && now - this.#lastShadowAt >= SHADOW_INTERVAL_MILLIS;
             const lightViewProjection = this.#shadowViewProjection;
             const uniform = new Float32Array(48);
             uniform.set(viewProjection, 0);
@@ -858,12 +860,15 @@ struct VertexOut {
     && all(shadow_uv <= vec2<f32>(0.998))
     && shadow_ndc.z >= 0.0
     && shadow_ndc.z <= 1.0;
-  let sampled = textureSampleCompare(
-    sun_shadow,
-    sun_shadow_sampler,
-    clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018
-  );
+  var sampled = 1.0;
+  if (${SHADOWS_ENABLED}) {
+    sampled = textureSampleCompare(
+      sun_shadow,
+      sun_shadow_sampler,
+      clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+      shadow_ndc.z - 0.0018
+    );
+  }
   let sun_visibility = select(1.0, mix(0.38, 1.0, sampled), shadow_inside);
   let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
   let hemi = normal.y * 0.20 + 0.22;

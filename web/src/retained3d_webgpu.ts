@@ -293,8 +293,8 @@ export class WebGpuRetainedRenderer {
     });
     this.#shadowSampler = device.createSampler({
       compare: "less",
-      magFilter: "nearest",
-      minFilter: "nearest",
+      magFilter: "linear",
+      minFilter: "linear",
     });
     this.#uniformBindGroup = device.createBindGroup({
       label: "Voplay retained 3D scene bind group",
@@ -1068,26 +1068,12 @@ struct VertexOut {
     && all(shadow_uv <= vec2<f32>(0.998))
     && shadow_ndc.z >= 0.0
     && shadow_ndc.z <= 1.0;
-  let shadow_texel = vec2<f32>(1.0 / 2048.0);
-  let shadow_sample_0 = textureSampleCompare(
-    sun_shadow, sun_shadow_sampler,
-    clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018);
-  let shadow_sample_1 = textureSampleCompare(
-    sun_shadow, sun_shadow_sampler,
-    clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018);
-  let shadow_sample_2 = textureSampleCompare(
-    sun_shadow, sun_shadow_sampler,
-    clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018);
-  let shadow_sample_3 = textureSampleCompare(
-    sun_shadow, sun_shadow_sampler,
-    clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018);
-  let sampled = (
-    shadow_sample_0 + shadow_sample_1 + shadow_sample_2 + shadow_sample_3
-  ) * 0.25;
+  let sampled = textureSampleCompare(
+    sun_shadow,
+    sun_shadow_sampler,
+    clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018
+  );
   let sun_visibility = select(1.0, mix(0.38, 1.0, sampled), shadow_inside);
   let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
   let hemi = normal.y * 0.20 + 0.22;

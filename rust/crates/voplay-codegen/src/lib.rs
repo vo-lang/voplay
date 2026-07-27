@@ -218,9 +218,33 @@ struct SourceGame {
     start: String,
     execute: String,
     max_init_bytes: usize,
+    #[serde(default = "default_world_max_entities")]
+    max_world_entities: usize,
+    #[serde(default = "default_world_max_commands")]
+    max_world_commands: usize,
+    #[serde(default = "default_world_max_changes")]
+    max_world_changes: usize,
+    #[serde(default = "default_world_component_bytes")]
+    max_world_component_bytes: usize,
     roles: Vec<String>,
     #[serde(default)]
     init_field: Vec<SourceField>,
+}
+
+fn default_world_max_entities() -> usize {
+    1_000_000
+}
+
+fn default_world_max_commands() -> usize {
+    16_777_216
+}
+
+fn default_world_max_changes() -> usize {
+    1_048_576
+}
+
+fn default_world_component_bytes() -> usize {
+    16_777_216
 }
 
 pub fn generate(source: &str) -> Result<GeneratedModule, CodegenError> {
@@ -319,6 +343,14 @@ fn validate_game(game: &SourceGame) -> Result<(), CodegenError> {
         || !valid_identifier(&game.start)
         || !valid_identifier(&game.execute)
         || game.max_init_bytes == 0
+        || game.max_world_entities == 0
+        || game.max_world_entities > 1_000_000
+        || game.max_world_commands == 0
+        || game.max_world_commands > 16_777_216
+        || game.max_world_changes == 0
+        || game.max_world_changes > 1_048_576
+        || game.max_world_component_bytes == 0
+        || game.max_world_component_bytes > 16_777_216
         || game.roles.is_empty()
     {
         return Err(CodegenError::InvalidSchema);
@@ -510,8 +542,12 @@ fn render_game_source(
     .unwrap();
     writeln!(
         source,
-        "\tinit, ok := {}DecodeInit(initBytes)\n\tif !ok {{ panic(\"generated Voplay init codec rejected target-island payload\") }}\n\tengine := voplay.TargetEngine()\n\tworldValue, ok := world.NewWorld(world.WorldRef{{EngineIndex: engine.Engine.Index, EngineGeneration: engine.Engine.Generation, WorldIndex: 1, WorldGeneration: 1}}, 1000000, 16777216, 1048576, 16777216)\n\tif !ok {{ panic(\"generated Voplay World configuration is invalid\") }}\n\tgame := &{}GeneratedGame{{Init: init, World: worldValue}}\n\tbuilder := &{}GeneratedBuilder{{}}\n\tgame.Configure(builder)\n\tif builder.Failure != nil {{ panic(builder.Failure.Error()) }}\n\torderedSystems, scheduleHash, ok := voplay.FreezeSchedule(builder.Systems)\n\tif !ok {{ panic(\"generated Voplay schedule is invalid\") }}\n\tbuilder.Systems = orderedSystems\n\tbuilder.ScheduleHash = scheduleHash\n\tcontext := &{}GeneratedStartContext{{NextHandle: 1, Builder: builder, WorldValue: worldValue}}\n\tif err := game.Start(context); err != nil {{ panic(err.Error()) }}\n\tif builder.Failure != nil {{ panic(builder.Failure.Error()) }}\n\tif err := voplay.TargetStart(builder.Configuration()); err != nil {{ panic(err.Error()) }}\n\tstages := []voplay.Stage{{voplay.StagePreTick, voplay.StageInput, voplay.StageGameplay, voplay.StagePrePhysics, voplay.StagePhysics, voplay.StagePostPhysics, voplay.StagePostTick, voplay.StageExtract}}\n\tfor {{\n\t\ttickBytes, err := voplay.TargetNextTicks()\n\t\tif err != nil {{ panic(err.Error()) }}\n\t\tbatch, ok := {}DecodeTickBatch(tickBytes)\n\t\tif !ok {{ panic(\"generated Voplay tick codec rejected provider payload\") }}\n\t\toutput := voplay.TickOutput{{}}\n\t\tfor offset := uint64(0); offset < batch.Count; offset++ {{\n\t\t\ttick := batch\n\t\t\ttick.FirstTick = batch.FirstTick+offset\n\t\t\ttick.Count = 1\n\t\t\tif offset > 0 {{ tick.InputFrames = nil; tick.RenderReturns = nil; tick.AssetReturns = nil; tick.AudioReturns = nil; tick.InitialEntities = nil; tick.RequestedAssets = nil; tick.RenderViews = nil }}\n\t\t\tfor _, stage := range stages {{\n\t\t\t\tfor _, system := range builder.Systems {{\n\t\t\t\t\tif system.Stage != stage {{ continue }}\n\t\t\t\t\ttickOutput, err := game.Execute(voplay.SystemInvocation{{System: system, Tick: tick, World: game.World}})\n\t\t\t\t\tif err != nil {{ panic(err.Error()) }}\n\t\t\t\t\tpacketCount := len(output.RenderPackets)+len(output.AssetPackets)+len(output.AudioPackets)+len(tickOutput.RenderPackets)+len(tickOutput.AssetPackets)+len(tickOutput.AudioPackets)\n\t\t\t\t\tif packetCount > 4096 {{ panic(\"generated Voplay tick output exceeds provider packet limit\") }}\n\t\t\t\t\toutput.RenderPackets = append(output.RenderPackets, tickOutput.RenderPackets...)\n\t\t\t\t\toutput.AssetPackets = append(output.AssetPackets, tickOutput.AssetPackets...)\n\t\t\t\t\toutput.AudioPackets = append(output.AudioPackets, tickOutput.AudioPackets...)\n\t\t\t\t}}\n\t\t\t}}\n\t\t}}\n\t\tresult, ok := {}EncodeTickOutput(output)\n\t\tif !ok {{ panic(\"generated Voplay tick output exceeds provider limits\") }}\n\t\tif err := voplay.TargetCommitTicks(batch.FirstTick, batch.Count, result); err != nil {{ panic(err.Error()) }}\n\t}}\n}}\n",
+        "\tinit, ok := {}DecodeInit(initBytes)\n\tif !ok {{ panic(\"generated Voplay init codec rejected target-island payload\") }}\n\tengine := voplay.TargetEngine()\n\tworldValue, ok := world.NewWorld(world.WorldRef{{EngineIndex: engine.Engine.Index, EngineGeneration: engine.Engine.Generation, WorldIndex: 1, WorldGeneration: 1}}, {}, {}, {}, {})\n\tif !ok {{ panic(\"generated Voplay World configuration is invalid\") }}\n\tgame := &{}GeneratedGame{{Init: init, World: worldValue}}\n\tbuilder := &{}GeneratedBuilder{{}}\n\tgame.Configure(builder)\n\tif builder.Failure != nil {{ panic(builder.Failure.Error()) }}\n\torderedSystems, scheduleHash, ok := voplay.FreezeSchedule(builder.Systems)\n\tif !ok {{ panic(\"generated Voplay schedule is invalid\") }}\n\tbuilder.Systems = orderedSystems\n\tbuilder.ScheduleHash = scheduleHash\n\tcontext := &{}GeneratedStartContext{{NextHandle: 1, Builder: builder, WorldValue: worldValue}}\n\tif err := game.Start(context); err != nil {{ panic(err.Error()) }}\n\tif builder.Failure != nil {{ panic(builder.Failure.Error()) }}\n\tif err := voplay.TargetStart(builder.Configuration()); err != nil {{ panic(err.Error()) }}\n\tstages := []voplay.Stage{{voplay.StagePreTick, voplay.StageInput, voplay.StageGameplay, voplay.StagePrePhysics, voplay.StagePhysics, voplay.StagePostPhysics, voplay.StagePostTick, voplay.StageExtract}}\n\tfor {{\n\t\ttickBytes, err := voplay.TargetNextTicks()\n\t\tif err != nil {{ panic(err.Error()) }}\n\t\tbatch, ok := {}DecodeTickBatch(tickBytes)\n\t\tif !ok {{ panic(\"generated Voplay tick codec rejected provider payload\") }}\n\t\toutput := voplay.TickOutput{{}}\n\t\tfor offset := uint64(0); offset < batch.Count; offset++ {{\n\t\t\ttick := batch\n\t\t\ttick.FirstTick = batch.FirstTick+offset\n\t\t\ttick.Count = 1\n\t\t\tif offset > 0 {{ tick.InputFrames = nil; tick.RenderReturns = nil; tick.AssetReturns = nil; tick.AudioReturns = nil; tick.InitialEntities = nil; tick.RequestedAssets = nil; tick.RenderViews = nil }}\n\t\t\tfor _, stage := range stages {{\n\t\t\t\tfor _, system := range builder.Systems {{\n\t\t\t\t\tif system.Stage != stage {{ continue }}\n\t\t\t\t\ttickOutput, err := game.Execute(voplay.SystemInvocation{{System: system, Tick: tick, World: game.World}})\n\t\t\t\t\tif err != nil {{ panic(err.Error()) }}\n\t\t\t\t\tpacketCount := len(output.RenderPackets)+len(output.AssetPackets)+len(output.AudioPackets)+len(tickOutput.RenderPackets)+len(tickOutput.AssetPackets)+len(tickOutput.AudioPackets)\n\t\t\t\t\tif packetCount > 4096 {{ panic(\"generated Voplay tick output exceeds provider packet limit\") }}\n\t\t\t\t\toutput.RenderPackets = append(output.RenderPackets, tickOutput.RenderPackets...)\n\t\t\t\t\toutput.AssetPackets = append(output.AssetPackets, tickOutput.AssetPackets...)\n\t\t\t\t\toutput.AudioPackets = append(output.AudioPackets, tickOutput.AudioPackets...)\n\t\t\t\t}}\n\t\t\t}}\n\t\t}}\n\t\tresult, ok := {}EncodeTickOutput(output)\n\t\tif !ok {{ panic(\"generated Voplay tick output exceeds provider limits\") }}\n\t\tif err := voplay.TargetCommitTicks(batch.FirstTick, batch.Count, result); err != nil {{ panic(err.Error()) }}\n\t}}\n}}\n",
         game.type_name,
+        game.max_world_entities,
+        game.max_world_commands,
+        game.max_world_changes,
+        game.max_world_component_bytes,
         game.type_name,
         game.type_name,
         game.type_name,
@@ -817,7 +853,7 @@ fn canonical_game(
     module_fingerprint: [u8; 32],
 ) -> String {
     let mut canonical = format!(
-        "module={canonical_module};package={};game={};init={};configure={};start={};execute={};max_init={};components={}",
+        "module={canonical_module};package={};game={};init={};configure={};start={};execute={};max_init={};world={},{},{},{};components={}",
         game.package,
         game.type_name,
         game.init_type,
@@ -825,6 +861,10 @@ fn canonical_game(
         game.start,
         game.execute,
         game.max_init_bytes,
+        game.max_world_entities,
+        game.max_world_commands,
+        game.max_world_changes,
+        game.max_world_component_bytes,
         hex(&module_fingerprint),
     );
     for role in &game.roles {
@@ -853,7 +893,7 @@ fn render_game_manifest(
     let role_fingerprint: [u8; 32] =
         Sha256::digest(format!("roles:{}", game.roles.join(",")).as_bytes()).into();
     format!(
-        "\n[game]\nname = {:?}\npackage = {:?}\nsource = {:?}\nartifact_id = \"{}\"\nschema_fingerprint = \"{}\"\nrole_artifact_set_fingerprint = \"{}\"\nroles = {:?}\nconfigure = {:?}\nstart = {:?}\nexecute = {:?}\n",
+        "\n[game]\nname = {:?}\npackage = {:?}\nsource = {:?}\nartifact_id = \"{}\"\nschema_fingerprint = \"{}\"\nrole_artifact_set_fingerprint = \"{}\"\nroles = {:?}\nconfigure = {:?}\nstart = {:?}\nexecute = {:?}\nmax_world_entities = {}\nmax_world_commands = {}\nmax_world_changes = {}\nmax_world_component_bytes = {}\n",
         game.type_name,
         game.package,
         path,
@@ -864,6 +904,10 @@ fn render_game_manifest(
         game.configure,
         game.start,
         game.execute,
+        game.max_world_entities,
+        game.max_world_commands,
+        game.max_world_changes,
+        game.max_world_component_bytes,
     )
 }
 

@@ -27,6 +27,7 @@ export class WebGpuRetainedRenderer {
     #overlayPipeline;
     #uniform;
     #uniformBindGroup;
+    #shadowUniform;
     #shadowUniformBindGroup;
     #shadowTexture;
     #shadowSampler;
@@ -62,6 +63,8 @@ export class WebGpuRetainedRenderer {
     #presentCpuMillis = 0;
     #presentStatsStarted = 0;
     #lastPresentAt = 0;
+    #shadowDirty = true;
+    #shadowViewProjection = null;
     #closed = false;
     static async create(canvas) {
         const gpu = navigator.gpu;
@@ -93,8 +96,6 @@ export class WebGpuRetainedRenderer {
         this.#renderScale = retainedRenderScale();
         this.#logicalWidth = Math.max(1, canvas.width);
         this.#logicalHeight = Math.max(1, canvas.height);
-        canvas.style.width = `${this.#logicalWidth}px`;
-        canvas.style.height = `${this.#logicalHeight}px`;
         const sceneLayouts = createScenePipelineLayouts(device);
         this.#materialBindGroupLayout = sceneLayouts.material;
         this.#scenePipeline = createScenePipeline(device, format, sceneLayouts.pipeline, "Voplay retained 3D opaque pipeline", "back", false, true);
@@ -105,6 +106,11 @@ export class WebGpuRetainedRenderer {
         this.#overlayPipeline = createOverlayPipeline(device, format);
         this.#uniform = device.createBuffer({
             label: "Voplay retained 3D scene uniform",
+            size: 192,
+            usage: BUFFER_UNIFORM | BUFFER_COPY_DST,
+        });
+        this.#shadowUniform = device.createBuffer({
+            label: "Voplay retained 3D shadow uniform",
             size: 192,
             usage: BUFFER_UNIFORM | BUFFER_COPY_DST,
         });
@@ -131,7 +137,7 @@ export class WebGpuRetainedRenderer {
         this.#shadowUniformBindGroup = device.createBindGroup({
             label: "Voplay retained 3D shadow bind group",
             layout: this.#shadowPipeline.getBindGroupLayout(0),
-            entries: [{ binding: 0, resource: { buffer: this.#uniform } }],
+            entries: [{ binding: 0, resource: { buffer: this.#shadowUniform } }],
         });
         this.#sampler = device.createSampler({
             label: "Voplay retained 3D material sampler",
@@ -200,6 +206,18 @@ export class WebGpuRetainedRenderer {
             await this.#draw(1, true);
         this.#schedulePresent();
     }
+    resize(width, height) {
+        if (this.#closed)
+            return;
+        const nextWidth = Math.max(1, Math.round(width));
+        const nextHeight = Math.max(1, Math.round(height));
+        if (nextWidth === this.#logicalWidth && nextHeight === this.#logicalHeight)
+            return;
+        this.#logicalWidth = nextWidth;
+        this.#logicalHeight = nextHeight;
+        this.#shadowDirty = true;
+        this.#updateOverlay();
+    }
     #prepareScene() {
         if (this.#scene === null || this.#previousScene === null) {
             throw new Error("Voplay retained 3D renderer has no scene");
@@ -223,23 +241,42 @@ export class WebGpuRetainedRenderer {
             });
             grouped.set(key, group);
         }
+        const previousBatches = new Map(this.#preparedBatches.map((batch) => [`${batch.mesh}:${batch.material}`, batch]));
         this.#preparedBatches = [];
         for (const [key, group] of grouped) {
             if (group.instances.length > MAX_INSTANCES) {
                 throw new Error("Voplay retained 3D instance capacity exceeded");
             }
+            const values = new Float32Array(group.instances.length * 20);
+            let dynamic = false;
+            for (let index = 0; index < group.instances.length; index += 1) {
+                const instance = group.instances[index];
+                writePreparedInstance(values, index * 20, instance, 1);
+                if (!matrixEquals(instance.previousMatrix, instance.currentMatrix)) {
+                    dynamic = true;
+                }
+            }
+            const buffer = this.#instanceBuffer(key, group.instances.length);
+            const previousBatch = previousBatches.get(key);
+            if (previousBatch === undefined
+                || previousBatch.buffer !== buffer
+                || !floatArraysEqual(previousBatch.values, values)) {
+                this.#device.queue.writeBuffer(buffer, 0, values);
+            }
             this.#preparedBatches.push({
                 mesh: group.mesh,
                 material: group.material,
-                buffer: this.#instanceBuffer(key, group.instances.length),
-                values: new Float32Array(group.instances.length * 20),
+                buffer,
+                values,
                 instances: group.instances,
+                dynamic,
             });
         }
         this.#preparedBatches.sort((left, right) => (this.#materials.get(left.material)?.alphaMode === 3 ? 1 : 0)
             - (this.#materials.get(right.material)?.alphaMode === 3 ? 1 : 0));
         this.#overlayScene = this.#scene.overlays;
         this.#updateOverlay();
+        this.#shadowDirty = true;
     }
     #updateOverlay() {
         const width = this.#logicalWidth;
@@ -279,16 +316,26 @@ export class WebGpuRetainedRenderer {
                 camera.matrix[7] / 1000,
                 camera.matrix[11] / 1000,
             ];
-            const lightViewProjection = sceneLightViewProjection(cameraPosition);
+            if (this.#shadowDirty || this.#shadowViewProjection === null) {
+                this.#shadowViewProjection = sceneLightViewProjection(cameraPosition);
+            }
+            const lightViewProjection = this.#shadowViewProjection;
             const uniform = new Float32Array(48);
             uniform.set(viewProjection, 0);
             uniform.set([-0.36, -0.84, -0.41, 0], 16);
             uniform.set([...cameraPosition, 1], 20);
             uniform.set([...this.#scene.fogColor, 1], 24);
-            uniform.set([this.#scene.fogStart, this.#scene.fogEnd, 0, 0], 28);
+            uniform.set([
+                this.#scene.fogStart,
+                this.#scene.fogEnd,
+                this.#scene.exposure,
+                this.#scene.toneMap,
+            ], 28);
             uniform.set(lightViewProjection, 32);
             this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
             for (const batch of this.#preparedBatches) {
+                if (!batch.dynamic)
+                    continue;
                 for (let index = 0; index < batch.instances.length; index += 1) {
                     writePreparedInstance(batch.values, index * 20, batch.instances[index], alpha);
                 }
@@ -297,29 +344,34 @@ export class WebGpuRetainedRenderer {
             const encoder = this.#device.createCommandEncoder({
                 label: "Voplay retained 3D frame",
             });
-            const shadowPass = encoder.beginRenderPass({
-                label: "Voplay retained 3D sun shadow pass",
-                colorAttachments: [],
-                depthStencilAttachment: {
-                    view: this.#shadowTexture.createView(),
-                    depthClearValue: 1,
-                    depthLoadOp: "clear",
-                    depthStoreOp: "store",
-                },
-            });
-            shadowPass.setPipeline(this.#shadowPipeline);
-            shadowPass.setBindGroup(0, this.#shadowUniformBindGroup);
-            for (const batch of this.#preparedBatches) {
-                const material = this.#materials.get(batch.material);
-                if (material !== undefined && material.alphaMode !== 1)
-                    continue;
-                const mesh = this.#meshes.get(batch.mesh);
-                shadowPass.setVertexBuffer(0, mesh.vertex);
-                shadowPass.setVertexBuffer(1, batch.buffer);
-                shadowPass.setIndexBuffer(mesh.index, "uint32");
-                shadowPass.drawIndexed(mesh.indexCount, batch.instances.length, 0, 0, 0);
+            if (this.#shadowDirty) {
+                const shadowUniform = new Float32Array(uniform);
+                this.#device.queue.writeBuffer(this.#shadowUniform, 0, shadowUniform);
+                const shadowPass = encoder.beginRenderPass({
+                    label: "Voplay retained 3D sun shadow pass",
+                    colorAttachments: [],
+                    depthStencilAttachment: {
+                        view: this.#shadowTexture.createView(),
+                        depthClearValue: 1,
+                        depthLoadOp: "clear",
+                        depthStoreOp: "store",
+                    },
+                });
+                shadowPass.setPipeline(this.#shadowPipeline);
+                shadowPass.setBindGroup(0, this.#shadowUniformBindGroup);
+                for (const batch of this.#preparedBatches) {
+                    const material = this.#materials.get(batch.material);
+                    if (material !== undefined && material.alphaMode !== 1)
+                        continue;
+                    const mesh = this.#meshes.get(batch.mesh);
+                    shadowPass.setVertexBuffer(0, mesh.vertex);
+                    shadowPass.setVertexBuffer(1, batch.buffer);
+                    shadowPass.setIndexBuffer(mesh.index, "uint32");
+                    shadowPass.drawIndexed(mesh.indexCount, batch.instances.length, 0, 0, 0);
+                }
+                shadowPass.end();
+                this.#shadowDirty = false;
             }
-            shadowPass.end();
             const pass = encoder.beginRenderPass({
                 label: "Voplay retained 3D render pass",
                 colorAttachments: [{
@@ -445,6 +497,7 @@ export class WebGpuRetainedRenderer {
         this.#fallbackMaterialParameters.destroy();
         this.#overlayBuffer.destroy();
         this.#uniform.destroy();
+        this.#shadowUniform.destroy();
         this.#depth?.destroy();
         this.#colorMsaa?.destroy();
         this.#context.unconfigure();
@@ -634,9 +687,9 @@ export class WebGpuRetainedRenderer {
     }
 }
 function retainedRenderScale() {
-    const requested = Number(new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "0.75");
+    const requested = Number(new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "1");
     if (!Number.isFinite(requested))
-        return 0.75;
+        return 1;
     return Math.max(0.5, Math.min(1, requested));
 }
 function createScenePipelineLayouts(device) {
@@ -773,7 +826,33 @@ struct VertexOut {
   if (material.flags.y > 1.5 && material.flags.y < 2.5 && albedo.a < material.flags.z) {
     discard;
   }
-  let normal = normalize(input.world_normal);
+  var normal = normalize(input.world_normal);
+  if (material.factors.z > 0.5) {
+    let sampled_normal = textureSample(
+      material_texture_1,
+      material_sampler,
+      input.texcoord
+    ).xyz * 2.0 - 1.0;
+    let position_dx = dpdx(input.world_position);
+    let position_dy = dpdy(input.world_position);
+    let texcoord_dx = dpdx(input.texcoord);
+    let texcoord_dy = dpdy(input.texcoord);
+    let tangent_raw = cross(position_dy, normal) * texcoord_dx.x
+      + cross(normal, position_dx) * texcoord_dy.x;
+    let bitangent_raw = cross(position_dy, normal) * texcoord_dx.y
+      + cross(normal, position_dx) * texcoord_dy.y;
+    let inverse_scale = inverseSqrt(max(
+      max(dot(tangent_raw, tangent_raw), dot(bitangent_raw, bitangent_raw)),
+      0.000001
+    ));
+    let tangent = tangent_raw * inverse_scale;
+    let bitangent = bitangent_raw * inverse_scale;
+    normal = normalize(
+      tangent * sampled_normal.x
+      + bitangent * sampled_normal.y
+      + normal * sampled_normal.z
+    );
+  }
   let light = normalize(-scene.light_direction.xyz);
   let view = normalize(scene.camera_position.xyz - input.world_position);
   let half_vector = normalize(light + view);
@@ -783,29 +862,62 @@ struct VertexOut {
     && all(shadow_uv <= vec2<f32>(0.998))
     && shadow_ndc.z >= 0.0
     && shadow_ndc.z <= 1.0;
-  let sampled = textureSampleCompare(
-    sun_shadow,
-    sun_shadow_sampler,
-    clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
-    shadow_ndc.z - 0.0018
-  );
+  let shadow_texel = vec2<f32>(1.0 / 2048.0);
+  let shadow_sample_0 = textureSampleCompare(
+    sun_shadow, sun_shadow_sampler,
+    clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018);
+  let shadow_sample_1 = textureSampleCompare(
+    sun_shadow, sun_shadow_sampler,
+    clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018);
+  let shadow_sample_2 = textureSampleCompare(
+    sun_shadow, sun_shadow_sampler,
+    clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018);
+  let shadow_sample_3 = textureSampleCompare(
+    sun_shadow, sun_shadow_sampler,
+    clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+    shadow_ndc.z - 0.0018);
+  let sampled = (
+    shadow_sample_0 + shadow_sample_1 + shadow_sample_2 + shadow_sample_3
+  ) * 0.25;
   let sun_visibility = select(1.0, mix(0.38, 1.0, sampled), shadow_inside);
   let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
-  let hemi = normal.y * 0.18 + 0.18;
-  let metallic = material.factors.x;
-  let roughness = max(material.factors.y, 0.04);
+  let hemi = normal.y * 0.20 + 0.22;
+  var metallic = material.factors.x;
+  var roughness = max(material.factors.y, 0.04);
+  if (material.factors.w > 0.5) {
+    let metallic_roughness = textureSample(
+      material_texture_2,
+      material_sampler,
+      input.texcoord
+    );
+    metallic *= metallic_roughness.b;
+    roughness = max(0.04, roughness * metallic_roughness.g);
+  }
   let specular_power = mix(72.0, 5.0, roughness);
   let specular = pow(max(dot(normal, half_vector), 0.0), specular_power) * diffuse;
   let fresnel = mix(vec3<f32>(0.04), albedo.rgb, metallic);
-  var lit = albedo.rgb * (0.32 + diffuse * 0.76 + hemi) * (1.0 - metallic * 0.34)
-    + fresnel * specular * (1.0 - roughness * 0.55)
+  let rim = pow(1.0 - max(dot(normal, view), 0.0), 3.0);
+  var lit = albedo.rgb * (0.28 + diffuse * 0.82 + hemi) * (1.0 - metallic * 0.34)
+    + fresnel * specular * (1.0 - roughness * 0.55) * 1.35
+    + albedo.rgb * rim * 0.08
     + material.emissive.rgb;
   if (material.flags.w > 0.5) {
     lit = albedo.rgb + material.emissive.rgb;
   }
   let distance_to_camera = distance(input.world_position, scene.camera_position.xyz);
   let fog = smoothstep(scene.fog_range.x, scene.fog_range.y, distance_to_camera);
-  return vec4<f32>(mix(lit, scene.fog_color.rgb, fog), albedo.a);
+  var color = mix(lit, scene.fog_color.rgb, fog) * exp2(scene.fog_range.z);
+  if (scene.fog_range.w > 2.5) {
+    let numerator = color * (2.51 * color + vec3<f32>(0.03));
+    let denominator = color * (2.43 * color + vec3<f32>(0.59)) + vec3<f32>(0.14);
+    color = clamp(numerator / denominator, vec3<f32>(0.0), vec3<f32>(1.0));
+  } else if (scene.fog_range.w > 1.5) {
+    color = color / (vec3<f32>(1.0) + color);
+  }
+  return vec4<f32>(color, albedo.a);
 }`,
     });
     return device.createRenderPipeline({
@@ -1051,6 +1163,8 @@ function decodeScene(payload) {
     let fogColor = [0.52, 0.78, 0.9];
     let fogStart = 220;
     let fogEnd = 1100;
+    let exposure = 0;
+    let toneMap = 1;
     let offset = 4;
     for (let index = 0; index < count; index += 1) {
         requireBytes(payload, offset, 12);
@@ -1120,6 +1234,8 @@ function decodeScene(payload) {
                 ];
                 fogStart = Number(componentView.getBigUint64(12, true)) / 1000;
                 fogEnd = Number(componentView.getBigUint64(20, true)) / 1000;
+                exposure = componentView.getInt32(28, true) / 1000;
+                toneMap = component[4];
             }
             else if (kind === 20
                 && component.byteLength >= 136
@@ -1138,7 +1254,16 @@ function decodeScene(payload) {
         throw new Error("Voplay retained 3D snapshot trailing bytes");
     if (camera === null)
         throw new Error("Voplay retained 3D snapshot has no camera");
-    return { instances, camera, overlays, fogColor, fogStart, fogEnd };
+    return {
+        instances,
+        camera,
+        overlays,
+        fogColor,
+        fogStart,
+        fogEnd,
+        exposure,
+        toneMap,
+    };
 }
 function decodeParticleInstances(bytes, entityKey) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -1260,6 +1385,8 @@ function decodeMaterial(bytes, expectedId) {
     ];
     const textures = Array.from({ length: 5 }, (_, index) => view.getBigUint64(51 + index * 8, true));
     const terrainSplat = textures.every((texture) => texture !== 0n) ? 1 : 0;
+    const hasNormalTexture = terrainSplat === 0 && textures[1] !== 0n ? 1 : 0;
+    const hasMetallicRoughnessTexture = terrainSplat === 0 && textures[2] !== 0n ? 1 : 0;
     const alphaMode = bytes[28];
     return {
         color,
@@ -1273,8 +1400,8 @@ function decodeMaterial(bytes, expectedId) {
             bytes[30] === 0 ? 0 : 1,
             view.getUint16(39, true) / 65535,
             view.getUint16(41, true) / 65535,
-            0,
-            0,
+            hasNormalTexture,
+            hasMetallicRoughnessTexture,
             view.getUint16(43, true) / 65535,
             view.getUint16(45, true) / 65535,
             view.getUint16(47, true) / 65535,
@@ -1305,6 +1432,24 @@ function writePreparedInstance(output, offset, instance, alpha) {
     output[offset + 17] = instance.color[1];
     output[offset + 18] = instance.color[2];
     output[offset + 19] = instance.color[3];
+}
+function matrixEquals(left, right) {
+    if (left.length !== right.length)
+        return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index])
+            return false;
+    }
+    return true;
+}
+function floatArraysEqual(left, right) {
+    if (left.length !== right.length)
+        return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index])
+            return false;
+    }
+    return true;
 }
 function sceneViewProjection(camera, aspect) {
     const matrix = camera.matrix;

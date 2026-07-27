@@ -451,15 +451,16 @@ class VoplayStudioRenderer {
             || !sameHandle(route.surface, id.surface)) {
             throw new Error("Voplay host-render Surface route does not match App Runtime authority");
         }
+        const identity = {
+            sessionId: capability.sessionId,
+            session: route.session,
+            sessionEpoch: route.sessionEpoch,
+            window: route.window,
+            view: route.view,
+            surface: route.surface,
+        };
         const lease = capability.attach({
-            identity: {
-                sessionId: capability.sessionId,
-                session: route.session,
-                sessionEpoch: route.sessionEpoch,
-                window: route.window,
-                view: route.view,
-                surface: route.surface,
-            },
+            identity,
             kind: "canvas",
             layer: route.zOrder,
             input: hostInputPolicy(route.inputPolicy),
@@ -494,6 +495,11 @@ class VoplayStudioRenderer {
             throw error;
         }
         this.#surfaces.set(surfaceKey(id), record);
+        if (this.#surfaces.size === 1
+            && capability.isInteractive()
+            && hostInputPolicy(route.inputPolicy) !== "passthrough") {
+            capability.focus(identity);
+        }
         return record;
     }
     async #ensureHostRenderSurfaceHost(deviceGeneration) {
@@ -1003,15 +1009,16 @@ class VoplayStudioRenderer {
                     || hostInputPolicy(route.inputPolicy) !== inputPolicy(control.inputPolicy)) {
                     throw new Error("Voplay SurfaceControl route does not match App Runtime authority");
                 }
+                const identity = {
+                    sessionId: capability.sessionId,
+                    session: control.session,
+                    sessionEpoch: BigInt(this.#requireLane().binding.sessionEpoch),
+                    window: control.window,
+                    view: control.view,
+                    surface: control.surface,
+                };
                 const lease = capability.attach({
-                    identity: {
-                        sessionId: capability.sessionId,
-                        session: control.session,
-                        sessionEpoch: BigInt(this.#requireLane().binding.sessionEpoch),
-                        window: control.window,
-                        view: control.view,
-                        surface: control.surface,
-                    },
+                    identity,
                     kind: "canvas",
                     layer: control.zOrder,
                     input: inputPolicy(control.inputPolicy),
@@ -1028,6 +1035,11 @@ class VoplayStudioRenderer {
                     attached = true;
                     this.#surfaces.set(key, { control, id, lease });
                     await this.#ensureHostRenderSurfaceHost(control.deviceGeneration);
+                    if (firstSurface
+                        && capability.isInteractive()
+                        && inputPolicy(control.inputPolicy) !== "passthrough") {
+                        capability.focus(identity);
+                    }
                 }
                 catch (error) {
                     if (attached) {
@@ -1051,6 +1063,7 @@ class VoplayStudioRenderer {
                 const current = this.#surface(key);
                 assertSameControlOwner(current.record.control, control);
                 current.host.resize(id, control.metrics);
+                this.#retainedRenderer?.resize(control.metrics.width, control.metrics.height);
                 current.record.control = control;
                 break;
             }

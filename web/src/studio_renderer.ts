@@ -1117,7 +1117,7 @@ class VoplayStudioRenderer {
       this.#host?.log(`Voplay retained WebGPU assets=${assets.length}`);
     }
     await this.#retainedRenderer.render(payload, assets);
-    if (this.#retainedStatsSamples < 12) {
+    if (this.#retainedStatsSamples < 20) {
       const now = performance.now();
       if (this.#retainedStatsStart === 0) this.#retainedStatsStart = now;
       this.#retainedFrameCount++;

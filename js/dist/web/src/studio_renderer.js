@@ -1,4 +1,5 @@
 import { WebGpuCanvasAdapter } from "./webgpu_adapter.js";
+import { WebGpuRetainedRenderer, } from "./retained3d_webgpu.js";
 import { decodeFrameSubmission, decodeSurfaceControl, encodeFrameOutcome, encodePlatformInput, surfaceKey, } from "./framework_lane.js";
 import { BrowserGpuReadbackError, BrowserSurfaceHost, } from "./platform_surface.js";
 import { decodeFrameworkPacket, encodeFrameworkPacket, } from "../../protocol/generated/voplay_protocol.js";
@@ -21,6 +22,7 @@ class VoplayStudioRenderer {
     #lane = null;
     #surfaceCapability = null;
     #surfaceHost = null;
+    #retainedRenderer = null;
     #haptics = null;
     #gamepads = null;
     #surfaces = new Map();
@@ -392,6 +394,8 @@ class VoplayStudioRenderer {
         }
         finally {
             this.#surfaceHost = null;
+            this.#retainedRenderer?.close();
+            this.#retainedRenderer = null;
             for (const record of this.#surfaces.values())
                 record.lease.release();
             this.#surfaces.clear();
@@ -858,34 +862,22 @@ class VoplayStudioRenderer {
         if (!(canvas instanceof HTMLCanvasElement)) {
             throw new Error("Voplay render snapshot has no canvas surface");
         }
-        drawRetainedSnapshot2d(canvas, payload, this.#snapshotMaterialPalette(header.engine));
+        if (this.#retainedRenderer === null) {
+            this.#retainedRenderer = await WebGpuRetainedRenderer.create(canvas);
+        }
+        const assets = [];
+        for (const asset of this.#profileAssets.values()) {
+            if (asset.engine.index === header.engine.index
+                && asset.engine.generation === header.engine.generation) {
+                assets.push(asset);
+            }
+        }
+        this.#retainedRenderer.render(payload, assets);
         await this.#requireLane().submit(encodeFrameworkPacket({
             ...header,
             kind: 2 /* MessageKind.RenderStateAck */,
             requiredControlRevision: header.requiredControlRevision,
         }, new Uint8Array()), header.commitId);
-    }
-    #snapshotMaterialPalette(engine) {
-        const palette = new Map();
-        for (const asset of this.#profileAssets.values()) {
-            if (asset.engine.index !== engine.index
-                || asset.engine.generation !== engine.generation
-                || asset.kind !== 3
-                || asset.bytes.byteLength < 39
-                || asset.bytes[0] !== 0x56
-                || asset.bytes[1] !== 0x41
-                || asset.bytes[2] !== 0x33
-                || asset.bytes[3] !== 0x31) {
-                continue;
-            }
-            const view = new DataView(asset.bytes.buffer, asset.bytes.byteOffset, asset.bytes.byteLength);
-            const id = view.getBigUint64(4, true);
-            const red = Math.round(view.getUint16(31, true) * 255 / 65535);
-            const green = Math.round(view.getUint16(33, true) * 255 / 65535);
-            const blue = Math.round(view.getUint16(35, true) * 255 / 65535);
-            palette.set(id, `rgb(${red},${green},${blue})`);
-        }
-        return palette;
     }
     async #replyLifecycle(packet, kind) {
         const lane = this.#requireLane();
@@ -1765,345 +1757,6 @@ function encodeHostRenderFrameTrace(engine, request, frameId, graphSignature, tr
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
-}
-function drawRetainedSnapshot2d(canvas, payload, materials) {
-    const context = canvas.getContext("2d");
-    if (context === null)
-        throw new Error("Voplay canvas has no 2D context");
-    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    const count = view.getUint32(0, true);
-    if (count > 1_000_000)
-        throw new Error("Voplay render snapshot object capacity exceeded");
-    let offset = 4;
-    const meshes = [];
-    const overlays = [];
-    let camera = null;
-    for (let index = 0; index < count; index += 1) {
-        if (payload.byteLength - offset < 12) {
-            throw new Error("truncated Voplay render snapshot object");
-        }
-        const entity = view.getUint32(offset, true);
-        const generation = view.getUint32(offset + 4, true);
-        const length = view.getUint32(offset + 8, true);
-        offset += 12;
-        if (entity === 0xffffffff
-            || generation === 0
-            || length === 0
-            || length > payload.byteLength - offset) {
-            throw new Error("invalid Voplay render snapshot object");
-        }
-        const object = payload.subarray(offset, offset + length);
-        offset += length;
-        if (object.byteLength >= 4
-            && object[0] === 0x56
-            && object[2] === 0x32
-            && object[3] === 0x31) {
-            overlays.push(object.slice());
-            continue;
-        }
-        if (object.byteLength < 272
-            || object[0] !== 0x56
-            || object[1] !== 0x52
-            || object[2] !== 0x57
-            || object[3] !== 0x31) {
-            continue;
-        }
-        const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
-        const matrix = Array.from({ length: 12 }, (_, matrixIndex) => Number(objectView.getBigInt64(124 + matrixIndex * 8, true)));
-        const componentCount = objectView.getUint32(268, true);
-        let componentOffset = 272;
-        let material = 0n;
-        for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
-            if (object.byteLength - componentOffset < 16) {
-                throw new Error("truncated Voplay retained render component");
-            }
-            const kind = objectView.getUint32(componentOffset, true);
-            const componentLength = objectView.getUint32(componentOffset + 12, true);
-            componentOffset += 16;
-            if (componentLength > object.byteLength - componentOffset) {
-                throw new Error("truncated Voplay retained component payload");
-            }
-            const component = object.subarray(componentOffset, componentOffset + componentLength);
-            componentOffset += componentLength;
-            if (kind === 1
-                && component.byteLength >= 12
-                && component[0] === 0x56
-                && component[1] === 0x4d
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                material = new DataView(component.buffer, component.byteOffset, component.byteLength).getBigUint64(4, true);
-            }
-            else if (kind === 2
-                && component.byteLength >= 21
-                && component[0] === 0x56
-                && component[1] === 0x43
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                const cameraView = new DataView(component.buffer, component.byteOffset, component.byteLength);
-                camera = {
-                    matrix,
-                    verticalFovDegrees: cameraView.getUint32(5, true) / 1000,
-                };
-            }
-            else if (component.byteLength >= 4
-                && component[0] === 0x56
-                && component[2] === 0x32
-                && component[3] === 0x31) {
-                overlays.push(component.slice());
-            }
-        }
-        if (componentOffset !== object.byteLength) {
-            throw new Error("Voplay retained object has trailing bytes");
-        }
-        if (material !== 0n) {
-            meshes.push({ entity, matrix, material });
-        }
-    }
-    if (offset !== payload.byteLength) {
-        throw new Error("Voplay render snapshot has trailing bytes");
-    }
-    drawPortableOutdoorBackdrop(context, canvas.width, canvas.height);
-    const fallbackKart = meshes.find((mesh) => mesh.entity >= 100 && mesh.entity <= 106);
-    const activeCamera = camera ?? fallbackSnapshotCamera(fallbackKart);
-    const faces = [];
-    for (const mesh of meshes) {
-        if (mesh.material === 100n)
-            continue;
-        appendProjectedPrimitiveFaces(faces, mesh, activeCamera, canvas.width, canvas.height, materials.get(mesh.material) ?? retainedMaterialColor(mesh.material, mesh.entity));
-    }
-    faces.sort((left, right) => right.depth - left.depth);
-    context.lineJoin = "round";
-    for (const face of faces) {
-        context.beginPath();
-        context.moveTo(face.points[0][0], face.points[0][1]);
-        for (let index = 1; index < face.points.length; index += 1) {
-            context.lineTo(face.points[index][0], face.points[index][1]);
-        }
-        context.closePath();
-        context.fillStyle = face.color;
-        context.fill();
-        context.strokeStyle = face.stroke;
-        context.lineWidth = 1;
-        context.stroke();
-    }
-    for (const overlay of overlays)
-        drawBlockKartOverlay(context, overlay);
-}
-function drawPortableOutdoorBackdrop(context, width, height) {
-    const horizon = height * 0.47;
-    const sky = context.createLinearGradient(0, 0, 0, horizon);
-    sky.addColorStop(0, "#269fe4");
-    sky.addColorStop(0.62, "#67d8ed");
-    sky.addColorStop(1, "#c9f3dd");
-    context.fillStyle = sky;
-    context.fillRect(0, 0, width, horizon);
-    context.fillStyle = "#79cf57";
-    context.beginPath();
-    context.moveTo(0, horizon + 24);
-    context.bezierCurveTo(width * 0.18, horizon - 42, width * 0.33, horizon + 4, width * 0.5, horizon - 30);
-    context.bezierCurveTo(width * 0.68, horizon - 62, width * 0.82, horizon + 16, width, horizon - 22);
-    context.lineTo(width, height);
-    context.lineTo(0, height);
-    context.closePath();
-    context.fill();
-    const grass = context.createLinearGradient(0, horizon, 0, height);
-    grass.addColorStop(0, "rgba(129,217,83,0.22)");
-    grass.addColorStop(1, "rgba(33,133,62,0.72)");
-    context.fillStyle = grass;
-    context.fillRect(0, horizon, width, height - horizon);
-    context.fillStyle = "rgba(255,255,255,0.88)";
-    for (const cloud of [
-        [0.12, 0.13, 0.036],
-        [0.49, 0.2, 0.026],
-        [0.72, 0.11, 0.043],
-    ]) {
-        const x = width * cloud[0];
-        const y = height * cloud[1];
-        const radius = width * cloud[2];
-        context.beginPath();
-        context.ellipse(x - radius * 0.65, y, radius * 0.68, radius * 0.36, 0, 0, Math.PI * 2);
-        context.ellipse(x, y - radius * 0.18, radius * 0.72, radius * 0.48, 0, 0, Math.PI * 2);
-        context.ellipse(x + radius * 0.72, y, radius * 0.64, radius * 0.34, 0, 0, Math.PI * 2);
-        context.fill();
-    }
-}
-function fallbackSnapshotCamera(kart) {
-    const x = kart?.matrix[3] ?? 0;
-    const y = kart?.matrix[7] ?? 0;
-    const z = kart?.matrix[11] ?? 0;
-    return {
-        matrix: [1000, 0, 0, x, 0, 850, 527, y + 8500, 0, -527, 850, z - 14000],
-        verticalFovDegrees: 62,
-    };
-}
-function appendProjectedPrimitiveFaces(output, primitive, camera, width, height, baseColor) {
-    const centerProjection = projectRetainedPoint([primitive.matrix[3], primitive.matrix[7], primitive.matrix[11]], camera, width, height);
-    if ((primitive.material === 101n && centerProjection === null)
-        || (centerProjection !== null
-            && (primitive.material === 101n || primitive.material === 105n || primitive.material === 110n)
-            && centerProjection.depth > 260_000)
-        || (centerProjection !== null && centerProjection.depth > 520_000)) {
-        return;
-    }
-    const localCorners = [
-        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
-        [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
-    ];
-    const world = localCorners.map(([x, y, z]) => [
-        primitive.matrix[0] * x + primitive.matrix[1] * y + primitive.matrix[2] * z + primitive.matrix[3],
-        primitive.matrix[4] * x + primitive.matrix[5] * y + primitive.matrix[6] * z + primitive.matrix[7],
-        primitive.matrix[8] * x + primitive.matrix[9] * y + primitive.matrix[10] * z + primitive.matrix[11],
-    ]);
-    const projected = world.map((point) => projectRetainedPoint(point, camera, width, height));
-    const faceIndices = [
-        [3, 2, 6, 7],
-        [4, 5, 6, 7],
-        [1, 0, 3, 2],
-        [0, 4, 7, 3],
-        [5, 1, 2, 6],
-    ];
-    const shades = [1.16, 0.94, 0.76, 0.86, 1.02];
-    for (let faceIndex = 0; faceIndex < faceIndices.length; faceIndex += 1) {
-        const indices = faceIndices[faceIndex];
-        const vertices = indices.map((index) => projected[index]);
-        if (vertices.some((vertex) => vertex === null))
-            continue;
-        const points = vertices.map((vertex) => [vertex.x, vertex.y]);
-        const signedArea = polygonSignedArea(points);
-        if (Math.abs(signedArea) < 0.25)
-            continue;
-        output.push({
-            points,
-            depth: vertices.reduce((sum, vertex) => sum + vertex.depth, 0) / vertices.length,
-            color: shadeCssColor(baseColor, shades[faceIndex]),
-            stroke: shadeCssColor(baseColor, 0.62),
-        });
-    }
-    if (primitive.material === 101n && centerProjection !== null) {
-        for (let dash = 0; dash < 12; dash += 1) {
-            const start = -0.47 + dash / 12;
-            const end = start + 0.045;
-            const worldDash = [
-                retainedLocalPoint(primitive.matrix, -0.018, 0.52, start),
-                retainedLocalPoint(primitive.matrix, 0.018, 0.52, start),
-                retainedLocalPoint(primitive.matrix, 0.018, 0.52, end),
-                retainedLocalPoint(primitive.matrix, -0.018, 0.52, end),
-            ];
-            const projectedDash = worldDash.map((point) => projectRetainedPoint(point, camera, width, height));
-            if (projectedDash.some((vertex) => vertex === null))
-                continue;
-            output.push({
-                points: projectedDash.map((vertex) => [vertex.x, vertex.y]),
-                depth: projectedDash.reduce((sum, vertex) => sum + vertex.depth, 0) /
-                    projectedDash.length - 1,
-                color: "rgb(245,245,225)",
-                stroke: "rgb(225,225,210)",
-            });
-        }
-    }
-}
-function retainedLocalPoint(matrix, x, y, z) {
-    return [
-        matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3],
-        matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7],
-        matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11],
-    ];
-}
-function projectRetainedPoint(point, camera, width, height) {
-    const matrix = camera.matrix;
-    const dx = point[0] - matrix[3];
-    const dy = point[1] - matrix[7];
-    const dz = point[2] - matrix[11];
-    const right = (matrix[0] * dx + matrix[4] * dy + matrix[8] * dz) / 1000;
-    const up = (matrix[1] * dx + matrix[5] * dy + matrix[9] * dz) / 1000;
-    const depth = -(matrix[2] * dx + matrix[6] * dy + matrix[10] * dz) / 1000;
-    if (depth < 80)
-        return null;
-    const focal = height / (2 * Math.tan(camera.verticalFovDegrees * Math.PI / 360));
-    return {
-        x: width / 2 + right * focal / depth,
-        y: height / 2 - up * focal / depth,
-        depth,
-    };
-}
-function polygonSignedArea(points) {
-    let area = 0;
-    for (let index = 0; index < points.length; index += 1) {
-        const current = points[index];
-        const next = points[(index + 1) % points.length];
-        area += current[0] * next[1] - next[0] * current[1];
-    }
-    return area / 2;
-}
-function shadeCssColor(color, factor) {
-    const channels = color.match(/\d+/g)?.slice(0, 3).map(Number);
-    if (channels === undefined || channels.length !== 3)
-        return color;
-    const [red, green, blue] = channels;
-    return `rgb(${Math.min(255, Math.round(red * factor))},${Math.min(255, Math.round(green * factor))},${Math.min(255, Math.round(blue * factor))})`;
-}
-function retainedMaterialColor(material, entity) {
-    if (entity >= 100 && entity <= 106)
-        return "rgb(39,145,236)";
-    switch (Number(material)) {
-        case 100: return "rgb(70,180,64)";
-        case 101: return "rgb(36,40,45)";
-        case 102: return "rgb(38,145,238)";
-        case 103: return "rgb(255,203,30)";
-        case 104: return "rgb(35,194,240)";
-        case 105: return "rgb(225,60,45)";
-        case 106: return "rgb(25,29,33)";
-        case 107: return "rgb(150,158,170)";
-        case 108: return "rgb(47,164,65)";
-        case 109: return "rgb(111,68,34)";
-        case 110: return "rgb(245,245,235)";
-        default: return "rgb(205,213,220)";
-    }
-}
-function drawBlockKartOverlay(context, bytes) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (bytes[1] === 0x48 && bytes.byteLength >= 81) {
-        const kind = bytes[4];
-        const x = Number(view.getBigInt64(13, true)) / 1000;
-        const y = Number(view.getBigInt64(21, true)) / 1000;
-        const width = Number(view.getBigInt64(29, true)) / 1000;
-        const height = Number(view.getBigInt64(37, true)) / 1000;
-        const radius = view.getUint32(45, true) / 1000;
-        const strokeWidth = view.getUint32(49, true) / 1000;
-        context.beginPath();
-        if (kind === 2) {
-            context.roundRect(x, y, width, height, Math.min(radius, width / 2, height / 2));
-        }
-        else if (kind === 3) {
-            context.beginPath();
-            context.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
-        }
-        else {
-            context.rect(x, y, width, height);
-        }
-        if (bytes[56] !== 0) {
-            context.fillStyle = `rgba(${bytes[53]},${bytes[54]},${bytes[55]},${bytes[56] / 255})`;
-            context.fill();
-        }
-        if (strokeWidth > 0 && bytes[60] !== 0) {
-            context.strokeStyle = `rgba(${bytes[57]},${bytes[58]},${bytes[59]},${bytes[60] / 255})`;
-            context.lineWidth = strokeWidth;
-            context.stroke();
-        }
-        return;
-    }
-    if (bytes[1] === 0x54 && bytes.byteLength >= 72) {
-        const x = Number(view.getBigInt64(20, true)) / 1000;
-        const y = Number(view.getBigInt64(28, true)) / 1000;
-        const size = Math.max(10, view.getUint32(36, true) / 1000);
-        const length = view.getUint32(68, true);
-        if (length > bytes.byteLength - 72)
-            return;
-        const text = new TextDecoder().decode(bytes.subarray(72, 72 + length));
-        context.fillStyle = `rgba(${bytes[64]},${bytes[65]},${bytes[66]},${bytes[67] / 255})`;
-        context.font = `600 ${size}px system-ui, sans-serif`;
-        context.fillText(text, x, y);
-    }
 }
 function isHostRenderCommand(bytes) {
     return bytes.byteLength >= 4

@@ -2,6 +2,8 @@ const BUFFER_COPY_DST = 0x08;
 const BUFFER_INDEX = 0x10;
 const BUFFER_VERTEX = 0x20;
 const BUFFER_UNIFORM = 0x40;
+const TEXTURE_COPY_DST = 0x02;
+const TEXTURE_BINDING = 0x04;
 const TEXTURE_RENDER_ATTACHMENT = 0x10;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
@@ -14,8 +16,13 @@ export class WebGpuRetainedRenderer {
     #overlayPipeline;
     #uniform;
     #uniformBindGroup;
+    #sampler;
+    #whiteTexture;
+    #whiteTextureView;
+    #fallbackMaterialBindGroup;
     #meshes = new Map();
     #materials = new Map();
+    #textures = new Map();
     #overlayBuffer;
     #overlayCapacity = 6;
     #depth = null;
@@ -31,6 +38,7 @@ export class WebGpuRetainedRenderer {
     #presentError = null;
     #presentFrames = 0;
     #presentStatsStarted = 0;
+    #lastPresentAt = 0;
     #closed = false;
     static async create(canvas) {
         const gpu = navigator.gpu;
@@ -64,6 +72,30 @@ export class WebGpuRetainedRenderer {
             layout: this.#scenePipeline.getBindGroupLayout(0),
             entries: [{ binding: 0, resource: { buffer: this.#uniform } }],
         });
+        this.#sampler = device.createSampler({
+            label: "Voplay retained 3D material sampler",
+            addressModeU: "repeat",
+            addressModeV: "repeat",
+            magFilter: "linear",
+            minFilter: "linear",
+            mipmapFilter: "linear",
+        });
+        this.#whiteTexture = device.createTexture({
+            label: "Voplay retained 3D white texture",
+            size: [1, 1, 1],
+            format: "rgba8unorm",
+            usage: TEXTURE_BINDING | TEXTURE_COPY_DST,
+        });
+        this.#whiteTextureView = this.#whiteTexture.createView();
+        device.queue.writeTexture({ texture: this.#whiteTexture }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1, 1]);
+        this.#fallbackMaterialBindGroup = device.createBindGroup({
+            label: "Voplay retained 3D fallback material",
+            layout: this.#scenePipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: this.#whiteTextureView },
+                { binding: 1, resource: this.#sampler },
+            ],
+        });
         this.#overlayBuffer = device.createBuffer({
             label: "Voplay retained 3D overlay vertices",
             size: this.#overlayCapacity * 24,
@@ -75,7 +107,7 @@ export class WebGpuRetainedRenderer {
             throw new Error("Voplay retained 3D renderer is closed");
         if (this.#presentError !== null)
             throw this.#presentError;
-        this.#syncAssets(assets);
+        await this.#syncAssets(assets);
         const now = performance.now();
         const scene = decodeScene(payload);
         if (this.#scene !== null) {
@@ -120,9 +152,14 @@ export class WebGpuRetainedRenderer {
                 if (mesh === undefined)
                     continue;
                 const material = this.#materials.get(instance.material);
-                const values = batches.get(instance.mesh) ?? [];
-                pushInstance(values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
-                batches.set(instance.mesh, values);
+                const key = `${instance.mesh}:${instance.material}`;
+                const batch = batches.get(key) ?? {
+                    mesh: instance.mesh,
+                    material: instance.material,
+                    values: [],
+                };
+                pushInstance(batch.values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
+                batches.set(key, batch);
             }
             const overlayValues = decodeOverlays(scene.overlays, width, height);
             if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
@@ -152,15 +189,16 @@ export class WebGpuRetainedRenderer {
             });
             pass.setPipeline(this.#scenePipeline);
             pass.setBindGroup(0, this.#uniformBindGroup);
-            for (const [meshId, values] of batches) {
-                const mesh = this.#meshes.get(meshId);
-                const count = values.length / 20;
+            for (const batch of batches.values()) {
+                const mesh = this.#meshes.get(batch.mesh);
+                const count = batch.values.length / 20;
                 if (count === 0)
                     continue;
                 if (count > MAX_INSTANCES)
                     throw new Error("Voplay retained 3D instance capacity exceeded");
                 this.#ensureInstanceCapacity(mesh, count);
-                this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(values));
+                this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(batch.values));
+                pass.setBindGroup(1, this.#materialBindGroup(this.#materials.get(batch.material)));
                 pass.setVertexBuffer(0, mesh.vertex);
                 pass.setVertexBuffer(1, mesh.instance);
                 pass.setIndexBuffer(mesh.index, "uint32");
@@ -206,6 +244,9 @@ export class WebGpuRetainedRenderer {
         this.#schedulePresent();
         if (this.#scene === null || this.#drawing || this.#presentError !== null)
             return;
+        if (this.#lastPresentAt !== 0 && now - this.#lastPresentAt < 15)
+            return;
+        this.#lastPresentAt = now;
         this.#drawing = true;
         void this.#draw(this.#sampleScene(now), false).then(() => {
             this.#presentFrames++;
@@ -239,13 +280,36 @@ export class WebGpuRetainedRenderer {
         }
         this.#meshes.clear();
         this.#materials.clear();
+        for (const texture of this.#textures.values())
+            texture.texture.destroy();
+        this.#textures.clear();
+        this.#whiteTexture.destroy();
         this.#overlayBuffer.destroy();
         this.#uniform.destroy();
         this.#depth?.destroy();
         this.#context.unconfigure();
         this.#device.destroy();
     }
-    #syncAssets(assets) {
+    #materialBindGroup(material) {
+        if (material === undefined)
+            return this.#fallbackMaterialBindGroup;
+        const texture = this.#textures.get(material.texture);
+        const textureRevision = texture?.revision ?? 0n;
+        if (material.bindGroup !== null && material.boundTextureRevision === textureRevision) {
+            return material.bindGroup;
+        }
+        material.bindGroup = this.#device.createBindGroup({
+            label: "Voplay retained 3D material",
+            layout: this.#scenePipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: texture?.view ?? this.#whiteTextureView },
+                { binding: 1, resource: this.#sampler },
+            ],
+        });
+        material.boundTextureRevision = textureRevision;
+        return material.bindGroup;
+    }
+    async #syncAssets(assets) {
         for (const asset of assets) {
             if (asset.kind === 2) {
                 const current = this.#meshes.get(asset.asset);
@@ -285,10 +349,41 @@ export class WebGpuRetainedRenderer {
                 const current = this.#materials.get(asset.asset);
                 if (current?.revision === asset.revision)
                     continue;
+                const decoded = decodeMaterial(asset.bytes, asset.asset);
                 this.#materials.set(asset.asset, {
                     revision: asset.revision,
-                    color: decodeMaterial(asset.bytes, asset.asset),
+                    color: decoded.color,
+                    texture: decoded.texture,
+                    bindGroup: null,
+                    boundTextureRevision: -1n,
                 });
+            }
+            else if (asset.kind === 6) {
+                const current = this.#textures.get(asset.asset);
+                if (current?.revision === asset.revision)
+                    continue;
+                const bitmap = await createImageBitmap(new Blob([asset.bytes.slice()], { type: "image/png" }));
+                try {
+                    if (bitmap.width === 0 || bitmap.height === 0) {
+                        throw new Error("Voplay retained texture has invalid dimensions");
+                    }
+                    const texture = this.#device.createTexture({
+                        label: `Voplay retained texture ${asset.asset}`,
+                        size: [bitmap.width, bitmap.height, 1],
+                        format: "rgba8unorm",
+                        usage: TEXTURE_BINDING | TEXTURE_COPY_DST,
+                    });
+                    this.#device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height, 1]);
+                    current?.texture.destroy();
+                    this.#textures.set(asset.asset, {
+                        revision: asset.revision,
+                        texture,
+                        view: texture.createView(),
+                    });
+                }
+                finally {
+                    bitmap.close();
+                }
             }
         }
     }
@@ -353,6 +448,8 @@ struct Scene {
   fog_range: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> scene: Scene;
+@group(1) @binding(0) var material_texture: texture_2d<f32>;
+@group(1) @binding(1) var material_sampler: sampler;
 
 struct VertexIn {
   @location(0) position: vec3<f32>,
@@ -370,6 +467,7 @@ struct VertexOut {
   @location(0) world_position: vec3<f32>,
   @location(1) world_normal: vec3<f32>,
   @location(2) color: vec4<f32>,
+  @location(3) texcoord: vec2<f32>,
 };
 
 @vertex fn vertex_main(input: VertexIn) -> VertexOut {
@@ -380,16 +478,18 @@ struct VertexOut {
   output.world_position = world.xyz;
   output.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
   output.color = input.color;
+  output.texcoord = input.texcoord;
   return output;
 }
 
 @fragment fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
   let diffuse = max(dot(input.world_normal, -scene.light_direction.xyz), 0.0);
   let hemi = input.world_normal.y * 0.16 + 0.16;
-  let lit = input.color.rgb * (0.34 + diffuse * 0.72 + hemi);
+  let albedo = textureSample(material_texture, material_sampler, input.texcoord) * input.color;
+  let lit = albedo.rgb * (0.34 + diffuse * 0.72 + hemi);
   let distance_to_camera = distance(input.world_position, scene.camera_position.xyz);
   let fog = smoothstep(scene.fog_range.x, scene.fog_range.y, distance_to_camera);
-  return vec4<f32>(mix(lit, scene.fog_color.rgb, fog), input.color.a);
+  return vec4<f32>(mix(lit, scene.fog_color.rgb, fog), albedo.a);
 }`,
     });
     return device.createRenderPipeline({
@@ -642,7 +742,7 @@ function decodeMeshArtifact(bytes, expectedId) {
     return { vertices, indices };
 }
 function decodeMaterial(bytes, expectedId) {
-    if (bytes.byteLength < 39
+    if (bytes.byteLength < 91
         || bytes[0] !== 0x56
         || bytes[1] !== 0x41
         || bytes[2] !== 0x33
@@ -653,12 +753,15 @@ function decodeMaterial(bytes, expectedId) {
     if (view.getBigUint64(4, true) !== expectedId) {
         throw new Error("Voplay retained material identity mismatch");
     }
-    return [
-        view.getUint16(31, true) / 65535,
-        view.getUint16(33, true) / 65535,
-        view.getUint16(35, true) / 65535,
-        view.getUint16(37, true) / 65535,
-    ];
+    return {
+        color: [
+            view.getUint16(31, true) / 65535,
+            view.getUint16(33, true) / 65535,
+            view.getUint16(35, true) / 65535,
+            view.getUint16(37, true) / 65535,
+        ],
+        texture: view.getBigUint64(51, true),
+    };
 }
 function pushInstance(output, matrix, color) {
     output.push(matrix[0] / 1000, matrix[4] / 1000, matrix[8] / 1000, 0, matrix[1] / 1000, matrix[5] / 1000, matrix[9] / 1000, 0, matrix[2] / 1000, matrix[6] / 1000, matrix[10] / 1000, 0, matrix[3] / 1000, matrix[7] / 1000, matrix[11] / 1000, 1, ...color);

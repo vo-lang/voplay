@@ -9,6 +9,7 @@ const (
 	AssetMaterial3d uint32 = 3
 	AssetSkinPalette3d uint32 = 4
 	AssetHeightmap3d uint32 = 5
+	AssetTexture2d uint32 = 6
 )
 
 type SnapshotObject struct {
@@ -107,7 +108,7 @@ func EncodeAssetPacket(engine voplay.EngineRef, channelEpoch uint64, kind uint32
 	asset uint64, revision uint64, requiredControlRevision uint64,
 	sourceSimulationRevision uint64, descriptor []byte) ([]byte, bool) {
 	if !engine.Engine.Valid() || channelEpoch == 0 || kind < AssetMesh3d ||
-		kind > AssetHeightmap3d || asset == 0 || revision == 0 ||
+		kind > AssetTexture2d || asset == 0 || revision == 0 ||
 		len(descriptor) == 0 || len(descriptor) > 4194304 {
 		return nil, false
 	}
@@ -136,7 +137,7 @@ func DecodeAssetAck(engine voplay.EngineRef, packet []byte) (AssetAck, bool) {
 		RequiredControlRevision: readRenderPacketU64(packet, 44),
 		SourceSimulationRevision: readRenderPacketU64(packet, 52),
 	}
-	return ack, ack.Kind >= AssetMesh3d && ack.Kind <= AssetHeightmap3d
+	return ack, ack.Kind >= AssetMesh3d && ack.Kind <= AssetTexture2d
 }
 
 func encodeRenderFrameworkPacket(kind uint16, engine voplay.EngineRef,

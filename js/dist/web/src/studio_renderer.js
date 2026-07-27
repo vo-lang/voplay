@@ -905,7 +905,7 @@ class VoplayStudioRenderer {
             this.#host?.log(`Voplay retained WebGPU assets=${assets.length}`);
         }
         const renderStarted = performance.now();
-        await this.#retainedRenderer.render(payload, assets);
+        await this.#retainedRenderer.render(nextObjects.values(), assets);
         this.#retainedObjects = nextObjects;
         this.#retainedRevision = header.newRevision;
         await this.#finishRetainedFrame(packet, renderStarted);
@@ -934,7 +934,7 @@ class VoplayStudioRenderer {
             }
         }
         const renderStarted = performance.now();
-        await this.#retainedRenderer.render(encodeRetainedObjectSnapshot(nextObjects), assets);
+        await this.#retainedRenderer.render(nextObjects.values(), assets);
         this.#retainedObjects = nextObjects;
         this.#retainedRevision = header.newRevision;
         await this.#finishRetainedFrame(packet, renderStarted);
@@ -1944,29 +1944,6 @@ function applyRetainedObjectTransaction(current, payload) {
         throw new Error("Voplay retained transaction has trailing bytes");
     }
     return objects;
-}
-function encodeRetainedObjectSnapshot(objects) {
-    const ordered = [...objects.values()].sort((left, right) => left.entity.index - right.entity.index || left.entity.generation - right.entity.generation);
-    let length = 4;
-    for (const object of ordered) {
-        length += 12 + object.bytes.byteLength;
-    }
-    if (length > 64 * 1024 * 1024) {
-        throw new Error("Voplay retained snapshot exceeds browser capacity");
-    }
-    const payload = new Uint8Array(length);
-    const view = new DataView(payload.buffer);
-    view.setUint32(0, ordered.length, true);
-    let offset = 4;
-    for (const object of ordered) {
-        view.setUint32(offset, object.entity.index, true);
-        view.setUint32(offset + 4, object.entity.generation, true);
-        view.setUint32(offset + 8, object.bytes.byteLength, true);
-        offset += 12;
-        payload.set(object.bytes, offset);
-        offset += object.bytes.byteLength;
-    }
-    return payload;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

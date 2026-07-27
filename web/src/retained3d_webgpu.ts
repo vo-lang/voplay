@@ -5,6 +5,11 @@ export interface RetainedGpuAsset {
   readonly bytes: Uint8Array;
 }
 
+export interface RetainedGpuObject {
+  readonly entity: { readonly index: number; readonly generation: number };
+  readonly bytes: Uint8Array;
+}
+
 interface GpuQueueLike {
   submit(commands: readonly unknown[]): void;
   onSubmittedWorkDone(): Promise<void>;
@@ -364,12 +369,12 @@ export class WebGpuRetainedRenderer {
     });
   }
 
-  async render(payload: Uint8Array, assets: Iterable<RetainedGpuAsset>): Promise<void> {
+  async render(objects: Iterable<RetainedGpuObject>, assets: Iterable<RetainedGpuAsset>): Promise<void> {
     if (this.#closed) throw new Error("Voplay retained 3D renderer is closed");
     if (this.#presentError !== null) throw this.#presentError;
     await this.#syncAssets(assets);
     const now = performance.now();
-    const scene = decodeScene(payload);
+    const scene = decodeScene(objects);
     if (this.#scene !== null) {
       this.#previousScene = this.#scene;
       const interval = now - this.#sceneReceivedAt;
@@ -1348,11 +1353,7 @@ struct OverlayOut {
   });
 }
 
-function decodeScene(payload: Uint8Array): DecodedScene {
-  if (payload.byteLength < 4) throw new Error("truncated Voplay retained 3D snapshot");
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const count = view.getUint32(0, true);
-  if (count > 1_000_000) throw new Error("Voplay retained 3D snapshot capacity exceeded");
+function decodeScene(objects: Iterable<RetainedGpuObject>): DecodedScene {
   const instances: SceneInstance[] = [];
   const overlays: Uint8Array[] = [];
   let camera: SceneCamera | null = null;
@@ -1361,17 +1362,14 @@ function decodeScene(payload: Uint8Array): DecodedScene {
   let fogEnd = 1100;
   let exposure = 0;
   let toneMap = 1;
-  let offset = 4;
-  for (let index = 0; index < count; index += 1) {
-    requireBytes(payload, offset, 12);
-    const entityKey = `${view.getUint32(offset, true)}:${view.getUint32(offset + 4, true)}`;
-    const length = view.getUint32(offset + 8, true);
-    offset += 12;
-    requireBytes(payload, offset, length);
-    const object = payload.subarray(offset, offset + length);
-    offset += length;
+  let count = 0;
+  for (const record of objects) {
+    count++;
+    if (count > 1_000_000) throw new Error("Voplay retained 3D snapshot capacity exceeded");
+    const entityKey = `${record.entity.index}:${record.entity.generation}`;
+    const object = record.bytes;
     if (isOverlay(object)) {
-      overlays.push(object.slice());
+      overlays.push(object);
       continue;
     }
     if (
@@ -1413,7 +1411,12 @@ function decodeScene(payload: Uint8Array): DecodedScene {
         );
         const material = componentView.getBigUint64(4, true);
         const mesh = componentView.getBigUint64(24, true);
-        instances.push({ key: entityKey, mesh, material, matrix });
+        instances.push({
+          key: `${entityKey}:component:${componentIndex}`,
+          mesh,
+          material,
+          matrix,
+        });
       } else if (
         kind === 2
         && component.byteLength >= 21
@@ -1463,11 +1466,10 @@ function decodeScene(payload: Uint8Array): DecodedScene {
       ) {
         instances.push(...decodeParticleInstances(component, entityKey));
       } else if (isOverlay(component)) {
-        overlays.push(component.slice());
+        overlays.push(component);
       }
     }
   }
-  if (offset !== payload.byteLength) throw new Error("Voplay retained 3D snapshot trailing bytes");
   if (camera === null) throw new Error("Voplay retained 3D snapshot has no camera");
   return {
     instances,

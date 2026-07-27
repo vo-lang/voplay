@@ -463,7 +463,10 @@ export class WebGpuRetainedRenderer {
       const elapsed = now - this.#presentStatsStarted;
       if (
         elapsed >= 1000
-        && new URLSearchParams(window.location.search).has("rendererDebug")
+        && (
+          new URLSearchParams(window.location.search).has("rendererDebug")
+          || new URLSearchParams(window.location.search).has("voplayPresentDebug")
+        )
       ) {
         console.debug(
           `Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)}`,

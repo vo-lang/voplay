@@ -863,7 +863,9 @@ class VoplayStudioRenderer {
             throw new Error("Voplay render snapshot has no canvas surface");
         }
         if (this.#retainedRenderer === null) {
+            this.#host?.log("Voplay retained WebGPU renderer creating");
             this.#retainedRenderer = await WebGpuRetainedRenderer.create(canvas);
+            this.#host?.log("Voplay retained WebGPU renderer ready");
         }
         const assets = [];
         for (const asset of this.#profileAssets.values()) {
@@ -873,6 +875,9 @@ class VoplayStudioRenderer {
             }
         }
         this.#retainedRenderer.render(payload, assets);
+        if (header.newRevision === 1n) {
+            this.#host?.log(`Voplay retained WebGPU first frame assets=${assets.length}`);
+        }
         await this.#requireLane().submit(encodeFrameworkPacket({
             ...header,
             kind: 2 /* MessageKind.RenderStateAck */,

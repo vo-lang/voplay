@@ -2515,13 +2515,25 @@ function drawBlockKartOverlay(
     const y = Number(view.getBigInt64(21, true)) / 1000;
     const width = Number(view.getBigInt64(29, true)) / 1000;
     const height = Number(view.getBigInt64(37, true)) / 1000;
-    context.fillStyle = `rgba(${bytes[53]},${bytes[54]},${bytes[55]},${bytes[56] / 255})`;
+    const radius = view.getUint32(45, true) / 1000;
+    const strokeWidth = view.getUint32(49, true) / 1000;
+    context.beginPath();
     if (kind === 2) {
+      context.roundRect(x, y, width, height, Math.min(radius, width / 2, height / 2));
+    } else if (kind === 3) {
       context.beginPath();
       context.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
-      context.fill();
     } else {
-      context.fillRect(x, y, width, height);
+      context.rect(x, y, width, height);
+    }
+    if (bytes[56] !== 0) {
+      context.fillStyle = `rgba(${bytes[53]},${bytes[54]},${bytes[55]},${bytes[56] / 255})`;
+      context.fill();
+    }
+    if (strokeWidth > 0 && bytes[60] !== 0) {
+      context.strokeStyle = `rgba(${bytes[57]},${bytes[58]},${bytes[59]},${bytes[60] / 255})`;
+      context.lineWidth = strokeWidth;
+      context.stroke();
     }
     return;
   }

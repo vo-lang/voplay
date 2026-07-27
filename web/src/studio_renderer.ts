@@ -125,6 +125,7 @@ class VoplayStudioRenderer {
   #retainedRenderer: WebGpuRetainedRenderer | null = null;
   #retainedAssetCount = -1;
   #retainedFrameCount = 0;
+  #retainedCpuMillis = 0;
   #retainedStatsStart = 0;
   #retainedStatsSamples = 0;
   #haptics: BrowserHapticsHost | null = null;
@@ -555,6 +556,7 @@ class VoplayStudioRenderer {
       this.#retainedRenderer = null;
       this.#retainedAssetCount = -1;
       this.#retainedFrameCount = 0;
+      this.#retainedCpuMillis = 0;
       this.#retainedStatsStart = 0;
       this.#retainedStatsSamples = 0;
       for (const record of this.#surfaces.values()) record.lease.release();
@@ -1116,7 +1118,9 @@ class VoplayStudioRenderer {
       this.#retainedAssetCount = assets.length;
       this.#host?.log(`Voplay retained WebGPU assets=${assets.length}`);
     }
+    const renderStarted = performance.now();
     await this.#retainedRenderer.render(payload, assets);
+    this.#retainedCpuMillis += performance.now() - renderStarted;
     if (this.#retainedStatsSamples < 20) {
       const now = performance.now();
       if (this.#retainedStatsStart === 0) this.#retainedStatsStart = now;
@@ -1124,10 +1128,12 @@ class VoplayStudioRenderer {
       const elapsed = now - this.#retainedStatsStart;
       if (elapsed >= 1000) {
         this.#host?.log(
-          `Voplay retained WebGPU fps=${Math.round(this.#retainedFrameCount * 1000 / elapsed)}`,
+          `Voplay retained WebGPU fps=${Math.round(this.#retainedFrameCount * 1000 / elapsed)} `
+          + `cpu_ms=${Math.round(this.#retainedCpuMillis / this.#retainedFrameCount * 10) / 10}`,
         );
         this.#retainedStatsStart = now;
         this.#retainedFrameCount = 0;
+        this.#retainedCpuMillis = 0;
         this.#retainedStatsSamples++;
       }
     }

@@ -215,7 +215,21 @@ export class WebGpuRetainedRenderer {
       device.destroy();
       throw new Error("Voplay retained 3D cannot acquire a WebGPU canvas");
     }
-    return new WebGpuRetainedRenderer(canvas, device, context, gpu.getPreferredCanvasFormat());
+    device.pushErrorScope("validation");
+    const renderer = new WebGpuRetainedRenderer(
+      canvas,
+      device,
+      context,
+      gpu.getPreferredCanvasFormat(),
+    );
+    const validation = await device.popErrorScope();
+    if (validation !== null) {
+      renderer.close();
+      throw new Error(
+        `Voplay retained 3D resource creation failed: ${validation.message ?? "unknown"}`,
+      );
+    }
+    return renderer;
   }
 
   private constructor(

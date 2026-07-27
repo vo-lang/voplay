@@ -1971,6 +1971,35 @@ function appendProjectedPrimitiveFaces(output, primitive, camera, width, height,
             stroke: shadeCssColor(baseColor, 0.62),
         });
     }
+    if (primitive.material === 101n) {
+        for (let dash = 0; dash < 12; dash += 1) {
+            const start = -0.47 + dash / 12;
+            const end = start + 0.045;
+            const worldDash = [
+                retainedLocalPoint(primitive.matrix, -0.018, 0.52, start),
+                retainedLocalPoint(primitive.matrix, 0.018, 0.52, start),
+                retainedLocalPoint(primitive.matrix, 0.018, 0.52, end),
+                retainedLocalPoint(primitive.matrix, -0.018, 0.52, end),
+            ];
+            const projectedDash = worldDash.map((point) => projectRetainedPoint(point, camera, width, height));
+            if (projectedDash.some((vertex) => vertex === null))
+                continue;
+            output.push({
+                points: projectedDash.map((vertex) => [vertex.x, vertex.y]),
+                depth: projectedDash.reduce((sum, vertex) => sum + vertex.depth, 0) /
+                    projectedDash.length - 1,
+                color: "rgb(245,245,225)",
+                stroke: "rgb(225,225,210)",
+            });
+        }
+    }
+}
+function retainedLocalPoint(matrix, x, y, z) {
+    return [
+        matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3],
+        matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7],
+        matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11],
+    ];
 }
 function projectRetainedPoint(point, camera, width, height) {
     const matrix = camera.matrix;

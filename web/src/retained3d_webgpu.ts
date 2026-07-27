@@ -150,7 +150,7 @@ const TEXTURE_BINDING = 0x04;
 const TEXTURE_RENDER_ATTACHMENT = 0x10;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
-const PRESENT_SAMPLE_COUNT = 2;
+const PRESENT_SAMPLE_COUNT = 4;
 
 export class WebGpuRetainedRenderer {
   readonly #canvas: HTMLCanvasElement;

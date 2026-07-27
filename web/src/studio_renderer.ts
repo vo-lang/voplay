@@ -123,6 +123,7 @@ class VoplayStudioRenderer {
   #surfaceCapability: AppSurfaceCapability | null = null;
   #surfaceHost: BrowserSurfaceHost | null = null;
   #retainedRenderer: WebGpuRetainedRenderer | null = null;
+  #retainedAssetCount = -1;
   #haptics: BrowserHapticsHost | null = null;
   #gamepads: BrowserGamepadInputSource | null = null;
   #surfaces = new Map<string, SurfaceRecord>();
@@ -549,6 +550,7 @@ class VoplayStudioRenderer {
       this.#surfaceHost = null;
       this.#retainedRenderer?.close();
       this.#retainedRenderer = null;
+      this.#retainedAssetCount = -1;
       for (const record of this.#surfaces.values()) record.lease.release();
       this.#surfaces.clear();
       for (const texture of this.#textures.values()) texture.source.close();
@@ -1104,10 +1106,11 @@ class VoplayStudioRenderer {
         assets.push(asset);
       }
     }
-    this.#retainedRenderer.render(payload, assets);
-    if (header.newRevision === 1n) {
-      this.#host?.log(`Voplay retained WebGPU first frame assets=${assets.length}`);
+    if (assets.length !== this.#retainedAssetCount) {
+      this.#retainedAssetCount = assets.length;
+      this.#host?.log(`Voplay retained WebGPU assets=${assets.length}`);
     }
+    await this.#retainedRenderer.render(payload, assets);
     await this.#requireLane().submit(encodeFrameworkPacket({
       ...header,
       kind: MessageKind.RenderStateAck,

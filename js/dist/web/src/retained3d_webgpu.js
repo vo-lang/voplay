@@ -60,86 +60,97 @@ export class WebGpuRetainedRenderer {
             usage: BUFFER_VERTEX | BUFFER_COPY_DST,
         });
     }
-    render(payload, assets) {
+    async render(payload, assets) {
         if (this.#closed)
             throw new Error("Voplay retained 3D renderer is closed");
-        this.#syncAssets(assets);
-        const scene = decodeScene(payload);
-        this.#resize();
-        const width = Math.max(1, this.#canvas.width);
-        const height = Math.max(1, this.#canvas.height);
-        const viewProjection = sceneViewProjection(scene.camera, width / height);
-        const cameraPosition = [
-            scene.camera.matrix[3] / 1000,
-            scene.camera.matrix[7] / 1000,
-            scene.camera.matrix[11] / 1000,
-        ];
-        const uniform = new Float32Array(32);
-        uniform.set(viewProjection, 0);
-        uniform.set([-0.36, -0.84, -0.41, 0], 16);
-        uniform.set([...cameraPosition, 1], 20);
-        uniform.set([...scene.fogColor, 1], 24);
-        uniform.set([scene.fogStart, scene.fogEnd, 0, 0], 28);
-        this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
-        const batches = new Map();
-        for (const instance of scene.instances) {
-            const mesh = this.#meshes.get(instance.mesh);
-            if (mesh === undefined)
-                continue;
-            const material = this.#materials.get(instance.material);
-            const values = batches.get(instance.mesh) ?? [];
-            pushInstance(values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
-            batches.set(instance.mesh, values);
+        this.#device.pushErrorScope("validation");
+        try {
+            this.#syncAssets(assets);
+            const scene = decodeScene(payload);
+            this.#resize();
+            const width = Math.max(1, this.#canvas.width);
+            const height = Math.max(1, this.#canvas.height);
+            const viewProjection = sceneViewProjection(scene.camera, width / height);
+            const cameraPosition = [
+                scene.camera.matrix[3] / 1000,
+                scene.camera.matrix[7] / 1000,
+                scene.camera.matrix[11] / 1000,
+            ];
+            const uniform = new Float32Array(32);
+            uniform.set(viewProjection, 0);
+            uniform.set([-0.36, -0.84, -0.41, 0], 16);
+            uniform.set([...cameraPosition, 1], 20);
+            uniform.set([...scene.fogColor, 1], 24);
+            uniform.set([scene.fogStart, scene.fogEnd, 0, 0], 28);
+            this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
+            const batches = new Map();
+            for (const instance of scene.instances) {
+                const mesh = this.#meshes.get(instance.mesh);
+                if (mesh === undefined)
+                    continue;
+                const material = this.#materials.get(instance.material);
+                const values = batches.get(instance.mesh) ?? [];
+                pushInstance(values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
+                batches.set(instance.mesh, values);
+            }
+            const overlayValues = decodeOverlays(scene.overlays, width, height);
+            if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
+                throw new Error("Voplay retained 3D overlay capacity exceeded");
+            }
+            const overlay = new Float32Array(overlayValues);
+            this.#ensureOverlayCapacity(overlay.length / 6);
+            if (overlay.length > 0)
+                this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
+            const encoder = this.#device.createCommandEncoder({
+                label: "Voplay retained 3D frame",
+            });
+            const pass = encoder.beginRenderPass({
+                label: "Voplay retained 3D render pass",
+                colorAttachments: [{
+                        view: this.#context.getCurrentTexture().createView(),
+                        clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                    }],
+                depthStencilAttachment: {
+                    view: this.#depth.createView(),
+                    depthClearValue: 1,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
+                },
+            });
+            pass.setPipeline(this.#scenePipeline);
+            pass.setBindGroup(0, this.#uniformBindGroup);
+            for (const [meshId, values] of batches) {
+                const mesh = this.#meshes.get(meshId);
+                const count = values.length / 20;
+                if (count === 0)
+                    continue;
+                if (count > MAX_INSTANCES)
+                    throw new Error("Voplay retained 3D instance capacity exceeded");
+                this.#ensureInstanceCapacity(mesh, count);
+                this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(values));
+                pass.setVertexBuffer(0, mesh.vertex);
+                pass.setVertexBuffer(1, mesh.instance);
+                pass.setIndexBuffer(mesh.index, "uint32");
+                pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
+            }
+            if (overlay.length > 0) {
+                pass.setPipeline(this.#overlayPipeline);
+                pass.setVertexBuffer(0, this.#overlayBuffer);
+                pass.draw(overlay.length / 6, 1, 0);
+            }
+            pass.end();
+            this.#device.queue.submit([encoder.finish()]);
         }
-        const overlayValues = decodeOverlays(scene.overlays, width, height);
-        if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
-            throw new Error("Voplay retained 3D overlay capacity exceeded");
+        catch (error) {
+            await this.#device.popErrorScope();
+            throw error;
         }
-        const overlay = new Float32Array(overlayValues);
-        this.#ensureOverlayCapacity(overlay.length / 6);
-        if (overlay.length > 0)
-            this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
-        const encoder = this.#device.createCommandEncoder({
-            label: "Voplay retained 3D frame",
-        });
-        const pass = encoder.beginRenderPass({
-            label: "Voplay retained 3D render pass",
-            colorAttachments: [{
-                    view: this.#context.getCurrentTexture().createView(),
-                    clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
-                    loadOp: "clear",
-                    storeOp: "store",
-                }],
-            depthStencilAttachment: {
-                view: this.#depth.createView(),
-                depthClearValue: 1,
-                depthLoadOp: "clear",
-                depthStoreOp: "store",
-            },
-        });
-        pass.setPipeline(this.#scenePipeline);
-        pass.setBindGroup(0, this.#uniformBindGroup);
-        for (const [meshId, values] of batches) {
-            const mesh = this.#meshes.get(meshId);
-            const count = values.length / 20;
-            if (count === 0)
-                continue;
-            if (count > MAX_INSTANCES)
-                throw new Error("Voplay retained 3D instance capacity exceeded");
-            this.#ensureInstanceCapacity(mesh, count);
-            this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(values));
-            pass.setVertexBuffer(0, mesh.vertex);
-            pass.setVertexBuffer(1, mesh.instance);
-            pass.setIndexBuffer(mesh.index, "uint32");
-            pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
+        const validation = await this.#device.popErrorScope();
+        if (validation !== null) {
+            throw new Error(`Voplay retained WebGPU validation failed: ${validation.message ?? "unknown"}`);
         }
-        if (overlay.length > 0) {
-            pass.setPipeline(this.#overlayPipeline);
-            pass.setVertexBuffer(0, this.#overlayBuffer);
-            pass.draw(overlay.length / 6, 1, 0);
-        }
-        pass.end();
-        this.#device.queue.submit([encoder.finish()]);
     }
     close() {
         if (this.#closed)

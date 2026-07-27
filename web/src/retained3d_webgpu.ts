@@ -52,6 +52,8 @@ interface GpuDeviceLike {
   createRenderPipeline(descriptor: unknown): GpuPipelineLike;
   createShaderModule(descriptor: unknown): unknown;
   createTexture(descriptor: unknown): GpuTextureLike;
+  popErrorScope(): Promise<{ readonly message?: string } | null>;
+  pushErrorScope(filter: "validation"): void;
   destroy(): void;
 }
 
@@ -177,8 +179,10 @@ export class WebGpuRetainedRenderer {
     });
   }
 
-  render(payload: Uint8Array, assets: Iterable<RetainedGpuAsset>): void {
+  async render(payload: Uint8Array, assets: Iterable<RetainedGpuAsset>): Promise<void> {
     if (this.#closed) throw new Error("Voplay retained 3D renderer is closed");
+    this.#device.pushErrorScope("validation");
+    try {
     this.#syncAssets(assets);
     const scene = decodeScene(payload);
     this.#resize();
@@ -254,6 +258,14 @@ export class WebGpuRetainedRenderer {
     }
     pass.end();
     this.#device.queue.submit([encoder.finish()]);
+    } catch (error) {
+      await this.#device.popErrorScope();
+      throw error;
+    }
+    const validation = await this.#device.popErrorScope();
+    if (validation !== null) {
+      throw new Error(`Voplay retained WebGPU validation failed: ${validation.message ?? "unknown"}`);
+    }
   }
 
   close(): void {

@@ -23,6 +23,7 @@ class VoplayStudioRenderer {
     #surfaceCapability = null;
     #surfaceHost = null;
     #retainedRenderer = null;
+    #retainedAssetCount = -1;
     #haptics = null;
     #gamepads = null;
     #surfaces = new Map();
@@ -396,6 +397,7 @@ class VoplayStudioRenderer {
             this.#surfaceHost = null;
             this.#retainedRenderer?.close();
             this.#retainedRenderer = null;
+            this.#retainedAssetCount = -1;
             for (const record of this.#surfaces.values())
                 record.lease.release();
             this.#surfaces.clear();
@@ -874,10 +876,11 @@ class VoplayStudioRenderer {
                 assets.push(asset);
             }
         }
-        this.#retainedRenderer.render(payload, assets);
-        if (header.newRevision === 1n) {
-            this.#host?.log(`Voplay retained WebGPU first frame assets=${assets.length}`);
+        if (assets.length !== this.#retainedAssetCount) {
+            this.#retainedAssetCount = assets.length;
+            this.#host?.log(`Voplay retained WebGPU assets=${assets.length}`);
         }
+        await this.#retainedRenderer.render(payload, assets);
         await this.#requireLane().submit(encodeFrameworkPacket({
             ...header,
             kind: 2 /* MessageKind.RenderStateAck */,

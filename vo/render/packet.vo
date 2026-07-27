@@ -16,6 +16,18 @@ type SnapshotObject struct {
 	Bytes []byte
 }
 
+const (
+	TransactionSpawn uint32 = 1
+	TransactionDespawn uint32 = 2
+	TransactionUpsert uint32 = 3
+)
+
+type TransactionOp struct {
+	Kind uint32
+	Entity voplay.Handle
+	Bytes []byte
+}
+
 type AssetAck struct {
 	Kind uint32
 	Asset uint64
@@ -54,6 +66,39 @@ func EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64,
 		}
 	}
 	return encodeRenderFrameworkPacket(3, engine, channelEpoch, commitId, 0, revision,
+		requiredControlRevision, sourceSimulationRevision, 0, payload)
+}
+
+// EncodeTransactionPacket publishes an incremental retained-world update against
+// an acknowledged base revision. Spawn and Upsert carry object bytes; Despawn
+// only carries the entity identity.
+func EncodeTransactionPacket(engine voplay.EngineRef, channelEpoch uint64,
+	commitId uint64, baseRevision uint64, newRevision uint64,
+	requiredControlRevision uint64, sourceSimulationRevision uint64,
+	ops []TransactionOp) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || commitId == 0 ||
+		baseRevision == 0 || newRevision != baseRevision + 1 || len(ops) > 131072 {
+		return nil, false
+	}
+	payload := appendRenderU32(nil, uint32(len(ops)))
+	for _, op := range ops {
+		if !op.Entity.Valid() || op.Kind < TransactionSpawn || op.Kind > TransactionUpsert ||
+			op.Kind == TransactionDespawn && len(op.Bytes) != 0 ||
+			op.Kind != TransactionDespawn && (len(op.Bytes) == 0 || len(op.Bytes) > 4194304) {
+			return nil, false
+		}
+		payload = append(payload, byte(op.Kind))
+		payload = appendRenderU32(payload, op.Entity.Index)
+		payload = appendRenderU32(payload, op.Entity.Generation)
+		if op.Kind != TransactionDespawn {
+			payload = appendRenderU32(payload, uint32(len(op.Bytes)))
+			payload = append(payload, op.Bytes...)
+		}
+		if len(payload)+80 > 67108864 {
+			return nil, false
+		}
+	}
+	return encodeRenderFrameworkPacket(1, engine, channelEpoch, commitId, baseRevision, newRevision,
 		requiredControlRevision, sourceSimulationRevision, 0, payload)
 }
 

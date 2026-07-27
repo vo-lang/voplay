@@ -28,6 +28,8 @@ class VoplayStudioRenderer {
     #retainedCpuMillis = 0;
     #retainedStatsStart = 0;
     #retainedStatsSamples = 0;
+    #retainedRevision = 0n;
+    #retainedObjects = new Map();
     #haptics = null;
     #gamepads = null;
     #surfaces = new Map();
@@ -406,6 +408,8 @@ class VoplayStudioRenderer {
             this.#retainedCpuMillis = 0;
             this.#retainedStatsStart = 0;
             this.#retainedStatsSamples = 0;
+            this.#retainedRevision = 0n;
+            this.#retainedObjects.clear();
             for (const record of this.#surfaces.values())
                 record.lease.release();
             this.#surfaces.clear();
@@ -684,6 +688,7 @@ class VoplayStudioRenderer {
             || header.kind === 32 /* MessageKind.WorkerWake */;
         if (header.kind !== 37 /* MessageKind.RenderAssetData */
             && header.kind !== 6 /* MessageKind.RenderControlTransaction */
+            && header.kind !== 1 /* MessageKind.RenderStateTransaction */
             && header.kind !== 3 /* MessageKind.RenderStateSnapshot */
             && !lifecyclePacket
             && header.sequence <= this.#lastInboundSequence) {
@@ -691,6 +696,7 @@ class VoplayStudioRenderer {
         }
         if (header.kind !== 37 /* MessageKind.RenderAssetData */
             && header.kind !== 6 /* MessageKind.RenderControlTransaction */
+            && header.kind !== 1 /* MessageKind.RenderStateTransaction */
             && header.kind !== 3 /* MessageKind.RenderStateSnapshot */
             && !lifecyclePacket) {
             this.#lastInboundSequence = header.sequence;
@@ -709,6 +715,9 @@ class VoplayStudioRenderer {
                 break;
             case 6 /* MessageKind.RenderControlTransaction */:
                 await this.#acceptRenderControl(decoded);
+                break;
+            case 1 /* MessageKind.RenderStateTransaction */:
+                await this.#acceptRenderTransaction(decoded);
                 break;
             case 3 /* MessageKind.RenderStateSnapshot */:
                 await this.#acceptRenderSnapshot(decoded);
@@ -872,6 +881,7 @@ class VoplayStudioRenderer {
         if (!(canvas instanceof HTMLCanvasElement)) {
             throw new Error("Voplay render snapshot has no canvas surface");
         }
+        const nextObjects = decodeRetainedObjectSnapshot(payload);
         if (this.#retainedRenderer === null) {
             this.#host?.log("Voplay retained WebGPU renderer creating");
             this.#retainedRenderer = await WebGpuRetainedRenderer.create(canvas);
@@ -890,6 +900,41 @@ class VoplayStudioRenderer {
         }
         const renderStarted = performance.now();
         await this.#retainedRenderer.render(payload, assets);
+        this.#retainedObjects = nextObjects;
+        this.#retainedRevision = header.newRevision;
+        await this.#finishRetainedFrame(packet, renderStarted);
+    }
+    async #acceptRenderTransaction(packet) {
+        const { header, payload } = packet;
+        if (header.commitId === 0n
+            || header.baseRevision === 0n
+            || header.baseRevision !== this.#retainedRevision
+            || header.newRevision !== header.baseRevision + 1n
+            || this.#surfaces.size !== 1
+            || this.#retainedRenderer === null) {
+            throw new Error("invalid Voplay render transaction");
+        }
+        const surface = this.#surfaces.values().next().value;
+        const canvas = surface?.lease.element;
+        if (!(canvas instanceof HTMLCanvasElement)) {
+            throw new Error("Voplay render transaction has no canvas surface");
+        }
+        const nextObjects = applyRetainedObjectTransaction(this.#retainedObjects, payload);
+        const assets = [];
+        for (const asset of this.#profileAssets.values()) {
+            if (asset.engine.index === header.engine.index
+                && asset.engine.generation === header.engine.generation) {
+                assets.push(asset);
+            }
+        }
+        const renderStarted = performance.now();
+        await this.#retainedRenderer.render(encodeRetainedObjectSnapshot(nextObjects), assets);
+        this.#retainedObjects = nextObjects;
+        this.#retainedRevision = header.newRevision;
+        await this.#finishRetainedFrame(packet, renderStarted);
+    }
+    async #finishRetainedFrame(packet, renderStarted) {
+        const { header } = packet;
         this.#retainedCpuMillis += performance.now() - renderStarted;
         if (this.#retainedStatsSamples < 20) {
             const now = performance.now();
@@ -1787,6 +1832,128 @@ function encodeHostRenderFrameTrace(engine, request, frameId, graphSignature, tr
     view.setUint32(41, trace.byteLength, true);
     bytes.set(trace, 45);
     return bytes;
+}
+function retainedObjectKey(entity) {
+    return `${entity.index}:${entity.generation}`;
+}
+function decodeRetainedObjectSnapshot(payload) {
+    if (payload.byteLength < 4) {
+        throw new Error("truncated Voplay retained snapshot");
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const count = view.getUint32(0, true);
+    if (count > 1_000_000 || count > Math.floor((payload.byteLength - 4) / 12)) {
+        throw new Error("invalid Voplay retained snapshot object count");
+    }
+    const objects = new Map();
+    let offset = 4;
+    for (let index = 0; index < count; index += 1) {
+        if (payload.byteLength - offset < 12) {
+            throw new Error("truncated Voplay retained snapshot object");
+        }
+        const entity = {
+            index: view.getUint32(offset, true),
+            generation: view.getUint32(offset + 4, true),
+        };
+        const length = view.getUint32(offset + 8, true);
+        offset += 12;
+        if (entity.index === 0
+            || entity.generation === 0
+            || length === 0
+            || length > 4 * 1024 * 1024
+            || length > payload.byteLength - offset) {
+            throw new Error("invalid Voplay retained snapshot object");
+        }
+        const key = retainedObjectKey(entity);
+        if (objects.has(key)) {
+            throw new Error("duplicate Voplay retained snapshot object");
+        }
+        objects.set(key, { entity, bytes: payload.slice(offset, offset + length) });
+        offset += length;
+    }
+    if (offset !== payload.byteLength) {
+        throw new Error("Voplay retained snapshot has trailing bytes");
+    }
+    return objects;
+}
+function applyRetainedObjectTransaction(current, payload) {
+    if (payload.byteLength < 4) {
+        throw new Error("truncated Voplay retained transaction");
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const count = view.getUint32(0, true);
+    if (count > MAX_COMMANDS || count > payload.byteLength - 4) {
+        throw new Error("invalid Voplay retained transaction operation count");
+    }
+    const objects = new Map(current);
+    const touched = new Set();
+    let offset = 4;
+    for (let index = 0; index < count; index += 1) {
+        if (payload.byteLength - offset < 9) {
+            throw new Error("truncated Voplay retained transaction operation");
+        }
+        const kind = payload[offset];
+        const entity = {
+            index: view.getUint32(offset + 1, true),
+            generation: view.getUint32(offset + 5, true),
+        };
+        offset += 9;
+        if (entity.index === 0 || entity.generation === 0) {
+            throw new Error("invalid Voplay retained transaction entity");
+        }
+        const key = retainedObjectKey(entity);
+        if (touched.has(key)) {
+            throw new Error("duplicate Voplay retained transaction entity");
+        }
+        touched.add(key);
+        if (kind === 2) {
+            if (!objects.delete(key)) {
+                throw new Error("Voplay retained transaction despawned a missing entity");
+            }
+            continue;
+        }
+        if (kind !== 1 && kind !== 3 || payload.byteLength - offset < 4) {
+            throw new Error("invalid Voplay retained transaction operation");
+        }
+        const length = view.getUint32(offset, true);
+        offset += 4;
+        if (length === 0 || length > 4 * 1024 * 1024 || length > payload.byteLength - offset) {
+            throw new Error("invalid Voplay retained transaction value");
+        }
+        const exists = objects.has(key);
+        if (kind === 1 && exists || kind === 3 && !exists) {
+            throw new Error("Voplay retained transaction entity state mismatch");
+        }
+        objects.set(key, { entity, bytes: payload.slice(offset, offset + length) });
+        offset += length;
+    }
+    if (offset !== payload.byteLength) {
+        throw new Error("Voplay retained transaction has trailing bytes");
+    }
+    return objects;
+}
+function encodeRetainedObjectSnapshot(objects) {
+    const ordered = [...objects.values()].sort((left, right) => left.entity.index - right.entity.index || left.entity.generation - right.entity.generation);
+    let length = 4;
+    for (const object of ordered) {
+        length += 12 + object.bytes.byteLength;
+    }
+    if (length > 64 * 1024 * 1024) {
+        throw new Error("Voplay retained snapshot exceeds browser capacity");
+    }
+    const payload = new Uint8Array(length);
+    const view = new DataView(payload.buffer);
+    view.setUint32(0, ordered.length, true);
+    let offset = 4;
+    for (const object of ordered) {
+        view.setUint32(offset, object.entity.index, true);
+        view.setUint32(offset + 4, object.entity.generation, true);
+        view.setUint32(offset + 8, object.bytes.byteLength, true);
+        offset += 12;
+        payload.set(object.bytes, offset);
+        offset += object.bytes.byteLength;
+    }
+    return payload;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

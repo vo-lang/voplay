@@ -22,6 +22,15 @@ export class WebGpuRetainedRenderer {
     #width = 0;
     #height = 0;
     #validationFrames = 8;
+    #previousScene = null;
+    #scene = null;
+    #sceneReceivedAt = 0;
+    #sceneIntervalMillis = 100;
+    #animationFrame = 0;
+    #drawing = false;
+    #presentError = null;
+    #presentFrames = 0;
+    #presentStatsStarted = 0;
     #closed = false;
     static async create(canvas) {
         const gpu = navigator.gpu;
@@ -64,12 +73,31 @@ export class WebGpuRetainedRenderer {
     async render(payload, assets) {
         if (this.#closed)
             throw new Error("Voplay retained 3D renderer is closed");
+        if (this.#presentError !== null)
+            throw this.#presentError;
+        this.#syncAssets(assets);
+        const now = performance.now();
+        const scene = decodeScene(payload);
+        if (this.#scene !== null) {
+            this.#previousScene = this.#scene;
+            const interval = now - this.#sceneReceivedAt;
+            if (interval >= 8 && interval <= 1000) {
+                this.#sceneIntervalMillis = Math.max(16, Math.min(250, interval));
+            }
+        }
+        else {
+            this.#previousScene = scene;
+        }
+        this.#scene = scene;
+        this.#sceneReceivedAt = now;
         const validate = this.#validationFrames > 0;
+        await this.#draw(scene, validate);
+        this.#schedulePresent();
+    }
+    async #draw(scene, validate) {
         if (validate)
             this.#device.pushErrorScope("validation");
         try {
-            this.#syncAssets(assets);
-            const scene = decodeScene(payload);
             this.#resize();
             const width = Math.max(1, this.#canvas.width);
             const height = Math.max(1, this.#canvas.height);
@@ -159,10 +187,51 @@ export class WebGpuRetainedRenderer {
             }
         }
     }
+    #sampleScene(now) {
+        if (this.#scene === null || this.#previousScene === null) {
+            throw new Error("Voplay retained 3D renderer has no scene");
+        }
+        const lead = Math.max(0, Math.min(1, (now - this.#sceneReceivedAt) / this.#sceneIntervalMillis));
+        return interpolateScene(this.#previousScene, this.#scene, 1 + lead);
+    }
+    #schedulePresent() {
+        if (this.#animationFrame !== 0 || this.#closed)
+            return;
+        this.#animationFrame = requestAnimationFrame((now) => this.#present(now));
+    }
+    #present(now) {
+        this.#animationFrame = 0;
+        if (this.#closed)
+            return;
+        this.#schedulePresent();
+        if (this.#scene === null || this.#drawing || this.#presentError !== null)
+            return;
+        this.#drawing = true;
+        void this.#draw(this.#sampleScene(now), false).then(() => {
+            this.#presentFrames++;
+            if (this.#presentStatsStarted === 0)
+                this.#presentStatsStarted = now;
+            const elapsed = now - this.#presentStatsStarted;
+            if (elapsed >= 1000
+                && new URLSearchParams(window.location.search).has("rendererDebug")) {
+                console.debug(`Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)}`);
+                this.#presentFrames = 0;
+                this.#presentStatsStarted = now;
+            }
+        }).catch((error) => {
+            this.#presentError = error instanceof Error ? error : new Error(String(error));
+        }).finally(() => {
+            this.#drawing = false;
+        });
+    }
     close() {
         if (this.#closed)
             return;
         this.#closed = true;
+        if (this.#animationFrame !== 0) {
+            cancelAnimationFrame(this.#animationFrame);
+            this.#animationFrame = 0;
+        }
         for (const mesh of this.#meshes.values()) {
             mesh.vertex.destroy();
             mesh.index.destroy();
@@ -435,6 +504,7 @@ function decodeScene(payload) {
     let offset = 4;
     for (let index = 0; index < count; index += 1) {
         requireBytes(payload, offset, 12);
+        const entityKey = `${view.getUint32(offset, true)}:${view.getUint32(offset + 4, true)}`;
         const length = view.getUint32(offset + 8, true);
         offset += 12;
         requireBytes(payload, offset, length);
@@ -472,7 +542,7 @@ function decodeScene(payload) {
                 const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
                 const material = componentView.getBigUint64(4, true);
                 const mesh = componentView.getBigUint64(24, true);
-                instances.push({ mesh, material, matrix });
+                instances.push({ key: entityKey, mesh, material, matrix });
             }
             else if (kind === 2
                 && component.byteLength >= 21
@@ -511,6 +581,31 @@ function decodeScene(payload) {
     if (camera === null)
         throw new Error("Voplay retained 3D snapshot has no camera");
     return { instances, camera, overlays, fogColor, fogStart, fogEnd };
+}
+function interpolateScene(previous, current, alpha) {
+    const previousInstances = new Map(previous.instances.map((instance) => [instance.key, instance]));
+    return {
+        instances: current.instances.map((instance) => {
+            const prior = previousInstances.get(instance.key);
+            return prior === undefined
+                ? instance
+                : {
+                    ...instance,
+                    matrix: interpolateMatrix(prior.matrix, instance.matrix, alpha),
+                };
+        }),
+        camera: {
+            ...current.camera,
+            matrix: interpolateMatrix(previous.camera.matrix, current.camera.matrix, alpha),
+        },
+        overlays: current.overlays,
+        fogColor: current.fogColor,
+        fogStart: current.fogStart,
+        fogEnd: current.fogEnd,
+    };
+}
+function interpolateMatrix(previous, current, alpha) {
+    return current.map((value, index) => previous[index] + (value - previous[index]) * alpha);
 }
 function decodeMeshArtifact(bytes, expectedId) {
     if (bytes.byteLength < 21

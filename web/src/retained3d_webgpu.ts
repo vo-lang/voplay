@@ -87,6 +87,7 @@ interface ResidentMaterial {
 }
 
 interface SceneInstance {
+  readonly key: string;
   readonly mesh: bigint;
   readonly material: bigint;
   readonly matrix: readonly number[];
@@ -131,6 +132,15 @@ export class WebGpuRetainedRenderer {
   #width = 0;
   #height = 0;
   #validationFrames = 8;
+  #previousScene: DecodedScene | null = null;
+  #scene: DecodedScene | null = null;
+  #sceneReceivedAt = 0;
+  #sceneIntervalMillis = 100;
+  #animationFrame = 0;
+  #drawing = false;
+  #presentError: Error | null = null;
+  #presentFrames = 0;
+  #presentStatsStarted = 0;
   #closed = false;
 
   static async create(canvas: HTMLCanvasElement): Promise<WebGpuRetainedRenderer> {
@@ -182,84 +192,102 @@ export class WebGpuRetainedRenderer {
 
   async render(payload: Uint8Array, assets: Iterable<RetainedGpuAsset>): Promise<void> {
     if (this.#closed) throw new Error("Voplay retained 3D renderer is closed");
+    if (this.#presentError !== null) throw this.#presentError;
+    this.#syncAssets(assets);
+    const now = performance.now();
+    const scene = decodeScene(payload);
+    if (this.#scene !== null) {
+      this.#previousScene = this.#scene;
+      const interval = now - this.#sceneReceivedAt;
+      if (interval >= 8 && interval <= 1000) {
+        this.#sceneIntervalMillis = Math.max(16, Math.min(250, interval));
+      }
+    } else {
+      this.#previousScene = scene;
+    }
+    this.#scene = scene;
+    this.#sceneReceivedAt = now;
     const validate = this.#validationFrames > 0;
+    await this.#draw(scene, validate);
+    this.#schedulePresent();
+  }
+
+  async #draw(scene: DecodedScene, validate: boolean): Promise<void> {
     if (validate) this.#device.pushErrorScope("validation");
     try {
-    this.#syncAssets(assets);
-    const scene = decodeScene(payload);
-    this.#resize();
-    const width = Math.max(1, this.#canvas.width);
-    const height = Math.max(1, this.#canvas.height);
-    const viewProjection = sceneViewProjection(scene.camera, width / height);
-    const cameraPosition = [
-      scene.camera.matrix[3]! / 1000,
-      scene.camera.matrix[7]! / 1000,
-      scene.camera.matrix[11]! / 1000,
-    ] as const;
-    const uniform = new Float32Array(32);
-    uniform.set(viewProjection, 0);
-    uniform.set([-0.36, -0.84, -0.41, 0], 16);
-    uniform.set([...cameraPosition, 1], 20);
-    uniform.set([...scene.fogColor, 1], 24);
-    uniform.set([scene.fogStart, scene.fogEnd, 0, 0], 28);
-    this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
+      this.#resize();
+      const width = Math.max(1, this.#canvas.width);
+      const height = Math.max(1, this.#canvas.height);
+      const viewProjection = sceneViewProjection(scene.camera, width / height);
+      const cameraPosition = [
+        scene.camera.matrix[3]! / 1000,
+        scene.camera.matrix[7]! / 1000,
+        scene.camera.matrix[11]! / 1000,
+      ] as const;
+      const uniform = new Float32Array(32);
+      uniform.set(viewProjection, 0);
+      uniform.set([-0.36, -0.84, -0.41, 0], 16);
+      uniform.set([...cameraPosition, 1], 20);
+      uniform.set([...scene.fogColor, 1], 24);
+      uniform.set([scene.fogStart, scene.fogEnd, 0, 0], 28);
+      this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
 
-    const batches = new Map<bigint, number[]>();
-    for (const instance of scene.instances) {
-      const mesh = this.#meshes.get(instance.mesh);
-      if (mesh === undefined) continue;
-      const material = this.#materials.get(instance.material);
-      const values = batches.get(instance.mesh) ?? [];
-      pushInstance(values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
-      batches.set(instance.mesh, values);
-    }
-    const overlayValues = decodeOverlays(scene.overlays, width, height);
-    if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
-      throw new Error("Voplay retained 3D overlay capacity exceeded");
-    }
-    const overlay = new Float32Array(overlayValues);
-    this.#ensureOverlayCapacity(overlay.length / 6);
-    if (overlay.length > 0) this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
+      const batches = new Map<bigint, number[]>();
+      for (const instance of scene.instances) {
+        const mesh = this.#meshes.get(instance.mesh);
+        if (mesh === undefined) continue;
+        const material = this.#materials.get(instance.material);
+        const values = batches.get(instance.mesh) ?? [];
+        pushInstance(values, instance.matrix, material?.color ?? [0.72, 0.72, 0.76, 1]);
+        batches.set(instance.mesh, values);
+      }
+      const overlayValues = decodeOverlays(scene.overlays, width, height);
+      if (overlayValues.length / 6 > MAX_OVERLAY_VERTICES) {
+        throw new Error("Voplay retained 3D overlay capacity exceeded");
+      }
+      const overlay = new Float32Array(overlayValues);
+      this.#ensureOverlayCapacity(overlay.length / 6);
+      if (overlay.length > 0) this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
 
-    const encoder = this.#device.createCommandEncoder({
-      label: "Voplay retained 3D frame",
-    });
-    const pass = encoder.beginRenderPass({
-      label: "Voplay retained 3D render pass",
-      colorAttachments: [{
-        view: this.#context.getCurrentTexture().createView(),
-        clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
-        loadOp: "clear",
-        storeOp: "store",
-      }],
-      depthStencilAttachment: {
-        view: this.#depth!.createView(),
-        depthClearValue: 1,
-        depthLoadOp: "clear",
-        depthStoreOp: "store",
-      },
-    });
-    pass.setPipeline(this.#scenePipeline);
-    pass.setBindGroup(0, this.#uniformBindGroup);
-    for (const [meshId, values] of batches) {
-      const mesh = this.#meshes.get(meshId)!;
-      const count = values.length / 20;
-      if (count === 0) continue;
-      if (count > MAX_INSTANCES) throw new Error("Voplay retained 3D instance capacity exceeded");
-      this.#ensureInstanceCapacity(mesh, count);
-      this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(values));
-      pass.setVertexBuffer(0, mesh.vertex);
-      pass.setVertexBuffer(1, mesh.instance);
-      pass.setIndexBuffer(mesh.index, "uint32");
-      pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
-    }
-    if (overlay.length > 0) {
-      pass.setPipeline(this.#overlayPipeline);
-      pass.setVertexBuffer(0, this.#overlayBuffer);
-      pass.draw(overlay.length / 6, 1, 0);
-    }
-    pass.end();
-    this.#device.queue.submit([encoder.finish()]);
+      const encoder = this.#device.createCommandEncoder({
+        label: "Voplay retained 3D frame",
+      });
+      const pass = encoder.beginRenderPass({
+        label: "Voplay retained 3D render pass",
+        colorAttachments: [{
+          view: this.#context.getCurrentTexture().createView(),
+          clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        }],
+        depthStencilAttachment: {
+          view: this.#depth!.createView(),
+          depthClearValue: 1,
+          depthLoadOp: "clear",
+          depthStoreOp: "store",
+        },
+      });
+      pass.setPipeline(this.#scenePipeline);
+      pass.setBindGroup(0, this.#uniformBindGroup);
+      for (const [meshId, values] of batches) {
+        const mesh = this.#meshes.get(meshId)!;
+        const count = values.length / 20;
+        if (count === 0) continue;
+        if (count > MAX_INSTANCES) throw new Error("Voplay retained 3D instance capacity exceeded");
+        this.#ensureInstanceCapacity(mesh, count);
+        this.#device.queue.writeBuffer(mesh.instance, 0, new Float32Array(values));
+        pass.setVertexBuffer(0, mesh.vertex);
+        pass.setVertexBuffer(1, mesh.instance);
+        pass.setIndexBuffer(mesh.index, "uint32");
+        pass.drawIndexed(mesh.indexCount, count, 0, 0, 0);
+      }
+      if (overlay.length > 0) {
+        pass.setPipeline(this.#overlayPipeline);
+        pass.setVertexBuffer(0, this.#overlayBuffer);
+        pass.draw(overlay.length / 6, 1, 0);
+      }
+      pass.end();
+      this.#device.queue.submit([encoder.finish()]);
     } catch (error) {
       if (validate) await this.#device.popErrorScope();
       throw error;
@@ -273,9 +301,53 @@ export class WebGpuRetainedRenderer {
     }
   }
 
+  #sampleScene(now: number): DecodedScene {
+    if (this.#scene === null || this.#previousScene === null) {
+      throw new Error("Voplay retained 3D renderer has no scene");
+    }
+    const lead = Math.max(0, Math.min(1, (now - this.#sceneReceivedAt) / this.#sceneIntervalMillis));
+    return interpolateScene(this.#previousScene, this.#scene, 1 + lead);
+  }
+
+  #schedulePresent(): void {
+    if (this.#animationFrame !== 0 || this.#closed) return;
+    this.#animationFrame = requestAnimationFrame((now) => this.#present(now));
+  }
+
+  #present(now: number): void {
+    this.#animationFrame = 0;
+    if (this.#closed) return;
+    this.#schedulePresent();
+    if (this.#scene === null || this.#drawing || this.#presentError !== null) return;
+    this.#drawing = true;
+    void this.#draw(this.#sampleScene(now), false).then(() => {
+      this.#presentFrames++;
+      if (this.#presentStatsStarted === 0) this.#presentStatsStarted = now;
+      const elapsed = now - this.#presentStatsStarted;
+      if (
+        elapsed >= 1000
+        && new URLSearchParams(window.location.search).has("rendererDebug")
+      ) {
+        console.debug(
+          `Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)}`,
+        );
+        this.#presentFrames = 0;
+        this.#presentStatsStarted = now;
+      }
+    }).catch((error: unknown) => {
+      this.#presentError = error instanceof Error ? error : new Error(String(error));
+    }).finally(() => {
+      this.#drawing = false;
+    });
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    if (this.#animationFrame !== 0) {
+      cancelAnimationFrame(this.#animationFrame);
+      this.#animationFrame = 0;
+    }
     for (const mesh of this.#meshes.values()) {
       mesh.vertex.destroy();
       mesh.index.destroy();
@@ -545,6 +617,7 @@ function decodeScene(payload: Uint8Array): DecodedScene {
   let offset = 4;
   for (let index = 0; index < count; index += 1) {
     requireBytes(payload, offset, 12);
+    const entityKey = `${view.getUint32(offset, true)}:${view.getUint32(offset + 4, true)}`;
     const length = view.getUint32(offset + 8, true);
     offset += 12;
     requireBytes(payload, offset, length);
@@ -593,7 +666,7 @@ function decodeScene(payload: Uint8Array): DecodedScene {
         );
         const material = componentView.getBigUint64(4, true);
         const mesh = componentView.getBigUint64(24, true);
-        instances.push({ mesh, material, matrix });
+        instances.push({ key: entityKey, mesh, material, matrix });
       } else if (
         kind === 2
         && component.byteLength >= 21
@@ -639,6 +712,42 @@ function decodeScene(payload: Uint8Array): DecodedScene {
   if (offset !== payload.byteLength) throw new Error("Voplay retained 3D snapshot trailing bytes");
   if (camera === null) throw new Error("Voplay retained 3D snapshot has no camera");
   return { instances, camera, overlays, fogColor, fogStart, fogEnd };
+}
+
+function interpolateScene(
+  previous: DecodedScene,
+  current: DecodedScene,
+  alpha: number,
+): DecodedScene {
+  const previousInstances = new Map(previous.instances.map((instance) => [instance.key, instance]));
+  return {
+    instances: current.instances.map((instance) => {
+      const prior = previousInstances.get(instance.key);
+      return prior === undefined
+        ? instance
+        : {
+          ...instance,
+          matrix: interpolateMatrix(prior.matrix, instance.matrix, alpha),
+        };
+    }),
+    camera: {
+      ...current.camera,
+      matrix: interpolateMatrix(previous.camera.matrix, current.camera.matrix, alpha),
+    },
+    overlays: current.overlays,
+    fogColor: current.fogColor,
+    fogStart: current.fogStart,
+    fogEnd: current.fogEnd,
+  };
+}
+
+function interpolateMatrix(
+  previous: readonly number[],
+  current: readonly number[],
+  alpha: number,
+): readonly number[] {
+  return current.map((value, index) =>
+    previous[index]! + (value - previous[index]!) * alpha);
 }
 
 function decodeMeshArtifact(

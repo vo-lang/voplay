@@ -2231,6 +2231,15 @@ function drawRetainedSnapshot2d(
     const object = payload.subarray(offset, offset + length);
     offset += length;
     if (
+      object.byteLength >= 4
+      && object[0] === 0x56
+      && object[2] === 0x32
+      && object[3] === 0x31
+    ) {
+      overlays.push(object.slice());
+      continue;
+    }
+    if (
       object.byteLength < 272
       || object[0] !== 0x56
       || object[1] !== 0x52
@@ -2428,7 +2437,7 @@ function appendProjectedPrimitiveFaces(
     if (vertices.some((vertex) => vertex === null)) continue;
     const points = vertices.map((vertex) => [vertex!.x, vertex!.y] as [number, number]);
     const signedArea = polygonSignedArea(points);
-    if (signedArea >= 0) continue;
+    if (Math.abs(signedArea) < 0.25) continue;
     output.push({
       points,
       depth: vertices.reduce((sum, vertex) => sum + vertex!.depth, 0) / vertices.length,

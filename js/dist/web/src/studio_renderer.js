@@ -1794,6 +1794,13 @@ function drawRetainedSnapshot2d(canvas, payload, materials) {
         }
         const object = payload.subarray(offset, offset + length);
         offset += length;
+        if (object.byteLength >= 4
+            && object[0] === 0x56
+            && object[2] === 0x32
+            && object[3] === 0x31) {
+            overlays.push(object.slice());
+            continue;
+        }
         if (object.byteLength < 272
             || object[0] !== 0x56
             || object[1] !== 0x52
@@ -1955,7 +1962,7 @@ function appendProjectedPrimitiveFaces(output, primitive, camera, width, height,
             continue;
         const points = vertices.map((vertex) => [vertex.x, vertex.y]);
         const signedArea = polygonSignedArea(points);
-        if (signedArea >= 0)
+        if (Math.abs(signedArea) < 0.25)
             continue;
         output.push({
             points,

@@ -7,7 +7,7 @@ const TEXTURE_BINDING = 0x04;
 const TEXTURE_RENDER_ATTACHMENT = 0x10;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
-const PRESENT_SAMPLE_COUNT = 1;
+const PRESENT_SAMPLE_COUNT = 4;
 export class WebGpuRetainedRenderer {
     #canvas;
     #device;
@@ -39,6 +39,7 @@ export class WebGpuRetainedRenderer {
     #overlayBuffer;
     #overlayCapacity = 6;
     #depth = null;
+    #colorMsaa = null;
     #width = 0;
     #height = 0;
     #validationFrames = 8;
@@ -178,7 +179,8 @@ export class WebGpuRetainedRenderer {
         this.#sceneReceivedAt = now;
         this.#prepareScene();
         const validate = this.#validationFrames > 0;
-        await this.#draw(1, validate);
+        if (validate)
+            await this.#draw(1, true);
         this.#schedulePresent();
     }
     #prepareScene() {
@@ -304,7 +306,8 @@ export class WebGpuRetainedRenderer {
             const pass = encoder.beginRenderPass({
                 label: "Voplay retained 3D render pass",
                 colorAttachments: [{
-                        view: this.#context.getCurrentTexture().createView(),
+                        view: this.#colorMsaa.createView(),
+                        resolveTarget: this.#context.getCurrentTexture().createView(),
                         clearValue: { r: 0.08, g: 0.48, b: 0.82, a: 1 },
                         loadOp: "clear",
                         storeOp: "store",
@@ -384,7 +387,9 @@ export class WebGpuRetainedRenderer {
                 && (new URLSearchParams(window.location.search).has("rendererDebug")
                     || new URLSearchParams(window.location.search).has("voplayPresentDebug"))) {
                 console.debug(`Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)} `
-                    + `cpu_ms=${Math.round(this.#presentCpuMillis / this.#presentFrames * 10) / 10}`);
+                    + `cpu_ms=${Math.round(this.#presentCpuMillis / this.#presentFrames * 10) / 10} `
+                    + `batches=${this.#preparedBatches.length} `
+                    + `instances=${this.#preparedBatches.reduce((sum, batch) => sum + batch.instances.length, 0)}`);
                 this.#presentFrames = 0;
                 this.#presentCpuMillis = 0;
                 this.#presentStatsStarted = now;
@@ -424,6 +429,7 @@ export class WebGpuRetainedRenderer {
         this.#overlayBuffer.destroy();
         this.#uniform.destroy();
         this.#depth?.destroy();
+        this.#colorMsaa?.destroy();
         this.#context.unconfigure();
         this.#device.destroy();
     }
@@ -555,6 +561,14 @@ export class WebGpuRetainedRenderer {
             alphaMode: "opaque",
         });
         this.#depth?.destroy();
+        this.#colorMsaa?.destroy();
+        this.#colorMsaa = this.#device.createTexture({
+            label: "Voplay retained 3D multisampled color",
+            size: [width, height, 1],
+            sampleCount: PRESENT_SAMPLE_COUNT,
+            format: this.#format,
+            usage: TEXTURE_RENDER_ATTACHMENT,
+        });
         this.#depth = this.#device.createTexture({
             label: "Voplay retained 3D depth",
             size: [width, height, 1],

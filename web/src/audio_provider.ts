@@ -376,16 +376,7 @@ export class VoplayBrowserAudioProvider {
         return;
       case MessageKind.AudioControlTransaction:
         this.#requireRunning(header.engine);
-        if (
-          header.newRevision < this.#controlRevision
-          || (
-            header.newRevision > this.#controlRevision
-            && this.#controlRevision !== 0n
-            && header.baseRevision !== this.#controlRevision
-          )
-        ) {
-          throw new Error("stale or non-contiguous Voplay audio control revision");
-        }
+        if (header.newRevision < this.#controlRevision) return;
         const nextControl = decodeAudioControl(packet);
         if (
           header.newRevision === this.#controlRevision
@@ -1468,24 +1459,20 @@ export class VoplayBrowserAudioProvider {
       || packet.header.kind === MessageKind.EngineResume
       || packet.header.kind === MessageKind.EngineClose
       || packet.header.kind === MessageKind.WorkerWake;
-    const sameRevisionControl =
-      packet.header.kind === MessageKind.AudioControlTransaction
-      && this.#controlRevision !== 0n
-      && packet.header.newRevision === this.#controlRevision;
     if (
       packet.header.kind !== MessageKind.AudioAssetData
+      && packet.header.kind !== MessageKind.AudioControlTransaction
       && packet.header.kind !== MessageKind.ControlObservedAck
       && !lifecyclePacket
-      && !sameRevisionControl
       && packet.header.sequence <= this.#lastSequence
     ) {
       throw new Error("Voplay audio packet sequence regression");
     }
     if (
       packet.header.kind !== MessageKind.AudioAssetData
+      && packet.header.kind !== MessageKind.AudioControlTransaction
       && packet.header.kind !== MessageKind.ControlObservedAck
       && !lifecyclePacket
-      && !sameRevisionControl
     ) {
       this.#lastSequence = packet.header.sequence;
     }

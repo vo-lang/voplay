@@ -669,11 +669,16 @@ class VoplayStudioRenderer {
             || header.kind === 16 /* MessageKind.EngineClose */
             || header.kind === 32 /* MessageKind.WorkerWake */;
         if (header.kind !== 37 /* MessageKind.RenderAssetData */
+            && header.kind !== 6 /* MessageKind.RenderControlTransaction */
+            && header.kind !== 3 /* MessageKind.RenderStateSnapshot */
             && !lifecyclePacket
             && header.sequence <= this.#lastInboundSequence) {
             throw new Error("Voplay packet sequence regression");
         }
-        if (header.kind !== 37 /* MessageKind.RenderAssetData */ && !lifecyclePacket) {
+        if (header.kind !== 37 /* MessageKind.RenderAssetData */
+            && header.kind !== 6 /* MessageKind.RenderControlTransaction */
+            && header.kind !== 3 /* MessageKind.RenderStateSnapshot */
+            && !lifecyclePacket) {
             this.#lastInboundSequence = header.sequence;
         }
         switch (header.kind) {
@@ -687,6 +692,12 @@ class VoplayStudioRenderer {
                 if (decoded.payload.byteLength !== 0) {
                     throw new Error("Voplay renderer wake payload must be empty");
                 }
+                break;
+            case 6 /* MessageKind.RenderControlTransaction */:
+                await this.#acceptRenderControl(decoded);
+                break;
+            case 3 /* MessageKind.RenderStateSnapshot */:
+                await this.#acceptRenderSnapshot(decoded);
                 break;
             case 30 /* MessageKind.SurfaceControl */:
                 await this.#applySurfaceControl(decodeSurfaceControl(bytes));
@@ -743,6 +754,116 @@ class VoplayStudioRenderer {
             default:
                 throw new Error("unsupported Voplay renderer lifecycle packet");
         }
+    }
+    async #acceptRenderControl(packet) {
+        const { header, payload } = packet;
+        if (header.commitId === 0n
+            || header.newRevision === 0n
+            || header.baseRevision + 1n !== header.newRevision
+            || payload.byteLength < 20
+            || payload[0] !== 0x56
+            || payload[1] !== 0x52
+            || payload[2] !== 0x43
+            || payload[3] !== 0x53) {
+            throw new Error("invalid Voplay render control");
+        }
+        const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        if (view.getUint16(4, true) !== 1
+            || view.getUint16(6, true) !== 0
+            || view.getBigUint64(8, true) !== header.commitId) {
+            throw new Error("unsupported Voplay render control");
+        }
+        const count = view.getUint32(16, true);
+        if (count === 0 || count > 4096) {
+            throw new Error("invalid Voplay render control entry count");
+        }
+        let offset = 20;
+        let target = null;
+        let domain = { index: 1, generation: 1 };
+        for (let index = 0; index < count; index += 1) {
+            if (payload.byteLength - offset < 48) {
+                throw new Error("truncated Voplay render control entry");
+            }
+            const kind = payload[offset];
+            const state = payload[offset + 1];
+            const handle = {
+                index: view.getUint32(offset + 4, true),
+                generation: view.getUint32(offset + 8, true),
+            };
+            const descriptorLength = view.getUint32(offset + 12, true);
+            offset += 48;
+            if ((kind !== 1 && kind !== 2 && kind !== 5)
+                || (state !== 1 && state !== 2)
+                || handle.index === 0xffffffff
+                || handle.generation === 0
+                || descriptorLength > payload.byteLength - offset) {
+                throw new Error("invalid Voplay render control entry");
+            }
+            const descriptor = payload.subarray(offset, offset + descriptorLength);
+            const descriptorView = new DataView(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength);
+            if (state === 1 && kind === 2 && descriptor.byteLength >= 17) {
+                target = {
+                    handle,
+                    width: descriptorView.getUint32(9, true),
+                    height: descriptorView.getUint32(13, true),
+                };
+            }
+            if (state === 1 && kind === 1 && descriptor.byteLength >= 42) {
+                domain = {
+                    index: descriptorView.getUint32(34, true),
+                    generation: descriptorView.getUint32(38, true),
+                };
+            }
+            offset += descriptorLength;
+        }
+        if (offset !== payload.byteLength || target === null) {
+            throw new Error("invalid Voplay render control payload");
+        }
+        if (this.#surfaces.size === 0) {
+            const lane = this.#requireLane();
+            const id = {
+                engine: {
+                    session: lane.binding.session,
+                    engine: header.engine,
+                },
+                surface: target.handle,
+                domain,
+            };
+            const record = await this.#attachHostRenderSurface(id, {
+                width: target.width,
+                height: target.height,
+                scaleNumerator: 1,
+                scaleDenominator: 1,
+            });
+            const canvas = record.lease.element;
+            canvas.width = target.width;
+            canvas.height = target.height;
+        }
+        await this.#requireLane().submit(encodeFrameworkPacket({
+            ...header,
+            kind: 7 /* MessageKind.RenderControlAck */,
+            requiredControlRevision: 0n,
+        }, new Uint8Array()), header.sequence);
+    }
+    async #acceptRenderSnapshot(packet) {
+        const { header, payload } = packet;
+        if (header.commitId === 0n
+            || header.newRevision === 0n
+            || payload.byteLength < 4
+            || this.#surfaces.size !== 1) {
+            throw new Error("invalid Voplay render snapshot");
+        }
+        const surface = this.#surfaces.values().next().value;
+        const canvas = surface?.lease.element;
+        if (!(canvas instanceof HTMLCanvasElement)) {
+            throw new Error("Voplay render snapshot has no canvas surface");
+        }
+        drawBlockKartSnapshot(canvas, payload);
+        await this.#requireLane().submit(encodeFrameworkPacket({
+            ...header,
+            kind: 2 /* MessageKind.RenderStateAck */,
+            requiredControlRevision: header.requiredControlRevision,
+        }, new Uint8Array()), header.commitId);
     }
     async #replyLifecycle(packet, kind) {
         const lane = this.#requireLane();
@@ -1622,6 +1743,179 @@ function encodeHostRenderFrameTrace(engine, request, frameId, graphSignature, tr
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
+}
+function drawBlockKartSnapshot(canvas, payload) {
+    const context = canvas.getContext("2d");
+    if (context === null)
+        throw new Error("Voplay canvas has no 2D context");
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const count = view.getUint32(0, true);
+    if (count > 1_000_000)
+        throw new Error("Voplay render snapshot object capacity exceeded");
+    let offset = 4;
+    const meshes = [];
+    const overlays = [];
+    for (let index = 0; index < count; index += 1) {
+        if (payload.byteLength - offset < 12) {
+            throw new Error("truncated Voplay render snapshot object");
+        }
+        const entity = view.getUint32(offset, true);
+        const generation = view.getUint32(offset + 4, true);
+        const length = view.getUint32(offset + 8, true);
+        offset += 12;
+        if (entity === 0xffffffff
+            || generation === 0
+            || length === 0
+            || length > payload.byteLength - offset) {
+            throw new Error("invalid Voplay render snapshot object");
+        }
+        const object = payload.subarray(offset, offset + length);
+        offset += length;
+        if (object.byteLength < 272
+            || object[0] !== 0x56
+            || object[1] !== 0x52
+            || object[2] !== 0x57
+            || object[3] !== 0x31) {
+            continue;
+        }
+        const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
+        const x = Number(objectView.getBigInt64(148, true));
+        const z = Number(objectView.getBigInt64(212, true));
+        const minX = Number(objectView.getBigInt64(220, true));
+        const minZ = Number(objectView.getBigInt64(236, true));
+        const maxX = Number(objectView.getBigInt64(244, true));
+        const maxZ = Number(objectView.getBigInt64(260, true));
+        const componentCount = objectView.getUint32(268, true);
+        let componentOffset = 272;
+        let material = 0n;
+        for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
+            if (object.byteLength - componentOffset < 16) {
+                throw new Error("truncated Voplay retained render component");
+            }
+            const kind = objectView.getUint32(componentOffset, true);
+            const componentLength = objectView.getUint32(componentOffset + 12, true);
+            componentOffset += 16;
+            if (componentLength > object.byteLength - componentOffset) {
+                throw new Error("truncated Voplay retained component payload");
+            }
+            const component = object.subarray(componentOffset, componentOffset + componentLength);
+            componentOffset += componentLength;
+            if (kind === 1
+                && component.byteLength >= 12
+                && component[0] === 0x56
+                && component[1] === 0x4d
+                && component[2] === 0x33
+                && component[3] === 0x31) {
+                material = new DataView(component.buffer, component.byteOffset, component.byteLength).getBigUint64(4, true);
+            }
+            else if (component.byteLength >= 4
+                && component[0] === 0x56
+                && component[2] === 0x32
+                && component[3] === 0x31) {
+                overlays.push(component.slice());
+            }
+        }
+        if (componentOffset !== object.byteLength) {
+            throw new Error("Voplay retained object has trailing bytes");
+        }
+        if (material !== 0n) {
+            meshes.push({
+                entity,
+                x,
+                z,
+                width: Math.max(1, maxX - minX),
+                depth: Math.max(1, maxZ - minZ),
+                material,
+            });
+        }
+    }
+    if (offset !== payload.byteLength) {
+        throw new Error("Voplay render snapshot has trailing bytes");
+    }
+    const kart = meshes.find((mesh) => mesh.entity >= 100 && mesh.entity <= 106);
+    const centerX = kart?.x ?? 0;
+    const centerZ = kart?.z ?? 0;
+    const scale = Math.min(canvas.width, canvas.height) / 220_000;
+    context.fillStyle = "#0d2033";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = "rgba(120, 180, 220, 0.12)";
+    context.lineWidth = 1;
+    const grid = 20_000 * scale;
+    if (grid >= 8) {
+        const xPhase = ((-centerX * scale) % grid + grid) % grid;
+        const yPhase = ((centerZ * scale) % grid + grid) % grid;
+        for (let x = xPhase; x < canvas.width; x += grid) {
+            context.beginPath();
+            context.moveTo(x, 0);
+            context.lineTo(x, canvas.height);
+            context.stroke();
+        }
+        for (let y = yPhase; y < canvas.height; y += grid) {
+            context.beginPath();
+            context.moveTo(0, y);
+            context.lineTo(canvas.width, y);
+            context.stroke();
+        }
+    }
+    for (const mesh of meshes) {
+        const screenX = canvas.width / 2 + (mesh.x - centerX) * scale;
+        const screenY = canvas.height / 2 - (mesh.z - centerZ) * scale;
+        const width = Math.max(3, Math.min(90, mesh.width * scale));
+        const height = Math.max(3, Math.min(90, mesh.depth * scale));
+        context.fillStyle = blockKartMaterialColor(mesh.material, mesh.entity);
+        context.fillRect(screenX - width / 2, screenY - height / 2, width, height);
+    }
+    for (const overlay of overlays)
+        drawBlockKartOverlay(context, overlay);
+    context.fillStyle = "rgba(255,255,255,0.92)";
+    context.font = "700 18px system-ui, sans-serif";
+    context.fillText("BLOCKKART", 22, 32);
+}
+function blockKartMaterialColor(material, entity) {
+    if (entity >= 100 && entity <= 106)
+        return "#ff4f48";
+    switch (Number(material % 8n)) {
+        case 0: return "#6f7f8c";
+        case 1: return "#f4ca64";
+        case 2: return "#e85e5e";
+        case 3: return "#5bbd72";
+        case 4: return "#42bcd3";
+        case 5: return "#9d78d1";
+        case 6: return "#30343b";
+        default: return "#d8dde1";
+    }
+}
+function drawBlockKartOverlay(context, bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes[1] === 0x48 && bytes.byteLength >= 81) {
+        const kind = bytes[4];
+        const x = Number(view.getBigInt64(13, true)) / 1000;
+        const y = Number(view.getBigInt64(21, true)) / 1000;
+        const width = Number(view.getBigInt64(29, true)) / 1000;
+        const height = Number(view.getBigInt64(37, true)) / 1000;
+        context.fillStyle = `rgba(${bytes[53]},${bytes[54]},${bytes[55]},${bytes[56] / 255})`;
+        if (kind === 2) {
+            context.beginPath();
+            context.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
+            context.fill();
+        }
+        else {
+            context.fillRect(x, y, width, height);
+        }
+        return;
+    }
+    if (bytes[1] === 0x54 && bytes.byteLength >= 72) {
+        const x = Number(view.getBigInt64(20, true)) / 1000;
+        const y = Number(view.getBigInt64(28, true)) / 1000;
+        const size = Math.max(10, view.getUint32(36, true) / 1000);
+        const length = view.getUint32(68, true);
+        if (length > bytes.byteLength - 72)
+            return;
+        const text = new TextDecoder().decode(bytes.subarray(72, 72 + length));
+        context.fillStyle = `rgba(${bytes[64]},${bytes[65]},${bytes[66]},${bytes[67] / 255})`;
+        context.font = `600 ${size}px system-ui, sans-serif`;
+        context.fillText(text, x, y);
+    }
 }
 function isHostRenderCommand(bytes) {
     return bytes.byteLength >= 4

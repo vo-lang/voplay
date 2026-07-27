@@ -184,6 +184,7 @@ export class WebGpuRetainedRenderer {
   #drawing = false;
   #presentError: Error | null = null;
   #presentFrames = 0;
+  #presentCpuMillis = 0;
   #presentStatsStarted = 0;
   #lastPresentAt = 0;
   #closed = false;
@@ -457,7 +458,9 @@ export class WebGpuRetainedRenderer {
     if (this.#lastPresentAt !== 0 && now - this.#lastPresentAt < 15) return;
     this.#lastPresentAt = now;
     this.#drawing = true;
+    const cpuStarted = performance.now();
     void this.#draw(this.#sampleAlpha(now), false).then(() => {
+      this.#presentCpuMillis += performance.now() - cpuStarted;
       this.#presentFrames++;
       if (this.#presentStatsStarted === 0) this.#presentStatsStarted = now;
       const elapsed = now - this.#presentStatsStarted;
@@ -469,9 +472,11 @@ export class WebGpuRetainedRenderer {
         )
       ) {
         console.debug(
-          `Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)}`,
+          `Voplay retained WebGPU present_fps=${Math.round(this.#presentFrames * 1000 / elapsed)} `
+          + `cpu_ms=${Math.round(this.#presentCpuMillis / this.#presentFrames * 10) / 10}`,
         );
         this.#presentFrames = 0;
+        this.#presentCpuMillis = 0;
         this.#presentStatsStarted = now;
       }
     }).catch((error: unknown) => {

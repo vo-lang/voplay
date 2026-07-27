@@ -405,6 +405,11 @@ struct OverlayOut {
                 }],
         },
         primitive: { topology: "triangle-list" },
+        depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: false,
+            depthCompare: "always",
+        },
     });
 }
 function decodeScene(payload) {

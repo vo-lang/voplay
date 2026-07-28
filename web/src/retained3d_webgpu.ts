@@ -1096,7 +1096,11 @@ fn surface_variation(position: vec3<f32>) -> f32 {
 }
 
 @fragment fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
-  var albedo = textureSample(material_texture_0, material_sampler, input.texcoord) * input.color;
+  let base_sample = textureSample(material_texture_0, material_sampler, input.texcoord);
+  var albedo = vec4<f32>(
+    pow(base_sample.rgb, vec3<f32>(2.2)),
+    base_sample.a
+  ) * input.color;
   if (material.flags.x > 0.5) {
     let control_uv = vec2<f32>(
       input.world_position.x / 1127.0 + 0.5,
@@ -1107,11 +1111,15 @@ fn surface_variation(position: vec3<f32>) -> f32 {
       vec4<f32>(0.0001)
     );
     let weights = raw_weights / dot(raw_weights, vec4<f32>(1.0));
+    let layer_0 = textureSample(material_texture_1, material_sampler, input.texcoord * 1.12);
+    let layer_1 = textureSample(material_texture_2, material_sampler, input.texcoord * 0.94);
+    let layer_2 = textureSample(material_texture_3, material_sampler, input.texcoord * 0.72);
+    let layer_3 = textureSample(material_texture_4, material_sampler, input.texcoord * 0.58);
     albedo = (
-      textureSample(material_texture_1, material_sampler, input.texcoord * 1.12) * weights.x
-      + textureSample(material_texture_2, material_sampler, input.texcoord * 0.94) * weights.y
-      + textureSample(material_texture_3, material_sampler, input.texcoord * 0.72) * weights.z
-      + textureSample(material_texture_4, material_sampler, input.texcoord * 0.58) * weights.w
+      vec4<f32>(pow(layer_0.rgb, vec3<f32>(2.2)), layer_0.a) * weights.x
+      + vec4<f32>(pow(layer_1.rgb, vec3<f32>(2.2)), layer_1.a) * weights.y
+      + vec4<f32>(pow(layer_2.rgb, vec3<f32>(2.2)), layer_2.a) * weights.z
+      + vec4<f32>(pow(layer_3.rgb, vec3<f32>(2.2)), layer_3.a) * weights.w
     ) * input.color;
   }
   if (material.flags.w < 0.5) {

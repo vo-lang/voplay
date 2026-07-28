@@ -943,9 +943,9 @@ export class WebGpuRetainedRenderer {
 
 function retainedRenderScale(): number {
   const requested = Number(
-    new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "1",
+    new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "0.82",
   );
-  if (!Number.isFinite(requested)) return 1;
+  if (!Number.isFinite(requested)) return 0.82;
   return Math.max(0.5, Math.min(1, requested));
 }
 

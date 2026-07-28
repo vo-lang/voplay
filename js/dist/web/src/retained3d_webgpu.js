@@ -725,9 +725,9 @@ export class WebGpuRetainedRenderer {
     }
 }
 function retainedRenderScale() {
-    const requested = Number(new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "1");
+    const requested = Number(new URLSearchParams(window.location.search).get("voplayRenderScale") ?? "0.82");
     if (!Number.isFinite(requested))
-        return 1;
+        return 0.82;
     return Math.max(0.5, Math.min(1, requested));
 }
 function createScenePipelineLayouts(device) {

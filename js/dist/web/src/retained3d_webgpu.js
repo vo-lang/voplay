@@ -10,8 +10,10 @@ const SHADER_STAGE_FRAGMENT = 0x02;
 const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 1;
-const SHADOW_INTERVAL_MILLIS = 66;
-const SHADOWS_ENABLED = false;
+const INSTANCE_FLOATS = 24;
+const SHADOW_MAP_SIZE = 512;
+const SHADOW_INTERVAL_MILLIS = 250;
+const SHADOWS_ENABLED = true;
 export class WebGpuRetainedRenderer {
     #canvas;
     #device;
@@ -108,17 +110,17 @@ export class WebGpuRetainedRenderer {
         this.#overlayPipeline = createOverlayPipeline(device, format);
         this.#uniform = device.createBuffer({
             label: "Voplay retained 3D scene uniform",
-            size: 192,
+            size: 256,
             usage: BUFFER_UNIFORM | BUFFER_COPY_DST,
         });
         this.#shadowUniform = device.createBuffer({
             label: "Voplay retained 3D shadow uniform",
-            size: 192,
+            size: 256,
             usage: BUFFER_UNIFORM | BUFFER_COPY_DST,
         });
         this.#shadowTexture = device.createTexture({
             label: "Voplay retained 3D sun shadow",
-            size: [2048, 2048, 1],
+            size: [SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1],
             format: "depth24plus",
             usage: TEXTURE_BINDING | TEXTURE_RENDER_ATTACHMENT,
         });
@@ -229,10 +231,11 @@ export class WebGpuRetainedRenderer {
         for (const instance of this.#scene.instances) {
             if (!this.#meshes.has(instance.mesh))
                 continue;
-            const key = `${instance.mesh}:${instance.material}`;
+            const key = `${instance.mesh}:${instance.material}:${instance.castsShadow ? 1 : 0}`;
             const group = grouped.get(key) ?? {
                 mesh: instance.mesh,
                 material: instance.material,
+                castsShadow: instance.castsShadow,
                 instances: [],
             };
             const previous = previousInstances.get(instance.key);
@@ -240,20 +243,24 @@ export class WebGpuRetainedRenderer {
                 previousMatrix: previous?.matrix ?? instance.matrix,
                 currentMatrix: instance.matrix,
                 color: this.#materials.get(instance.material)?.color ?? [0.72, 0.72, 0.76, 1],
+                receivesShadow: instance.receivesShadow,
             });
             grouped.set(key, group);
         }
-        const previousBatches = new Map(this.#preparedBatches.map((batch) => [`${batch.mesh}:${batch.material}`, batch]));
+        const previousBatches = new Map(this.#preparedBatches.map((batch) => [
+            `${batch.mesh}:${batch.material}:${batch.castsShadow ? 1 : 0}`,
+            batch,
+        ]));
         this.#preparedBatches = [];
         for (const [key, group] of grouped) {
             if (group.instances.length > MAX_INSTANCES) {
                 throw new Error("Voplay retained 3D instance capacity exceeded");
             }
-            const values = new Float32Array(group.instances.length * 20);
+            const values = new Float32Array(group.instances.length * INSTANCE_FLOATS);
             let dynamic = false;
             for (let index = 0; index < group.instances.length; index += 1) {
                 const instance = group.instances[index];
-                writePreparedInstance(values, index * 20, instance, 1);
+                writePreparedInstance(values, index * INSTANCE_FLOATS, instance, 1);
                 if (!matrixEquals(instance.previousMatrix, instance.currentMatrix)) {
                     dynamic = true;
                 }
@@ -268,6 +275,7 @@ export class WebGpuRetainedRenderer {
             this.#preparedBatches.push({
                 mesh: group.mesh,
                 material: group.material,
+                castsShadow: group.castsShadow,
                 buffer,
                 values,
                 instances: group.instances,
@@ -319,31 +327,41 @@ export class WebGpuRetainedRenderer {
                 camera.matrix[11] / 1000,
             ];
             const now = performance.now();
-            if (this.#shadowViewProjection === null) {
-                this.#shadowViewProjection = sceneLightViewProjection(cameraPosition);
-            }
             const redrawShadow = SHADOWS_ENABLED
+                && this.#scene.sun.castsShadow
                 && this.#shadowDirty
                 && now - this.#lastShadowAt >= SHADOW_INTERVAL_MILLIS;
+            if (this.#shadowViewProjection === null || redrawShadow) {
+                this.#shadowViewProjection = sceneLightViewProjection(cameraPosition, this.#scene.sun.direction);
+            }
             const lightViewProjection = this.#shadowViewProjection;
-            const uniform = new Float32Array(48);
+            const uniform = new Float32Array(64);
             uniform.set(viewProjection, 0);
-            uniform.set([-0.36, -0.84, -0.41, 0], 16);
-            uniform.set([...cameraPosition, 1], 20);
-            uniform.set([...this.#scene.fogColor, 1], 24);
+            uniform.set([...this.#scene.sun.direction, 0], 16);
+            uniform.set([...this.#scene.sun.color, this.#scene.sun.intensity], 20);
+            uniform.set([...this.#scene.fill.direction, 0], 24);
+            uniform.set([...this.#scene.fill.color, this.#scene.fill.intensity], 28);
+            uniform.set([...cameraPosition, 1], 32);
+            uniform.set([...this.#scene.fogColor, 1], 36);
             uniform.set([
                 this.#scene.fogStart,
                 this.#scene.fogEnd,
                 this.#scene.exposure,
                 this.#scene.toneMap,
-            ], 28);
-            uniform.set(lightViewProjection, 32);
+            ], 40);
+            uniform.set(lightViewProjection, 44);
+            uniform.set([
+                0.66,
+                0.30,
+                this.#scene.sun.castsShadow ? 1 : 0,
+                1 / SHADOW_MAP_SIZE,
+            ], 60);
             this.#device.queue.writeBuffer(this.#uniform, 0, uniform);
             for (const batch of this.#preparedBatches) {
                 if (!batch.dynamic)
                     continue;
                 for (let index = 0; index < batch.instances.length; index += 1) {
-                    writePreparedInstance(batch.values, index * 20, batch.instances[index], alpha);
+                    writePreparedInstance(batch.values, index * INSTANCE_FLOATS, batch.instances[index], alpha);
                 }
                 this.#device.queue.writeBuffer(batch.buffer, 0, batch.values);
             }
@@ -366,6 +384,8 @@ export class WebGpuRetainedRenderer {
                 shadowPass.setPipeline(this.#shadowPipeline);
                 shadowPass.setBindGroup(0, this.#shadowUniformBindGroup);
                 for (const batch of this.#preparedBatches) {
+                    if (!batch.castsShadow)
+                        continue;
                     const material = this.#materials.get(batch.material);
                     if (material !== undefined && material.alphaMode !== 1)
                         continue;
@@ -414,7 +434,8 @@ export class WebGpuRetainedRenderer {
             }
             pass.end();
             this.#device.queue.submit([encoder.finish()]);
-            await this.#device.queue.onSubmittedWorkDone();
+            if (validate)
+                await this.#device.queue.onSubmittedWorkDone();
         }
         catch (error) {
             if (validate)
@@ -663,7 +684,7 @@ export class WebGpuRetainedRenderer {
         current?.buffer.destroy();
         const buffer = this.#device.createBuffer({
             label: `Voplay retained 3D instances ${key}`,
-            size: capacity * 20 * 4,
+            size: capacity * INSTANCE_FLOATS * 4,
             usage: BUFFER_VERTEX | BUFFER_COPY_DST,
         });
         this.#instanceBatches.set(key, { buffer, capacity });
@@ -746,11 +767,15 @@ function createScenePipeline(device, format, pipelineLayout, label, cullMode, bl
         code: `
 struct Scene {
   view_projection: mat4x4<f32>,
-  light_direction: vec4<f32>,
+  sun_direction: vec4<f32>,
+  sun_color: vec4<f32>,
+  fill_direction: vec4<f32>,
+  fill_color: vec4<f32>,
   camera_position: vec4<f32>,
   fog_color: vec4<f32>,
   fog_range: vec4<f32>,
   light_view_projection: mat4x4<f32>,
+  ambient: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> scene: Scene;
 @group(0) @binding(1) var sun_shadow: texture_depth_2d;
@@ -778,6 +803,7 @@ struct VertexIn {
   @location(5) model_2: vec4<f32>,
   @location(6) model_3: vec4<f32>,
   @location(7) color: vec4<f32>,
+  @location(8) instance_flags: vec4<f32>,
 };
 
 struct VertexOut {
@@ -787,6 +813,7 @@ struct VertexOut {
   @location(2) color: vec4<f32>,
   @location(3) texcoord: vec2<f32>,
   @location(4) shadow_position: vec4<f32>,
+  @location(5) instance_flags: vec4<f32>,
 };
 
 @vertex fn vertex_main(input: VertexIn) -> VertexOut {
@@ -799,7 +826,22 @@ struct VertexOut {
   output.color = input.color;
   output.texcoord = input.texcoord;
   output.shadow_position = scene.light_view_projection * world;
+  output.instance_flags = input.instance_flags;
   return output;
+}
+
+fn hash_position(position: vec3<f32>) -> f32 {
+  var value = fract(position * 0.1031);
+  value += dot(value, value.yzx + vec3<f32>(33.33));
+  return fract((value.x + value.y) * value.z);
+}
+
+fn surface_variation(position: vec3<f32>) -> f32 {
+  let macro_cell = floor(position * vec3<f32>(0.18, 0.31, 0.18));
+  let detail_cell = floor(position * vec3<f32>(0.83, 1.17, 0.83));
+  let macro_noise = hash_position(macro_cell);
+  let detail_noise = hash_position(detail_cell.yzx + vec3<f32>(17.0, 41.0, 29.0));
+  return 0.91 + macro_noise * 0.13 + detail_noise * 0.045;
 }
 
 @fragment fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
@@ -820,6 +862,12 @@ struct VertexOut {
       + textureSample(material_texture_3, material_sampler, input.texcoord * 0.72) * weights.z
       + textureSample(material_texture_4, material_sampler, input.texcoord * 0.58) * weights.w
     ) * input.color;
+  }
+  if (material.flags.w < 0.5) {
+    albedo = vec4<f32>(
+      albedo.rgb * surface_variation(input.world_position),
+      albedo.a
+    );
   }
   if (material.flags.y > 1.5 && material.flags.y < 2.5 && albedo.a < material.flags.z) {
     discard;
@@ -851,7 +899,8 @@ struct VertexOut {
       + normal * sampled_normal.z
     );
   }
-  let light = normalize(-scene.light_direction.xyz);
+  let light = normalize(-scene.sun_direction.xyz);
+  let fill_light = normalize(-scene.fill_direction.xyz);
   let view = normalize(scene.camera_position.xyz - input.world_position);
   let half_vector = normalize(light + view);
   let shadow_ndc = input.shadow_position.xyz / input.shadow_position.w;
@@ -861,17 +910,52 @@ struct VertexOut {
     && shadow_ndc.z >= 0.0
     && shadow_ndc.z <= 1.0;
   var sampled = 1.0;
-  if (${SHADOWS_ENABLED}) {
-    sampled = textureSampleCompare(
-      sun_shadow,
-      sun_shadow_sampler,
-      clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
-      shadow_ndc.z - 0.0018
+  if (${SHADOWS_ENABLED} && scene.ambient.z > 0.5) {
+    let shadow_texel = vec2<f32>(scene.ambient.w);
+    let shadow_bias = mix(0.0032, 0.0012, max(dot(normal, light), 0.0));
+    let shadow_depth = shadow_ndc.z - shadow_bias;
+    sampled = 0.25 * (
+      textureSampleCompare(
+        sun_shadow,
+        sun_shadow_sampler,
+        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+        shadow_depth
+      )
+      + textureSampleCompare(
+        sun_shadow,
+        sun_shadow_sampler,
+        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+        shadow_depth
+      )
+      + textureSampleCompare(
+        sun_shadow,
+        sun_shadow_sampler,
+        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+        shadow_depth
+      )
+      + textureSampleCompare(
+        sun_shadow,
+        sun_shadow_sampler,
+        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
+        shadow_depth
+      )
     );
   }
-  let sun_visibility = select(1.0, mix(0.38, 1.0, sampled), shadow_inside);
+  let receives_shadow = shadow_inside
+    && input.instance_flags.x > 0.5
+    && scene.ambient.z > 0.5;
+  let sun_visibility = select(1.0, mix(0.50, 1.0, sampled), receives_shadow);
   let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
-  let hemi = normal.y * 0.20 + 0.22;
+  let fill_diffuse = 0.28 + max(dot(normal, fill_light), 0.0) * 0.72;
+  let hemi = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+  let ground_ambient = vec3<f32>(0.35, 0.30, 0.24) * scene.ambient.y;
+  let sky_ambient = (
+    scene.fog_color.rgb * vec3<f32>(0.62, 0.68, 0.76)
+    + vec3<f32>(0.14, 0.17, 0.20)
+  ) * scene.ambient.x;
+  let ambient = mix(ground_ambient, sky_ambient, hemi);
+  let direct = scene.sun_color.rgb * diffuse * scene.sun_color.a
+    + scene.fill_color.rgb * fill_diffuse * scene.fill_color.a;
   var metallic = material.factors.x;
   var roughness = max(material.factors.y, 0.04);
   if (material.factors.w > 0.5) {
@@ -884,12 +968,13 @@ struct VertexOut {
     roughness = max(0.04, roughness * metallic_roughness.g);
   }
   let specular_power = mix(72.0, 5.0, roughness);
-  let specular = pow(max(dot(normal, half_vector), 0.0), specular_power) * diffuse;
+  let specular = pow(max(dot(normal, half_vector), 0.0), specular_power)
+    * diffuse * scene.sun_color.a;
   let fresnel = mix(vec3<f32>(0.04), albedo.rgb, metallic);
   let rim = pow(1.0 - max(dot(normal, view), 0.0), 3.0);
-  var lit = albedo.rgb * (0.28 + diffuse * 0.82 + hemi) * (1.0 - metallic * 0.34)
+  var lit = albedo.rgb * (ambient + direct) * (1.0 - metallic * 0.42)
     + fresnel * specular * (1.0 - roughness * 0.55) * 1.35
-    + albedo.rgb * rim * 0.08
+    + albedo.rgb * rim * (0.07 + scene.fill_color.a * 0.06)
     + material.emissive.rgb;
   if (material.flags.w > 0.5) {
     lit = albedo.rgb + material.emissive.rgb;
@@ -923,7 +1008,7 @@ struct VertexOut {
                     ],
                 },
                 {
-                    arrayStride: 80,
+                    arrayStride: 96,
                     stepMode: "instance",
                     attributes: [
                         { shaderLocation: 3, offset: 0, format: "float32x4" },
@@ -931,6 +1016,7 @@ struct VertexOut {
                         { shaderLocation: 5, offset: 32, format: "float32x4" },
                         { shaderLocation: 6, offset: 48, format: "float32x4" },
                         { shaderLocation: 7, offset: 64, format: "float32x4" },
+                        { shaderLocation: 8, offset: 80, format: "float32x4" },
                     ],
                 },
             ],
@@ -1026,11 +1112,15 @@ function createShadowPipeline(device) {
         code: `
 struct Scene {
   view_projection: mat4x4<f32>,
-  light_direction: vec4<f32>,
+  sun_direction: vec4<f32>,
+  sun_color: vec4<f32>,
+  fill_direction: vec4<f32>,
+  fill_color: vec4<f32>,
   camera_position: vec4<f32>,
   fog_color: vec4<f32>,
   fog_range: vec4<f32>,
   light_view_projection: mat4x4<f32>,
+  ambient: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> scene: Scene;
 
@@ -1059,7 +1149,7 @@ struct VertexIn {
                     attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }],
                 },
                 {
-                    arrayStride: 80,
+                    arrayStride: 96,
                     stepMode: "instance",
                     attributes: [
                         { shaderLocation: 3, offset: 0, format: "float32x4" },
@@ -1140,6 +1230,7 @@ struct OverlayOut {
 function decodeScene(objects) {
     const instances = [];
     const overlays = [];
+    const directionalLights = [];
     let camera = null;
     let fogColor = [0.52, 0.78, 0.9];
     let fogStart = 220;
@@ -1189,6 +1280,8 @@ function decodeScene(objects) {
                     key: `${entityKey}:component:${componentIndex}`,
                     mesh,
                     material,
+                    castsShadow: component[20] !== 0,
+                    receivesShadow: component[21] !== 0,
                     matrix,
                 });
             }
@@ -1221,6 +1314,29 @@ function decodeScene(objects) {
                 exposure = componentView.getInt32(28, true) / 1000;
                 toneMap = component[4];
             }
+            else if (kind === 11
+                && component.byteLength >= 22
+                && component[0] === 0x56
+                && component[1] === 0x4c
+                && component[2] === 0x33
+                && component[3] === 0x31
+                && component[4] === 1) {
+                const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
+                directionalLights.push({
+                    direction: normalizeVector3([
+                        -matrix[2] / 1000,
+                        -matrix[6] / 1000,
+                        -matrix[10] / 1000,
+                    ]),
+                    color: [
+                        componentView.getUint16(8, true) / 65535,
+                        componentView.getUint16(10, true) / 65535,
+                        componentView.getUint16(12, true) / 65535,
+                    ],
+                    intensity: Math.min(8, componentView.getUint32(14, true) / 1000),
+                    castsShadow: component[7] !== 0,
+                });
+            }
             else if (kind === 20
                 && component.byteLength >= 136
                 && component[0] === 0x56
@@ -1236,10 +1352,26 @@ function decodeScene(objects) {
     }
     if (camera === null)
         throw new Error("Voplay retained 3D snapshot has no camera");
+    directionalLights.sort((left, right) => Number(right.castsShadow) - Number(left.castsShadow)
+        || right.intensity - left.intensity);
+    const sun = directionalLights[0] ?? {
+        direction: [-0.36, -0.84, -0.41],
+        color: [1, 0.92, 0.78],
+        intensity: 1.35,
+        castsShadow: true,
+    };
+    const fill = directionalLights[1] ?? {
+        direction: [0.52, -0.38, 0.76],
+        color: [0.42, 0.62, 1],
+        intensity: 0.32,
+        castsShadow: false,
+    };
     return {
         instances,
         camera,
         overlays,
+        sun,
+        fill,
         fogColor,
         fogStart,
         fogEnd,
@@ -1294,6 +1426,8 @@ function decodeParticleInstances(bytes, entityKey) {
             key: `${entityKey}:particle:${index}`,
             mesh,
             material,
+            castsShadow: false,
+            receivesShadow: false,
             matrix: [
                 scale, 0, 0, x,
                 0, scale, 0, y,
@@ -1414,6 +1548,10 @@ function writePreparedInstance(output, offset, instance, alpha) {
     output[offset + 17] = instance.color[1];
     output[offset + 18] = instance.color[2];
     output[offset + 19] = instance.color[3];
+    output[offset + 20] = instance.receivesShadow ? 1 : 0;
+    output[offset + 21] = 0;
+    output[offset + 22] = 0;
+    output[offset + 23] = 0;
 }
 function matrixEquals(left, right) {
     if (left.length !== right.length)
@@ -1456,8 +1594,8 @@ function sceneViewProjection(camera, aspect) {
     ]);
     return multiplyMat4(projection, view);
 }
-function sceneLightViewProjection(cameraPosition) {
-    const forward = normalizeVector3([-0.36, -0.84, -0.41]);
+function sceneLightViewProjection(cameraPosition, lightDirection) {
+    const forward = normalizeVector3(lightDirection);
     const center = [cameraPosition[0], 12, cameraPosition[2]];
     const eye = [
         center[0] - forward[0] * 320,

@@ -178,8 +178,8 @@ const MAX_INSTANCES = 65_536;
 const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 1;
 const INSTANCE_FLOATS = 24;
-const SHADOW_MAP_SIZE = 512;
-const SHADOW_INTERVAL_MILLIS = 250;
+const SHADOW_MAP_SIZE = 1024;
+const SHADOW_INTERVAL_MILLIS = 100;
 const SHADOWS_ENABLED = true;
 
 export class WebGpuRetainedRenderer {
@@ -565,8 +565,8 @@ export class WebGpuRetainedRenderer {
       ], 40);
       uniform.set(lightViewProjection, 44);
       uniform.set([
-        0.66,
-        0.30,
+        0.44,
+        0.18,
         this.#scene.sun.castsShadow ? 1 : 0,
         1 / SHADOW_MAP_SIZE,
       ], 60);
@@ -1073,7 +1073,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   let detail_cell = floor(position * vec3<f32>(0.83, 1.17, 0.83));
   let macro_noise = hash_position(macro_cell);
   let detail_noise = hash_position(detail_cell.yzx + vec3<f32>(17.0, 41.0, 29.0));
-  return 0.91 + macro_noise * 0.13 + detail_noise * 0.045;
+  return 0.96 + macro_noise * 0.065 + detail_noise * 0.025;
 }
 
 @fragment fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
@@ -1144,7 +1144,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   var sampled = 1.0;
   if (${SHADOWS_ENABLED} && scene.ambient.z > 0.5) {
     let shadow_texel = vec2<f32>(scene.ambient.w);
-    let shadow_bias = mix(0.0032, 0.0012, max(dot(normal, light), 0.0));
+    let shadow_bias = mix(0.00070, 0.00018, max(dot(normal, light), 0.0));
     let shadow_depth = shadow_ndc.z - shadow_bias;
     sampled = 0.25 * (
       textureSampleCompare(
@@ -1176,18 +1176,19 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   let receives_shadow = shadow_inside
     && input.instance_flags.x > 0.5
     && scene.ambient.z > 0.5;
-  let sun_visibility = select(1.0, mix(0.50, 1.0, sampled), receives_shadow);
-  let diffuse = max(dot(normal, light), 0.0) * sun_visibility;
-  let fill_diffuse = 0.28 + max(dot(normal, fill_light), 0.0) * 0.72;
+  let sun_visibility = select(1.0, mix(0.22, 1.0, sampled), receives_shadow);
+  let n_dot_l = max(dot(normal, light), 0.0);
+  let n_dot_v = max(dot(normal, view), 0.001);
+  let n_dot_h = max(dot(normal, half_vector), 0.0);
+  let v_dot_h = max(dot(view, half_vector), 0.0);
+  let fill_diffuse = max(dot(normal, fill_light), 0.0);
   let hemi = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
-  let ground_ambient = vec3<f32>(0.35, 0.30, 0.24) * scene.ambient.y;
+  let ground_ambient = vec3<f32>(0.28, 0.25, 0.20) * scene.ambient.y;
   let sky_ambient = (
-    scene.fog_color.rgb * vec3<f32>(0.62, 0.68, 0.76)
-    + vec3<f32>(0.14, 0.17, 0.20)
+    scene.fog_color.rgb * vec3<f32>(0.50, 0.58, 0.70)
+    + vec3<f32>(0.08, 0.10, 0.13)
   ) * scene.ambient.x;
   let ambient = mix(ground_ambient, sky_ambient, hemi);
-  let direct = scene.sun_color.rgb * diffuse * scene.sun_color.a
-    + scene.fill_color.rgb * fill_diffuse * scene.fill_color.a;
   var metallic = material.factors.x;
   var roughness = max(material.factors.y, 0.04);
   if (material.factors.w > 0.5) {
@@ -1199,14 +1200,35 @@ fn surface_variation(position: vec3<f32>) -> f32 {
     metallic *= metallic_roughness.b;
     roughness = max(0.04, roughness * metallic_roughness.g);
   }
-  let specular_power = mix(72.0, 5.0, roughness);
-  let specular = pow(max(dot(normal, half_vector), 0.0), specular_power)
-    * diffuse * scene.sun_color.a;
-  let fresnel = mix(vec3<f32>(0.04), albedo.rgb, metallic);
+  let alpha = roughness * roughness;
+  let alpha_squared = alpha * alpha;
+  let distribution_denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
+  let distribution = alpha_squared / max(
+    3.14159265 * distribution_denominator * distribution_denominator,
+    0.0001
+  );
+  let geometry_k = (roughness + 1.0) * (roughness + 1.0) * 0.125;
+  let geometry_view = n_dot_v / (n_dot_v * (1.0 - geometry_k) + geometry_k);
+  let geometry_light = n_dot_l / (n_dot_l * (1.0 - geometry_k) + geometry_k);
+  let geometry = geometry_view * geometry_light;
+  let base_reflectance = mix(vec3<f32>(0.04), albedo.rgb, metallic);
+  let fresnel = base_reflectance
+    + (vec3<f32>(1.0) - base_reflectance) * pow(1.0 - v_dot_h, 5.0);
+  let specular_brdf = distribution * geometry * fresnel
+    / max(4.0 * n_dot_v * n_dot_l, 0.001);
+  let diffuse_brdf = (vec3<f32>(1.0) - fresnel)
+    * (1.0 - metallic) * albedo.rgb / 3.14159265;
+  let sun_radiance = scene.sun_color.rgb * scene.sun_color.a;
+  let sun_direct = (diffuse_brdf + specular_brdf)
+    * sun_radiance * n_dot_l * sun_visibility;
+  let fill_direct = albedo.rgb * (1.0 - metallic)
+    * scene.fill_color.rgb * scene.fill_color.a * fill_diffuse * 0.55;
+  let ambient_diffuse = albedo.rgb * (1.0 - metallic) * ambient;
+  let ambient_specular = base_reflectance * sky_ambient
+    * mix(0.22, 0.055, roughness);
   let rim = pow(1.0 - max(dot(normal, view), 0.0), 3.0);
-  var lit = albedo.rgb * (ambient + direct) * (1.0 - metallic * 0.42)
-    + fresnel * specular * (1.0 - roughness * 0.55) * 1.35
-    + albedo.rgb * rim * (0.07 + scene.fill_color.a * 0.06)
+  var lit = ambient_diffuse + ambient_specular + sun_direct + fill_direct
+    + albedo.rgb * rim * (0.025 + scene.fill_color.a * 0.025)
     + material.emissive.rgb;
   if (material.flags.w > 0.5) {
     lit = albedo.rgb + material.emissive.rgb;
@@ -1914,7 +1936,7 @@ function sceneLightViewProjection(
     right[2], up[2], back[2], 0,
     -dot3(right, eye), -dot3(up, eye), -dot3(back, eye), 1,
   ]);
-  const extent = 190;
+  const extent = 125;
   const near = 0.1;
   const far = 720;
   const projection = new Float32Array([

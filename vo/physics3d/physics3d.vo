@@ -242,8 +242,19 @@ func (runtime *Runtime) Submit(command Command) bool {
 			body.Kind != BodyDynamic {
 		return false
 	}
-	for _, pending := range runtime.Commands {
-		if pending.Body == command.Body {
+	for index, pending := range runtime.Commands {
+		if pending.Body != command.Body {
+			continue
+		}
+		pendingPose := pending.Kind == CommandWorldPose ||
+			pending.Kind == CommandKinematicTarget || pending.Kind == CommandTeleport
+		commandPose := command.Kind == CommandWorldPose ||
+			command.Kind == CommandKinematicTarget || command.Kind == CommandTeleport
+		if pendingPose && commandPose {
+			runtime.Commands[index] = command
+			return true
+		}
+		if !pendingPose && !commandPose {
 			return false
 		}
 	}

@@ -351,8 +351,8 @@ export class WebGpuRetainedRenderer {
             ], 40);
             uniform.set(lightViewProjection, 44);
             uniform.set([
-                0.44,
-                0.18,
+                0.58,
+                0.25,
                 this.#scene.sun.castsShadow ? 1 : 0,
                 1 / SHADOW_MAP_SIZE,
             ], 60);
@@ -912,7 +912,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   var sampled = 1.0;
   if (${SHADOWS_ENABLED} && scene.ambient.z > 0.5) {
     let shadow_texel = vec2<f32>(scene.ambient.w);
-    let shadow_bias = mix(0.00070, 0.00018, max(dot(normal, light), 0.0));
+    let shadow_bias = mix(0.00160, 0.00055, max(dot(normal, light), 0.0));
     let shadow_depth = shadow_ndc.z - shadow_bias;
     sampled = 0.25 * (
       textureSampleCompare(
@@ -944,17 +944,17 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   let receives_shadow = shadow_inside
     && input.instance_flags.x > 0.5
     && scene.ambient.z > 0.5;
-  let sun_visibility = select(1.0, mix(0.22, 1.0, sampled), receives_shadow);
+  let sun_visibility = select(1.0, mix(0.36, 1.0, sampled), receives_shadow);
   let n_dot_l = max(dot(normal, light), 0.0);
   let n_dot_v = max(dot(normal, view), 0.001);
   let n_dot_h = max(dot(normal, half_vector), 0.0);
   let v_dot_h = max(dot(view, half_vector), 0.0);
   let fill_diffuse = max(dot(normal, fill_light), 0.0);
   let hemi = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
-  let ground_ambient = vec3<f32>(0.28, 0.25, 0.20) * scene.ambient.y;
+  let ground_ambient = vec3<f32>(0.32, 0.29, 0.24) * scene.ambient.y;
   let sky_ambient = (
-    scene.fog_color.rgb * vec3<f32>(0.50, 0.58, 0.70)
-    + vec3<f32>(0.08, 0.10, 0.13)
+    scene.fog_color.rgb * vec3<f32>(0.54, 0.62, 0.74)
+    + vec3<f32>(0.10, 0.12, 0.15)
   ) * scene.ambient.x;
   let ambient = mix(ground_ambient, sky_ambient, hemi);
   var metallic = material.factors.x;
@@ -988,9 +988,9 @@ fn surface_variation(position: vec3<f32>) -> f32 {
     * (1.0 - metallic) * albedo.rgb / 3.14159265;
   let sun_radiance = scene.sun_color.rgb * scene.sun_color.a;
   let sun_direct = (diffuse_brdf + specular_brdf)
-    * sun_radiance * n_dot_l * sun_visibility;
+    * sun_radiance * n_dot_l * sun_visibility * 1.35;
   let fill_direct = albedo.rgb * (1.0 - metallic)
-    * scene.fill_color.rgb * scene.fill_color.a * fill_diffuse * 0.55;
+    * scene.fill_color.rgb * scene.fill_color.a * fill_diffuse * 0.75;
   let ambient_diffuse = albedo.rgb * (1.0 - metallic) * ambient;
   let ambient_specular = base_reflectance * sky_ambient
     * mix(0.22, 0.055, roughness);

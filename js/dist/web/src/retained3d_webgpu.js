@@ -351,8 +351,8 @@ export class WebGpuRetainedRenderer {
             ], 40);
             uniform.set(lightViewProjection, 44);
             uniform.set([
-                0.58,
-                0.25,
+                0.42,
+                0.16,
                 this.#scene.sun.castsShadow ? 1 : 0,
                 1 / SHADOW_MAP_SIZE,
             ], 60);
@@ -863,6 +863,17 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   return 0.96 + macro_noise * 0.065 + detail_noise * 0.025;
 }
 
+fn value_noise_2d(position: vec2<f32>) -> f32 {
+  let cell = floor(position);
+  let local = fract(position);
+  let blend = local * local * (vec2<f32>(3.0) - 2.0 * local);
+  let a = hash_position(vec3<f32>(cell.x, 0.0, cell.y));
+  let b = hash_position(vec3<f32>(cell.x + 1.0, 0.0, cell.y));
+  let c = hash_position(vec3<f32>(cell.x, 0.0, cell.y + 1.0));
+  let d = hash_position(vec3<f32>(cell.x + 1.0, 0.0, cell.y + 1.0));
+  return mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+}
+
 @fragment fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
   let base_sample = textureSample(material_texture_0, material_sampler, input.texcoord);
   var albedo = vec4<f32>(
@@ -878,7 +889,20 @@ fn surface_variation(position: vec3<f32>) -> f32 {
       textureSample(material_texture_0, material_sampler, control_uv),
       vec4<f32>(0.0001)
     );
-    let weights = raw_weights / dot(raw_weights, vec4<f32>(1.0));
+    let authored_weights = raw_weights / dot(raw_weights, vec4<f32>(1.0));
+    let terrain_macro = value_noise_2d(input.world_position.xz * 0.018);
+    let terrain_detail = value_noise_2d(
+      input.world_position.xz * 0.061 + vec2<f32>(19.0, 7.0)
+    );
+    let terrain_slope = 1.0 - clamp(abs(normalize(input.world_normal).y), 0.0, 1.0);
+    let organic_weights = vec4<f32>(
+      0.48 + (1.0 - terrain_macro) * 0.34,
+      0.18 + smoothstep(0.25, 0.78, terrain_macro) * 0.82,
+      smoothstep(0.67, 0.93, terrain_detail) * 0.42,
+      smoothstep(0.10, 0.48, terrain_slope) * 2.4
+    );
+    let combined_weights = authored_weights * 0.72 + organic_weights;
+    let weights = combined_weights / dot(combined_weights, vec4<f32>(1.0));
     let layer_0 = textureSample(material_texture_1, material_sampler, input.texcoord * 1.12);
     let layer_1 = textureSample(material_texture_2, material_sampler, input.texcoord * 0.94);
     let layer_2 = textureSample(material_texture_3, material_sampler, input.texcoord * 0.72);
@@ -971,7 +995,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   let receives_shadow = shadow_inside
     && input.instance_flags.x > 0.5
     && scene.ambient.z > 0.5;
-  let sun_visibility = select(1.0, mix(0.36, 1.0, sampled), receives_shadow);
+  let sun_visibility = select(1.0, mix(0.20, 1.0, sampled), receives_shadow);
   let n_dot_l = max(dot(normal, light), 0.0);
   let n_dot_v = max(dot(normal, view), 0.001);
   let n_dot_h = max(dot(normal, half_vector), 0.0);
@@ -1017,7 +1041,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   let sun_direct = (diffuse_brdf + specular_brdf)
     * sun_radiance * n_dot_l * sun_visibility * 1.35;
   let fill_direct = albedo.rgb * (1.0 - metallic)
-    * scene.fill_color.rgb * scene.fill_color.a * fill_diffuse * 0.75;
+    * scene.fill_color.rgb * scene.fill_color.a * fill_diffuse * 0.55;
   let ambient_diffuse = albedo.rgb * (1.0 - metallic) * ambient;
   let ambient_specular = base_reflectance * sky_ambient
     * mix(0.22, 0.055, roughness);
@@ -1706,17 +1730,71 @@ function decodeOverlays(overlays, width, height) {
     for (const bytes of overlays) {
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         if (bytes[1] === 0x48 && bytes.byteLength >= 81) {
+            const kind = bytes[4];
             const x = Number(view.getBigInt64(13, true)) / 1000;
             const y = Number(view.getBigInt64(21, true)) / 1000;
             const shapeWidth = Number(view.getBigInt64(29, true)) / 1000;
             const shapeHeight = Number(view.getBigInt64(37, true)) / 1000;
-            if (bytes[56] !== 0) {
-                pushOverlayRect(vertices, width, height, x, y, shapeWidth, shapeHeight, [
-                    bytes[53] / 255,
-                    bytes[54] / 255,
-                    bytes[55] / 255,
-                    bytes[56] / 255,
-                ]);
+            const radius = view.getUint32(45, true) / 1000;
+            const strokeWidth = view.getUint32(49, true) / 1000;
+            const fill = [
+                bytes[53] / 255,
+                bytes[54] / 255,
+                bytes[55] / 255,
+                bytes[56] / 255,
+            ];
+            const stroke = [
+                bytes[57] / 255,
+                bytes[58] / 255,
+                bytes[59] / 255,
+                bytes[60] / 255,
+            ];
+            const pathLength = view.getUint32(77, true);
+            const path = [];
+            if (kind === 5
+                && pathLength >= 4
+                && pathLength % 2 === 0
+                && pathLength <= (bytes.byteLength - 81) / 8) {
+                for (let index = 0; index < pathLength; index += 2) {
+                    path.push([
+                        Number(view.getBigInt64(81 + index * 8, true)) / 1000,
+                        Number(view.getBigInt64(81 + (index + 1) * 8, true)) / 1000,
+                    ]);
+                }
+            }
+            if (fill[3] > 0) {
+                if (kind === 2) {
+                    pushOverlayPolygon(vertices, width, height, overlayRoundedRectPoints(x, y, shapeWidth, shapeHeight, radius), fill);
+                }
+                else if (kind === 3) {
+                    pushOverlayPolygon(vertices, width, height, overlayEllipsePoints(x, y, shapeWidth, shapeHeight), fill);
+                }
+                else if (kind === 5 && path.length >= 3) {
+                    pushOverlayPolygon(vertices, width, height, path, fill);
+                }
+                else {
+                    pushOverlayRect(vertices, width, height, x, y, shapeWidth, shapeHeight, fill);
+                }
+            }
+            if (stroke[3] > 0 && strokeWidth > 0) {
+                if (kind === 2) {
+                    const outer = overlayRoundedRectPoints(x, y, shapeWidth, shapeHeight, radius);
+                    const inset = Math.min(strokeWidth, Math.min(shapeWidth, shapeHeight) * 0.49);
+                    const inner = overlayRoundedRectPoints(x + inset, y + inset, Math.max(0.01, shapeWidth - inset * 2), Math.max(0.01, shapeHeight - inset * 2), Math.max(0, radius - inset));
+                    pushOverlayRing(vertices, width, height, outer, inner, stroke);
+                }
+                else if (kind === 3) {
+                    const outer = overlayEllipsePoints(x, y, shapeWidth, shapeHeight);
+                    const inset = Math.min(strokeWidth, Math.min(shapeWidth, shapeHeight) * 0.49);
+                    const inner = overlayEllipsePoints(x + inset, y + inset, Math.max(0.01, shapeWidth - inset * 2), Math.max(0.01, shapeHeight - inset * 2));
+                    pushOverlayRing(vertices, width, height, outer, inner, stroke);
+                }
+                else if (kind === 5 && path.length >= 2) {
+                    pushOverlayPolyline(vertices, width, height, path, strokeWidth, stroke);
+                }
+                else {
+                    pushOverlayRectStroke(vertices, width, height, x, y, shapeWidth, shapeHeight, strokeWidth, stroke);
+                }
             }
             continue;
         }
@@ -1750,6 +1828,110 @@ function pushOverlayRect(output, width, height, x, y, rectWidth, rectHeight, col
     pushOverlayVertex(output, right, top, color);
     pushOverlayVertex(output, right, bottom, color);
 }
+function overlayRoundedRectPoints(x, y, width, height, radius) {
+    const safeRadius = Math.max(0, Math.min(radius, width * 0.5, height * 0.5));
+    if (safeRadius <= 0.01) {
+        return [
+            [x, y],
+            [x + width, y],
+            [x + width, y + height],
+            [x, y + height],
+        ];
+    }
+    const points = [];
+    const corners = [
+        [x + width - safeRadius, y + safeRadius, -Math.PI * 0.5],
+        [x + width - safeRadius, y + height - safeRadius, 0],
+        [x + safeRadius, y + height - safeRadius, Math.PI * 0.5],
+        [x + safeRadius, y + safeRadius, Math.PI],
+    ];
+    for (const [centerX, centerY, start] of corners) {
+        for (let segment = 0; segment <= 6; segment += 1) {
+            const angle = start + segment / 6 * Math.PI * 0.5;
+            points.push([
+                centerX + Math.cos(angle) * safeRadius,
+                centerY + Math.sin(angle) * safeRadius,
+            ]);
+        }
+    }
+    return points;
+}
+function overlayEllipsePoints(x, y, width, height) {
+    const points = [];
+    const centerX = x + width * 0.5;
+    const centerY = y + height * 0.5;
+    for (let segment = 0; segment < 40; segment += 1) {
+        const angle = segment / 40 * Math.PI * 2;
+        points.push([
+            centerX + Math.cos(angle) * width * 0.5,
+            centerY + Math.sin(angle) * height * 0.5,
+        ]);
+    }
+    return points;
+}
+function pushOverlayPolygon(output, width, height, points, color) {
+    if (points.length < 3)
+        return;
+    const centerSum = points.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1]], [0, 0]);
+    const center = [
+        centerSum[0] / points.length,
+        centerSum[1] / points.length,
+    ];
+    for (let index = 0; index < points.length; index += 1) {
+        pushOverlayScreenTriangle(output, width, height, center, points[index], points[(index + 1) % points.length], color);
+    }
+}
+function pushOverlayRing(output, width, height, outer, inner, color) {
+    if (outer.length < 3 || outer.length !== inner.length)
+        return;
+    for (let index = 0; index < outer.length; index += 1) {
+        const next = (index + 1) % outer.length;
+        pushOverlayScreenTriangle(output, width, height, outer[index], outer[next], inner[index], color);
+        pushOverlayScreenTriangle(output, width, height, inner[index], outer[next], inner[next], color);
+    }
+}
+function pushOverlayPolyline(output, width, height, points, strokeWidth, color) {
+    const half = strokeWidth * 0.5;
+    for (let index = 0; index + 1 < points.length; index += 1) {
+        const start = points[index];
+        const end = points[index + 1];
+        const dx = end[0] - start[0];
+        const dy = end[1] - start[1];
+        const length = Math.hypot(dx, dy);
+        if (length <= 0.001)
+            continue;
+        const normalX = -dy / length * half;
+        const normalY = dx / length * half;
+        const a = [start[0] + normalX, start[1] + normalY];
+        const b = [end[0] + normalX, end[1] + normalY];
+        const c = [end[0] - normalX, end[1] - normalY];
+        const d = [start[0] - normalX, start[1] - normalY];
+        pushOverlayScreenTriangle(output, width, height, a, b, d, color);
+        pushOverlayScreenTriangle(output, width, height, d, b, c, color);
+    }
+    for (const point of points) {
+        pushOverlayPolygon(output, width, height, overlayEllipsePoints(point[0] - half, point[1] - half, strokeWidth, strokeWidth), color);
+    }
+}
+function pushOverlayRectStroke(output, width, height, x, y, rectWidth, rectHeight, strokeWidth, color) {
+    const inset = Math.min(strokeWidth, Math.min(rectWidth, rectHeight) * 0.49);
+    pushOverlayRing(output, width, height, [
+        [x, y],
+        [x + rectWidth, y],
+        [x + rectWidth, y + rectHeight],
+        [x, y + rectHeight],
+    ], [
+        [x + inset, y + inset],
+        [x + rectWidth - inset, y + inset],
+        [x + rectWidth - inset, y + rectHeight - inset],
+        [x + inset, y + rectHeight - inset],
+    ], color);
+}
+function pushOverlayScreenTriangle(output, width, height, a, b, c, color) {
+    pushOverlayVertex(output, a[0] / width * 2 - 1, 1 - a[1] / height * 2, color);
+    pushOverlayVertex(output, b[0] / width * 2 - 1, 1 - b[1] / height * 2, color);
+    pushOverlayVertex(output, c[0] / width * 2 - 1, 1 - c[1] / height * 2, color);
+}
 function pushOverlayText(output, width, height, x, baseline, size, text, color) {
     const pixel = size / 7;
     let cursor = x;
@@ -1759,7 +1941,7 @@ function pushOverlayText(output, width, height, x, baseline, size, text, color) 
             for (let column = 0; column < 5; column += 1) {
                 if ((rows[row] & (1 << (4 - column))) === 0)
                     continue;
-                pushOverlayRect(output, width, height, cursor + column * pixel, baseline - size + row * pixel, pixel * 0.86, pixel * 0.86, color);
+                pushOverlayRect(output, width, height, cursor + column * pixel, baseline - size + row * pixel, pixel * 1.02, pixel * 1.02, color);
             }
         }
         cursor += pixel * 6;

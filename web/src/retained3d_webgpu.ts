@@ -846,17 +846,36 @@ export class WebGpuRetainedRenderer {
           if (bitmap.width === 0 || bitmap.height === 0) {
             throw new Error("Voplay retained texture has invalid dimensions");
           }
+          const mipLevelCount = 1 + Math.floor(
+            Math.log2(Math.max(bitmap.width, bitmap.height)),
+          );
           const texture = this.#device.createTexture({
             label: `Voplay retained texture ${asset.asset}`,
             size: [bitmap.width, bitmap.height, 1],
+            mipLevelCount,
             format: "rgba8unorm",
             usage: TEXTURE_BINDING | TEXTURE_COPY_DST | TEXTURE_RENDER_ATTACHMENT,
           });
-          this.#device.queue.copyExternalImageToTexture(
-            { source: bitmap },
-            { texture },
-            [bitmap.width, bitmap.height, 1],
-          );
+          for (let mipLevel = 0; mipLevel < mipLevelCount; mipLevel += 1) {
+            const width = Math.max(1, bitmap.width >> mipLevel);
+            const height = Math.max(1, bitmap.height >> mipLevel);
+            const source = mipLevel === 0
+              ? bitmap
+              : await createImageBitmap(bitmap, {
+                resizeWidth: width,
+                resizeHeight: height,
+                resizeQuality: "high",
+              });
+            try {
+              this.#device.queue.copyExternalImageToTexture(
+                { source },
+                { texture, mipLevel },
+                [width, height, 1],
+              );
+            } finally {
+              if (source !== bitmap) source.close();
+            }
+          }
           current?.texture.destroy();
           this.#textures.set(asset.asset, {
             revision: asset.revision,
@@ -1243,6 +1262,7 @@ fn surface_variation(position: vec3<f32>) -> f32 {
   } else if (scene.fog_range.w > 1.5) {
     color = color / (vec3<f32>(1.0) + color);
   }
+  color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
   return vec4<f32>(color, albedo.a);
 }`,
   });

@@ -37,11 +37,16 @@ type AssetAck struct {
 	SourceSimulationRevision uint64
 }
 
+type StateAck struct {
+	CommitId uint64
+	Revision uint64
+	RequiredControlRevision uint64
+	SourceSimulationRevision uint64
+}
+
 // EncodeSnapshotPacket publishes a complete retained render world. Object bytes
 // may contain a retained 3D object or one of the retained 2D object formats.
-func EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64,
-	commitId uint64, revision uint64, requiredControlRevision uint64,
-	sourceSimulationRevision uint64, objects []SnapshotObject) ([]byte, bool) {
+func EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64, commitId uint64, revision uint64, requiredControlRevision uint64, sourceSimulationRevision uint64, objects []SnapshotObject) ([]byte, bool) {
 	if !engine.Engine.Valid() || channelEpoch == 0 || commitId == 0 || revision == 0 ||
 		len(objects) > 1000000 {
 		return nil, false
@@ -52,9 +57,9 @@ func EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64,
 		if !object.Entity.Valid() || len(object.Bytes) == 0 || len(object.Bytes) > 4194304 {
 			return nil, false
 		}
-		if index != 0 && (object.Entity.Index < previous.Index ||
-			object.Entity.Index == previous.Index &&
-				object.Entity.Generation <= previous.Generation) {
+		if index != 0 &&
+			(object.Entity.Index < previous.Index ||
+				object.Entity.Index == previous.Index && object.Entity.Generation <= previous.Generation) {
 			return nil, false
 		}
 		previous = object.Entity
@@ -62,23 +67,20 @@ func EncodeSnapshotPacket(engine voplay.EngineRef, channelEpoch uint64,
 		payload = appendRenderU32(payload, object.Entity.Generation)
 		payload = appendRenderU32(payload, uint32(len(object.Bytes)))
 		payload = append(payload, object.Bytes...)
-		if len(payload)+80 > 67108864 {
+		if len(payload) + 80 > 67108864 {
 			return nil, false
 		}
 	}
-	return encodeRenderFrameworkPacket(3, engine, channelEpoch, commitId, 0, revision,
-		requiredControlRevision, sourceSimulationRevision, 0, payload)
+	return encodeRenderFrameworkPacket(3, engine, channelEpoch, commitId, 0, revision, requiredControlRevision, sourceSimulationRevision, 0, payload)
 }
 
 // EncodeTransactionPacket publishes an incremental retained-world update against
 // an acknowledged base revision. Spawn and Upsert carry object bytes; Despawn
 // only carries the entity identity.
-func EncodeTransactionPacket(engine voplay.EngineRef, channelEpoch uint64,
-	commitId uint64, baseRevision uint64, newRevision uint64,
-	requiredControlRevision uint64, sourceSimulationRevision uint64,
-	ops []TransactionOp) ([]byte, bool) {
-	if !engine.Engine.Valid() || channelEpoch == 0 || commitId == 0 ||
-		baseRevision == 0 || newRevision != baseRevision + 1 || len(ops) > 131072 {
+func EncodeTransactionPacket(engine voplay.EngineRef, channelEpoch uint64, commitId uint64, baseRevision uint64, newRevision uint64, requiredControlRevision uint64, sourceSimulationRevision uint64, ops []TransactionOp) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || commitId == 0 || baseRevision == 0 ||
+		newRevision != baseRevision + 1 ||
+		len(ops) > 131072 {
 		return nil, false
 	}
 	payload := appendRenderU32(nil, uint32(len(ops)))
@@ -95,21 +97,20 @@ func EncodeTransactionPacket(engine voplay.EngineRef, channelEpoch uint64,
 			payload = appendRenderU32(payload, uint32(len(op.Bytes)))
 			payload = append(payload, op.Bytes...)
 		}
-		if len(payload)+80 > 67108864 {
+		if len(payload) + 80 > 67108864 {
 			return nil, false
 		}
 	}
-	return encodeRenderFrameworkPacket(1, engine, channelEpoch, commitId, baseRevision, newRevision,
-		requiredControlRevision, sourceSimulationRevision, 0, payload)
+	return encodeRenderFrameworkPacket(1, engine, channelEpoch, commitId, baseRevision, newRevision, requiredControlRevision, sourceSimulationRevision, 0, payload)
 }
 
 // EncodeAssetPacket stages an immutable renderer-owned asset revision.
-func EncodeAssetPacket(engine voplay.EngineRef, channelEpoch uint64, kind uint32,
-	asset uint64, revision uint64, requiredControlRevision uint64,
-	sourceSimulationRevision uint64, descriptor []byte) ([]byte, bool) {
-	if !engine.Engine.Valid() || channelEpoch == 0 || kind < AssetMesh3d ||
-		kind > AssetTexture2d || asset == 0 || revision == 0 ||
-		len(descriptor) == 0 || len(descriptor) > 4194304 {
+func EncodeAssetPacket(engine voplay.EngineRef, channelEpoch uint64, kind uint32, asset uint64, revision uint64, requiredControlRevision uint64, sourceSimulationRevision uint64, descriptor []byte) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || kind < AssetMesh3d || kind > AssetTexture2d ||
+		asset == 0 ||
+		revision == 0 ||
+		len(descriptor) == 0 ||
+		len(descriptor) > 4194304 {
 		return nil, false
 	}
 	payload := []byte{'V', 'R', 'A', '1', 1}
@@ -118,21 +119,21 @@ func EncodeAssetPacket(engine voplay.EngineRef, channelEpoch uint64, kind uint32
 	payload = appendRenderU64(payload, revision)
 	payload = appendRenderU32(payload, uint32(len(descriptor)))
 	payload = append(payload, descriptor...)
-	return encodeRenderFrameworkPacket(37, engine, channelEpoch, asset, 0, revision,
-		requiredControlRevision, sourceSimulationRevision, 0, payload)
+	return encodeRenderFrameworkPacket(37, engine, channelEpoch, asset, 0, revision, requiredControlRevision, sourceSimulationRevision, 0, payload)
 }
 
 func DecodeAssetAck(engine voplay.EngineRef, packet []byte) (AssetAck, bool) {
-	if len(packet) != 84 || uint16(packet[0])|uint16(packet[1])<<8 != 38 ||
+	if len(packet) != 84 || uint16(packet[0]) | uint16(packet[1]) << 8 != 38 ||
 		readRenderPacketU32(packet, 4) != engine.Engine.Index ||
 		readRenderPacketU32(packet, 8) != engine.Engine.Generation ||
-		readRenderPacketU64(packet, 12) == 0 || readRenderPacketU64(packet, 20) == 0 ||
-		readRenderPacketU64(packet, 36) == 0 || readRenderPacketU32(packet, 76) != 4 {
+		readRenderPacketU64(packet, 12) == 0 ||
+		readRenderPacketU64(packet, 20) == 0 ||
+		readRenderPacketU64(packet, 36) == 0 ||
+		readRenderPacketU32(packet, 76) != 4 {
 		return AssetAck{}, false
 	}
 	ack := AssetAck{
-		Kind: readRenderPacketU32(packet, 80),
-		Asset: readRenderPacketU64(packet, 20),
+		Kind: readRenderPacketU32(packet, 80), Asset: readRenderPacketU64(packet, 20),
 		Revision: readRenderPacketU64(packet, 36),
 		RequiredControlRevision: readRenderPacketU64(packet, 44),
 		SourceSimulationRevision: readRenderPacketU64(packet, 52),
@@ -140,11 +141,25 @@ func DecodeAssetAck(engine voplay.EngineRef, packet []byte) (AssetAck, bool) {
 	return ack, ack.Kind >= AssetMesh3d && ack.Kind <= AssetTexture2d
 }
 
-func encodeRenderFrameworkPacket(kind uint16, engine voplay.EngineRef,
-	channelEpoch uint64, commitId uint64, baseRevision uint64, newRevision uint64,
-	requiredControlRevision uint64, sourceSimulationRevision uint64, sequence uint64,
-	payload []byte) ([]byte, bool) {
-	if !engine.Engine.Valid() || channelEpoch == 0 || len(payload)+80 > 67108864 {
+func DecodeStateAck(engine voplay.EngineRef, packet []byte) (StateAck, bool) {
+	if len(packet) != 80 || uint16(packet[0]) | uint16(packet[1]) << 8 != 2 ||
+		readRenderPacketU32(packet, 4) != engine.Engine.Index ||
+		readRenderPacketU32(packet, 8) != engine.Engine.Generation ||
+		readRenderPacketU64(packet, 12) == 0 ||
+		readRenderPacketU64(packet, 20) == 0 ||
+		readRenderPacketU64(packet, 36) == 0 ||
+		readRenderPacketU32(packet, 76) != 0 {
+		return StateAck{}, false
+	}
+	return StateAck{
+		CommitId: readRenderPacketU64(packet, 20), Revision: readRenderPacketU64(packet, 36),
+		RequiredControlRevision: readRenderPacketU64(packet, 44),
+		SourceSimulationRevision: readRenderPacketU64(packet, 52),
+	}, true
+}
+
+func encodeRenderFrameworkPacket(kind uint16, engine voplay.EngineRef, channelEpoch uint64, commitId uint64, baseRevision uint64, newRevision uint64, requiredControlRevision uint64, sourceSimulationRevision uint64, sequence uint64, payload []byte) ([]byte, bool) {
+	if !engine.Engine.Valid() || channelEpoch == 0 || len(payload) + 80 > 67108864 {
 		return nil, false
 	}
 	packet := make([]byte, 80)
@@ -165,28 +180,28 @@ func encodeRenderFrameworkPacket(kind uint16, engine voplay.EngineRef,
 
 func putRenderU32(bytes []byte, offset int, value uint32) {
 	bytes[offset] = byte(value)
-	bytes[offset+1] = byte(value >> 8)
-	bytes[offset+2] = byte(value >> 16)
-	bytes[offset+3] = byte(value >> 24)
+	bytes[offset + 1] = byte(value >> 8)
+	bytes[offset + 2] = byte(value >> 16)
+	bytes[offset + 3] = byte(value >> 24)
 }
 
 func putRenderU64(bytes []byte, offset int, value uint64) {
 	bytes[offset] = byte(value)
-	bytes[offset+1] = byte(value >> 8)
-	bytes[offset+2] = byte(value >> 16)
-	bytes[offset+3] = byte(value >> 24)
-	bytes[offset+4] = byte(value >> 32)
-	bytes[offset+5] = byte(value >> 40)
-	bytes[offset+6] = byte(value >> 48)
-	bytes[offset+7] = byte(value >> 56)
+	bytes[offset + 1] = byte(value >> 8)
+	bytes[offset + 2] = byte(value >> 16)
+	bytes[offset + 3] = byte(value >> 24)
+	bytes[offset + 4] = byte(value >> 32)
+	bytes[offset + 5] = byte(value >> 40)
+	bytes[offset + 6] = byte(value >> 48)
+	bytes[offset + 7] = byte(value >> 56)
 }
 
 func readRenderPacketU32(bytes []byte, offset int) uint32 {
-	return uint32(bytes[offset]) | uint32(bytes[offset+1]) << 8 |
-		uint32(bytes[offset+2]) << 16 | uint32(bytes[offset+3]) << 24
+	return uint32(bytes[offset]) | uint32(bytes[offset + 1]) << 8 | uint32(bytes[offset + 2]) << 16 |
+		uint32(bytes[offset + 3]) << 24
 }
 
 func readRenderPacketU64(bytes []byte, offset int) uint64 {
 	return uint64(readRenderPacketU32(bytes, offset)) |
-		uint64(readRenderPacketU32(bytes, offset+4)) << 32
+		uint64(readRenderPacketU32(bytes, offset + 4)) << 32
 }

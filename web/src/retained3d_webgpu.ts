@@ -165,6 +165,31 @@ interface DecodedScene {
   readonly toneMap: number;
 }
 
+interface DecodedSceneObject {
+  readonly instances: SceneInstance[];
+  readonly overlays: Uint8Array[];
+  readonly directionalLights: SceneDirectionalLight[];
+  readonly camera: SceneCamera | null;
+  readonly environment: {
+    readonly fogColor: readonly [number, number, number];
+    readonly fogStart: number;
+    readonly fogEnd: number;
+    readonly exposure: number;
+    readonly toneMap: number;
+  } | null;
+}
+
+interface DecodedSceneObjectCacheEntry {
+  readonly bytes: Uint8Array;
+  readonly object: DecodedSceneObject;
+}
+
+interface DecodedOverlayCacheEntry {
+  readonly width: number;
+  readonly height: number;
+  readonly vertices: Float32Array;
+}
+
 const BUFFER_COPY_DST = 0x08;
 const BUFFER_INDEX = 0x10;
 const BUFFER_VERTEX = 0x20;
@@ -212,6 +237,8 @@ export class WebGpuRetainedRenderer {
   readonly #materials = new Map<bigint, ResidentMaterial>();
   readonly #textures = new Map<bigint, ResidentTexture>();
   readonly #instanceBatches = new Map<string, ResidentInstanceBatch>();
+  readonly #decodedObjects = new Map<string, DecodedSceneObjectCacheEntry>();
+  readonly #decodedOverlays = new WeakMap<Uint8Array, DecodedOverlayCacheEntry>();
   #preparedBatches: PreparedBatch[] = [];
   #overlayVertexCount = 0;
   #overlayScene: readonly Uint8Array[] = [];
@@ -389,7 +416,7 @@ export class WebGpuRetainedRenderer {
     if (this.#presentError !== null) throw this.#presentError;
     await this.#syncAssets(assets);
     const now = performance.now();
-    const scene = decodeScene(objects);
+    const scene = decodeScene(objects, this.#decodedObjects);
     if (this.#scene !== null) {
       this.#previousScene = this.#scene;
       const interval = now - this.#sceneReceivedAt;
@@ -499,11 +526,34 @@ export class WebGpuRetainedRenderer {
   #updateOverlay(): void {
     const width = this.#logicalWidth;
     const height = this.#logicalHeight;
-    const values = decodeOverlays(this.#overlayScene, width, height);
-    if (values.length / 6 > MAX_OVERLAY_VERTICES) {
+    const chunks: Float32Array[] = [];
+    let valueCount = 0;
+    for (const bytes of this.#overlayScene) {
+      const cached = this.#decodedOverlays.get(bytes);
+      const vertices = cached !== undefined
+        && cached.width === width
+        && cached.height === height
+        ? cached.vertices
+        : new Float32Array(decodeOverlays([bytes], width, height));
+      if (
+        cached === undefined
+        || cached.width !== width
+        || cached.height !== height
+      ) {
+        this.#decodedOverlays.set(bytes, { width, height, vertices });
+      }
+      chunks.push(vertices);
+      valueCount += vertices.length;
+    }
+    if (valueCount / 6 > MAX_OVERLAY_VERTICES) {
       throw new Error("Voplay retained 3D overlay capacity exceeded");
     }
-    const overlay = new Float32Array(values);
+    const overlay = new Float32Array(valueCount);
+    let offset = 0;
+    for (const vertices of chunks) {
+      overlay.set(vertices, offset);
+      offset += vertices.length;
+    }
     this.#ensureOverlayCapacity(overlay.length / 6);
     if (overlay.length > 0) this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
     this.#overlayVertexCount = overlay.length / 6;
@@ -1537,7 +1587,10 @@ struct OverlayOut {
   });
 }
 
-function decodeScene(objects: Iterable<RetainedGpuObject>): DecodedScene {
+function decodeScene(
+  objects: Iterable<RetainedGpuObject>,
+  cache: Map<string, DecodedSceneObjectCacheEntry>,
+): DecodedScene {
   const instances: SceneInstance[] = [];
   const overlays: Uint8Array[] = [];
   const directionalLights: SceneDirectionalLight[] = [];
@@ -1548,142 +1601,33 @@ function decodeScene(objects: Iterable<RetainedGpuObject>): DecodedScene {
   let exposure = 0;
   let toneMap = 1;
   let count = 0;
+  const liveEntities = new Set<string>();
   for (const record of objects) {
     count++;
     if (count > 1_000_000) throw new Error("Voplay retained 3D snapshot capacity exceeded");
     const entityKey = `${record.entity.index}:${record.entity.generation}`;
-    const object = record.bytes;
-    if (isOverlay(object)) {
-      overlays.push(object);
-      continue;
+    liveEntities.add(entityKey);
+    const cached = cache.get(entityKey);
+    const decoded = cached !== undefined && cached.bytes === record.bytes
+      ? cached.object
+      : decodeSceneObject(record, entityKey);
+    if (cached === undefined || cached.bytes !== record.bytes) {
+      cache.set(entityKey, { bytes: record.bytes, object: decoded });
     }
-    if (
-      object.byteLength < 272
-      || object[0] !== 0x56
-      || object[1] !== 0x52
-      || object[2] !== 0x57
-      || object[3] !== 0x31
-    ) {
-      continue;
+    instances.push(...decoded.instances);
+    overlays.push(...decoded.overlays);
+    directionalLights.push(...decoded.directionalLights);
+    if (decoded.camera !== null) camera = decoded.camera;
+    if (decoded.environment !== null) {
+      fogColor = decoded.environment.fogColor;
+      fogStart = decoded.environment.fogStart;
+      fogEnd = decoded.environment.fogEnd;
+      exposure = decoded.environment.exposure;
+      toneMap = decoded.environment.toneMap;
     }
-    const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
-    const matrix = Array.from(
-      { length: 12 },
-      (_, matrixIndex) => Number(objectView.getBigInt64(124 + matrixIndex * 8, true)),
-    );
-    const componentCount = objectView.getUint32(268, true);
-    let componentOffset = 272;
-    for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
-      requireBytes(object, componentOffset, 16);
-      const kind = objectView.getUint32(componentOffset, true);
-      const componentLength = objectView.getUint32(componentOffset + 12, true);
-      componentOffset += 16;
-      requireBytes(object, componentOffset, componentLength);
-      const component = object.subarray(componentOffset, componentOffset + componentLength);
-      componentOffset += componentLength;
-      if (
-        kind === 1
-        && component.byteLength >= 40
-        && component[0] === 0x56
-        && component[1] === 0x4d
-        && component[2] === 0x33
-        && component[3] === 0x31
-      ) {
-        const componentView = new DataView(
-          component.buffer,
-          component.byteOffset,
-          component.byteLength,
-        );
-        const material = componentView.getBigUint64(4, true);
-        const mesh = componentView.getBigUint64(24, true);
-        instances.push({
-          key: `${entityKey}:component:${componentIndex}`,
-          mesh,
-          material,
-          castsShadow: component[20] !== 0,
-          receivesShadow: component[21] !== 0,
-          matrix,
-        });
-      } else if (
-        kind === 2
-        && component.byteLength >= 21
-        && component[0] === 0x56
-        && component[1] === 0x43
-        && component[2] === 0x33
-        && component[3] === 0x31
-      ) {
-        const componentView = new DataView(
-          component.buffer,
-          component.byteOffset,
-          component.byteLength,
-        );
-        camera = {
-          matrix,
-          verticalFovDegrees: componentView.getUint32(5, true) / 1000,
-        };
-      } else if (
-        kind === 10
-        && component.byteLength >= 38
-        && component[0] === 0x56
-        && component[1] === 0x45
-        && component[2] === 0x33
-        && component[3] === 0x31
-      ) {
-        const componentView = new DataView(
-          component.buffer,
-          component.byteOffset,
-          component.byteLength,
-        );
-        fogColor = [
-          componentView.getUint16(6, true) / 65535,
-          componentView.getUint16(8, true) / 65535,
-          componentView.getUint16(10, true) / 65535,
-        ];
-        fogStart = Number(componentView.getBigUint64(12, true)) / 1000;
-        fogEnd = Number(componentView.getBigUint64(20, true)) / 1000;
-        exposure = componentView.getInt32(28, true) / 1000;
-        toneMap = component[4]!;
-      } else if (
-        kind === 11
-        && component.byteLength >= 22
-        && component[0] === 0x56
-        && component[1] === 0x4c
-        && component[2] === 0x33
-        && component[3] === 0x31
-        && component[4] === 1
-      ) {
-        const componentView = new DataView(
-          component.buffer,
-          component.byteOffset,
-          component.byteLength,
-        );
-        directionalLights.push({
-          direction: normalizeVector3([
-            -matrix[2]! / 1000,
-            -matrix[6]! / 1000,
-            -matrix[10]! / 1000,
-          ]),
-          color: [
-            componentView.getUint16(8, true) / 65535,
-            componentView.getUint16(10, true) / 65535,
-            componentView.getUint16(12, true) / 65535,
-          ],
-          intensity: Math.min(8, componentView.getUint32(14, true) / 1000),
-          castsShadow: component[7] !== 0,
-        });
-      } else if (
-        kind === 20
-        && component.byteLength >= 136
-        && component[0] === 0x56
-        && component[1] === 0x50
-        && component[2] === 0x33
-        && component[3] === 0x31
-      ) {
-        instances.push(...decodeParticleInstances(component, entityKey));
-      } else if (isOverlay(component)) {
-        overlays.push(component);
-      }
-    }
+  }
+  for (const entityKey of cache.keys()) {
+    if (!liveEntities.has(entityKey)) cache.delete(entityKey);
   }
   if (camera === null) throw new Error("Voplay retained 3D snapshot has no camera");
   directionalLights.sort((left, right) =>
@@ -1713,6 +1657,149 @@ function decodeScene(objects: Iterable<RetainedGpuObject>): DecodedScene {
     exposure,
     toneMap,
   };
+}
+
+function decodeSceneObject(
+  record: RetainedGpuObject,
+  entityKey: string,
+): DecodedSceneObject {
+  const instances: SceneInstance[] = [];
+  const overlays: Uint8Array[] = [];
+  const directionalLights: SceneDirectionalLight[] = [];
+  let camera: SceneCamera | null = null;
+  let environment: DecodedSceneObject["environment"] = null;
+  const object = record.bytes;
+  if (isOverlay(object)) {
+    return { instances, overlays: [object], directionalLights, camera, environment };
+  }
+  if (
+    object.byteLength < 272
+    || object[0] !== 0x56
+    || object[1] !== 0x52
+    || object[2] !== 0x57
+    || object[3] !== 0x31
+  ) {
+    return { instances, overlays, directionalLights, camera, environment };
+  }
+  const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
+  const matrix = Array.from(
+    { length: 12 },
+    (_, matrixIndex) => Number(objectView.getBigInt64(124 + matrixIndex * 8, true)),
+  );
+  const componentCount = objectView.getUint32(268, true);
+  let componentOffset = 272;
+  for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
+    requireBytes(object, componentOffset, 16);
+    const kind = objectView.getUint32(componentOffset, true);
+    const componentLength = objectView.getUint32(componentOffset + 12, true);
+    componentOffset += 16;
+    requireBytes(object, componentOffset, componentLength);
+    const component = object.subarray(componentOffset, componentOffset + componentLength);
+    componentOffset += componentLength;
+    if (
+      kind === 1
+      && component.byteLength >= 40
+      && component[0] === 0x56
+      && component[1] === 0x4d
+      && component[2] === 0x33
+      && component[3] === 0x31
+    ) {
+      const componentView = new DataView(
+        component.buffer,
+        component.byteOffset,
+        component.byteLength,
+      );
+      instances.push({
+        key: `${entityKey}:component:${componentIndex}`,
+        material: componentView.getBigUint64(4, true),
+        mesh: componentView.getBigUint64(24, true),
+        castsShadow: component[20] !== 0,
+        receivesShadow: component[21] !== 0,
+        matrix,
+      });
+    } else if (
+      kind === 2
+      && component.byteLength >= 21
+      && component[0] === 0x56
+      && component[1] === 0x43
+      && component[2] === 0x33
+      && component[3] === 0x31
+    ) {
+      const componentView = new DataView(
+        component.buffer,
+        component.byteOffset,
+        component.byteLength,
+      );
+      camera = {
+        matrix,
+        verticalFovDegrees: componentView.getUint32(5, true) / 1000,
+      };
+    } else if (
+      kind === 10
+      && component.byteLength >= 38
+      && component[0] === 0x56
+      && component[1] === 0x45
+      && component[2] === 0x33
+      && component[3] === 0x31
+    ) {
+      const componentView = new DataView(
+        component.buffer,
+        component.byteOffset,
+        component.byteLength,
+      );
+      environment = {
+        fogColor: [
+          componentView.getUint16(6, true) / 65535,
+          componentView.getUint16(8, true) / 65535,
+          componentView.getUint16(10, true) / 65535,
+        ],
+        fogStart: Number(componentView.getBigUint64(12, true)) / 1000,
+        fogEnd: Number(componentView.getBigUint64(20, true)) / 1000,
+        exposure: componentView.getInt32(28, true) / 1000,
+        toneMap: component[4]!,
+      };
+    } else if (
+      kind === 11
+      && component.byteLength >= 22
+      && component[0] === 0x56
+      && component[1] === 0x4c
+      && component[2] === 0x33
+      && component[3] === 0x31
+      && component[4] === 1
+    ) {
+      const componentView = new DataView(
+        component.buffer,
+        component.byteOffset,
+        component.byteLength,
+      );
+      directionalLights.push({
+        direction: normalizeVector3([
+          -matrix[2]! / 1000,
+          -matrix[6]! / 1000,
+          -matrix[10]! / 1000,
+        ]),
+        color: [
+          componentView.getUint16(8, true) / 65535,
+          componentView.getUint16(10, true) / 65535,
+          componentView.getUint16(12, true) / 65535,
+        ],
+        intensity: Math.min(8, componentView.getUint32(14, true) / 1000),
+        castsShadow: component[7] !== 0,
+      });
+    } else if (
+      kind === 20
+      && component.byteLength >= 136
+      && component[0] === 0x56
+      && component[1] === 0x50
+      && component[2] === 0x33
+      && component[3] === 0x31
+    ) {
+      instances.push(...decodeParticleInstances(component, entityKey));
+    } else if (isOverlay(component)) {
+      overlays.push(component);
+    }
+  }
+  return { instances, overlays, directionalLights, camera, environment };
 }
 
 function decodeParticleInstances(bytes: Uint8Array, entityKey: string): SceneInstance[] {

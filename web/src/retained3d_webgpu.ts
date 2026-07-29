@@ -1244,34 +1244,13 @@ fn value_noise_2d(position: vec2<f32>) -> f32 {
     && shadow_ndc.z <= 1.0;
   var sampled = 1.0;
   if (${SHADOWS_ENABLED} && scene.ambient.z > 0.5) {
-    let shadow_texel = vec2<f32>(scene.ambient.w);
     let shadow_bias = mix(0.00160, 0.00055, max(dot(normal, light), 0.0));
     let shadow_depth = shadow_ndc.z - shadow_bias;
-    sampled = 0.25 * (
-      textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
+    sampled = textureSampleCompare(
+      sun_shadow,
+      sun_shadow_sampler,
+      clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+      shadow_depth
     );
   }
   let receives_shadow = shadow_inside

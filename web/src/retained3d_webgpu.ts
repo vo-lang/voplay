@@ -2642,7 +2642,10 @@ function pushOverlayText(
   const pixel = size / 7;
   let cursor = x;
   for (const character of text) {
-    const rows = FONT_5X7[character] ?? FONT_5X7["?"]!;
+    const glyph = character >= "a" && character <= "z"
+      ? character.toUpperCase()
+      : character;
+    const rows = FONT_5X7[glyph] ?? FONT_5X7["?"]!;
     for (let row = 0; row < 7; row += 1) {
       for (let column = 0; column < 5; column += 1) {
         if ((rows[row]! & (1 << (4 - column))) === 0) continue;
@@ -2674,7 +2677,11 @@ function pushOverlayVertex(
 const FONT_5X7: Readonly<Record<string, readonly number[]>> = {
   " ": [0, 0, 0, 0, 0, 0, 0],
   "?": [14, 17, 1, 2, 4, 0, 4],
+  "!": [4, 4, 4, 4, 4, 0, 4],
+  ".": [0, 0, 0, 0, 0, 6, 6],
+  ":": [0, 6, 6, 0, 6, 6, 0],
   "-": [0, 0, 0, 31, 0, 0, 0],
+  "+": [0, 4, 4, 31, 4, 4, 0],
   "/": [1, 2, 2, 4, 8, 8, 16],
   "0": [14, 17, 19, 21, 25, 17, 14],
   "1": [4, 12, 4, 4, 4, 4, 14],

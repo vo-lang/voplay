@@ -12,7 +12,7 @@ const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 1;
 const INSTANCE_FLOATS = 24;
 const SHADOW_MAP_SIZE = 1024;
-const SHADOW_INTERVAL_MILLIS = 100;
+const SHADOW_INTERVAL_MILLIS = 200;
 const SHADOWS_ENABLED = true;
 export class WebGpuRetainedRenderer {
     #canvas;
@@ -44,6 +44,8 @@ export class WebGpuRetainedRenderer {
     #materials = new Map();
     #textures = new Map();
     #instanceBatches = new Map();
+    #decodedObjects = new Map();
+    #decodedOverlays = new WeakMap();
     #preparedBatches = [];
     #overlayVertexCount = 0;
     #overlayScene = [];
@@ -191,7 +193,7 @@ export class WebGpuRetainedRenderer {
             throw this.#presentError;
         await this.#syncAssets(assets);
         const now = performance.now();
-        const scene = decodeScene(objects);
+        const scene = decodeScene(objects, this.#decodedObjects);
         if (this.#scene !== null) {
             this.#previousScene = this.#scene;
             const interval = now - this.#sceneReceivedAt;
@@ -291,11 +293,32 @@ export class WebGpuRetainedRenderer {
     #updateOverlay() {
         const width = this.#logicalWidth;
         const height = this.#logicalHeight;
-        const values = decodeOverlays(this.#overlayScene, width, height);
-        if (values.length / 6 > MAX_OVERLAY_VERTICES) {
+        const chunks = [];
+        let valueCount = 0;
+        for (const bytes of this.#overlayScene) {
+            const cached = this.#decodedOverlays.get(bytes);
+            const vertices = cached !== undefined
+                && cached.width === width
+                && cached.height === height
+                ? cached.vertices
+                : new Float32Array(decodeOverlays([bytes], width, height));
+            if (cached === undefined
+                || cached.width !== width
+                || cached.height !== height) {
+                this.#decodedOverlays.set(bytes, { width, height, vertices });
+            }
+            chunks.push(vertices);
+            valueCount += vertices.length;
+        }
+        if (valueCount / 6 > MAX_OVERLAY_VERTICES) {
             throw new Error("Voplay retained 3D overlay capacity exceeded");
         }
-        const overlay = new Float32Array(values);
+        const overlay = new Float32Array(valueCount);
+        let offset = 0;
+        for (const vertices of chunks) {
+            overlay.set(vertices, offset);
+            offset += vertices.length;
+        }
         this.#ensureOverlayCapacity(overlay.length / 6);
         if (overlay.length > 0)
             this.#device.queue.writeBuffer(this.#overlayBuffer, 0, overlay);
@@ -962,34 +985,13 @@ fn value_noise_2d(position: vec2<f32>) -> f32 {
     && shadow_ndc.z <= 1.0;
   var sampled = 1.0;
   if (${SHADOWS_ENABLED} && scene.ambient.z > 0.5) {
-    let shadow_texel = vec2<f32>(scene.ambient.w);
     let shadow_bias = mix(0.00160, 0.00055, max(dot(normal, light), 0.0));
     let shadow_depth = shadow_ndc.z - shadow_bias;
-    sampled = 0.25 * (
-      textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, -0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(-0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
-      + textureSampleCompare(
-        sun_shadow,
-        sun_shadow_sampler,
-        clamp(shadow_uv + shadow_texel * vec2<f32>(0.5, 0.5), vec2<f32>(0.002), vec2<f32>(0.998)),
-        shadow_depth
-      )
+    sampled = textureSampleCompare(
+      sun_shadow,
+      sun_shadow_sampler,
+      clamp(shadow_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+      shadow_depth
     );
   }
   let receives_shadow = shadow_inside
@@ -1301,7 +1303,7 @@ struct OverlayOut {
         multisample: { count: PRESENT_SAMPLE_COUNT },
     });
 }
-function decodeScene(objects) {
+function decodeScene(objects, cache) {
     const instances = [];
     const overlays = [];
     const directionalLights = [];
@@ -1312,117 +1314,36 @@ function decodeScene(objects) {
     let exposure = 0;
     let toneMap = 1;
     let count = 0;
+    const liveEntities = new Set();
     for (const record of objects) {
         count++;
         if (count > 1_000_000)
             throw new Error("Voplay retained 3D snapshot capacity exceeded");
         const entityKey = `${record.entity.index}:${record.entity.generation}`;
-        const object = record.bytes;
-        if (isOverlay(object)) {
-            overlays.push(object);
-            continue;
+        liveEntities.add(entityKey);
+        const cached = cache.get(entityKey);
+        const decoded = cached !== undefined && cached.bytes === record.bytes
+            ? cached.object
+            : decodeSceneObject(record, entityKey);
+        if (cached === undefined || cached.bytes !== record.bytes) {
+            cache.set(entityKey, { bytes: record.bytes, object: decoded });
         }
-        if (object.byteLength < 272
-            || object[0] !== 0x56
-            || object[1] !== 0x52
-            || object[2] !== 0x57
-            || object[3] !== 0x31) {
-            continue;
+        instances.push(...decoded.instances);
+        overlays.push(...decoded.overlays);
+        directionalLights.push(...decoded.directionalLights);
+        if (decoded.camera !== null)
+            camera = decoded.camera;
+        if (decoded.environment !== null) {
+            fogColor = decoded.environment.fogColor;
+            fogStart = decoded.environment.fogStart;
+            fogEnd = decoded.environment.fogEnd;
+            exposure = decoded.environment.exposure;
+            toneMap = decoded.environment.toneMap;
         }
-        const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
-        const matrix = Array.from({ length: 12 }, (_, matrixIndex) => Number(objectView.getBigInt64(124 + matrixIndex * 8, true)));
-        const componentCount = objectView.getUint32(268, true);
-        let componentOffset = 272;
-        for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
-            requireBytes(object, componentOffset, 16);
-            const kind = objectView.getUint32(componentOffset, true);
-            const componentLength = objectView.getUint32(componentOffset + 12, true);
-            componentOffset += 16;
-            requireBytes(object, componentOffset, componentLength);
-            const component = object.subarray(componentOffset, componentOffset + componentLength);
-            componentOffset += componentLength;
-            if (kind === 1
-                && component.byteLength >= 40
-                && component[0] === 0x56
-                && component[1] === 0x4d
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
-                const material = componentView.getBigUint64(4, true);
-                const mesh = componentView.getBigUint64(24, true);
-                instances.push({
-                    key: `${entityKey}:component:${componentIndex}`,
-                    mesh,
-                    material,
-                    castsShadow: component[20] !== 0,
-                    receivesShadow: component[21] !== 0,
-                    matrix,
-                });
-            }
-            else if (kind === 2
-                && component.byteLength >= 21
-                && component[0] === 0x56
-                && component[1] === 0x43
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
-                camera = {
-                    matrix,
-                    verticalFovDegrees: componentView.getUint32(5, true) / 1000,
-                };
-            }
-            else if (kind === 10
-                && component.byteLength >= 38
-                && component[0] === 0x56
-                && component[1] === 0x45
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
-                fogColor = [
-                    componentView.getUint16(6, true) / 65535,
-                    componentView.getUint16(8, true) / 65535,
-                    componentView.getUint16(10, true) / 65535,
-                ];
-                fogStart = Number(componentView.getBigUint64(12, true)) / 1000;
-                fogEnd = Number(componentView.getBigUint64(20, true)) / 1000;
-                exposure = componentView.getInt32(28, true) / 1000;
-                toneMap = component[4];
-            }
-            else if (kind === 11
-                && component.byteLength >= 22
-                && component[0] === 0x56
-                && component[1] === 0x4c
-                && component[2] === 0x33
-                && component[3] === 0x31
-                && component[4] === 1) {
-                const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
-                directionalLights.push({
-                    direction: normalizeVector3([
-                        -matrix[2] / 1000,
-                        -matrix[6] / 1000,
-                        -matrix[10] / 1000,
-                    ]),
-                    color: [
-                        componentView.getUint16(8, true) / 65535,
-                        componentView.getUint16(10, true) / 65535,
-                        componentView.getUint16(12, true) / 65535,
-                    ],
-                    intensity: Math.min(8, componentView.getUint32(14, true) / 1000),
-                    castsShadow: component[7] !== 0,
-                });
-            }
-            else if (kind === 20
-                && component.byteLength >= 136
-                && component[0] === 0x56
-                && component[1] === 0x50
-                && component[2] === 0x33
-                && component[3] === 0x31) {
-                instances.push(...decodeParticleInstances(component, entityKey));
-            }
-            else if (isOverlay(component)) {
-                overlays.push(component);
-            }
-        }
+    }
+    for (const entityKey of cache.keys()) {
+        if (!liveEntities.has(entityKey))
+            cache.delete(entityKey);
     }
     if (camera === null)
         throw new Error("Voplay retained 3D snapshot has no camera");
@@ -1452,6 +1373,119 @@ function decodeScene(objects) {
         exposure,
         toneMap,
     };
+}
+function decodeSceneObject(record, entityKey) {
+    const instances = [];
+    const overlays = [];
+    const directionalLights = [];
+    let camera = null;
+    let environment = null;
+    const object = record.bytes;
+    if (isOverlay(object)) {
+        return { instances, overlays: [object], directionalLights, camera, environment };
+    }
+    if (object.byteLength < 272
+        || object[0] !== 0x56
+        || object[1] !== 0x52
+        || object[2] !== 0x57
+        || object[3] !== 0x31) {
+        return { instances, overlays, directionalLights, camera, environment };
+    }
+    const objectView = new DataView(object.buffer, object.byteOffset, object.byteLength);
+    const matrix = Array.from({ length: 12 }, (_, matrixIndex) => Number(objectView.getBigInt64(124 + matrixIndex * 8, true)));
+    const componentCount = objectView.getUint32(268, true);
+    let componentOffset = 272;
+    for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
+        requireBytes(object, componentOffset, 16);
+        const kind = objectView.getUint32(componentOffset, true);
+        const componentLength = objectView.getUint32(componentOffset + 12, true);
+        componentOffset += 16;
+        requireBytes(object, componentOffset, componentLength);
+        const component = object.subarray(componentOffset, componentOffset + componentLength);
+        componentOffset += componentLength;
+        if (kind === 1
+            && component.byteLength >= 40
+            && component[0] === 0x56
+            && component[1] === 0x4d
+            && component[2] === 0x33
+            && component[3] === 0x31) {
+            const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
+            instances.push({
+                key: `${entityKey}:component:${componentIndex}`,
+                material: componentView.getBigUint64(4, true),
+                mesh: componentView.getBigUint64(24, true),
+                castsShadow: component[20] !== 0,
+                receivesShadow: component[21] !== 0,
+                matrix,
+            });
+        }
+        else if (kind === 2
+            && component.byteLength >= 21
+            && component[0] === 0x56
+            && component[1] === 0x43
+            && component[2] === 0x33
+            && component[3] === 0x31) {
+            const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
+            camera = {
+                matrix,
+                verticalFovDegrees: componentView.getUint32(5, true) / 1000,
+            };
+        }
+        else if (kind === 10
+            && component.byteLength >= 38
+            && component[0] === 0x56
+            && component[1] === 0x45
+            && component[2] === 0x33
+            && component[3] === 0x31) {
+            const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
+            environment = {
+                fogColor: [
+                    componentView.getUint16(6, true) / 65535,
+                    componentView.getUint16(8, true) / 65535,
+                    componentView.getUint16(10, true) / 65535,
+                ],
+                fogStart: Number(componentView.getBigUint64(12, true)) / 1000,
+                fogEnd: Number(componentView.getBigUint64(20, true)) / 1000,
+                exposure: componentView.getInt32(28, true) / 1000,
+                toneMap: component[4],
+            };
+        }
+        else if (kind === 11
+            && component.byteLength >= 22
+            && component[0] === 0x56
+            && component[1] === 0x4c
+            && component[2] === 0x33
+            && component[3] === 0x31
+            && component[4] === 1) {
+            const componentView = new DataView(component.buffer, component.byteOffset, component.byteLength);
+            directionalLights.push({
+                direction: normalizeVector3([
+                    -matrix[2] / 1000,
+                    -matrix[6] / 1000,
+                    -matrix[10] / 1000,
+                ]),
+                color: [
+                    componentView.getUint16(8, true) / 65535,
+                    componentView.getUint16(10, true) / 65535,
+                    componentView.getUint16(12, true) / 65535,
+                ],
+                intensity: Math.min(8, componentView.getUint32(14, true) / 1000),
+                castsShadow: component[7] !== 0,
+            });
+        }
+        else if (kind === 20
+            && component.byteLength >= 136
+            && component[0] === 0x56
+            && component[1] === 0x50
+            && component[2] === 0x33
+            && component[3] === 0x31) {
+            instances.push(...decodeParticleInstances(component, entityKey));
+        }
+        else if (isOverlay(component)) {
+            overlays.push(component);
+        }
+    }
+    return { instances, overlays, directionalLights, camera, environment };
 }
 function decodeParticleInstances(bytes, entityKey) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -2085,7 +2119,10 @@ function pushOverlayText(output, width, height, x, baseline, size, text, color) 
     const pixel = size / 7;
     let cursor = x;
     for (const character of text) {
-        const rows = FONT_5X7[character] ?? FONT_5X7["?"];
+        const glyph = character >= "a" && character <= "z"
+            ? character.toUpperCase()
+            : character;
+        const rows = FONT_5X7[glyph] ?? FONT_5X7["?"];
         for (let row = 0; row < 7; row += 1) {
             for (let column = 0; column < 5; column += 1) {
                 if ((rows[row] & (1 << (4 - column))) === 0)
@@ -2102,7 +2139,11 @@ function pushOverlayVertex(output, x, y, color) {
 const FONT_5X7 = {
     " ": [0, 0, 0, 0, 0, 0, 0],
     "?": [14, 17, 1, 2, 4, 0, 4],
+    "!": [4, 4, 4, 4, 4, 0, 4],
+    ".": [0, 0, 0, 0, 0, 6, 6],
+    ":": [0, 6, 6, 0, 6, 6, 0],
     "-": [0, 0, 0, 31, 0, 0, 0],
+    "+": [0, 4, 4, 31, 4, 4, 0],
     "/": [1, 2, 2, 4, 8, 8, 16],
     "0": [14, 17, 19, 21, 25, 17, 14],
     "1": [4, 12, 4, 4, 4, 4, 14],

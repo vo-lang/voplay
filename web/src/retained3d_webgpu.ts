@@ -179,7 +179,7 @@ const MAX_OVERLAY_VERTICES = 262_144;
 const PRESENT_SAMPLE_COUNT = 1;
 const INSTANCE_FLOATS = 24;
 const SHADOW_MAP_SIZE = 1024;
-const SHADOW_INTERVAL_MILLIS = 100;
+const SHADOW_INTERVAL_MILLIS = 200;
 const SHADOWS_ENABLED = true;
 
 export class WebGpuRetainedRenderer {

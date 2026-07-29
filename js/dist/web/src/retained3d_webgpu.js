@@ -1519,7 +1519,157 @@ function particleRandom(seed, index, channel) {
     return (value >>> 0) / 0xffffffff;
 }
 function interpolateMatrix(previous, current, alpha) {
-    return current.map((value, index) => previous[index] + (value - previous[index]) * alpha);
+    return interpolateTransformMatrix(previous, current, alpha);
+}
+function interpolateTransformMatrix(previous, current, alpha) {
+    if (previous.length < 12 || current.length < 12) {
+        return current.map((value, index) => previous[index] + (value - previous[index]) * alpha);
+    }
+    const previousTransform = decomposeTransformMatrix(previous);
+    const currentTransform = decomposeTransformMatrix(current);
+    if (previousTransform === null || currentTransform === null) {
+        return current.map((value, index) => previous[index] + (value - previous[index]) * alpha);
+    }
+    const rotation = slerpQuaternion(previousTransform.rotation, currentTransform.rotation, alpha);
+    const scaleAlpha = Math.max(0, Math.min(1, alpha));
+    const scale = [
+        interpolateScalar(previousTransform.scale[0], currentTransform.scale[0], scaleAlpha),
+        interpolateScalar(previousTransform.scale[1], currentTransform.scale[1], scaleAlpha),
+        interpolateScalar(previousTransform.scale[2], currentTransform.scale[2], scaleAlpha),
+    ];
+    const translation = [
+        interpolateScalar(previous[3], current[3], alpha),
+        interpolateScalar(previous[7], current[7], alpha),
+        interpolateScalar(previous[11], current[11], alpha),
+    ];
+    return composeTransformMatrix(rotation, scale, translation);
+}
+function interpolateScalar(previous, current, alpha) {
+    return previous + (current - previous) * alpha;
+}
+function decomposeTransformMatrix(matrix) {
+    let scaleX = Math.hypot(matrix[0], matrix[4], matrix[8]);
+    const scaleY = Math.hypot(matrix[1], matrix[5], matrix[9]);
+    const scaleZ = Math.hypot(matrix[2], matrix[6], matrix[10]);
+    if (scaleX < 1e-8 || scaleY < 1e-8 || scaleZ < 1e-8)
+        return null;
+    const determinant = matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9])
+        - matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8])
+        + matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+    if (determinant < 0)
+        scaleX = -scaleX;
+    return {
+        rotation: quaternionFromRotationMatrix([
+            matrix[0] / scaleX, matrix[1] / scaleY, matrix[2] / scaleZ,
+            matrix[4] / scaleX, matrix[5] / scaleY, matrix[6] / scaleZ,
+            matrix[8] / scaleX, matrix[9] / scaleY, matrix[10] / scaleZ,
+        ]),
+        scale: [scaleX, scaleY, scaleZ],
+    };
+}
+function quaternionFromRotationMatrix(matrix) {
+    const trace = matrix[0] + matrix[4] + matrix[8];
+    let x;
+    let y;
+    let z;
+    let w;
+    if (trace > 0) {
+        const scale = Math.sqrt(trace + 1) * 2;
+        w = scale * 0.25;
+        x = (matrix[7] - matrix[5]) / scale;
+        y = (matrix[2] - matrix[6]) / scale;
+        z = (matrix[3] - matrix[1]) / scale;
+    }
+    else if (matrix[0] > matrix[4] && matrix[0] > matrix[8]) {
+        const scale = Math.sqrt(1 + matrix[0] - matrix[4] - matrix[8]) * 2;
+        w = (matrix[7] - matrix[5]) / scale;
+        x = scale * 0.25;
+        y = (matrix[1] + matrix[3]) / scale;
+        z = (matrix[2] + matrix[6]) / scale;
+    }
+    else if (matrix[4] > matrix[8]) {
+        const scale = Math.sqrt(1 + matrix[4] - matrix[0] - matrix[8]) * 2;
+        w = (matrix[2] - matrix[6]) / scale;
+        x = (matrix[1] + matrix[3]) / scale;
+        y = scale * 0.25;
+        z = (matrix[5] + matrix[7]) / scale;
+    }
+    else {
+        const scale = Math.sqrt(1 + matrix[8] - matrix[0] - matrix[4]) * 2;
+        w = (matrix[3] - matrix[1]) / scale;
+        x = (matrix[2] + matrix[6]) / scale;
+        y = (matrix[5] + matrix[7]) / scale;
+        z = scale * 0.25;
+    }
+    return normalizeQuaternion([x, y, z, w]);
+}
+function slerpQuaternion(previous, current, alpha) {
+    let target = current;
+    let dot = quaternionDot(previous, target);
+    if (dot < 0) {
+        target = [-target[0], -target[1], -target[2], -target[3]];
+        dot = -dot;
+    }
+    dot = Math.max(-1, Math.min(1, dot));
+    if (dot > 0.9995) {
+        return normalizeQuaternion([
+            previous[0] + (target[0] - previous[0]) * alpha,
+            previous[1] + (target[1] - previous[1]) * alpha,
+            previous[2] + (target[2] - previous[2]) * alpha,
+            previous[3] + (target[3] - previous[3]) * alpha,
+        ]);
+    }
+    const angle = Math.acos(dot);
+    const inverseSine = 1 / Math.sin(angle);
+    const previousWeight = Math.sin((1 - alpha) * angle) * inverseSine;
+    const currentWeight = Math.sin(alpha * angle) * inverseSine;
+    return normalizeQuaternion([
+        previous[0] * previousWeight + target[0] * currentWeight,
+        previous[1] * previousWeight + target[1] * currentWeight,
+        previous[2] * previousWeight + target[2] * currentWeight,
+        previous[3] * previousWeight + target[3] * currentWeight,
+    ]);
+}
+function quaternionDot(left, right) {
+    return left[0] * right[0] + left[1] * right[1]
+        + left[2] * right[2] + left[3] * right[3];
+}
+function normalizeQuaternion(quaternion) {
+    const length = Math.hypot(...quaternion);
+    if (length < 1e-8)
+        return [0, 0, 0, 1];
+    return [
+        quaternion[0] / length,
+        quaternion[1] / length,
+        quaternion[2] / length,
+        quaternion[3] / length,
+    ];
+}
+function composeTransformMatrix(rotation, scale, translation) {
+    const [x, y, z, w] = rotation;
+    const xx = x * x;
+    const yy = y * y;
+    const zz = z * z;
+    const xy = x * y;
+    const xz = x * z;
+    const yz = y * z;
+    const xw = x * w;
+    const yw = y * w;
+    const zw = z * w;
+    return [
+        (1 - 2 * (yy + zz)) * scale[0],
+        2 * (xy - zw) * scale[1],
+        2 * (xz + yw) * scale[2],
+        translation[0],
+        2 * (xy + zw) * scale[0],
+        (1 - 2 * (xx + zz)) * scale[1],
+        2 * (yz - xw) * scale[2],
+        translation[1],
+        2 * (xz - yw) * scale[0],
+        2 * (yz + xw) * scale[1],
+        (1 - 2 * (xx + yy)) * scale[2],
+        translation[2],
+    ];
 }
 function decodeMeshArtifact(bytes, expectedId) {
     if (bytes.byteLength < 21
@@ -1600,23 +1750,22 @@ function decodeMaterial(bytes, expectedId) {
     };
 }
 function writePreparedInstance(output, offset, instance, alpha) {
-    const previous = instance.previousMatrix;
-    const current = instance.currentMatrix;
-    output[offset] = (previous[0] + (current[0] - previous[0]) * alpha) / 1000;
-    output[offset + 1] = (previous[4] + (current[4] - previous[4]) * alpha) / 1000;
-    output[offset + 2] = (previous[8] + (current[8] - previous[8]) * alpha) / 1000;
+    const matrix = interpolateTransformMatrix(instance.previousMatrix, instance.currentMatrix, alpha);
+    output[offset] = matrix[0] / 1000;
+    output[offset + 1] = matrix[4] / 1000;
+    output[offset + 2] = matrix[8] / 1000;
     output[offset + 3] = 0;
-    output[offset + 4] = (previous[1] + (current[1] - previous[1]) * alpha) / 1000;
-    output[offset + 5] = (previous[5] + (current[5] - previous[5]) * alpha) / 1000;
-    output[offset + 6] = (previous[9] + (current[9] - previous[9]) * alpha) / 1000;
+    output[offset + 4] = matrix[1] / 1000;
+    output[offset + 5] = matrix[5] / 1000;
+    output[offset + 6] = matrix[9] / 1000;
     output[offset + 7] = 0;
-    output[offset + 8] = (previous[2] + (current[2] - previous[2]) * alpha) / 1000;
-    output[offset + 9] = (previous[6] + (current[6] - previous[6]) * alpha) / 1000;
-    output[offset + 10] = (previous[10] + (current[10] - previous[10]) * alpha) / 1000;
+    output[offset + 8] = matrix[2] / 1000;
+    output[offset + 9] = matrix[6] / 1000;
+    output[offset + 10] = matrix[10] / 1000;
     output[offset + 11] = 0;
-    output[offset + 12] = (previous[3] + (current[3] - previous[3]) * alpha) / 1000;
-    output[offset + 13] = (previous[7] + (current[7] - previous[7]) * alpha) / 1000;
-    output[offset + 14] = (previous[11] + (current[11] - previous[11]) * alpha) / 1000;
+    output[offset + 12] = matrix[3] / 1000;
+    output[offset + 13] = matrix[7] / 1000;
+    output[offset + 14] = matrix[11] / 1000;
     output[offset + 15] = 1;
     output[offset + 16] = instance.color[0];
     output[offset + 17] = instance.color[1];

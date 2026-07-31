@@ -231,7 +231,16 @@ impl PresentationState {
         &self,
         domain: PresentationDomainId,
         frame_id: u64,
-        ops: Vec<PresentationStateOp>,
+        mut ops: Vec<PresentationStateOp>,
+    ) -> Result<PresentationStateCommit, PresentationStateError> {
+        self.prepare_frame_reusing(domain, frame_id, &mut ops)
+    }
+
+    pub fn prepare_frame_reusing(
+        &self,
+        domain: PresentationDomainId,
+        frame_id: u64,
+        ops: &mut Vec<PresentationStateOp>,
     ) -> Result<PresentationStateCommit, PresentationStateError> {
         self.ensure_open()?;
         if domain.engine != self.engine || !domain.handle.is_valid() {
@@ -254,7 +263,7 @@ impl PresentationState {
             bytes: 0,
         });
         let before = staged.values.clone();
-        for op in ops {
+        for op in ops.drain(..) {
             match op {
                 PresentationStateOp::Set { key, value } => {
                     if key == 0 {

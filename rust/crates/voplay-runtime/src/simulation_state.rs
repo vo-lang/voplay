@@ -65,7 +65,7 @@ pub enum SimulationStateError {
 }
 
 pub struct SimulationStateCommit {
-    resources: BTreeMap<u32, Vec<u8>>,
+    resources: Option<BTreeMap<u32, Vec<u8>>>,
     readable_events: Vec<SimulationEvent>,
     revision: u64,
 }
@@ -113,7 +113,7 @@ impl SimulationState {
             config,
             revision: 0,
             resources: BTreeMap::new(),
-            readable_events: Vec::new(),
+            readable_events: Vec::with_capacity(config.max_stage_events),
             closed: false,
         })
     }
@@ -134,35 +134,51 @@ impl SimulationState {
 
     pub fn prepare_stage(
         &self,
-        resource_ops: Vec<SimulationResourceOp>,
-        emitted_events: Vec<SimulationEvent>,
+        mut resource_ops: Vec<SimulationResourceOp>,
+        mut emitted_events: Vec<SimulationEvent>,
+    ) -> Result<SimulationStateCommit, SimulationStateError> {
+        self.prepare_stage_reusing(&mut resource_ops, &mut emitted_events)
+    }
+
+    pub fn prepare_stage_reusing(
+        &self,
+        resource_ops: &mut Vec<SimulationResourceOp>,
+        emitted_events: &mut Vec<SimulationEvent>,
     ) -> Result<SimulationStateCommit, SimulationStateError> {
         self.ensure_open()?;
-        let mut resources = self.resources.clone();
-        for op in resource_ops {
-            match op {
-                SimulationResourceOp::Set { resource, value } => {
-                    if resource == 0 {
-                        return Err(SimulationStateError::InvalidResource);
+        let resources = if resource_ops.is_empty() {
+            None
+        } else {
+            let mut resources = self.resources.clone();
+            for op in resource_ops.drain(..) {
+                match op {
+                    SimulationResourceOp::Set { resource, value } => {
+                        if resource == 0 {
+                            return Err(SimulationStateError::InvalidResource);
+                        }
+                        if value.len() > self.config.max_resource_bytes {
+                            return Err(SimulationStateError::ResourceValueCapacity);
+                        }
+                        resources.insert(resource, value);
                     }
-                    if value.len() > self.config.max_resource_bytes {
-                        return Err(SimulationStateError::ResourceValueCapacity);
-                    }
-                    resources.insert(resource, value);
-                }
-                SimulationResourceOp::Remove { resource } => {
-                    if resource == 0 {
-                        return Err(SimulationStateError::InvalidResource);
-                    }
-                    if resources.remove(&resource).is_none() {
-                        return Err(SimulationStateError::ResourceNotFound);
+                    SimulationResourceOp::Remove { resource } => {
+                        if resource == 0 {
+                            return Err(SimulationStateError::InvalidResource);
+                        }
+                        if resources.remove(&resource).is_none() {
+                            return Err(SimulationStateError::ResourceNotFound);
+                        }
                     }
                 }
             }
-        }
-        validate_resources(&resources, self.config)?;
-        validate_events(&emitted_events, self.config)?;
-        let changed = resources != self.resources || emitted_events != self.readable_events;
+            validate_resources(&resources, self.config)?;
+            Some(resources)
+        };
+        validate_events(emitted_events, self.config)?;
+        let changed = resources
+            .as_ref()
+            .is_some_and(|resources| resources != &self.resources)
+            || *emitted_events != self.readable_events;
         let revision = if changed {
             self.revision
                 .checked_add(1)
@@ -172,16 +188,67 @@ impl SimulationState {
         };
         Ok(SimulationStateCommit {
             resources,
-            readable_events: emitted_events,
+            readable_events: std::mem::take(emitted_events),
             revision,
         })
     }
 
     pub fn commit(&mut self, commit: SimulationStateCommit) -> Result<(), SimulationStateError> {
         self.ensure_open()?;
-        self.resources = commit.resources;
+        if let Some(resources) = commit.resources {
+            self.resources = resources;
+        }
         self.readable_events = commit.readable_events;
         self.revision = commit.revision;
+        Ok(())
+    }
+
+    pub fn commit_reusing(
+        &mut self,
+        commit: SimulationStateCommit,
+        reusable_events: &mut Vec<SimulationEvent>,
+    ) -> Result<(), SimulationStateError> {
+        self.ensure_open()?;
+        let previous = std::mem::replace(&mut self.readable_events, commit.readable_events);
+        reusable_events.clear();
+        *reusable_events = previous;
+        if let Some(resources) = commit.resources {
+            self.resources = resources;
+        }
+        self.revision = commit.revision;
+        Ok(())
+    }
+
+    /// Append endpoint events at a preflighted safe point while retaining both
+    /// vector allocations for the next tick.
+    pub fn append_events_reusing(
+        &mut self,
+        events: &mut Vec<SimulationEvent>,
+    ) -> Result<(), SimulationStateError> {
+        self.ensure_open()?;
+        if events.is_empty() {
+            return Ok(());
+        }
+        validate_events(events, self.config)?;
+        if self.readable_events.len().saturating_add(events.len()) > self.config.max_stage_events {
+            return Err(SimulationStateError::EventCapacity);
+        }
+        let current_bytes = self
+            .readable_events
+            .iter()
+            .map(|event| event.bytes.len())
+            .sum::<usize>();
+        let appended_bytes = events.iter().map(|event| event.bytes.len()).sum::<usize>();
+        current_bytes
+            .checked_add(appended_bytes)
+            .filter(|bytes| *bytes <= self.config.max_total_event_bytes)
+            .ok_or(SimulationStateError::EventTotalCapacity)?;
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(SimulationStateError::RevisionExhausted)?;
+        self.readable_events.append(events);
+        self.revision = revision;
         Ok(())
     }
 
@@ -397,6 +464,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(unchanged.revision(), 1);
+    }
+
+    #[test]
+    fn endpoint_event_append_reuses_both_vector_allocations() {
+        let config = SimulationStateConfig::default();
+        let mut state = SimulationState::new(world(), config).unwrap();
+        let state_capacity = state.readable_events.capacity();
+        let mut incoming = Vec::with_capacity(config.max_stage_events);
+        let incoming_capacity = incoming.capacity();
+        incoming.push(SimulationEvent {
+            kind: 7,
+            bytes: vec![1, 2, 3],
+        });
+
+        state.append_events_reusing(&mut incoming).unwrap();
+
+        assert!(incoming.is_empty());
+        assert_eq!(incoming.capacity(), incoming_capacity);
+        assert_eq!(state.readable_events.capacity(), state_capacity);
+        assert_eq!(state.revision(), 1);
+        assert_eq!(state.events(7).count(), 1);
     }
 
     #[test]

@@ -260,10 +260,17 @@ impl World {
 
     pub fn apply_stage(
         &mut self,
-        commands: Vec<WorldCommand>,
+        mut commands: Vec<WorldCommand>,
+    ) -> Result<WorldStageResult, WorldError> {
+        self.apply_stage_reusing(&mut commands)
+    }
+
+    pub fn apply_stage_reusing(
+        &mut self,
+        commands: &mut Vec<WorldCommand>,
     ) -> Result<WorldStageResult, WorldError> {
         self.ensure_open()?;
-        self.preflight(&commands)?;
+        self.preflight(commands)?;
         let has_changes = commands.iter().any(|command| self.command_changes(command));
         if !has_changes {
             return Ok(WorldStageResult {
@@ -278,7 +285,7 @@ impl World {
             .ok_or(WorldError::RevisionExhausted)?;
         let change_start = self.changes.len();
         let mut spawned = Vec::new();
-        for command in commands {
+        for command in commands.drain(..) {
             match command {
                 WorldCommand::Spawn {
                     stable_key,

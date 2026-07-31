@@ -138,7 +138,17 @@ impl LogicIoOutbox {
         })
     }
 
-    pub fn prepare(&self, commands: Vec<LogicIoCommand>) -> Result<LogicIoCommit, LogicIoError> {
+    pub fn prepare(
+        &self,
+        mut commands: Vec<LogicIoCommand>,
+    ) -> Result<LogicIoCommit, LogicIoError> {
+        self.prepare_reusing(&mut commands)
+    }
+
+    pub fn prepare_reusing(
+        &self,
+        commands: &mut Vec<LogicIoCommand>,
+    ) -> Result<LogicIoCommit, LogicIoError> {
         self.ensure_open()?;
         if self.queue.len().saturating_add(commands.len()) > self.config.max_commands {
             return Err(LogicIoError::CommandCapacity);
@@ -148,7 +158,7 @@ impl LogicIoOutbox {
         let mut last_asset_sequence = self.last_asset_sequence;
         let mut last_render_event_sequence = self.last_render_event_sequence;
         let mut last_audio_event_sequence = self.last_audio_event_sequence;
-        for command in commands {
+        for command in commands.drain(..) {
             self.validate(&command)?;
             match &command {
                 LogicIoCommand::AssetRequest { sequence, .. }

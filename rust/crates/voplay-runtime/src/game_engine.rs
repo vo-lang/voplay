@@ -540,6 +540,73 @@ pub struct GameEngine<G: Game> {
     max_logic_io_commands: usize,
     pending_endpoint_events: Vec<SimulationEvent>,
     pending_endpoint_event_bytes: usize,
+    stage_systems: BTreeMap<Stage, Vec<SystemSpec>>,
+    stage_buffers: GameStageBuffers,
+}
+
+struct GameStageBuffers {
+    render_ops: Vec<RenderOp>,
+    transients: Vec<RenderTransient>,
+    presentation_ops: Vec<PresentationStateOp>,
+    world_commands: Vec<WorldCommand>,
+    resource_ops: Vec<SimulationResourceOp>,
+    emitted_events: Vec<SimulationEvent>,
+    logic_io_commands: Vec<LogicIoCommand>,
+    control_transactions: Vec<ControlTxnBuilder>,
+    peak_used_slots: usize,
+}
+
+impl GameStageBuffers {
+    fn new(config: &GameEngineConfig) -> Self {
+        Self {
+            render_ops: Vec::with_capacity(config.render_outbox.max_pending_ops),
+            transients: Vec::with_capacity(config.render_outbox.max_domains),
+            presentation_ops: Vec::with_capacity(config.presentation_state.max_entries_per_domain),
+            world_commands: Vec::with_capacity(config.max_stage_world_commands),
+            resource_ops: Vec::with_capacity(config.simulation_state.max_resources),
+            emitted_events: Vec::with_capacity(config.simulation_state.max_stage_events),
+            logic_io_commands: Vec::with_capacity(config.logic_io.max_commands),
+            control_transactions: Vec::with_capacity(config.group.control.max_ops_per_transaction),
+            peak_used_slots: 0,
+        }
+    }
+
+    fn used_slots(&self) -> usize {
+        self.render_ops.len()
+            + self.transients.len()
+            + self.presentation_ops.len()
+            + self.world_commands.len()
+            + self.resource_ops.len()
+            + self.emitted_events.len()
+            + self.logic_io_commands.len()
+            + self.control_transactions.len()
+    }
+
+    fn reserved_slots(&self) -> usize {
+        self.render_ops.capacity()
+            + self.transients.capacity()
+            + self.presentation_ops.capacity()
+            + self.world_commands.capacity()
+            + self.resource_ops.capacity()
+            + self.emitted_events.capacity()
+            + self.logic_io_commands.capacity()
+            + self.control_transactions.capacity()
+    }
+
+    fn observe_peak(&mut self) {
+        self.peak_used_slots = self.peak_used_slots.max(self.used_slots());
+    }
+
+    fn clear(&mut self) {
+        self.render_ops.clear();
+        self.transients.clear();
+        self.presentation_ops.clear();
+        self.world_commands.clear();
+        self.resource_ops.clear();
+        self.emitted_events.clear();
+        self.logic_io_commands.clear();
+        self.control_transactions.clear();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -552,6 +619,8 @@ pub struct GameEngineOwnerSnapshot {
     pub pending_endpoint_events: usize,
     pub pending_endpoint_event_bytes: usize,
     pub pending_logic_io_commands: usize,
+    pub stage_buffer_reserved_slots: usize,
+    pub stage_buffer_peak_used_slots: usize,
     pub world: crate::world::WorldOwnerSnapshot,
     pub clock: crate::world::SimulationClockOwnerSnapshot,
     pub render_outbox: crate::outbox::RenderOutboxOwnerSnapshot,
@@ -595,6 +664,14 @@ impl<G: Game> GameEngine<G> {
         game.configure(&mut configure)?;
         configure.plugins.freeze()?;
         let schedule = Schedule::configure(configure.systems)?;
+        let mut stage_systems = BTreeMap::<Stage, Vec<SystemSpec>>::new();
+        for system in schedule.systems() {
+            stage_systems
+                .entry(system.stage)
+                .or_default()
+                .push(system.clone());
+        }
+        let stage_buffers = GameStageBuffers::new(&config);
         let supervisor = InstanceGroupSupervisor::new(id, config.group)?;
         let render_outbox = RenderOutbox::new(id, config.render_outbox)?;
         let presentation_state = PresentationState::new(id, config.presentation_state)?;
@@ -638,8 +715,10 @@ impl<G: Game> GameEngine<G> {
             max_stage_event_bytes: config.simulation_state.max_event_bytes,
             max_total_event_bytes: config.simulation_state.max_total_event_bytes,
             max_logic_io_commands: config.logic_io.max_commands,
-            pending_endpoint_events: Vec::new(),
+            pending_endpoint_events: Vec::with_capacity(config.simulation_state.max_stage_events),
             pending_endpoint_event_bytes: 0,
+            stage_systems,
+            stage_buffers,
         })
     }
 
@@ -1069,6 +1148,8 @@ impl<G: Game> GameEngine<G> {
             pending_endpoint_events: self.pending_endpoint_events.len(),
             pending_endpoint_event_bytes: self.pending_endpoint_event_bytes,
             pending_logic_io_commands: self.logic_io.commands().len(),
+            stage_buffer_reserved_slots: self.stage_buffers.reserved_slots(),
+            stage_buffer_peak_used_slots: self.stage_buffers.peak_used_slots,
             world: self.world.owner_snapshot(),
             clock: self.clock.owner_snapshot(),
             render_outbox: self.render_outbox.owner_snapshot(),
@@ -1312,23 +1393,13 @@ impl<G: Game> GameEngine<G> {
         if self.pending_endpoint_events.is_empty() {
             return Ok(());
         }
-        let mut events = self.simulation_state.snapshot().readable_events;
-        if events
-            .len()
-            .saturating_add(self.pending_endpoint_events.len())
-            > self.max_stage_events
-        {
-            return Err(GameEngineError::StageOutputCapacity);
-        }
-        events.extend(self.pending_endpoint_events.iter().cloned());
-        let commit = self.simulation_state.prepare_stage(Vec::new(), events)?;
         let next_revision = self
             .simulation_revision
             .checked_add(1)
             .ok_or(GameEngineError::SimulationRevisionExhausted)?;
-        self.simulation_state.commit(commit)?;
+        self.simulation_state
+            .append_events_reusing(&mut self.pending_endpoint_events)?;
         self.simulation_revision = next_revision;
-        self.pending_endpoint_events.clear();
         self.pending_endpoint_event_bytes = 0;
         Ok(())
     }
@@ -1340,20 +1411,12 @@ impl<G: Game> GameEngine<G> {
         input: Option<&InputFrame>,
     ) -> Result<(), GameEngineError> {
         let systems = self
-            .schedule
-            .systems()
-            .iter()
-            .filter(|system| system.stage == stage)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut render_ops = Vec::new();
-        let mut transients = Vec::new();
-        let mut presentation_ops = Vec::new();
-        let mut world_commands = Vec::new();
-        let mut resource_ops = Vec::new();
-        let mut emitted_events = Vec::new();
-        let mut logic_io_commands = Vec::new();
-        let mut control_transactions = Vec::new();
+            .stage_systems
+            .get(&stage)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        self.stage_buffers.clear();
+        let buffers = &mut self.stage_buffers;
         let control_lease = self.control_lease.ok_or(GameEngineError::InvalidState)?;
         let render_control_revision = self.supervisor.control_store().render_revision();
         let audio_control_revision = self.supervisor.control_store().audio_revision();
@@ -1362,60 +1425,66 @@ impl<G: Game> GameEngine<G> {
                 engine: self.id,
                 stage,
                 world: &self.world,
-                world_commands: &mut world_commands,
+                world_commands: &mut buffers.world_commands,
                 world_command_capacity: self.max_stage_world_commands,
-                render_ops: &mut render_ops,
+                render_ops: &mut buffers.render_ops,
                 render_op_capacity: self.max_extract_ops,
-                transients: &mut transients,
+                transients: &mut buffers.transients,
                 transient_capacity: self.max_frame_transients,
                 presentation_pulse: pulse,
                 presentation_state: &self.presentation_state,
-                presentation_ops: &mut presentation_ops,
+                presentation_ops: &mut buffers.presentation_ops,
                 presentation_op_capacity: self.max_presentation_ops,
                 simulation_state: &self.simulation_state,
-                resource_ops: &mut resource_ops,
+                resource_ops: &mut buffers.resource_ops,
                 resource_op_capacity: self.max_resource_ops,
-                emitted_events: &mut emitted_events,
+                emitted_events: &mut buffers.emitted_events,
                 event_capacity: self.max_stage_events,
-                logic_io_commands: &mut logic_io_commands,
+                logic_io_commands: &mut buffers.logic_io_commands,
                 logic_io_capacity: self.max_logic_io_commands,
                 control_lease,
                 render_control_revision,
                 audio_control_revision,
-                control_transactions: &mut control_transactions,
+                control_transactions: &mut buffers.control_transactions,
             };
-            self.game.execute(&system, &mut context, input)?;
+            self.game.execute(system, &mut context, input)?;
         }
+        buffers.observe_peak();
         let mut staged_control = self.supervisor.control_store().clone();
         let logic_generation = self.endpoints[&Role::Logic].generation;
-        for transaction in control_transactions {
+        for transaction in buffers.control_transactions.drain(..) {
             let domain = transaction.domain();
             let committed = staged_control
                 .commit(transaction)?
                 .publish_at_safe_point(logic_generation)
                 .map_err(|(error, _)| error)?;
-            emitted_events.push(control_committed_event(domain, &committed));
+            buffers
+                .emitted_events
+                .push(control_committed_event(domain, &committed));
             let snapshot = staged_control.snapshot(domain)?;
-            logic_io_commands.push(match domain {
+            buffers.logic_io_commands.push(match domain {
                 ControlDomain::Render => LogicIoCommand::RenderControl(snapshot),
                 ControlDomain::Audio => LogicIoCommand::AudioControl(snapshot),
             });
         }
-        let logic_io_commit = self.logic_io.prepare(logic_io_commands)?;
+        let logic_io_commit = self
+            .logic_io
+            .prepare_reusing(&mut buffers.logic_io_commands)?;
         match stage {
-            Stage::Extract => self.render_outbox.enqueue(
+            Stage::Extract => self.render_outbox.enqueue_reusing(
                 self.simulation_revision,
                 self.supervisor.control_store().render_revision(),
-                render_ops,
+                &mut buffers.render_ops,
             )?,
             Stage::Frame => {
                 let pulse = pulse.ok_or(GameEngineError::InvalidPresentationPulse)?;
-                let presentation_commit = self.presentation_state.prepare_frame(
+                let presentation_commit = self.presentation_state.prepare_frame_reusing(
                     pulse.surface.domain,
                     pulse.pulse_id,
-                    presentation_ops,
+                    &mut buffers.presentation_ops,
                 )?;
-                self.render_outbox.stage_transients(transients)?;
+                self.render_outbox
+                    .stage_transients_reusing(&mut buffers.transients)?;
                 self.presentation_state.commit(presentation_commit)?;
             }
             Stage::Startup
@@ -1427,10 +1496,11 @@ impl<G: Game> GameEngine<G> {
             | Stage::PostPhysics
             | Stage::PostTick
             | Stage::Shutdown => {
-                let simulation_commit = self
-                    .simulation_state
-                    .prepare_stage(resource_ops, emitted_events)?;
-                let advances_simulation = !world_commands.is_empty()
+                let simulation_commit = self.simulation_state.prepare_stage_reusing(
+                    &mut buffers.resource_ops,
+                    &mut buffers.emitted_events,
+                )?;
+                let advances_simulation = !buffers.world_commands.is_empty()
                     || simulation_commit.revision() != self.simulation_state.revision();
                 let next_simulation_revision = if advances_simulation {
                     self.simulation_revision
@@ -1439,8 +1509,10 @@ impl<G: Game> GameEngine<G> {
                 } else {
                     self.simulation_revision
                 };
-                self.world.apply_stage(world_commands)?;
-                self.simulation_state.commit(simulation_commit)?;
+                self.world
+                    .apply_stage_reusing(&mut buffers.world_commands)?;
+                self.simulation_state
+                    .commit_reusing(simulation_commit, &mut buffers.emitted_events)?;
                 self.simulation_revision = next_simulation_revision;
             }
         }
@@ -1739,6 +1811,68 @@ mod tests {
                 bytes: vec![tick_id as u8],
             })
             .collect()
+    }
+
+    #[test]
+    fn game_stage_buffers_are_reserved_once_and_reused_across_ticks() {
+        let id = EngineId {
+            index: 51,
+            generation: 1,
+        };
+        let mut factory = factory();
+        let mut engine = GameEngine::install(
+            id,
+            factory.descriptor.clone(),
+            &mut factory,
+            init(),
+            config(),
+        )
+        .expect("install");
+        let capacities = (
+            engine.stage_buffers.render_ops.capacity(),
+            engine.stage_buffers.transients.capacity(),
+            engine.stage_buffers.presentation_ops.capacity(),
+            engine.stage_buffers.world_commands.capacity(),
+            engine.stage_buffers.resource_ops.capacity(),
+            engine.stage_buffers.emitted_events.capacity(),
+            engine.stage_buffers.logic_io_commands.capacity(),
+            engine.stage_buffers.control_transactions.capacity(),
+        );
+        assert_eq!(
+            engine.stage_systems.values().map(Vec::len).sum::<usize>(),
+            engine.schedule.systems().len()
+        );
+        assert_eq!(
+            engine.owner_snapshot().stage_buffer_reserved_slots,
+            capacities.0
+                + capacities.1
+                + capacities.2
+                + capacities.3
+                + capacities.4
+                + capacities.5
+                + capacities.6
+                + capacities.7
+        );
+
+        engine.start().expect("start");
+        for input in inputs() {
+            engine.manual_step(&input).expect("tick");
+        }
+
+        assert_eq!(
+            (
+                engine.stage_buffers.render_ops.capacity(),
+                engine.stage_buffers.transients.capacity(),
+                engine.stage_buffers.presentation_ops.capacity(),
+                engine.stage_buffers.world_commands.capacity(),
+                engine.stage_buffers.resource_ops.capacity(),
+                engine.stage_buffers.emitted_events.capacity(),
+                engine.stage_buffers.logic_io_commands.capacity(),
+                engine.stage_buffers.control_transactions.capacity(),
+            ),
+            capacities
+        );
+        assert!(engine.owner_snapshot().stage_buffer_peak_used_slots > 0);
     }
 
     fn pulse(pulse_id: u64) -> PresentationPulse {

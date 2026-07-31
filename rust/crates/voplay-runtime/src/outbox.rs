@@ -214,14 +214,27 @@ impl RenderOutbox {
         &mut self,
         source_simulation_revision: u64,
         required_control_revision: u64,
-        ops: Vec<RenderOp>,
+        mut ops: Vec<RenderOp>,
+    ) -> Result<(), OutboxError> {
+        self.enqueue_reusing(
+            source_simulation_revision,
+            required_control_revision,
+            &mut ops,
+        )
+    }
+
+    pub fn enqueue_reusing(
+        &mut self,
+        source_simulation_revision: u64,
+        required_control_revision: u64,
+        ops: &mut Vec<RenderOp>,
     ) -> Result<(), OutboxError> {
         self.ensure_open()?;
         if self.snapshot_required {
             return Ok(());
         }
         let mut staged_pending = self.pending.clone();
-        for op in ops {
+        for op in ops.drain(..) {
             let entity = op.entity();
             if entity.engine != self.engine {
                 return Err(OutboxError::WrongEngine);
@@ -480,11 +493,18 @@ impl RenderOutbox {
 
     pub fn stage_transients(
         &mut self,
-        transients: Vec<RenderTransient>,
+        mut transients: Vec<RenderTransient>,
+    ) -> Result<(), OutboxError> {
+        self.stage_transients_reusing(&mut transients)
+    }
+
+    pub fn stage_transients_reusing(
+        &mut self,
+        transients: &mut Vec<RenderTransient>,
     ) -> Result<(), OutboxError> {
         self.ensure_open()?;
         let mut staged = self.transient.clone();
-        for transient in transients {
+        for transient in transients.drain(..) {
             Self::stage_transient_into(self.engine, self.config, &mut staged, transient)?;
         }
         self.transient = staged;
